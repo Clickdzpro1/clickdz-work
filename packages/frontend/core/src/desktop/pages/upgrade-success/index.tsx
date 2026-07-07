@@ -34,7 +34,7 @@ export const Component = () => {
           components={{
             1: (
               <a
-                href="mailto:support@toeverything.info"
+                href="mailto:support@clickdz.ai"
                 className={styles.mail}
               />
             ),

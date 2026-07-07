@@ -53,7 +53,7 @@ export const Component = ({
   const loggedIn = useLiveData(
     authService.session.status$.map(s => s === 'authenticated')
   );
-  const enableLocalWorkspace =
+  const serverReportedLocalWorkspace =
     useLiveData(
       defaultServerService.server.config$.selector(
         c =>
@@ -61,6 +61,12 @@ export const Component = ({
           BUILD_CONFIG.isNative
       )
     ) ?? true;
+  // ClickDz Work: the local/demo workspace (and any "skip sign-in" affordance)
+  // must never be reachable on web builds, regardless of what the server
+  // reports via ServerFeature.LocalWorkspace. Electron keeps the original
+  // behavior so the desktop app can still work fully offline.
+  const enableLocalWorkspace =
+    BUILD_CONFIG.isElectron && serverReportedLocalWorkspace;
 
   const workspacesService = useService(WorkspacesService);
   const list = useLiveData(workspacesService.list.workspaces$);
@@ -158,6 +164,10 @@ export const Component = ({
   }, [desktopApi]);
 
   useEffect(() => {
+    // ClickDz Work: this creates the local "Demo Workspace" when no
+    // workspace exists yet. `enableLocalWorkspace` is already forced to
+    // false on web (see above), so this can never run there — only
+    // Electron (BUILD_CONFIG.isElectron) can hit this path.
     if (listIsLoading || list.length > 0 || !enableLocalWorkspace) {
       return;
     }

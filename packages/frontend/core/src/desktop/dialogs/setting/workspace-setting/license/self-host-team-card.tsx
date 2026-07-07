@@ -415,7 +415,7 @@ const ActionModal = ({
           components={{
             1: (
               <a
-                href="https://affine.pro/pricing/?type=selfhost#table"
+                href="https://clickdz.ai"
                 target="_blank"
                 rel="noreferrer"
                 style={{ color: cssVarV2('text/link') }}

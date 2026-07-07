@@ -142,7 +142,7 @@ export function ContactUS() {
         1: (
           <a
             style={{ color: 'var(--affine-primary-color)' }}
-            href="https://affine.pro/redirect/discord"
+            href="https://clickdz.ai"
             target="__blank"
           />
         ),

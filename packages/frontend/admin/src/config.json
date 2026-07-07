@@ -359,7 +359,7 @@
   "copilot": {
     "enabled": {
       "type": "Boolean",
-      "desc": "Whether to enable the copilot plugin. <br> Document: <a href=\"https://docs.affine.pro/self-host-affine/administer/ai\" target=\"_blank\">https://docs.affine.pro/self-host-affine/administer/ai</a>"
+      "desc": "Whether to enable the copilot plugin. <br> Document: <a href=\"https://clickdz.ai\" target=\"_blank\">https://clickdz.ai</a>"
     },
     "byok.enabled": {
       "type": "Boolean",

@@ -66,22 +66,29 @@ describe('useSignOut', () => {
     jumpToSignIn.mockClear();
   });
 
-  test('redirects to index when guest demo allowed', async () => {
+  // ClickDz Work: this test suite runs with BUILD_CONFIG for the `web`
+  // distribution (BUILD_CONFIG.isElectron === false, see
+  // scripts/setup/global.ts), so sign-out must always land on /sign-in,
+  // never back on the index route — regardless of what the server reports
+  // for the local/demo workspace feature. Electron is not exercised by
+  // this suite, but keeps the original (server-flag-driven) behavior.
+
+  test('redirects to sign in on web even when guest demo allowed', async () => {
     allowGuestDemo = true;
     const { result } = renderHook(() => useSignOut());
     result.current();
     await waitFor(() => expect(signOutFn).toHaveBeenCalled());
-    expect(jumpToIndex).toHaveBeenCalled();
-    expect(jumpToSignIn).not.toHaveBeenCalled();
+    expect(jumpToSignIn).toHaveBeenCalled();
+    expect(jumpToIndex).not.toHaveBeenCalled();
   });
 
-  test('redirects to index when guest demo config not provided', async () => {
+  test('redirects to sign in on web when guest demo config not provided', async () => {
     allowGuestDemo = undefined;
     const { result } = renderHook(() => useSignOut());
     result.current();
     await waitFor(() => expect(signOutFn).toHaveBeenCalled());
-    expect(jumpToIndex).toHaveBeenCalled();
-    expect(jumpToSignIn).not.toHaveBeenCalled();
+    expect(jumpToSignIn).toHaveBeenCalled();
+    expect(jumpToIndex).not.toHaveBeenCalled();
   });
 
   test('redirects to sign in when guest demo disabled', async () => {

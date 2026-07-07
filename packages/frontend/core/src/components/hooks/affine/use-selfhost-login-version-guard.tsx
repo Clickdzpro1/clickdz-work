@@ -33,7 +33,7 @@ const rules = [
               lineHeight: '16px',
             }}
           >
-            https://docs.affine.pro/self-host-affine/install/upgrade
+            https://clickdz.ai
           </a>
         </div>
       </div>

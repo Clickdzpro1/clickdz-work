@@ -200,7 +200,7 @@ export function AppUpdaterButton({
         }
       } else {
         urlService.openPopupWindow(
-          `https://github.com/toeverything/AFFiNE/releases/tag/v${updateAvailable.version}`
+          `https://github.com/Clickdzpro1/clickdz-work/releases/tag/v${updateAvailable.version}`
         );
       }
     } else if (changelogUnread) {

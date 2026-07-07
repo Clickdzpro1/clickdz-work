@@ -353,7 +353,7 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
               >
                 ${this.isHistoryLoading
                   ? html`<span data-testid="chat-panel-loading-state"
-                      >AFFiNE AI is loading history...</span
+                      >ClickDz AI is loading history...</span
                     >`
                   : html`<span data-testid="chat-panel-empty-state"
                       >What can I help you with?</span

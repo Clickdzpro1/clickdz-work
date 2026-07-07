@@ -33,11 +33,14 @@ export const useSignOut = ({
 
   const signOut = useCallback(async () => {
     onConfirm?.()?.catch(console.error);
+    // ClickDz Work: after sign-out, web must always land on /sign-in, never
+    // back on the index route (which could imply a local workspace).
     const enableLocalWorkspace =
-      BUILD_CONFIG.isNative ||
-      defaultServerService.server.config$.value.features.includes(
-        ServerFeature.LocalWorkspace
-      );
+      BUILD_CONFIG.isElectron &&
+      (BUILD_CONFIG.isNative ||
+        defaultServerService.server.config$.value.features.includes(
+          ServerFeature.LocalWorkspace
+        ));
 
     try {
       await authService.signOut();

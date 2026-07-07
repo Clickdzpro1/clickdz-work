@@ -7,9 +7,12 @@ import { DebugLogger } from '@affine/debug';
 import type { DocsService } from '@affine/core/modules/doc';
 
 import { insertFromMarkdown } from '../blocksuite/utils/markdown-utils';
-import { PENDING_KEY, type PendingSelection } from './niches';
+import { NICHES, PENDING_KEY, type PendingSelection } from './niches';
 
 const logger = new DebugLogger('clickdz:installer');
+
+// prefix for the one-shot "template library" install guard, keyed per workspace
+const TEMPLATE_LIB_KEY_PREFIX = 'clickdz:tpl-lib:v1:';
 
 export async function installPendingTemplates(docsService: DocsService) {
   let pending: PendingSelection | null = null;
@@ -60,6 +63,82 @@ export async function installPendingTemplates(docsService: DocsService) {
       } catch (e) {
         logger.error(`failed to install ${nicheId}/${kind}`, e);
       }
+    }
+  }
+}
+
+// ClickDz Work — populates the sidebar "Template" menu so every workspace has
+// a starter library, even if the /welcome wizard was never run. Installs one
+// "hub" doc per niche (20 total) and marks each as a real template doc via
+// docsService.createDoc({ isTemplate: true }) — the same option the built-in
+// "Create new template" menu item uses (see template-doc/view/template-list-menu.tsx).
+// One-shot per workspace, guarded by a localStorage flag set before the loop
+// runs so a mid-install crash can never trigger a duplicate install.
+export async function ensureTemplateLibrary(
+  docsService: DocsService,
+  workspaceId: string
+) {
+  const guardKey = TEMPLATE_LIB_KEY_PREFIX + workspaceId;
+  try {
+    if (localStorage.getItem(guardKey)) return;
+  } catch {
+    return;
+  }
+
+  // set the guard FIRST — before any doc is created — so a crash mid-loop
+  // can't cause a double-install on next boot
+  try {
+    localStorage.setItem(guardKey, '1');
+  } catch {
+    /* ignore */
+  }
+
+  let existingTitles: Set<string>;
+  try {
+    existingTitles = new Set(
+      docsService.list.docs$.value
+        .filter(doc => !doc.trash$.value)
+        .map(doc => doc.title$.value)
+    );
+  } catch (e) {
+    logger.error('failed to read existing doc titles', e);
+    existingTitles = new Set();
+  }
+
+  const contentModule = await import('./template-content').catch(e => {
+    logger.error('failed to load template content', e);
+    return null;
+  });
+  if (!contentModule) return;
+  const { TEMPLATE_CONTENT } = contentModule;
+
+  for (const niche of NICHES) {
+    try {
+      const pack = TEMPLATE_CONTENT[niche.id];
+      if (!pack) continue;
+      const tpl = pack.hub;
+      if (existingTitles.has(tpl.title)) {
+        logger.info(`skipped ${niche.id}/hub (already exists)`);
+        continue;
+      }
+      const record = docsService.createDoc({
+        title: tpl.title,
+        isTemplate: true,
+      });
+      const { doc, release } = docsService.open(record.id);
+      try {
+        const store = doc.blockSuiteDoc;
+        store.load();
+        const [note] = store.getBlocksByFlavour('affine:note');
+        // strip the H1 (already the doc title) and import the body markdown
+        const body = tpl.content.replace(/^#\s.*(\r?\n)?/, '');
+        await insertFromMarkdown(undefined, body, store, note?.id, 0);
+        logger.info(`installed template ${niche.id}/hub`);
+      } finally {
+        release();
+      }
+    } catch (e) {
+      logger.error(`failed to install template ${niche.id}/hub`, e);
     }
   }
 }

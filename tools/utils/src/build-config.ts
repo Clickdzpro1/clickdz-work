@@ -44,11 +44,11 @@ export function getBuildConfig(
         // editorVersion: pkg.dependencies['@blocksuite/affine'],
         editorVersion: pkg.version,
         githubUrl: 'https://github.com/Clickdzpro1/clickdz-work',
-        changelogUrl: 'https://affine.pro/what-is-new',
+        changelogUrl: 'https://clickdz.ai',
         downloadUrl: 'https://clickdz-work-hub-techportal.vercel.app/#download',
-        pricingUrl: 'https://affine.pro/pricing',
-        discordUrl: 'https://affine.pro/redirect/discord',
-        requestLicenseUrl: 'https://affine.pro/redirect/license',
+        pricingUrl: 'https://clickdz.ai',
+        discordUrl: 'https://clickdz.ai',
+        requestLicenseUrl: 'https://clickdz.ai',
         imageProxyUrl: '/api/worker/image-proxy',
         linkPreviewUrl: '/api/worker/link-preview',
         CAPTCHA_SITE_KEY: process.env.CAPTCHA_SITE_KEY ?? '',
@@ -59,14 +59,14 @@ export function getBuildConfig(
       return {
         ...this.stable,
         appBuildType: 'beta' as const,
-        changelogUrl: 'https://github.com/toeverything/AFFiNE/releases',
+        changelogUrl: 'https://clickdz.ai',
       };
     },
     get internal() {
       return {
         ...this.stable,
         appBuildType: 'internal' as const,
-        changelogUrl: 'https://github.com/toeverything/AFFiNE/releases',
+        changelogUrl: 'https://clickdz.ai',
       };
     },
     // canary will be aggressive and enable all features
@@ -74,7 +74,7 @@ export function getBuildConfig(
       return {
         ...this.stable,
         appBuildType: 'canary' as const,
-        changelogUrl: 'https://github.com/toeverything/AFFiNE/releases',
+        changelogUrl: 'https://clickdz.ai',
       };
     },
   };

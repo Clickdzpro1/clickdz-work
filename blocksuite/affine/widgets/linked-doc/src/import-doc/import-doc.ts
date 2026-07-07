@@ -193,8 +193,8 @@ export class ImportDoc extends WithDisposable(LitElement) {
           <div>Import</div>
         </header>
         <div>
-          AFFiNE will gradually support more file formats for import.
-          <a href="https://affine.pro/redirect/discord" target="_blank"
+          ClickDz Work will gradually support more file formats for import.
+          <a href="https://clickdz.ai" target="_blank"
             >Provide feedback.</a
           >
         </div>

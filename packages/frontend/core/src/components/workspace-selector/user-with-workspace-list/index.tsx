@@ -75,11 +75,14 @@ export const UserWithWorkspaceList = ({
   }, [globalDialogService]);
 
   const onNewWorkspace = useCallback(() => {
+    // ClickDz Work: never allow anonymous local-workspace creation on web,
+    // regardless of server-reported feature flags. Electron is unaffected.
     const enableLocalWorkspace =
-      BUILD_CONFIG.isNative ||
-      defaultServerService.server.config$.value.features.includes(
-        ServerFeature.LocalWorkspace
-      );
+      BUILD_CONFIG.isElectron &&
+      (BUILD_CONFIG.isNative ||
+        defaultServerService.server.config$.value.features.includes(
+          ServerFeature.LocalWorkspace
+        ));
     if (!isAuthenticated && !enableLocalWorkspace) {
       return openSignInModal();
     }

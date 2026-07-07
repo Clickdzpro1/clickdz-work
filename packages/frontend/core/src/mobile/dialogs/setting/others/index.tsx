@@ -17,26 +17,26 @@ export const OthersGroup = () => {
             <div className={hotTag}>Hot</div>
           </div>
         }
-        href="https://discord.com/invite/whd5mjYqVw"
+        href="https://clickdz.ai"
       />
       <RowLayout
         label={t['com.affine.mobile.setting.others.github']()}
-        href="https://github.com/toeverything/AFFiNE"
+        href="https://github.com/Clickdzpro1/clickdz-work"
       />
 
       <RowLayout
         label={t['com.affine.mobile.setting.others.website']()}
-        href="https://affine.pro/"
+        href="https://clickdz.ai"
       />
 
       <RowLayout
         label={t['com.affine.mobile.setting.others.privacy']()}
-        href="https://affine.pro/privacy"
+        href="https://clickdz.ai"
       />
 
       <RowLayout
         label={t['com.affine.mobile.setting.others.terms']()}
-        href="https://affine.pro/terms"
+        href="https://clickdz.ai"
       />
       <DeleteAccount />
     </SettingGroup>

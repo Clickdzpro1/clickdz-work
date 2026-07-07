@@ -16,13 +16,16 @@ export const AddWorkspace = ({
 }) => {
   const t = useI18n();
   const defaultServerService = useService(DefaultServerService);
-  const enableLocalWorkspace = useLiveData(
+  const serverReportedLocalWorkspace = useLiveData(
     defaultServerService.server.config$.selector(
       c =>
         c.features.includes(ServerFeature.LocalWorkspace) ||
         BUILD_CONFIG.isNative
     )
   );
+  // ClickDz Work: label should never suggest local workspace creation on web.
+  const enableLocalWorkspace =
+    BUILD_CONFIG.isElectron && serverReportedLocalWorkspace;
 
   return (
     <>

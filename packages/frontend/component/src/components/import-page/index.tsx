@@ -48,7 +48,7 @@ export const ImportPage = ({
       <span>
         ClickDz Work will gradually support more and more file types for import.&nbsp;
         <a
-          href="https://affine.pro/redirect/discord"
+          href="https://clickdz.ai"
           target="_blank"
           rel="noreferrer"
         >
