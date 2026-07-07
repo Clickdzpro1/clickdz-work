@@ -87,6 +87,17 @@ const PATCHES = [
     ],
   ],
   [
+    'packages/frontend/admin/src/modules/setup/form.tsx',
+    [
+      ['Welcome to AFFiNE', `Welcome to ${BRAND}`, 1],
+      [
+        'Configure your Self Host AFFiNE with a few simple settings.',
+        `Configure your self-hosted ${BRAND} with a few simple settings.`,
+        1,
+      ],
+    ],
+  ],
+  [
     'packages/frontend/apps/electron/resources/app-update.yml',
     [
       ['owner: toeverything', 'owner: Clickdzpro1', 1],
