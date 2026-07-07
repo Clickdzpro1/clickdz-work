@@ -117,6 +117,23 @@ const PATCHES = [
       ['<name>AFFiNE</name>', `<name>${BRAND}</name>`, 1],
       ['https://affine.pro', HOST, 0],
       ['https://github.com/toeverything/AFFiNE/issues', `${FORK}/issues`, 0],
+      [
+        '<mediatype>x-scheme-handler/affine</mediatype>',
+        `<mediatype>x-scheme-handler/${SCHEME}</mediatype>`,
+        0,
+      ],
+      [
+        '<color type="primary">#1e96eb</color>',
+        '<color type="primary">#2B7FFF</color>',
+        0,
+      ],
+      ['<developer id="pro.affine.app">', '<developer id="ai.clickdz.work">', 0],
+      ['<name>affine</name>', '<name>clickdz.ai</name>', 0],
+      [
+        'AFFiNE is a workspace with fully merged docs',
+        `${BRAND} is a workspace with fully merged docs`,
+        0,
+      ],
     ],
   ],
 ];

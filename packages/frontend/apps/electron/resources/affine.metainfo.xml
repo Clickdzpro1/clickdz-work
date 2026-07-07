@@ -10,8 +10,8 @@
   <url type="help">https://docs.affine.pro/</url>
   <url type="vcs-browser">https://github.com/toeverything/AFFiNE</url>
   <url type="contribute">https://docs.affine.pro/contributing</url>
-  <developer id="pro.affine.app">
-    <name>affine</name>
+  <developer id="ai.clickdz.work">
+    <name>clickdz.ai</name>
   </developer>
   <content_rating type="oars-1.1"/>
   <categories>
@@ -22,14 +22,14 @@
     <keyword>canvas</keyword>
   </keywords>
   <branding>
-    <color type="primary">#1e96eb</color>
+    <color type="primary">#2B7FFF</color>
   </branding>
   <recommends>
     <display_length compare="ge">800</display_length>
     <internet>always</internet>
   </recommends>
   <provides>
-    <mediatype>x-scheme-handler/affine</mediatype>
+    <mediatype>x-scheme-handler/clickdzwork</mediatype>
   </provides>
   <supports>
     <control>pointing</control>
@@ -39,7 +39,7 @@
   </supports>
   <description>
     <p>Write, Draw, Plan, All at Once. With AI.</p>
-    <p>AFFiNE is a workspace with fully merged docs, whiteboards and databases. Get more things done, your creativity isn’t monotone.</p>
+    <p>ClickDz Work is a workspace with fully merged docs, whiteboards and databases. Get more things done, your creativity isn’t monotone.</p>
     <p>Features</p>
     <ul>
       <li>Write your way to better productivity. Build up your content like blocks and let your ideas run wild.</li>

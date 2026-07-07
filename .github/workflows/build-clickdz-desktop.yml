@@ -1,0 +1,116 @@
+name: Build ClickDz Work desktop apps
+
+# Builds unsigned ClickDz Work desktop apps for Windows (portable package),
+# macOS (DMG, arm64 + x64) and Linux (x64) by reusing the upstream
+# release-desktop-platform pipeline with code signing disabled.
+# Trigger: push a tag like `desktop-0.27.0-clickdz.1` or run manually.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app-version:
+        description: 'App version (semver)'
+        default: '0.27.0-clickdz.1'
+        type: string
+  push:
+    tags:
+      - 'desktop-*'
+
+permissions:
+  actions: write
+  contents: write
+  security-events: write
+  id-token: write
+  attestations: write
+
+env:
+  BUILD_TYPE: stable
+  DEBUG: 'affine:*,napi:*'
+  APP_NAME: affine
+  MACOSX_DEPLOYMENT_TARGET: '11.6'
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      app-version: ${{ steps.v.outputs.version }}
+      short-sha: ${{ steps.v.outputs.short }}
+    steps:
+      - id: v
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/desktop-* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/desktop-}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ inputs.app-version }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "short=${GITHUB_SHA::9}" >> "$GITHUB_OUTPUT"
+
+  before-make:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Version
+        uses: ./.github/actions/setup-version
+        with:
+          app-version: ${{ needs.meta.outputs.app-version }}
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+      - name: generate-assets
+        run: yarn affine @affine/electron generate-assets
+        env:
+          RELEASE_VERSION: ${{ needs.meta.outputs.app-version }}
+      - name: Upload web artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-web
+          path: packages/frontend/apps/electron/resources/web-static
+
+  macos:
+    needs: [meta, before-make]
+    strategy:
+      fail-fast: false
+      matrix:
+        spec:
+          - arch: x64
+            target: x86_64-apple-darwin
+          - arch: arm64
+            target: aarch64-apple-darwin
+    uses: ./.github/workflows/release-desktop-platform.yml
+    secrets: inherit
+    with:
+      build_type: stable
+      app_version: ${{ needs.meta.outputs.app-version }}
+      git_short_hash: ${{ needs.meta.outputs.short-sha }}
+      runner: macos-latest
+      platform: darwin
+      arch: ${{ matrix.spec.arch }}
+      target: ${{ matrix.spec.target }}
+      apple_codesign: false
+
+  linux:
+    needs: [meta, before-make]
+    uses: ./.github/workflows/release-desktop-platform.yml
+    secrets: inherit
+    with:
+      build_type: stable
+      app_version: ${{ needs.meta.outputs.app-version }}
+      git_short_hash: ${{ needs.meta.outputs.short-sha }}
+      runner: ubuntu-latest
+      platform: linux
+      arch: x64
+      target: x86_64-unknown-linux-gnu
+      install_linux_deps: true
+
+  windows:
+    needs: [meta, before-make]
+    uses: ./.github/workflows/release-desktop-platform.yml
+    secrets: inherit
+    with:
+      build_type: stable
+      app_version: ${{ needs.meta.outputs.app-version }}
+      git_short_hash: ${{ needs.meta.outputs.short-sha }}
+      runner: windows-latest
+      platform: win32
+      arch: x64
+      target: x86_64-pc-windows-msvc

@@ -138,6 +138,16 @@ def main(brand_dir: str, out_dir: str):
         out / "favicon.ico", format="ICO",
         sizes=[(16, 16), (32, 32), (48, 48)])
 
+    # system tray icon (54x54 RGBA, mark only, matches upstream dims)
+    mark_color.resize((54, 54), Image.LANCZOS).save(out / "tray-icon.png")
+
+    # NSIS installer sidebar (328x628 RGB BMP): brand gradient + white mark
+    sw, sh = 328, 628
+    side = diag_gradient(sh, NAVY, PRIMARY).crop((0, 0, sw, sh))
+    sm = mark_white.resize((int(sw * 0.62),) * 2, Image.LANCZOS)
+    side.paste(sm, ((sw - sm.width) // 2, int(sh * 0.16)), sm)
+    side.convert("RGB").save(out / "nsis-sidebar.bmp", format="BMP")
+
     # approval preview grid
     cell, pad = 256, 24
     grid = Image.new("RGBA", (4 * cell + 5 * pad, cell + 2 * pad),

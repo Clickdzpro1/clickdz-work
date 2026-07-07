@@ -12,6 +12,9 @@ on:
         description: 'Image tag channel (stable / canary)'
         default: 'stable'
         type: string
+  push:
+    tags:
+      - 'image-*'
 
 permissions:
   contents: write
@@ -32,6 +35,6 @@ jobs:
     uses: ./.github/workflows/build-images.yml
     secrets: inherit
     with:
-      build-type: ${{ inputs.revision-tag }}
+      build-type: ${{ inputs.revision-tag || 'stable' }}
       app-version: 0.27.0-clickdz.1
       git-short-hash: ${{ needs.meta.outputs.short }}
