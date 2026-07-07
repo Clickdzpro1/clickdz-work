@@ -43,7 +43,7 @@ export function getBuildConfig(
         appVersion: pkg.version,
         // editorVersion: pkg.dependencies['@blocksuite/affine'],
         editorVersion: pkg.version,
-        githubUrl: 'https://github.com/toeverything/AFFiNE',
+        githubUrl: 'https://github.com/Clickdzpro1/clickdz-work',
         changelogUrl: 'https://affine.pro/what-is-new',
         downloadUrl: 'https://affine.pro/download',
         pricingUrl: 'https://affine.pro/pricing',

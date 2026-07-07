@@ -217,7 +217,7 @@ export function Template(props: PropsWithChildren) {
             <Link href="https://affine.pro">
               <Img
                 src="https://cdn.affine.pro/mail/2023-8-9/affine-logo.png"
-                alt="AFFiNE logo"
+                alt="ClickDz Work logo"
                 height="32px"
               />
             </Link>

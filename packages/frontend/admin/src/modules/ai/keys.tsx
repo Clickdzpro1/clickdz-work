@@ -59,7 +59,7 @@ export function Keys() {
           </div>
           <Separator />
           <div className="px-5 space-y-3 text-sm font-normal text-muted-foreground">
-            Custom API keys may not perform as expected. AFFiNE does not
+            Custom API keys may not perform as expected. ClickDz Work does not
             guarantee results when using custom API keys.
           </div>
         </div>

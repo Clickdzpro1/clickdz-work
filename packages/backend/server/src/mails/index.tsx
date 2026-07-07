@@ -66,14 +66,14 @@ function make<T extends ComponentType<any>>(
 
 export const Renderers = {
   //#region Test
-  TestMail: make(TestMail, 'Test Email from AFFiNE'),
+  TestMail: make(TestMail, 'Test Email from ClickDz Work'),
   //#endregion
 
   //#region User
-  SignIn: make(SignIn, 'Sign in to AFFiNE'),
-  SignUp: make(SignUp, 'Your AFFiNE account is waiting for you!'),
-  SetPassword: make(SetPassword, 'Set your AFFiNE password'),
-  ChangePassword: make(ChangePassword, 'Modify your AFFiNE password'),
+  SignIn: make(SignIn, 'Sign in to ClickDz Work'),
+  SignUp: make(SignUp, 'Your ClickDz Work account is waiting for you!'),
+  SetPassword: make(SetPassword, 'Set your ClickDz Work password'),
+  ChangePassword: make(ChangePassword, 'Modify your ClickDz Work password'),
   VerifyEmail: make(VerifyEmail, 'Verify your email address'),
   ChangeEmail: make(ChangeEmail, 'Change your email address'),
   VerifyChangeEmail: make(VerifyChangeEmail, 'Verify your new email address'),
@@ -83,7 +83,7 @@ export const Renderers = {
   //#region Workspace
   MemberInvitation: make(
     Invitation,
-    'You were invited to join a workspace on AFFiNE'
+    'You were invited to join a workspace on ClickDz Work'
   ),
   MemberAccepted: make(
     InvitationAccepted,
@@ -114,8 +114,8 @@ export const Renderers = {
   //#endregion
 
   //#region Doc
-  Mention: make(Mention, 'You were mentioned in AFFiNE'),
-  Comment: make(Comment, 'New comment in AFFiNE'),
+  Mention: make(Mention, 'You were mentioned in ClickDz Work'),
+  Comment: make(Comment, 'New comment in ClickDz Work'),
   CommentMention: make(CommentMention, 'You were mentioned in a comment'),
   //#endregion
 
@@ -152,7 +152,7 @@ export const Renderers = {
   //#region License
   TeamLicense: make(
     TeamLicense,
-    'Your AFFiNE Self-Hosted Team Workspace license is ready'
+    'Your ClickDz Work Self-Hosted Team Workspace license is ready'
   ),
   //#endregion
 } as const;
