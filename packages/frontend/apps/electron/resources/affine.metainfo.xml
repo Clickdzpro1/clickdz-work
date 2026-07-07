@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <component type="desktop-application">
-  <id>affine</id>
-  <name>AFFiNE</name>
+  <id>ai.clickdz.work</id>
+  <name>ClickDz Work</name>
   <summary>Productivity and note-taking app</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT AND LicenseRef-proprietary=https://github.com/toeverything/AFFiNE/blob/canary/LICENSE</project_license>
-  <url type="homepage">https://affine.pro</url>
-  <url type="bugtracker">https://github.com/toeverything/AFFiNE/issues</url>
+  <url type="homepage">https://work.clickdz.ai</url>
+  <url type="bugtracker">https://github.com/Clickdzpro1/clickdz-work/issues</url>
   <url type="help">https://docs.affine.pro/</url>
   <url type="vcs-browser">https://github.com/toeverything/AFFiNE</url>
   <url type="contribute">https://docs.affine.pro/contributing</url>
@@ -51,15 +51,15 @@
   <launchable type="desktop-id">affine.desktop</launchable>
   <screenshots>
     <screenshot type="default">
-      <image>https://affine.pro/overview/Write.jpg</image>
+      <image>https://work.clickdz.ai/overview/Write.jpg</image>
       <caption>Document writing interface with block-based editing</caption>
     </screenshot>
     <screenshot>
-      <image>https://affine.pro/overview/Draw.jpg</image>
+      <image>https://work.clickdz.ai/overview/Draw.jpg</image>
       <caption>Whiteboard drawing and visualization capabilities</caption>
     </screenshot>
     <screenshot>
-      <image>https://affine.pro/overview/Plan.jpg</image>
+      <image>https://work.clickdz.ai/overview/Plan.jpg</image>
       <caption>Project planning and task management view</caption>
     </screenshot>
   </screenshots>

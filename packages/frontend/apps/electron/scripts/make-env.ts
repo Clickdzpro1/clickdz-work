@@ -17,7 +17,7 @@ const ROOT = path.resolve(__dirname, '..');
 const envBuildType = (process.env.BUILD_TYPE || 'canary').trim().toLowerCase();
 const buildType = ReleaseTypeSchema.parse(envBuildType);
 const stableBuild = buildType === 'stable';
-const productName = !stableBuild ? `AFFiNE-${buildType}` : 'AFFiNE';
+const productName = !stableBuild ? `ClickDz Work ${buildType}` : 'ClickDz Work';
 const icoPath = path.join(
   ROOT,
   !stableBuild
@@ -44,7 +44,7 @@ const icnsPath = path.join(
 
 const iconPngPath = path.join(ROOT, './resources/icons/icon.png');
 
-const iconUrl = `https://cdn.affine.pro/app-icons/icon_${buildType}.ico`;
+const iconUrl = `https://raw.githubusercontent.com/Clickdzpro1/clickdz-work/canary/packages/frontend/apps/electron/resources/icons/icon_${buildType}.ico`;
 
 log(`buildType=${buildType}, productName=${productName}, icoPath=${icoPath}`);
 
@@ -70,10 +70,10 @@ const {
 log(`parsed args: arch=${arch}, platform=${platform}`);
 
 const appIdMap = {
-  internal: 'pro.affine.internal',
-  canary: 'pro.affine.canary',
-  beta: 'pro.affine.beta',
-  stable: 'pro.affine.app',
+  internal: 'ai.clickdz.work.internal',
+  canary: 'ai.clickdz.work.canary',
+  beta: 'ai.clickdz.work.beta',
+  stable: 'ai.clickdz.work',
 };
 
 export {

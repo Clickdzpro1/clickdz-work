@@ -38,7 +38,7 @@ export const BUILD_IN_SERVERS: (ServerMetadata & { config: ServerConfig })[] =
               ? 'http://localhost:8080'
               : location.origin,
             config: {
-              serverName: 'AFFiNE Cloud',
+              serverName: 'ClickDz Cloud',
               features: [
                 ServerFeature.Indexer,
                 ServerFeature.Copilot,
@@ -67,11 +67,11 @@ export const BUILD_IN_SERVERS: (ServerMetadata & { config: ServerConfig })[] =
               id: 'affine-cloud',
               baseUrl: BUILD_CONFIG.isNative
                 ? BUILD_CONFIG.isIOS
-                  ? 'https://apple.getaffineapp.com'
-                  : 'https://app.affine.pro'
+                  ? 'https://work.clickdz.ai'
+                  : 'https://work.clickdz.ai'
                 : location.origin,
               config: {
-                serverName: 'AFFiNE Cloud',
+                serverName: 'ClickDz Cloud',
                 features: [
                   ServerFeature.Indexer,
                   ServerFeature.Copilot,
@@ -100,11 +100,11 @@ export const BUILD_IN_SERVERS: (ServerMetadata & { config: ServerConfig })[] =
                 id: 'affine-cloud',
                 baseUrl: BUILD_CONFIG.isNative
                   ? BUILD_CONFIG.isIOS
-                    ? 'https://apple.getaffineapp.com'
-                    : 'https://insider.affine.pro'
+                    ? 'https://work.clickdz.ai'
+                    : 'https://work.clickdz.ai'
                   : location.origin,
                 config: {
-                  serverName: 'AFFiNE Cloud',
+                  serverName: 'ClickDz Cloud',
                   features: [
                     ServerFeature.Indexer,
                     ServerFeature.Copilot,
@@ -131,9 +131,9 @@ export const BUILD_IN_SERVERS: (ServerMetadata & { config: ServerConfig })[] =
             ? [
                 {
                   id: 'affine-cloud',
-                  baseUrl: 'https://insider.affine.pro',
+                  baseUrl: 'https://work.clickdz.ai',
                   config: {
-                    serverName: 'AFFiNE Cloud',
+                    serverName: 'ClickDz Cloud',
                     features: [
                       ServerFeature.Indexer,
                       ServerFeature.Copilot,
@@ -161,10 +161,10 @@ export const BUILD_IN_SERVERS: (ServerMetadata & { config: ServerConfig })[] =
                   {
                     id: 'affine-cloud',
                     baseUrl: BUILD_CONFIG.isNative
-                      ? 'https://affine.fail'
+                      ? 'https://work.clickdz.ai'
                       : location.origin,
                     config: {
-                      serverName: 'AFFiNE Cloud',
+                      serverName: 'ClickDz Cloud',
                       features: [
                         ServerFeature.Indexer,
                         ServerFeature.Copilot,
@@ -197,10 +197,10 @@ export type TelemetryChannel =
   | 'local';
 
 const OFFICIAL_TELEMETRY_ENDPOINTS: Record<TelemetryChannel, string> = {
-  stable: 'https://app.affine.pro',
-  beta: 'https://insider.affine.pro',
-  internal: 'https://insider.affine.pro',
-  canary: 'https://affine.fail',
+  stable: 'https://work.clickdz.ai',
+  beta: 'https://work.clickdz.ai',
+  internal: 'https://work.clickdz.ai',
+  canary: 'https://work.clickdz.ai',
   local: 'http://localhost:8080',
 };
 

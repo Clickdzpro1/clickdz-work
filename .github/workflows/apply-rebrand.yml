@@ -1,0 +1,51 @@
+name: Apply ClickDz Work rebrand
+
+# Maintenance job: re-apply the ClickDz Work rebrand after syncing the fork
+# with upstream AFFiNE. Run manually from the Actions tab. The patch engine
+# is idempotent (already-applied targets count as success) and fails loudly
+# if an upstream change moved a patch target.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: rebrand
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  rebrand:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install renderers
+        run: pip install pillow cairosvg
+
+      - name: Render icon set from the real ClickDZ logo
+        run: python3 tools/rebrand/render_icons.py tools/rebrand/brand /tmp/icons
+
+      - name: Install desktop and web icons
+        run: |
+          RES=packages/frontend/apps/electron/resources/icons
+          cp /tmp/icons/icon*.png /tmp/icons/icon*.ico /tmp/icons/icon*.icns "$RES/"
+          cp /tmp/icons/dmg-background.png "/tmp/icons/dmg-background@2x.png" "$RES/"
+          PUB=packages/frontend/core/public
+          cp /tmp/icons/favicon.ico /tmp/icons/apple-touch-icon.png "$PUB/"
+          for s in 32 36 48 72 96 144 192; do cp "/tmp/icons/favicon-$s.png" "$PUB/"; done
+
+      - name: Apply string and config patches (fails loudly on any miss)
+        run: node tools/rebrand/apply.mjs .
+
+      - name: Commit rebrand
+        run: |
+          git config user.name "clickdz-rebrand-bot"
+          git config user.email "admin@clickdz.ai"
+          git add -A
+          git commit -m "chore: apply ClickDz Work rebrand (automated, re-runnable)"
+          git push

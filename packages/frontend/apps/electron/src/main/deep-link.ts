@@ -13,7 +13,7 @@ import {
   showMainWindow,
 } from './windows-manager';
 
-let protocol = buildType === 'stable' ? 'affine' : `affine-${buildType}`;
+let protocol = buildType === 'stable' ? 'clickdzwork' : `clickdzwork-${buildType}`;
 if (isDev) {
   protocol = 'affine-dev';
 }

@@ -22,7 +22,7 @@ import {
 
 const fromBuildIdentifier = utils.fromBuildIdentifier;
 
-const linuxMimeTypes = [`x-scheme-handler/${productName.toLowerCase()}`];
+const linuxMimeTypes = ['x-scheme-handler/clickdzwork'];
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -170,7 +170,7 @@ const makers = [
       config: {
         format: 'ULMO',
         icon: icnsPath,
-        name: 'AFFiNE',
+        name: 'ClickDz Work',
         'icon-size': 128,
         background: path.join(
           __dirname,
@@ -204,7 +204,7 @@ const makers = [
   {
     name: '@electron-forge/maker-zip',
     config: {
-      name: 'affine',
+      name: 'clickdz-work',
       iconUrl: icoPath,
       setupIcon: icoPath,
       platforms: ['darwin', 'linux', 'win32'],
