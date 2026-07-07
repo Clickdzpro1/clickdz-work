@@ -169,6 +169,17 @@ const PATCHES = [
     ],
   ],
   [
+    'packages/frontend/core/src/desktop/components/document-title/index.tsx',
+    [
+      [
+        "document.title = prefix + (viewTitle ? `${viewTitle} · AFFiNE` : 'AFFiNE');",
+        "document.title = prefix + (viewTitle ? `${viewTitle} · ClickDz Work` : 'ClickDz Work');",
+        1,
+      ],
+      ["document.title = 'AFFiNE';", "document.title = 'ClickDz Work';", 1],
+    ],
+  ],
+  [
     'packages/frontend/core/src/modules/cloud/server-name.ts',
     [
       [

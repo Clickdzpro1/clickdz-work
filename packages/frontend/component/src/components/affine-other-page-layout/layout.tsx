@@ -44,7 +44,7 @@ export const AffineOtherPageLayout = ({
             className={styles.hideInSmallScreen}
           >
             {t['com.affine.auth.open.affine.download-app']()}
-          </Button>}}
+          </Button>}}}}
           <MobileNavbar />
         </div>
       )}
