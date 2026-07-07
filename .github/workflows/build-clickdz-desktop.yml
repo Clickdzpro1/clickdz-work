@@ -10,7 +10,7 @@ on:
     inputs:
       app-version:
         description: 'App version (semver)'
-        default: '0.27.0-clickdz.1'
+        default: '0.27.1'
         type: string
   push:
     tags:

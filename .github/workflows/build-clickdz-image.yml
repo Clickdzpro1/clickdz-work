@@ -36,5 +36,5 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.revision-tag || 'stable' }}
-      app-version: 0.27.0-clickdz.1
+      app-version: 0.27.1
       git-short-hash: ${{ needs.meta.outputs.short }}
