@@ -1,7 +1,7 @@
 name: clickdz-work
 
 # ClickDz Work self-host stack (VPS / any Docker host).
-# Same service contract as the upstream AFFiNE selfhost compose, pointed at
+# Same service contract as the upstream ClickDz Work selfhost compose, pointed at
 # the ClickDz Work image. Fill .env from .env.template first (no secrets in
 # this file, ever).
 
@@ -19,8 +19,8 @@ services:
       migration_job:
         condition: service_completed_successfully
     volumes:
-      - ${UPLOAD_LOCATION}:/root/.affine/storage
-      - ${CONFIG_LOCATION}:/root/.affine/config
+      - ${UPLOAD_LOCATION}:/root/.ClickDz Work/storage
+      - ${CONFIG_LOCATION}:/root/.ClickDz Work/config
     env_file: .env
     environment:
       - REDIS_SERVER_HOST=redis
@@ -32,8 +32,8 @@ services:
     image: ghcr.io/clickdzpro1/clickdz-work:${CLICKDZ_REVISION:-stable}
     container_name: clickdz_work_migration
     volumes:
-      - ${UPLOAD_LOCATION}:/root/.affine/storage
-      - ${CONFIG_LOCATION}:/root/.affine/config
+      - ${UPLOAD_LOCATION}:/root/.ClickDz Work/storage
+      - ${CONFIG_LOCATION}:/root/.ClickDz Work/config
     command: ['sh', '-c', 'node ./scripts/self-host-predeploy.js']
     env_file: .env
     environment:

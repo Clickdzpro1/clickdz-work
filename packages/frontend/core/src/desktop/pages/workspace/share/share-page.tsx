@@ -27,7 +27,7 @@ import { useI18n } from '@affine/i18n';
 import { DisposableGroup } from '@blocksuite/affine/global/disposable';
 import { RefNodeSlotsProvider } from '@blocksuite/affine/inlines/reference';
 import { type DocMode, DocModes } from '@blocksuite/affine/model';
-import { Logo1Icon } from '@blocksuite/icons/rc';
+// import { Logo1Icon } from '@blocksuite/icons/rc'; // Replaced with ClickDz logo
 import { FrameworkScope, useLiveData, useService } from '@toeverything/infra';
 import clsx from 'clsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -411,7 +411,7 @@ const SharePageFooter = () => {
       <span className={styles.linkText}>
         {t['com.affine.share-page.footer.built-with']()}
       </span>
-      <Logo1Icon fontSize={20} />
+      <img src="/imgs/app-icon-stable.png" width={20} height={20} alt="ClickDz Work" style={{ borderRadius: '3px' }} />
     </a>
   );
 };

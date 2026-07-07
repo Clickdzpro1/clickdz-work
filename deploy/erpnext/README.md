@@ -40,5 +40,5 @@ First login: `Administrator` / the `ERP_ADMIN_PASSWORD` you set.
 - Backups: `docker compose exec backend bench --site erp.clickdz.ai backup`
   (schedule via cron; volumes db-data + sites hold everything).
 - ClickDz Work ↔ ClickDz ERP integration ideas (phase 2): shared SSO,
-  AFFiNE doc links inside ERP records, AI copilot against ERP data via
+  ClickDz Work doc links inside ERP records, AI copilot against ERP data via
   ERPNext REST API + OpenAI.

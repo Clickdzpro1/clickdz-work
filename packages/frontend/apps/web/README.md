@@ -1,3 +1,3 @@
 # web
 
-AFFiNE Desktop Edition Web app.
+ClickDz Work Desktop Edition Web app.

@@ -3,7 +3,7 @@ import { autoUpdater as defaultAutoUpdater } from 'electron-updater';
 
 import { buildType } from '../config';
 import { logger } from '../logger';
-import { AFFiNEUpdateProvider } from './affine-update-provider';
+import { AFFiNEUpdateProvider } from './ClickDz Work-update-provider';
 import { updaterSubjects } from './event';
 import { WindowsUpdater } from './windows-updater';
 

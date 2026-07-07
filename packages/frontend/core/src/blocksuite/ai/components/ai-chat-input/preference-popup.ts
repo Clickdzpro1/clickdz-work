@@ -41,6 +41,22 @@ export class ChatInputPreference extends SignalWatcher(
   WithDisposable(ShadowlessElement)
 ) {
   static override styles = css`
+    .scrollable-models {
+      max-height: 360px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--affine-v2-layer-background-hoverOverlay) transparent;
+    }
+    .scrollable-models::-webkit-scrollbar {
+      width: 4px;
+    }
+    .scrollable-models::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .scrollable-models::-webkit-scrollbar-thumb {
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      border-radius: 2px;
+    }
     .chat-input-preference-trigger {
       display: flex;
       align-items: center;
@@ -142,7 +158,43 @@ export class ChatInputPreference extends SignalWatcher(
     const modelItems = [];
     const searchItems = [];
 
-    // model switch
+    // model switch - with scrollable wrapper for long lists
+    const allModels = this.aiModelService.models.value;
+    const modelActionItems = allModels.map(model => {
+      const isSelected = model.id === this.model.value?.id;
+      const isSelfHosted =
+        this.serverService.server.config$.value?.type ===
+        ServerDeploymentType.Selfhosted;
+      const status =
+        this.subscriptionService.subscription.ai$.value?.status;
+      const isSubscribed = status === SubscriptionStatus.Active;
+      return menu.action({
+        name: model.category,
+        info: html`
+          <span class="ai-model-version">${model.version}</span>
+        `,
+        prefix: html`
+          <div class="ai-model-prefix">
+            ${isSelected ? DoneIcon() : undefined}
+          </div>
+        `,
+        postfix: html`
+          <div class="ai-model-postfix" @click=${this.onAISubscribe}>
+            ${model.isPro && !isSubscribed ? LockIcon() : undefined}
+          </div>
+        `,
+        select: () => {
+          if (model.isPro && !isSelfHosted && !isSubscribed) {
+            this.notificationService.toast(
+              `Pro models require a ClickDz AI subscription.`
+            );
+            return;
+          }
+          this.aiModelService.setModel(model.id);
+        },
+      });
+    });
+
     modelItems.push(
       menu.subMenu({
         name: 'Model',
@@ -152,40 +204,8 @@ export class ChatInputPreference extends SignalWatcher(
           <span class="ai-active-model-name"> ${this.model.value?.name} </span>
         `,
         options: {
-          items: this.aiModelService.models.value.map(model => {
-            const isSelected = model.id === this.model.value?.id;
-            const isSelfHosted =
-              this.serverService.server.config$.value?.type ===
-              ServerDeploymentType.Selfhosted;
-            const status =
-              this.subscriptionService.subscription.ai$.value?.status;
-            const isSubscribed = status === SubscriptionStatus.Active;
-            return menu.action({
-              name: model.category,
-              info: html`
-                <span class="ai-model-version">${model.version}</span>
-              `,
-              prefix: html`
-                <div class="ai-model-prefix">
-                  ${isSelected ? DoneIcon() : undefined}
-                </div>
-              `,
-              postfix: html`
-                <div class="ai-model-postfix" @click=${this.onAISubscribe}>
-                  ${model.isPro && !isSubscribed ? LockIcon() : undefined}
-                </div>
-              `,
-              select: () => {
-                if (model.isPro && !isSelfHosted && !isSubscribed) {
-                  this.notificationService.toast(
-                    `Pro models require a ClickDz AI subscription.`
-                  );
-                  return;
-                }
-                this.aiModelService.setModel(model.id);
-              },
-            });
-          }),
+          items: modelActionItems,
+          class: 'scrollable-models',
         },
       })
     );

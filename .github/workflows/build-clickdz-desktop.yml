@@ -25,8 +25,8 @@ permissions:
 
 env:
   BUILD_TYPE: stable
-  DEBUG: 'affine:*,napi:*'
-  APP_NAME: affine
+  DEBUG: 'ClickDz Work:*,napi:*'
+  APP_NAME: ClickDz Work
   MACOSX_DEPLOYMENT_TARGET: '11.6'
 
 jobs:
@@ -57,7 +57,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
       - name: generate-assets
-        run: yarn affine @affine/electron generate-assets
+        run: yarn ClickDz Work @ClickDz Work/electron generate-assets
         env:
           RELEASE_VERSION: ${{ needs.meta.outputs.app-version }}
       - name: Upload web artifact

@@ -1,4 +1,4 @@
-# @blocksuite/affine-shared/commands
+# @blocksuite/ClickDz Work-shared/commands
 
-This package contains the common commands used in the affine blocks.
+This package contains the common commands used in the ClickDz Work blocks.
 Keep in mind that you should not put commands that are specific to a single kind of block here.

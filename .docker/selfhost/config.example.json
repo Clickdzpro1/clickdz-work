@@ -1,6 +1,6 @@
 {
   "$schema": "https://github.com/toeverything/affine/releases/latest/download/config.schema.json",
   "server": {
-    "name": "AFFiNE Self Hosted Server"
+    "name": "ClickDz Work Self Hosted Server"
   }
 }

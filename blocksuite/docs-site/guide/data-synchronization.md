@@ -1,7 +1,7 @@
 # Data Synchronization
 
 ::: info
-🌐 This documentation has a [Chinese translation](https://insider.affine.pro/share/af3478a2-9c9c-4d16-864d-bffa1eb10eb6/xiObHbAC0yUb7HmX4-fjg).
+🌐 This documentation has a [Chinese translation](https://insider.clickdz.ai/share/af3478a2-9c9c-4d16-864d-bffa1eb10eb6/xiObHbAC0yUb7HmX4-fjg).
 :::
 
 This guide explores several optimal ways to synchronize (in other words, save and load) documents in BlockSuite.
@@ -76,12 +76,12 @@ function createDoc() {
   new IndexeddbPersistence('provider-demo', doc.spaceDoc);
 
   doc.load(() => {
-    const pageBlockId = doc.addBlock('affine:page', {
+    const pageBlockId = doc.addBlock('ClickDz Work:page', {
       title: new Text('Test'),
     });
-    doc.addBlock('affine:surface', {}, pageBlockId);
-    const noteId = doc.addBlock('affine:note', {}, pageBlockId);
-    doc.addBlock('affine:paragraph', { text: new Text('Hello World!') }, noteId);
+    doc.addBlock('ClickDz Work:surface', {}, pageBlockId);
+    const noteId = doc.addBlock('ClickDz Work:note', {}, pageBlockId);
+    doc.addBlock('ClickDz Work:paragraph', { text: new Text('Hello World!') }, noteId);
   });
 }
 

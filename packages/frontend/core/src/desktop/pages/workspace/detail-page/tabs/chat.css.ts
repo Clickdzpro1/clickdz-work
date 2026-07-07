@@ -82,6 +82,7 @@ export const loadingIcon = style({
   width: '44px',
   height: '44px',
   color: 'var(--affine-icon-secondary)',
+  animation: 'clickdz-spin 1.2s linear infinite',
 });
 
 export const tabsContainer = style({
@@ -107,4 +108,10 @@ globalStyle(`${content} > ai-chat-content`, {
   height: 0,
   minHeight: 0,
   width: '100%',
+});
+
+/* ClickDz spinning logo animation for loading state */
+globalStyle('@keyframes clickdz-spin', {
+  from: { transform: 'rotate(0deg)' },
+  to: { transform: 'rotate(360deg)' },
 });

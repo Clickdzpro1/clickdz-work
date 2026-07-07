@@ -1,12 +1,12 @@
-## AFFiNE Release Process
+## ClickDz Work Release Process
 
-> In order to make a stable/beta release, you need to get authorization from the AFFiNE test team.
+> In order to make a stable/beta release, you need to get authorization from the ClickDz Work test team.
 
 ## Who Can Make a Release?
 
-The AFFiNE core team grants release authorization and enforces the following requirements:
+The ClickDz Work core team grants release authorization and enforces the following requirements:
 
-- Commit access to the AFFiNE repository.
+- Commit access to the ClickDz Work repository.
 - Access to GitHub Actions.
 
 ## How to Make a Release
@@ -30,7 +30,7 @@ git push origin canary
 
 ### 3. Create a Release Action
 
-Trigger a release action in the [Release Desktop App](https://github.com/toeverything/AFFiNE/actions/workflows/release-desktop-app.yml).
+Trigger a release action in the [Release Desktop App](https://github.com/toeverything/ClickDz Work/actions/workflows/release-desktop-app.yml).
 
 ![img.png](assets/release-action.png)
 
@@ -38,7 +38,7 @@ Select the appropriate branch, complete the form, and click `Run workflow`.
 
 ### 4. Publish the Release
 
-Once the release action is complete, a draft release will appear on the [Releases page](https://github.com/toeverything/AFFiNE/releases).
+Once the release action is complete, a draft release will appear on the [Releases page](https://github.com/toeverything/ClickDz Work/releases).
 
 Edit the release notes if necessary, then publish the release.
 

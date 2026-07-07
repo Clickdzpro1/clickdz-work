@@ -19,7 +19,7 @@ const TRUSTED_REDIRECT_DOMAINS = [
   'youtube.com',
   't.me',
   'reddit.com',
-  'affine.pro',
+  'ClickDz Work.pro',
 ].map(d => d.toLowerCase());
 
 function normalizeHostname(hostname: string) {

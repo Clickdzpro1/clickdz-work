@@ -88,7 +88,7 @@ describe('SettingsPage', () => {
     useAppConfigMock.mockReturnValue({
       appConfig: {
         server: {
-          name: 'AFFiNE',
+          name: 'ClickDz Work',
         },
         auth: {
           allowSignup: true,
@@ -96,7 +96,7 @@ describe('SettingsPage', () => {
       },
       patchedAppConfig: {
         server: {
-          name: 'AFFiNE',
+          name: 'ClickDz Work',
         },
         auth: {
           allowSignup: true,
@@ -153,7 +153,7 @@ describe('SettingsPage', () => {
     useAppConfigMock.mockReturnValue({
       appConfig: {
         server: {
-          name: 'AFFiNE',
+          name: 'ClickDz Work',
         },
         auth: {
           allowSignup: true,
@@ -161,7 +161,7 @@ describe('SettingsPage', () => {
       },
       patchedAppConfig: {
         server: {
-          name: 'AFFiNE',
+          name: 'ClickDz Work',
         },
         auth: {
           allowSignup: true,

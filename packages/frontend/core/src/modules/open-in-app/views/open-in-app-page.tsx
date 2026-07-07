@@ -2,7 +2,7 @@ import { Button } from '@affine/component/ui/button';
 import { WorkspaceDialogService } from '@affine/core/modules/dialogs';
 import { appIconMap, appNames } from '@affine/core/utils/channel';
 import { Trans, useI18n } from '@affine/i18n';
-import { LocalWorkspaceIcon, Logo1Icon } from '@blocksuite/icons/rc';
+import { LocalWorkspaceIcon } from '@blocksuite/icons/rc';
 import { useServiceOptional } from '@toeverything/infra';
 import type { MouseEvent } from 'react';
 import { useCallback } from 'react';
@@ -60,7 +60,7 @@ export const OpenInAppPage = ({
     <div className={styles.root}>
       <div className={styles.topNav}>
         <a href="/" rel="noreferrer" className={styles.affineLogo}>
-          <Logo1Icon width={24} height={24} />
+          <img src="/imgs/app-icon-stable.png" width={24} height={24} alt="ClickDz Work" />
         </a>
 
         <div className={styles.topNavLinks}>

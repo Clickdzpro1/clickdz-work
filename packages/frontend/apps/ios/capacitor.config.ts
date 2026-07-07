@@ -13,12 +13,12 @@ interface AppConfig {
 }
 
 const config: CapacitorConfig & AppConfig = {
-  appId: 'app.affine.pro',
-  appName: 'AFFiNE',
+  appId: 'app.ClickDz Work.pro',
+  appName: 'ClickDz Work',
   webDir: 'dist',
   affineVersion: packageJson.version,
   ios: {
-    scheme: 'AFFiNE',
+    scheme: 'ClickDz Work',
     path: '.',
     webContentsDebuggingEnabled: true,
     // Silence Capacitor's bridge logging (⚡️ TO JS / ⚡️ To Native -> / ⚡️ [log]).

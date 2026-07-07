@@ -1,13 +1,13 @@
-import { notify } from '@affine/component';
-import { getStoreManager } from '@affine/core/blocksuite/manager/store';
-import { AffineContext } from '@affine/core/components/context';
-import { AppFallback } from '@affine/core/mobile/components/app-fallback';
-import { configureMobileModules } from '@affine/core/mobile/modules';
-import { HapticProvider } from '@affine/core/mobile/modules/haptics';
-import { NavigationGestureProvider } from '@affine/core/mobile/modules/navigation-gesture';
-import { VirtualKeyboardProvider } from '@affine/core/mobile/modules/virtual-keyboard';
-import { router } from '@affine/core/mobile/router';
-import { configureCommonModules } from '@affine/core/modules';
+import { notify } from '@ClickDz Work/component';
+import { getStoreManager } from '@ClickDz Work/core/blocksuite/manager/store';
+import { AffineContext } from '@ClickDz Work/core/components/context';
+import { AppFallback } from '@ClickDz Work/core/mobile/components/app-fallback';
+import { configureMobileModules } from '@ClickDz Work/core/mobile/modules';
+import { HapticProvider } from '@ClickDz Work/core/mobile/modules/haptics';
+import { NavigationGestureProvider } from '@ClickDz Work/core/mobile/modules/navigation-gesture';
+import { VirtualKeyboardProvider } from '@ClickDz Work/core/mobile/modules/virtual-keyboard';
+import { router } from '@ClickDz Work/core/mobile/router';
+import { configureCommonModules } from '@ClickDz Work/core/modules';
 import {
   AuthProvider,
   AuthService,
@@ -17,44 +17,44 @@ import {
   ServersService,
   SubscriptionService,
   ValidatorProvider,
-} from '@affine/core/modules/cloud';
-import { registerNativePreviewHandlers } from '@affine/core/modules/code-block-preview-renderer';
-import { DocsService } from '@affine/core/modules/doc';
-import { FeatureFlagService } from '@affine/core/modules/feature-flag';
-import { GlobalContextService } from '@affine/core/modules/global-context';
-import { I18nProvider } from '@affine/core/modules/i18n';
-import { LifecycleService } from '@affine/core/modules/lifecycle';
-import { NativePaywallProvider } from '@affine/core/modules/paywall';
+} from '@ClickDz Work/core/modules/cloud';
+import { registerNativePreviewHandlers } from '@ClickDz Work/core/modules/code-block-preview-renderer';
+import { DocsService } from '@ClickDz Work/core/modules/doc';
+import { FeatureFlagService } from '@ClickDz Work/core/modules/feature-flag';
+import { GlobalContextService } from '@ClickDz Work/core/modules/global-context';
+import { I18nProvider } from '@ClickDz Work/core/modules/i18n';
+import { LifecycleService } from '@ClickDz Work/core/modules/lifecycle';
+import { NativePaywallProvider } from '@ClickDz Work/core/modules/paywall';
 import {
   configureLocalStorageStateStorageImpls,
   NbstoreProvider,
-} from '@affine/core/modules/storage';
-import { PopupWindowProvider } from '@affine/core/modules/url';
-import { ClientSchemeProvider } from '@affine/core/modules/url/providers/client-schema';
+} from '@ClickDz Work/core/modules/storage';
+import { PopupWindowProvider } from '@ClickDz Work/core/modules/url';
+import { ClientSchemeProvider } from '@ClickDz Work/core/modules/url/providers/client-schema';
 import {
   configureBrowserWorkbenchModule,
   WorkbenchService,
-} from '@affine/core/modules/workbench';
+} from '@ClickDz Work/core/modules/workbench';
 import {
   getAFFiNEWorkspaceSchema,
   WorkspacesService,
-} from '@affine/core/modules/workspace';
-import { configureBrowserWorkspaceFlavours } from '@affine/core/modules/workspace-engine';
-import { getWorkerUrl } from '@affine/env/worker';
+} from '@ClickDz Work/core/modules/workspace';
+import { configureBrowserWorkspaceFlavours } from '@ClickDz Work/core/modules/workspace-engine';
+import { getWorkerUrl } from '@ClickDz Work/env/worker';
 import {
   refreshSubscriptionMutation,
   requestApplySubscriptionMutation,
-} from '@affine/graphql';
-import { I18n } from '@affine/i18n';
-import { StoreManagerClient } from '@affine/nbstore/worker/client';
-import { setTelemetryTransport } from '@affine/track';
-import { Container } from '@blocksuite/affine/global/di';
+} from '@ClickDz Work/graphql';
+import { I18n } from '@ClickDz Work/i18n';
+import { StoreManagerClient } from '@ClickDz Work/nbstore/worker/client';
+import { setTelemetryTransport } from '@ClickDz Work/track';
+import { Container } from '@blocksuite/ClickDz Work/global/di';
 import {
   docLinkBaseURLMiddleware,
   MarkdownAdapter,
   titleMiddleware,
-} from '@blocksuite/affine/shared/adapters';
-import { MarkdownTransformer } from '@blocksuite/affine/widgets/linked-doc';
+} from '@blocksuite/ClickDz Work/shared/adapters';
+import { MarkdownTransformer } from '@blocksuite/ClickDz Work/widgets/linked-doc';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Haptics } from '@capacitor/haptics';
@@ -119,7 +119,7 @@ framework.impl(PopupWindowProvider, {
 });
 framework.impl(ClientSchemeProvider, {
   getClientScheme() {
-    return 'affine';
+    return 'ClickDz Work';
   },
 });
 framework.impl(ValidatorProvider, {
@@ -437,7 +437,7 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 const notifyAuthenticationError = (error: unknown, fallback: string) => {
   console.error(fallback, error);
   notify.error({
-    title: I18n['com.affine.auth.toast.title.failed'](),
+    title: I18n['com.ClickDz Work.auth.toast.title.failed'](),
     message: getErrorMessage(error, fallback),
   });
 };

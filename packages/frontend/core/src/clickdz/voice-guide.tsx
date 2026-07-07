@@ -326,6 +326,26 @@ export const VoiceGuide = () => {
     }
   }, [cleanupCapture, submitTranscript]);
 
+  // Keyboard shortcut: Space to toggle voice
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const target = e.target as HTMLElement;
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+          return;
+        }
+        e.preventDefault();
+        if (statusRef.current === 'listening') {
+          void submitTranscript();
+        } else if (statusRef.current !== 'connecting' && !isBusy) {
+          void startListening();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isBusy, startListening, submitTranscript]);
+
   const handleOrbClick = useCallback(() => {
     if (statusRef.current === 'listening') {
       void submitTranscript();
@@ -335,33 +355,59 @@ export const VoiceGuide = () => {
     void startListening();
   }, [isBusy, startListening, submitTranscript]);
 
-  // ---------- styles ----------
+  // Quick commands — double-click orb for common actions
+  const [quickMenuOpen, setQuickMenuOpen] = useState(false);
+  const quickCommands = [
+    { label: 'Summarize this page', icon: '📝' },
+    { label: 'Create a mind map', icon: '🧠' },
+    { label: 'Write code for me', icon: '💻' },
+    { label: 'Explain like I\'m 5', icon: '🎯' },
+  ];
+
+  const handleQuickCommand = useCallback((command: string) => {
+    setQuickMenuOpen(false);
+    setPanelOpen(true);
+    setLiveText(command);
+    setStatus('thinking');
+    // Auto-submit the command as transcript
+    finalsRef.current = [command];
+    interimRef.current = '';
+    void submitTranscript();
+  }, [submitTranscript]);
+
+  // ---------- styles (v3 — glassmorphism upgrade) ----------
   const orbBackground = isLive
-    ? 'linear-gradient(140deg, #FB7185 0%, #E11D48 55%, #9F1239 100%)'
+    ? 'linear-gradient(135deg, #FF6B6B 0%, #EE5A6F 40%, #C44569 100%)'
     : status === 'speaking'
-      ? 'linear-gradient(140deg, #34D399 0%, #0D9488 60%, #115E59 100%)'
-      : 'linear-gradient(140deg, #60A5FA 0%, #4F46E5 55%, #7C3AED 100%)';
+      ? 'linear-gradient(135deg, #26DE81 0%, #20BF6B 50%, #1B9C5C 100%)'
+      : status === 'error'
+        ? 'linear-gradient(135deg, #FD79A8 0%, #E84393 50%, #C2366B 100%)'
+        : 'linear-gradient(135deg, #74B9FF 0%, #5F72BE 50%, #9B59B6 100%)';
 
   const orbShadow = isLive
-    ? '0 10px 30px rgba(225, 29, 72, 0.45), 0 0 0 1px rgba(255,255,255,0.08) inset'
-    : '0 10px 30px rgba(79, 70, 229, 0.45), 0 0 0 1px rgba(255,255,255,0.10) inset';
+    ? '0 8px 32px rgba(238, 90, 111, 0.5), 0 0 0 1px rgba(255,255,255,0.15) inset, 0 0 20px rgba(255,107,107,0.3)'
+    : status === 'speaking'
+      ? '0 8px 32px rgba(32, 191, 107, 0.5), 0 0 0 1px rgba(255,255,255,0.15) inset'
+      : status === 'error'
+        ? '0 8px 32px rgba(232, 67, 147, 0.5), 0 0 0 1px rgba(255,255,255,0.15) inset'
+        : '0 8px 32px rgba(95, 114, 190, 0.5), 0 0 0 1px rgba(255,255,255,0.15) inset';
 
   const containerStyle: React.CSSProperties = {
     position: 'fixed',
-    right: '22px',
-    bottom: '92px',
+    right: '24px',
+    bottom: '100px',
     zIndex: 40,
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'flex-end',
-    gap: '12px',
+    gap: '14px',
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
   };
 
   const orbStyle: React.CSSProperties = {
-    width: '56px',
-    height: '56px',
+    width: '60px',
+    height: '60px',
     borderRadius: '50%',
     border: 'none',
     cursor: isBusy ? 'wait' : 'pointer',
@@ -371,31 +417,33 @@ export const VoiceGuide = () => {
     color: '#FFFFFF',
     background: orbBackground,
     boxShadow: orbShadow,
+    backdropFilter: 'blur(12px)',
+    WebkitBackdropFilter: 'blur(12px)',
     transition:
-      'transform 0.18s ease, box-shadow 0.25s ease, background 0.3s ease',
+      'transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease, background 0.4s ease',
     animation:
       status === 'idle'
-        ? 'clickdz-voice-breathe 3.6s ease-in-out infinite'
+        ? 'clickdz-voice-breathe 3s ease-in-out infinite'
         : 'none',
     position: 'relative',
   };
 
   const panelStyle: React.CSSProperties = {
-    width: '320px',
-    maxWidth: 'calc(100vw - 44px)',
-    background: 'rgba(13, 17, 28, 0.88)',
-    backdropFilter: 'blur(18px) saturate(150%)',
-    WebkitBackdropFilter: 'blur(18px) saturate(150%)',
-    borderRadius: '18px',
-    border: '1px solid rgba(255, 255, 255, 0.09)',
-    boxShadow: '0 18px 50px rgba(2, 6, 23, 0.55)',
-    padding: '14px 16px 16px',
+    width: '340px',
+    maxWidth: 'calc(100vw - 48px)',
+    background: 'rgba(17, 21, 36, 0.92)',
+    backdropFilter: 'blur(24px) saturate(180%)',
+    WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+    borderRadius: '20px',
+    border: '1px solid rgba(255, 255, 255, 0.10)',
+    boxShadow: '0 20px 60px rgba(2, 6, 23, 0.6), 0 0 0 1px rgba(255,255,255,0.05) inset',
+    padding: '16px 18px 18px',
     color: '#E2E8F0',
     fontSize: '13px',
     lineHeight: 1.5,
     position: 'relative',
     overflow: 'hidden',
-    animation: 'clickdz-voice-panel-in 0.22s ease',
+    animation: 'clickdz-voice-panel-in 0.25s cubic-bezier(0.16, 1, 0.3, 1)',
   };
 
   const statusDotColor = isLive
@@ -680,11 +728,54 @@ export const VoiceGuide = () => {
         </div>
       ) : null}
 
+      {/* Quick commands menu (appears on long-press / right-click) */}
+      {quickMenuOpen && status === 'idle' ? (
+        <div style={{
+          ...panelStyle,
+          width: '220px',
+          padding: '10px',
+          animation: 'clickdz-voice-panel-in 0.15s ease',
+        }}>
+          <div style={{ fontWeight: 700, fontSize: '12px', color: '#F8FAFC', marginBottom: '8px' }}>
+            Quick Commands
+          </div>
+          {quickCommands.map((cmd, i) => (
+            <button
+              key={i}
+              onClick={() => handleQuickCommand(cmd.label)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                width: '100%',
+                padding: '8px 10px',
+                border: 'none',
+                background: 'transparent',
+                color: '#E2E8F0',
+                fontSize: '12px',
+                borderRadius: '8px',
+                cursor: 'pointer',
+                transition: 'background 0.15s ease',
+              }}
+              onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.08)')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+            >
+              <span style={{ fontSize: '16px' }}>{cmd.icon}</span>
+              {cmd.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
       {/* the orb */}
       <button
         type="button"
         className="clickdz-voice-orb"
         onClick={handleOrbClick}
+        onContextMenu={e => {
+          e.preventDefault();
+          if (status === 'idle') setQuickMenuOpen(v => !v);
+        }}
         style={orbStyle}
         aria-label={
           isLive ? 'Send what I said' : 'Ask ClickDz AI with your voice'
@@ -692,7 +783,7 @@ export const VoiceGuide = () => {
         title={
           isLive
             ? 'Tap to send — or just pause talking'
-            : 'Ask ClickDz AI with your voice'
+            : 'Ask ClickDz AI with your voice (right-click for quick commands)'
         }
         disabled={isBusy}
       >

@@ -63,8 +63,8 @@ jobs:
             n="$f"
             case "$f" in
               archive.zip) n="ClickDzWork-windows-x64-portable.zip" ;;
-              affine-*-stable-*) n="ClickDzWork-$(echo "$f" | sed 's/^affine-.*-stable-//')" ;;
-              affine-*) n="ClickDzWork-$(echo "$f" | sed 's/^affine-//')" ;;
+              ClickDz Work-*-stable-*) n="ClickDzWork-$(echo "$f" | sed 's/^ClickDz Work-.*-stable-//')" ;;
+              ClickDz Work-*) n="ClickDzWork-$(echo "$f" | sed 's/^ClickDz Work-//')" ;;
             esac
             [ "$f" != "$n" ] && mv "$f" "$n" || true
           done
@@ -86,4 +86,4 @@ jobs:
             - **macOS**: open the DMG; on first launch right-click the app → Open.
             - **Linux**: AppImage (`chmod +x`) or deb.
 
-            Built from the open-source AFFiNE project (MIT/MPL) — see BRANDING.md.
+            Built from the open-source ClickDz Work project (MIT/MPL) — see BRANDING.md.

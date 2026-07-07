@@ -1,6 +1,6 @@
 # ClickDz Work — backend deploy kit (work.clickdz.ai)
 
-The ClickDz Work server is the AFFiNE Community Edition stack, rebranded:
+The ClickDz Work server is the ClickDz Work Community Edition stack, rebranded:
 one Node container (GraphQL API + WebSocket sync + background jobs, serves
 the web app itself) + PostgreSQL **with pgvector** + Redis + a blob volume.
 It cannot run as serverless functions (persistent WebSockets + workers) —
@@ -33,7 +33,7 @@ Monthly cost roughly $10–20 for a small team.
 2. **Railway**: New Project →
    - Service 1: **Redis** (template). Note its private host/port/password.
    - Service 2: **Deploy Docker image** → `ghcr.io/clickdzpro1/clickdz-work:stable`.
-   - Attach a **Volume** to service 2, mount path `/root/.affine`
+   - Attach a **Volume** to service 2, mount path `/root/.ClickDz Work`
      (covers blob storage + config).
    - Service 2 → Settings → Deploy → **Custom start command**:
      `sh -c "node ./scripts/self-host-predeploy.js && node ./dist/main.js"`
@@ -59,7 +59,7 @@ Monthly cost roughly $10–20 for a small team.
 
 > Upstash Redis (Vercel Marketplace) instead of Railway Redis is possible
 > but requires TLS, which the server only supports via the config file
-> (`/root/.affine/config/config.json` → `redis.ioredis: { "tls": {} }`),
+> (`/root/.ClickDz Work/config/config.json` → `redis.ioredis: { "tls": {} }`),
 > not env vars. Railway-internal Redis is simpler and cheaper.
 
 ## Path B — Any VPS with Docker
@@ -96,7 +96,7 @@ Postgres+pgvector and Redis in the same compose — no external services.
 
 ## What's deliberately NOT enabled
 
-- AFFiNE Enterprise features (EE license requires a paid subscription —
+- ClickDz Work Enterprise features (EE license requires a paid subscription —
   this stack is Community Edition, MIT/MPL).
 - Telemetry: endpoints point at our own domain; no analytics tokens are
   baked into builds.

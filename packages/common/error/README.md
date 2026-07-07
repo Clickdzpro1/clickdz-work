@@ -1,3 +1,3 @@
-# @affine/error
+# @ClickDz Work/error
 
-AFFiNE error handler utilities
+ClickDz Work error handler utilities

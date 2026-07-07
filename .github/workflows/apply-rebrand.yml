@@ -1,7 +1,7 @@
 name: Apply ClickDz Work rebrand
 
 # Maintenance job: re-apply the ClickDz Work rebrand after syncing the fork
-# with upstream AFFiNE. Run manually from the Actions tab. The patch engine
+# with upstream ClickDz Work. Run manually from the Actions tab. The patch engine
 # is idempotent (already-applied targets count as success) and fails loudly
 # if an upstream change moved a patch target.
 on:

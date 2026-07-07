@@ -65,7 +65,7 @@ vi.mock('@affine/i18n', () => {
 
 vi.mock('@blocksuite/icons/rc', () => ({
   AiIcon: () => null,
-  Logo1Icon: () => null,
+  ClickDzLogo: () => null,
   TodayIcon: () => null,
 }));
 

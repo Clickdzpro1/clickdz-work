@@ -1,13 +1,13 @@
-# @blocksuite/affine-ext-loader
+# @blocksuite/ClickDz Work-ext-loader
 
-Blocksuite extension loader system for AFFiNE, providing a structured way to manage and load extensions in different contexts.
+Blocksuite extension loader system for ClickDz Work, providing a structured way to manage and load extensions in different contexts.
 
 ## Usage
 
 ### Basic Extension Provider
 
 ```typescript
-import { BaseExtensionProvider } from '@blocksuite/affine-ext-loader';
+import { BaseExtensionProvider } from '@blocksuite/ClickDz Work-ext-loader';
 import { z } from 'zod';
 
 // Create a custom provider with options
@@ -28,7 +28,7 @@ class MyProvider extends BaseExtensionProvider<'my-scope', { enabled: boolean }>
 ### Store Extensions
 
 ```typescript
-import { StoreExtensionProvider, StoreExtensionManager } from '@blocksuite/affine-ext-loader';
+import { StoreExtensionProvider, StoreExtensionManager } from '@blocksuite/ClickDz Work-ext-loader';
 import { z } from 'zod';
 
 // Create a store provider with custom options
@@ -54,7 +54,7 @@ const extensions = manager.get('store');
 ### View Extensions
 
 ```typescript
-import { ViewExtensionProvider, ViewExtensionManager } from '@blocksuite/affine-ext-loader';
+import { ViewExtensionProvider, ViewExtensionManager } from '@blocksuite/ClickDz Work-ext-loader';
 import { z } from 'zod';
 
 // Create a view provider with custom options

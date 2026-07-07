@@ -8,7 +8,9 @@ import type { SettingTab } from '@affine/core/modules/dialogs/constant';
 import { type WorkspaceMetadata } from '@affine/core/modules/workspace';
 import { useI18n } from '@affine/i18n';
 import { track } from '@affine/track';
-import { Logo1Icon } from '@blocksuite/icons/rc';
+const ClickDzLogo = ({ size = 20 }: { size?: number }) => (
+  <img src="/imgs/app-icon-stable.png" width={size} height={size} alt="ClickDz Work" style={{ borderRadius: '4px' }} />
+);
 import { useLiveData, useService } from '@toeverything/infra';
 import clsx from 'clsx';
 import {
@@ -91,7 +93,7 @@ export const SignInButton = () => {
       }, [globalDialogService])}
     >
       <div className="avatar not-sign">
-        <Logo1Icon />
+        <ClickDzLogo />
       </div>
 
       <div className="content">

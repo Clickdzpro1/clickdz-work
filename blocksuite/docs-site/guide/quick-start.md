@@ -77,7 +77,7 @@ Key takeaways in the snippet above:
 
 - The `@blocksuite/presets` package contains the prebuilt editors and opt-in additional UI components.
 - To work with the BlockSuite document model and first-party blocks, the `@blocksuite/store` and `@blocksuite/blocks` packages are required.
-- The BlockSuite `canary` versions are released daily based on the master branch, which is also used in production in [AFFiNE](https://github.com/toeverything/AFFiNE).
+- The BlockSuite `canary` versions are released daily based on the master branch, which is also used in production in [ClickDz Work](https://github.com/toeverything/ClickDz Work).
 
 Then you can use the prebuilt `PageEditor` out of the box, with an initialized `doc` instance attached as its document model:
 
@@ -95,7 +95,7 @@ import { Text } from '@blocksuite/store';
   document.body.appendChild(editor);
 
   // Update block node with some initial text content
-  const paragraphs = doc.getBlockByFlavour('affine:paragraph');
+  const paragraphs = doc.getBlockByFlavour('ClickDz Work:paragraph');
   const paragraph = paragraphs[0];
   doc.updateBlock(paragraph, { text: new Text('Hello World!') });
 })();

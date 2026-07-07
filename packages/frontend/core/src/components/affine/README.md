@@ -1,4 +1,4 @@
-# Affine Official Workspace Component
+# ClickDz Work Official Workspace Component
 
 This component need specific configuration to work properly.
 

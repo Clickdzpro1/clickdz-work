@@ -3,8 +3,8 @@ import '../src/prelude';
 import '../src/app.module';
 
 import fs from 'node:fs';
-import { ProjectRoot } from '@affine-tools/utils/path';
-import { Package } from '@affine-tools/utils/workspace';
+import { ProjectRoot } from '@ClickDz Work-tools/utils/path';
+import { Package } from '@ClickDz Work-tools/utils/workspace';
 import {
   getDescriptors as getAllDescriptors,
   ConfigDescriptor,
@@ -41,7 +41,7 @@ function convertDescriptorToSchemaProperty(descriptor: ConfigDescriptor<any>) {
 function generateJsonSchema(outputPath: string) {
   const schema = {
     $schema: 'http://json-schema.org/draft-07/schema#',
-    title: 'AFFiNE Application Configuration',
+    title: 'ClickDz Work Application Configuration',
     type: 'object',
     properties: {},
   };
@@ -104,7 +104,7 @@ function main() {
     ProjectRoot.join('.docker', 'selfhost', 'schema.json').toString()
   );
   generateAdminConfigJson(
-    new Package('@affine/admin').join('src/config.json').toString()
+    new Package('@ClickDz Work/admin').join('src/config.json').toString()
   );
 }
 

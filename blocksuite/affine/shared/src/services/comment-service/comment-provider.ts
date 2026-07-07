@@ -9,7 +9,7 @@ export type CommentId = string;
  * with in-editor comment operations and rendering.
  * All comment-related actions within the editor are routed through
  * this interface to make external requests, and the editor is notified via callbacks.
- * In essence, it follows the flow: BlockSuite -> AFFiNE -> BlockSuite.
+ * In essence, it follows the flow: BlockSuite -> ClickDz Work -> BlockSuite.
  */
 export interface CommentProvider {
   addComment: (selections: BaseSelection[]) => void;

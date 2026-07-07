@@ -3,8 +3,8 @@ import {
   ExportToHTMLIcon,
   ExportToMarkdownIcon,
   NewIcon,
-} from '@blocksuite/affine-components/icons';
-import { openFilesWith } from '@blocksuite/affine-shared/utils';
+} from '@blocksuite/ClickDz Work-components/icons';
+import { openFilesWith } from '@blocksuite/ClickDz Work-shared/utils';
 import { WithDisposable } from '@blocksuite/global/lit';
 import type { ExtensionType, Schema, Workspace } from '@blocksuite/store';
 import { html, LitElement, type PropertyValues } from 'lit';
@@ -220,7 +220,7 @@ export class ImportDoc extends WithDisposable(LitElement) {
           </icon-button>
         </div>
         <!-- <div class="footer">
-        <div>Migrate from other versions of AFFiNE?</div>
+        <div>Migrate from other versions of ClickDz Work?</div>
       </div> -->
       </div>
     `;

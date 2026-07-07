@@ -1,14 +1,14 @@
 {
-  "name": "@affine/electron",
+  "name": "@ClickDz Work/electron",
   "private": true,
   "version": "0.27.0",
   "main": "./dist/main.js",
   "author": "toeverything",
   "repository": {
-    "url": "https://github.com/toeverything/AFFiNE",
+    "url": "https://github.com/toeverything/ClickDz Work",
     "type": "git"
   },
-  "description": "AFFiNE Desktop App",
+  "description": "ClickDz Work Desktop App",
   "homepage": "https://work.clickdz.ai",
   "exports": {
     "./helper/exposed": "./src/helper/exposed.ts",
@@ -33,10 +33,10 @@
     "make-nsis": "node ./scripts/make-nsis.ts"
   },
   "devDependencies": {
-    "@affine-tools/utils": "workspace:*",
-    "@affine/i18n": "workspace:*",
-    "@affine/native": "workspace:*",
-    "@affine/nbstore": "workspace:*",
+    "@ClickDz Work-tools/utils": "workspace:*",
+    "@ClickDz Work/i18n": "workspace:*",
+    "@ClickDz Work/native": "workspace:*",
+    "@ClickDz Work/nbstore": "workspace:*",
     "@electron-forge/cli": "^7.11.1",
     "@electron-forge/core": "^7.11.1",
     "@electron-forge/maker-deb": "^7.11.1",
@@ -84,9 +84,9 @@
   "build": {
     "protocols": [
       {
-        "name": "affine",
+        "name": "ClickDz Work",
         "schemes": [
-          "affine"
+          "ClickDz Work"
         ]
       }
     ]

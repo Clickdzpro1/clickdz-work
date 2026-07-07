@@ -177,9 +177,9 @@ type VersionDistribution = 'canary' | 'beta' | 'stable';
 type VersionPlatform = 'windows' | 'macos' | 'linux';
 type VersionArch = 'x64' | 'arm64';
 type FileParts =
-  | ['affine', string, VersionDistribution, VersionPlatform, VersionArch]
+  | ['ClickDz Work', string, VersionDistribution, VersionPlatform, VersionArch]
   | [
-      'affine',
+      'ClickDz Work',
       string,
       `${'canary' | 'beta'}.${number}`,
       VersionDistribution,
@@ -201,7 +201,7 @@ export function availableForMyPlatformAndInstaller(
   const imLinux = platform === 'linux';
 
   //  in form of:
-  //   affine-${build}-${buildSuffix}-${distribution}-${platform}-${arch}.${installer}
+  //   ClickDz Work-${build}-${buildSuffix}-${distribution}-${platform}-${arch}.${installer}
   //          ^ 1.0.0    ^canary.1    ^ canary        ^windows    ^ x64  ^.nsis.exe
   const filename = file.split('/').pop();
 

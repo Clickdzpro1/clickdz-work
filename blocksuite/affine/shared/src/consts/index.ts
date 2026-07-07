@@ -8,14 +8,14 @@ import {
   EmbedSyncedDocModel,
   EmbedYoutubeModel,
   SYNCED_DEFAULT_WIDTH,
-} from '@blocksuite/affine-model';
+} from '@blocksuite/ClickDz Work-model';
 
 export const BLOCK_CHILDREN_CONTAINER_PADDING_LEFT = 24;
 export const EDGELESS_BLOCK_CHILD_PADDING = 24;
 export const EDGELESS_BLOCK_CHILD_BORDER_WIDTH = 2;
 
 // The height of the header, which is used to calculate the scroll offset
-// In AFFiNE, to avoid the option element to be covered by the header, we need to reserve the space for the header
+// In ClickDz Work, to avoid the option element to be covered by the header, we need to reserve the space for the header
 export const PAGE_HEADER_HEIGHT = 53;
 
 export const EMBED_CARD_MIN_WIDTH = 450;
@@ -53,13 +53,13 @@ export const EMBED_CARD_HEIGHT: Record<EmbedCardStyle, number> = {
 };
 
 export const EMBED_BLOCK_FLAVOUR_LIST = [
-  'affine:embed-github',
-  'affine:embed-youtube',
-  'affine:embed-figma',
-  'affine:embed-linked-doc',
-  'affine:embed-synced-doc',
-  'affine:embed-html',
-  'affine:embed-loom',
+  'ClickDz Work:embed-github',
+  'ClickDz Work:embed-youtube',
+  'ClickDz Work:embed-figma',
+  'ClickDz Work:embed-linked-doc',
+  'ClickDz Work:embed-synced-doc',
+  'ClickDz Work:embed-html',
+  'ClickDz Work:embed-loom',
 ] as const;
 
 export const EMBED_BLOCK_MODEL_LIST = [
@@ -73,18 +73,18 @@ export const EMBED_BLOCK_MODEL_LIST = [
 ] as const;
 
 export const DEFAULT_IMAGE_PROXY_ENDPOINT =
-  'https://affine-worker.toeverything.workers.dev/api/worker/image-proxy';
+  'https://ClickDz Work-worker.toeverything.workers.dev/api/worker/image-proxy';
 
-// https://github.com/toeverything/affine-workers/tree/main/packages/link-preview
+// https://github.com/toeverything/ClickDz Work-workers/tree/main/packages/link-preview
 export const DEFAULT_LINK_PREVIEW_ENDPOINT =
-  'https://affine-worker.toeverything.workers.dev/api/worker/link-preview';
+  'https://ClickDz Work-worker.toeverything.workers.dev/api/worker/link-preview';
 
 // This constant is used to ignore tags when exporting using html2canvas
 export const CANVAS_EXPORT_IGNORE_TAGS = [
   'EDGELESS-TOOLBAR-WIDGET',
-  'AFFINE-DRAG-HANDLE-WIDGET',
-  'AFFINE-TOOLBAR-WIDGET',
-  'AFFINE-BLOCK-SELECTION',
+  'ClickDz Work-DRAG-HANDLE-WIDGET',
+  'ClickDz Work-TOOLBAR-WIDGET',
+  'ClickDz Work-BLOCK-SELECTION',
 ];
 
 export * from './bracket-pairs.js';

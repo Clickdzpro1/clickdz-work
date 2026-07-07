@@ -300,7 +300,7 @@ export interface CoordinationLeaseGrant {
 }
 
 /**
- * Converts markdown content to AFFiNE-compatible y-octo document binary.
+ * Converts markdown content to ClickDz Work-compatible y-octo document binary.
  *
  * # Arguments
  * * `title` - The document title

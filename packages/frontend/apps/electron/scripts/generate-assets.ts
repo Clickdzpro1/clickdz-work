@@ -45,14 +45,14 @@ const cwd = repoRootDir;
 
 // step 1: build web dist
 if (!process.env.SKIP_WEB_BUILD) {
-  spawnSync('yarn', ['affine', '@affine/electron-renderer', 'build'], {
+  spawnSync('yarn', ['ClickDz Work', '@ClickDz Work/electron-renderer', 'build'], {
     stdio: 'inherit',
     env: process.env,
     cwd,
     shell: true,
   });
 
-  spawnSync('yarn', ['affine', '@affine/electron', 'build'], {
+  spawnSync('yarn', ['ClickDz Work', '@ClickDz Work/electron', 'build'], {
     stdio: 'inherit',
     env: process.env,
     cwd,
@@ -67,8 +67,8 @@ if (process.env.BUILD_TYPE === 'internal') {
   const appUpdaterYml = path.join(publicDistDir, 'app-update.yml');
   const appUpdaterYmlContent = await fs.readFile(appUpdaterYml, 'utf-8');
   const newAppUpdaterYmlContent = appUpdaterYmlContent.replace(
-    'AFFiNE',
-    'AFFiNE-Releases'
+    'ClickDz Work',
+    'ClickDz Work-Releases'
   );
   await fs.writeFile(appUpdaterYml, newAppUpdaterYmlContent);
 }

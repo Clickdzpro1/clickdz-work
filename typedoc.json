@@ -1,9 +1,11 @@
 {
-  "entryPoints": ["packages/common/infra"],
+  "entryPoints": [
+    "packages/common/infra"
+  ],
   "out": "docs/reference/dist",
   "entryPointStrategy": "packages",
   "includeVersion": false,
   "logLevel": "Error",
   "readme": "./docs/reference/readme.md",
-  "name": "AFFiNE Development Reference"
+  "name": "ClickDz Work Development Reference"
 }

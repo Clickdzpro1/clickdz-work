@@ -1,5 +1,5 @@
 {
-  "name": "@affine/i18n",
+  "name": "@ClickDz Work/i18n",
   "version": "0.27.0",
   "description": "",
   "type": "module",
@@ -15,7 +15,7 @@
   "keywords": [],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/toeverything/AFFiNE.git"
+    "url": "git+https://github.com/toeverything/ClickDz Work.git"
   },
   "dependencies": {
     "@affine/debug": "workspace:*",

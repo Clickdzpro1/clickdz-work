@@ -1,4 +1,4 @@
-This document explains how to start server (@affine/server) locally with Docker
+This document explains how to start server (@ClickDz Work/server) locally with Docker
 
 > **Warning**:
 >
@@ -7,7 +7,7 @@ This document explains how to start server (@affine/server) locally with Docker
 
 ## Run required dev services in docker compose
 
-Running yarn's server package (@affine/server) requires some dev services to be running, i.e.:
+Running yarn's server package (@ClickDz Work/server) requires some dev services to be running, i.e.:
 
 - postgres
 - redis
@@ -24,7 +24,7 @@ docker compose -f ./.docker/dev/compose.yml up
 
 ### Notify
 
-> Starting from AFFiNE 0.20, compose.yml includes a breaking change: the default database image has switched from `postgres:16` to `pgvector/pgvector:pg16`. If you were previously using another major version of Postgres, please change the number after `pgvector/pgvector:pg` to the major version you are using.
+> Starting from ClickDz Work 0.20, compose.yml includes a breaking change: the default database image has switched from `postgres:16` to `pgvector/pgvector:pg16`. If you were previously using another major version of Postgres, please change the number after `pgvector/pgvector:pg` to the major version you are using.
 
 ## Build native packages (you need to setup rust toolchain first)
 
@@ -32,7 +32,7 @@ Server also requires native packages to be built, you can build them by running 
 
 ```sh
 # build native
-yarn affine @affine/server-native build
+yarn ClickDz Work @ClickDz Work/server-native build
 ```
 
 ## Prepare dev environment
@@ -42,14 +42,14 @@ yarn affine @affine/server-native build
 cp packages/backend/server/.env.example packages/backend/server/.env
 
 # everytime there are new migrations, init command should runned again
-yarn affine server init
+yarn ClickDz Work server init
 ```
 
 ## Start server
 
 ```sh
 # at project root
-yarn affine server dev
+yarn ClickDz Work server dev
 ```
 
 when server started, it will created a default user and a pro user for testing:
@@ -58,7 +58,7 @@ when server started, it will created a default user and a pro user for testing:
 
 Workspace members up to 3
 
-- email: dev@affine.pro
+- email: dev@clickdz.ai
 - name: Dev User
 - password: dev
 
@@ -66,7 +66,7 @@ Workspace members up to 3
 
 Workspace members up to 10
 
-- email: pro@affine.pro
+- email: pro@clickdz.ai
 - name: Pro User
 - password: pro
 
@@ -74,7 +74,7 @@ Workspace members up to 10
 
 Include a default `Team Workspace` and the members up to 10
 
-- email: team@affine.pro
+- email: team@clickdz.ai
 - name: Team User
 - password: team
 
@@ -85,11 +85,11 @@ Include a default `Team Workspace` and the members up to 10
 yarn dev
 ```
 
-You can login with the user (dev@affine.pro / dev) above to test the server.
+You can login with the user (dev@clickdz.ai / dev) above to test the server.
 
 ## Done
 
-Now you should be able to start developing affine with server enabled.
+Now you should be able to start developing ClickDz Work with server enabled.
 
 ## Bonus
 
@@ -97,11 +97,11 @@ Now you should be able to start developing affine with server enabled.
 
 ```sh
 # available at http://localhost:5555
-yarn affine server prisma studio
+yarn ClickDz Work server prisma studio
 ```
 
 ### Seed the db
 
 ```sh
-yarn affine server seed -h
+yarn ClickDz Work server seed -h
 ```

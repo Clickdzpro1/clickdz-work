@@ -5,7 +5,7 @@
 ### Path Factories
 
 ```ts
-import { FACTORIES } from '@affine/routes';
+import { FACTORIES } from '@ClickDz Work/routes';
 
 const path = FACTORIES.workspace.doc({ workspaceId: '123', docId: '456' });
 //                                     ^^^^ with typecheck
@@ -14,7 +14,7 @@ const path = FACTORIES.workspace.doc({ workspaceId: '123', docId: '456' });
 ### Register router
 
 ```tsx
-import { ROUTES } from '@affine/routes';
+import { ROUTES } from '@ClickDz Work/routes';
 
 function Routes() {
   return <Router path={ROUTES.admin.index} element={} />;
@@ -24,7 +24,7 @@ function Routes() {
 ### Path Parameter
 
 ```ts
-import { RouteParamsTypes } from '@affine/routes';
+import { RouteParamsTypes } from '@ClickDz Work/routes';
 
 function Doc() {
   const { workspaceId, docId } = useParams<RouteParamsTypes['workspace']['doc']>();

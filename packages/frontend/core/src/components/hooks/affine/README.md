@@ -1,6 +1,6 @@
-# AFFiNE Hooks
+# ClickDz Work Hooks
 
-> This directory will be moved to `@affine/worksapce/affine/hooks` in the future.
+> This directory will be moved to `@ClickDz Work/worksapce/ClickDz Work/hooks` in the future.
 
-Only put hooks in this directory if they are specific to AFFiNE, for example
-if they are using the AFFiNE API, or if the `AffineWorkspace` is required.
+Only put hooks in this directory if they are specific to ClickDz Work, for example
+if they are using the ClickDz Work API, or if the `AffineWorkspace` is required.
