@@ -2,7 +2,6 @@ import { Button, notify } from '@affine/component';
 import {
   AuthContainer,
   AuthContent,
-  AuthHeader,
   AuthInput,
 } from '@affine/component/auth-components';
 import { OAuth } from '@affine/core/components/affine/auth/oauth';
@@ -150,13 +149,24 @@ export const WebSingleStepSignIn = ({
     t,
   ]);
 
+  // ClickDz Work: clean header — no upstream logo icon, no duplicated
+  // "Sign in to X" + "X" lines. The page layout already shows the ClickDz
+  // logo in the top navigation.
+  const header = (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.25 }}>
+        Sign in
+      </div>
+      <div style={{ fontSize: 14, color: '#7A8699', marginTop: 4 }}>
+        {signInServerName}
+      </div>
+    </div>
+  );
+
   if (versionError && isSelfhosted) {
     return (
       <AuthContainer>
-        <AuthHeader
-          title={t['com.affine.auth.sign.in']()}
-          subTitle={signInServerName}
-        />
+        {header}
         <AuthContent>
           <div>{versionError}</div>
         </AuthContent>
@@ -166,10 +176,7 @@ export const WebSingleStepSignIn = ({
 
   return (
     <AuthContainer>
-      <AuthHeader
-        title={t['com.affine.auth.sign.in']()}
-        subTitle={signInServerName}
-      />
+      {header}
 
       <AuthContent>
         <OAuth redirectUrl={redirectUrl} />
@@ -220,7 +227,15 @@ export const WebSingleStepSignIn = ({
 
           <Button
             className={style.signInButton}
-            style={{ width: '100%' }}
+            style={{
+              width: '100%',
+              // explicit brand colors — the themed primary variant rendered
+              // white-on-white on the web auth page
+              background: 'linear-gradient(135deg, #2B7FFF, #1D4ED8)',
+              color: '#FFFFFF',
+              fontWeight: 600,
+              border: 'none',
+            }}
             size="extraLarge"
             data-testid="sign-in-button"
             block
@@ -228,7 +243,7 @@ export const WebSingleStepSignIn = ({
             loading={isLoading}
             disabled={isLoading || (!verifyToken && needCaptcha)}
           >
-            {t['com.affine.auth.sign.in']()}
+            Sign in
           </Button>
         </form>
 
