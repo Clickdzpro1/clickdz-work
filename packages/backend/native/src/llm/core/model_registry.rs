@@ -11,11 +11,412 @@ fn to_contract_variant(variant: &llm_adapter::core::ModelRegistryVariant) -> Res
     .map_err(crate::llm::map_json_error)
 }
 
+fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVariant> {
+  let image_attachment = llm_adapter::core::CapabilityAttachment {
+    kinds: vec!["image".to_string()],
+    source_kinds: Some(vec!["url".to_string(), "data".to_string()]),
+    allow_remote_urls: Some(true),
+  };
+
+  let gemini_attachment = llm_adapter::core::CapabilityAttachment {
+    kinds: vec!["image".to_string(), "audio".to_string(), "file".to_string()],
+    source_kinds: Some(vec![
+      "url".to_string(),
+      "data".to_string(),
+      "bytes".to_string(),
+      "file_handle".to_string(),
+    ]),
+    allow_remote_urls: Some(true),
+  };
+
+  let mut variants = Vec::new();
+
+  // Anthropic backend variants
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-opus-4-8".to_string(),
+    raw_model_id: "claude-opus-4-8".to_string(),
+    display_name: Some("Claude Opus 4.8".to_string()),
+    aliases: vec!["claude-opus-4-8".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec!["reasoning_budget_12000".to_string()]),
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-opus-4-7".to_string(),
+    raw_model_id: "claude-opus-4-7".to_string(),
+    display_name: Some("Claude Opus 4.7".to_string()),
+    aliases: vec!["claude-opus-4-7".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec!["reasoning_budget_12000".to_string()]),
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-opus-4-6".to_string(),
+    raw_model_id: "claude-opus-4-6".to_string(),
+    display_name: Some("Claude Opus 4.6".to_string()),
+    aliases: vec!["claude-opus-4-6".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec!["reasoning_budget_12000".to_string()]),
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-haiku-4-5".to_string(),
+    raw_model_id: "claude-haiku-4-5".to_string(),
+    display_name: Some("Claude Haiku 4.5".to_string()),
+    aliases: vec!["claude-haiku-4-5".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-opus-4-5".to_string(),
+    raw_model_id: "claude-opus-4-5".to_string(),
+    display_name: Some("Claude Opus 4.5".to_string()),
+    aliases: vec!["claude-opus-4-5".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec!["reasoning_budget_12000".to_string()]),
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-opus-4-1".to_string(),
+    raw_model_id: "claude-opus-4-1".to_string(),
+    display_name: Some("Claude Opus 4.1".to_string()),
+    aliases: vec!["claude-opus-4-1".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec!["reasoning_budget_12000".to_string()]),
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-3-7-sonnet".to_string(),
+    raw_model_id: "claude-3-7-sonnet-20250219".to_string(),
+    display_name: Some("Claude 3.7 Sonnet".to_string()),
+    aliases: vec!["claude-3-7-sonnet".to_string(), "claude-3-7-sonnet-20250219".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec!["reasoning_budget_12000".to_string()]),
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-3-5-sonnet".to_string(),
+    raw_model_id: "claude-3-5-sonnet-20241022".to_string(),
+    display_name: Some("Claude 3.5 Sonnet".to_string()),
+    aliases: vec!["claude-3-5-sonnet".to_string(), "claude-3-5-sonnet-20241022".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-3-5-haiku".to_string(),
+    raw_model_id: "claude-3-5-haiku-20241022".to_string(),
+    display_name: Some("Claude 3.5 Haiku".to_string()),
+    aliases: vec!["claude-3-5-haiku".to_string(), "claude-3-5-haiku-20241022".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-3-opus".to_string(),
+    raw_model_id: "claude-3-opus-20240229".to_string(),
+    display_name: Some("Claude 3 Opus".to_string()),
+    aliases: vec!["claude-3-opus".to_string(), "claude-3-opus-20240229".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-3-haiku".to_string(),
+    raw_model_id: "claude-3-haiku-20240307".to_string(),
+    display_name: Some("Claude 3 Haiku".to_string()),
+    aliases: vec!["claude-3-haiku".to_string(), "claude-3-haiku-20240307".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  // OpenAI backend variants
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_responses".to_string(),
+    canonical_key: "gpt-5.5".to_string(),
+    raw_model_id: "gpt-5.5".to_string(),
+    display_name: Some("GPT 5.5".to_string()),
+    aliases: vec!["gpt-5.5".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: Some(image_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_responses".to_string()),
+    request_layer: Some("responses".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_responses".to_string(),
+    canonical_key: "gpt-5.4".to_string(),
+    raw_model_id: "gpt-5.4".to_string(),
+    display_name: Some("GPT 5.4".to_string()),
+    aliases: vec!["gpt-5.4".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: Some(image_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_responses".to_string()),
+    request_layer: Some("responses".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_responses".to_string(),
+    canonical_key: "gpt-5.4-mini".to_string(),
+    raw_model_id: "gpt-5.4-mini".to_string(),
+    display_name: Some("GPT 5.4 Mini".to_string()),
+    aliases: vec!["gpt-5.4-mini".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: Some(image_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_responses".to_string()),
+    request_layer: Some("responses".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_responses".to_string(),
+    canonical_key: "gpt-5.4-nano".to_string(),
+    raw_model_id: "gpt-5.4-nano".to_string(),
+    display_name: Some("GPT 5.4 Nano".to_string()),
+    aliases: vec!["gpt-5.4-nano".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: Some(image_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_responses".to_string()),
+    request_layer: Some("responses".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_responses".to_string(),
+    canonical_key: "gpt-5.3".to_string(),
+    raw_model_id: "gpt-5.3".to_string(),
+    display_name: Some("GPT 5.3".to_string()),
+    aliases: vec!["gpt-5.3".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: Some(image_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_responses".to_string()),
+    request_layer: Some("responses".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_responses".to_string(),
+    canonical_key: "gpt-5.1".to_string(),
+    raw_model_id: "gpt-5.1".to_string(),
+    display_name: Some("GPT 5.1".to_string()),
+    aliases: vec!["gpt-5.1".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: Some(image_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_responses".to_string()),
+    request_layer: Some("responses".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  // Gemini backend variants
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "gemini_api".to_string(),
+    canonical_key: "gemini-3-flash-preview".to_string(),
+    raw_model_id: "gemini-3-flash-preview".to_string(),
+    display_name: Some("Gemini 3 Flash Preview".to_string()),
+    aliases: vec!["gemini-3-flash-preview".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec![
+        "text".to_string(),
+        "image".to_string(),
+        "audio".to_string(),
+        "file".to_string(),
+      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(gemini_attachment.clone()),
+      structured_attachments: Some(gemini_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("gemini".to_string()),
+    request_layer: Some("gemini_api".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec![
+      "prefetch_remote_attachments".to_string(),
+      "structured_retry".to_string(),
+      "reasoning_medium".to_string(),
+    ]),
+  });
+
+  variants
+}
+
+fn all_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVariant> {
+  let mut variants = llm_adapter::core::default_model_registry_variants();
+  variants.extend(custom_model_registry_variants());
+  variants
+}
+
 #[napi(catch_unwind)]
 pub fn llm_resolve_model_registry_variant(
   request: ModelRegistryResolveRequest,
 ) -> Result<ModelRegistryResolveResponse> {
-  let variants = llm_adapter::core::default_model_registry_variants();
+  let variants = all_model_registry_variants();
   let response = match llm_adapter::core::resolve_model_registry_variant(
     &variants,
     request.backend_kind.as_deref(),
@@ -38,7 +439,7 @@ pub fn llm_resolve_model_registry_variant(
 
 #[napi(catch_unwind)]
 pub fn llm_match_model_registry(request: ModelRegistryMatchRequest) -> Result<ModelRegistryMatchResponse> {
-  let variants = llm_adapter::core::default_model_registry_variants();
+  let variants = all_model_registry_variants();
   let cond = serde_json::to_value(request.cond)
     .and_then(serde_json::from_value)
     .map_err(crate::llm::map_json_error)?;
@@ -213,5 +614,44 @@ mod tests {
     })
     .unwrap();
     assert!(generic_gemini_image.variant.is_none());
+  }
+
+  #[test]
+  fn should_resolve_custom_claude_opus_48() {
+    let response = llm_resolve_model_registry_variant(ModelRegistryResolveRequest {
+      backend_kind: Some("anthropic".to_string()),
+      model_id: "claude-opus-4-8".to_string(),
+    })
+    .unwrap();
+    let variant = response.variant.unwrap();
+    assert_eq!(variant.raw_model_id, "claude-opus-4-8");
+    assert_eq!(variant.backend_kind, "anthropic");
+    assert_eq!(variant.display_name.as_deref(), Some("Claude Opus 4.8"));
+  }
+
+  #[test]
+  fn should_resolve_custom_gpt_55() {
+    let response = llm_resolve_model_registry_variant(ModelRegistryResolveRequest {
+      backend_kind: Some("openai_responses".to_string()),
+      model_id: "gpt-5.5".to_string(),
+    })
+    .unwrap();
+    let variant = response.variant.unwrap();
+    assert_eq!(variant.raw_model_id, "gpt-5.5");
+    assert_eq!(variant.backend_kind, "openai_responses");
+    assert_eq!(variant.display_name.as_deref(), Some("GPT 5.5"));
+  }
+
+  #[test]
+  fn should_resolve_custom_gemini_3_flash_preview() {
+    let response = llm_resolve_model_registry_variant(ModelRegistryResolveRequest {
+      backend_kind: Some("gemini_api".to_string()),
+      model_id: "gemini-3-flash-preview".to_string(),
+    })
+    .unwrap();
+    let variant = response.variant.unwrap();
+    assert_eq!(variant.raw_model_id, "gemini-3-flash-preview");
+    assert_eq!(variant.backend_kind, "gemini_api");
+    assert_eq!(variant.display_name.as_deref(), Some("Gemini 3 Flash Preview"));
   }
 }
