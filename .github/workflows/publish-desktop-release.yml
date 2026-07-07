@@ -54,11 +54,22 @@ jobs:
           echo "--- all artifact files ---"
           find dist -type f | sed 's/^/  /'
           mkdir -p out
+          # real installers are >20MB; small zips are onboarding fragments
           find dist -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \
             -o -name '*.AppImage' -o -name '*.deb' -o -name '*.flatpak' \
-            -o -name '*.nupkg' \) -exec cp -n {} out/ \;
-          echo "--- release payload ---"
-          ls -la out/
+            -o -name '*.nupkg' \) -size +20M -exec cp -n {} out/ \;
+          cd out
+          for f in *; do
+            n="$f"
+            case "$f" in
+              archive.zip) n="ClickDzWork-windows-x64-portable.zip" ;;
+              affine-*-stable-*) n="ClickDzWork-$(echo "$f" | sed 's/^affine-.*-stable-//')" ;;
+              affine-*) n="ClickDzWork-$(echo "$f" | sed 's/^affine-//')" ;;
+            esac
+            [ "$f" != "$n" ] && mv "$f" "$n" || true
+          done
+          echo "--- release payload (versionless, hub permalinks stay valid) ---"
+          ls -la
 
       - name: Create release
         uses: softprops/action-gh-release@v2
