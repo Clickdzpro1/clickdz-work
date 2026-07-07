@@ -1,0 +1,37 @@
+name: Build ClickDz Work server image
+
+# Builds the branded server image (web + admin + mobile static + server
+# bundle + native) and pushes ghcr.io/clickdzpro1/clickdz-work:<tag> and
+# :<tag>-<sha>. Reuses the upstream build-images pipeline, re-pointed at
+# our registry namespace and trimmed to linux/amd64.
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision-tag:
+        description: 'Image tag channel (stable / canary)'
+        default: 'stable'
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      short-sha: ${{ steps.m.outputs.short }}
+    steps:
+      - id: m
+        run: echo "short=${GITHUB_SHA::9}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: meta
+    uses: ./.github/workflows/build-images.yml
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.revision-tag }}
+      app-version: 0.27.0-clickdz.1
+      git-short-hash: ${{ needs.meta.outputs.short }}

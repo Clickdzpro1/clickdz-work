@@ -269,7 +269,7 @@ jobs:
           context: .
           push: true
           pull: true
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          platforms: linux/amd64
           provenance: true
           file: .github/deployment/node/Dockerfile
-          tags: ghcr.io/toeverything/affine:${{inputs.build-type}}-${{ inputs.git-short-hash }}
+          tags: ghcr.io/clickdzpro1/clickdz-work:${{inputs.build-type}}-${{ inputs.git-short-hash }},ghcr.io/clickdzpro1/clickdz-work:${{inputs.build-type}}
