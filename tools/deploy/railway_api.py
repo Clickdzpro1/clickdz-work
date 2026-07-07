@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Railway provisioning + ops for the ClickDz Work stack (work.clickdz.ai).
 
-Auth: env RAILWAY_ACCOUNT_TOKEN (Account token from railway.app/account/tokens
-— NOT a project token). GraphQL at backboard.railway.app/graphql/v2, Bearer.
+Auth: env RAILWAY_ACCOUNT_TOKEN (Account OR workspace token; workspace tokens
+cannot query `me` — verify uses `projects`). GraphQL at backboard.railway.app/graphql/v2, Bearer.
 
 Actions:
   verify                       auth check (me + project list)
@@ -41,7 +41,8 @@ def gql(query, variables=None):
     req = urllib.request.Request(
         API, data=body,
         headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {tok()}"})
+                 "Authorization": f"Bearer {tok()}",
+                 "User-Agent": "clickdz-work-deploy/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
             d = json.loads(r.read().decode())
@@ -180,7 +181,7 @@ def main():
     a = ap.parse_args()
 
     if a.action == "verify":
-        d = gql("query { me { name email } }")
+        d = gql("query { projects { edges { node { id name } } } }")
         print(json.dumps(d))
     elif a.action == "provision":
         provision()
