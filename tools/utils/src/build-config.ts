@@ -45,7 +45,7 @@ export function getBuildConfig(
         editorVersion: pkg.version,
         githubUrl: 'https://github.com/Clickdzpro1/clickdz-work',
         changelogUrl: 'https://affine.pro/what-is-new',
-        downloadUrl: 'https://affine.pro/download',
+        downloadUrl: 'https://clickdz-work-hub-techportal.vercel.app/#download',
         pricingUrl: 'https://affine.pro/pricing',
         discordUrl: 'https://affine.pro/redirect/discord',
         requestLicenseUrl: 'https://affine.pro/redirect/license',

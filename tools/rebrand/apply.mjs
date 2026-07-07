@@ -126,6 +126,49 @@ const PATCHES = [
     ],
   ],
   [
+    'packages/frontend/component/src/components/affine-other-page-layout/layout.tsx',
+    [
+      [
+        `          <Button
+            onClick={openDownloadLink}
+            className={styles.hideInSmallScreen}
+          >`,
+        `          {false && <Button
+            onClick={openDownloadLink}
+            className={styles.hideInSmallScreen}
+          >`,
+        0,
+      ],
+      [
+        `            {t['com.affine.auth.open.affine.download-app']()}
+          </Button>`,
+        `            {t['com.affine.auth.open.affine.download-app']()}
+          </Button>}`,
+        0,
+      ],
+    ],
+  ],
+  [
+    'tools/utils/src/build-config.ts',
+    [
+      [
+        "downloadUrl: 'https://affine.pro/download',",
+        "downloadUrl: 'https://clickdz-work-hub-techportal.vercel.app/#download',",
+        0,
+      ],
+    ],
+  ],
+  [
+    'packages/frontend/core/src/components/affine/onboarding/animate-in-tooltip.tsx',
+    [
+      [
+        'AFFiNE is a workspace with fully merged docs,',
+        'ClickDz Work is a workspace with fully merged docs,',
+        0,
+      ],
+    ],
+  ],
+  [
     'packages/frontend/core/src/modules/cloud/server-name.ts',
     [
       [
