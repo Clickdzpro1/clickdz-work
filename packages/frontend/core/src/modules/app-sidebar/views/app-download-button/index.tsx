@@ -13,7 +13,7 @@ export function AppDownloadButton({
   className?: string;
   style?: React.CSSProperties;
 }) {
-  const [show, setShow] = useState(true);
+  const [show, setShow] = useState(false); // hidden for ClickDz Work
 
   const handleClose = useCatchEventCallback(() => {
     setShow(false);
@@ -22,7 +22,7 @@ export function AppDownloadButton({
   // TODO(@JimmFly): unify this type of literal value.
   const handleClick = useCallback(() => {
     track.$.navigationPanel.bottomButtons.downloadApp();
-    const url = `https://affine.pro/download?channel=stable`;
+    const url = `https://clickdz-work-hub-techportal.vercel.app/#download`;
     open(url, '_blank');
   }, []);
 

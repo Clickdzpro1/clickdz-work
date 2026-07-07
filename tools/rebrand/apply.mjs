@@ -126,6 +126,43 @@ const PATCHES = [
     ],
   ],
   [
+    'packages/frontend/core/src/modules/cloud/server-name.ts',
+    [
+      [
+        "export const DEFAULT_SELF_HOSTED_SERVER_NAME = 'AFFiNE Self-hosted';",
+        `export const DEFAULT_SELF_HOSTED_SERVER_NAME = '${BRAND}';`,
+        1,
+      ],
+    ],
+  ],
+  [
+    'packages/backend/server/src/core/auth/service.ts',
+    [
+      [
+        "(env.selfhosted ? 'AFFiNE Self-hosted' : 'AFFiNE Cloud')",
+        `(env.selfhosted ? '${BRAND}' : 'ClickDz Cloud')`,
+        1,
+      ],
+    ],
+  ],
+  [
+    'packages/backend/server/src/core/config/resolver.ts',
+    [
+      ["? 'AFFiNE Self-hosted'", `? '${BRAND}'`, 1],
+    ],
+  ],
+  [
+    'packages/frontend/core/src/modules/app-sidebar/views/app-download-button/index.tsx',
+    [
+      ['const [show, setShow] = useState(true);',
+       'const [show, setShow] = useState(false); // hidden for ClickDz Work',
+       1],
+      ['https://affine.pro/download?channel=stable',
+       'https://clickdz-work-hub-techportal.vercel.app/#download',
+       0],
+    ],
+  ],
+  [
     'packages/frontend/admin/src/modules/setup/form.tsx',
     [
       ['Welcome to AFFiNE', `Welcome to ${BRAND}`, 1],
