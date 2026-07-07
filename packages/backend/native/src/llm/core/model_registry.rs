@@ -252,6 +252,46 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     behavior_flags: None,
   });
 
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-sonnet-4-5".to_string(),
+    raw_model_id: "claude-sonnet-4-5-20250929".to_string(),
+    display_name: Some("Claude Sonnet 4.5".to_string()),
+    aliases: vec!["claude-sonnet-4-5".to_string(), "claude-sonnet-4-5-20250929".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "anthropic".to_string(),
+    canonical_key: "claude-sonnet-4".to_string(),
+    raw_model_id: "claude-sonnet-4-20250514".to_string(),
+    display_name: Some("Claude Sonnet 4".to_string()),
+    aliases: vec!["claude-sonnet-4".to_string(), "claude-sonnet-4-20250514".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("anthropic".to_string()),
+    request_layer: Some("anthropic".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
   // OpenAI backend variants
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "openai_responses".to_string(),
@@ -373,7 +413,56 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     behavior_flags: None,
   });
 
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_responses".to_string(),
+    canonical_key: "gpt-5.2".to_string(),
+    raw_model_id: "gpt-5.2".to_string(),
+    display_name: Some("GPT 5.2".to_string()),
+    aliases: vec!["gpt-5.2".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: Some(image_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_responses".to_string()),
+    request_layer: Some("responses".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
   // Gemini backend variants
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "gemini_api".to_string(),
+    canonical_key: "gemini-3.5-flash".to_string(),
+    raw_model_id: "gemini-3.5-flash".to_string(),
+    display_name: Some("Gemini 3.5 Flash".to_string()),
+    aliases: vec!["gemini-3.5-flash".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec![
+        "text".to_string(),
+        "image".to_string(),
+        "audio".to_string(),
+        "file".to_string(),
+      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(gemini_attachment.clone()),
+      structured_attachments: Some(gemini_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("gemini".to_string()),
+    request_layer: Some("gemini_api".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec![
+      "prefetch_remote_attachments".to_string(),
+      "structured_retry".to_string(),
+      "reasoning_medium".to_string(),
+    ]),
+  });
+
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "gemini_api".to_string(),
     canonical_key: "gemini-3-flash-preview".to_string(),

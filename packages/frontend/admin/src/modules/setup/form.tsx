@@ -47,7 +47,7 @@ const SettingsDone = () => {
         All Settings Done
       </h1>
       <p className="mt-5 font-semibold text-xl max-lg:px-4 max-lg:text-lg">
-        AFFiNE is ready to use.
+        ClickDz Work est prêt à l'emploi.
       </p>
     </div>
   );

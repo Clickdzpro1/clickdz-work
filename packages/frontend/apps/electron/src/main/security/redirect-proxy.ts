@@ -19,7 +19,7 @@ function resolveCurrentHostnameForRedirectAllowlist() {
   try {
     return new URL(base).hostname;
   } catch {
-    return 'app.affine.pro';
+    return 'work.clickdz.ai';
   }
 }
 

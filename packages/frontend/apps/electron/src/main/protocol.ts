@@ -46,10 +46,10 @@ async function resolveWhitelistedLocalPath(filepath: string) {
 }
 
 const apiBaseByBuildType: Record<typeof buildType, string> = {
-  stable: 'https://app.affine.pro',
-  beta: 'https://insider.affine.pro',
-  internal: 'https://insider.affine.pro',
-  canary: 'https://affine.fail',
+  stable: 'https://work.clickdz.ai',
+  beta: 'https://work.clickdz.ai',
+  internal: 'https://work.clickdz.ai',
+  canary: 'https://work.clickdz.ai',
 };
 
 function resolveApiBaseUrl() {
@@ -168,12 +168,11 @@ const needRefererDomains = [
   /^(?:[a-zA-Z0-9-]+\.)*youtube-nocookie\.com$/,
   /^(?:[a-zA-Z0-9-]+\.)*googlevideo\.com$/,
 ];
-const defaultReferer = 'https://client.affine.local/';
+const defaultReferer = 'https://client.clickdz.local/';
 const affineDomains = [
-  /^(?:[a-z0-9-]+\.)*usercontent\.affine\.pro$/i,
-  /^(?:[a-z0-9-]+\.)*affine\.pro$/i,
-  /^(?:[a-z0-9-]+\.)*affine\.fail$/i,
-  /^(?:[a-z0-9-]+\.)*affine\.run$/i,
+  /^(?:[a-z0-9-]+\.)*work\.clickdz\.ai$/i,
+  /^(?:[a-z0-9-]+\.)*clickdz\.ai$/i,
+  /^(?:[a-z0-9-]+\.)*usercontent\.clickdz\.ai$/i,
 ];
 
 function setHeader(

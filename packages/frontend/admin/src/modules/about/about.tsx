@@ -46,7 +46,7 @@ export function AboutAFFiNE() {
   return (
     <div className="flex flex-col h-full gap-3 py-5 px-6 w-full">
       <div className="flex items-center">
-        <span className="text-xl font-semibold">About AFFiNE</span>
+        <span className="text-xl font-semibold">About ClickDz Work</span>
       </div>
       <div className="overflow-y-auto space-y-[10px]">
         <div className="flex flex-col rounded-md border">

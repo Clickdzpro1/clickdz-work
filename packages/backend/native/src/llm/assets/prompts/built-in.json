@@ -508,7 +508,7 @@
   {
     "name": "Make it real",
     "action": "Make it real",
-    "model": "claude-sonnet-4-5@20250929",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [
       {
         "role": "system",
@@ -523,7 +523,7 @@
   {
     "name": "Make it real with text",
     "action": "Make it real with text",
-    "model": "claude-sonnet-4-5@20250929",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [
       {
         "role": "system",
@@ -583,7 +583,7 @@
   {
     "name": "Section Edit",
     "action": "Section Edit",
-    "model": "claude-sonnet-4@20250514",
+    "model": "claude-sonnet-4-20250514",
     "messages": [
       {
         "role": "system",
@@ -696,7 +696,7 @@
   },
   {
     "name": "Code Artifact",
-    "model": "claude-sonnet-4-5@20250929",
+    "model": "claude-sonnet-4-5-20250929",
     "messages": [
       {
         "role": "system",
@@ -722,13 +722,13 @@
       "claude-sonnet-4-6",
       "claude-opus-4-6",
       "claude-sonnet-4-5",
-      "claude-sonnet-4-5@20250929",
+      "claude-sonnet-4-5-20250929",
       "claude-haiku-4-5",
       "claude-opus-4-5",
       "claude-opus-4-1",
       "claude-opus-4",
       "claude-sonnet-4",
-      "claude-sonnet-4@20250514",
+      "claude-sonnet-4-20250514",
       "claude-3-7-sonnet",
       "claude-3-5-sonnet",
       "claude-3-5-haiku",
