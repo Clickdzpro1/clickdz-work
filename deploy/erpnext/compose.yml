@@ -1,0 +1,127 @@
+# ClickDz ERP — ERPNext v15 production stack (official frappe_docker topology)
+# Host: any VPS with Docker. See deploy/erpnext/README.md for the runbook.
+# Uses OFFICIAL frappe/erpnext images (the Clickdzpro1/erpnext fork is a
+# vanilla mirror kept for future custom apps — swap the image when we build
+# a custom one).
+
+name: clickdz-erp
+
+x-app: &app
+  image: frappe/erpnext:${ERPNEXT_VERSION:-v15}
+  restart: unless-stopped
+  volumes:
+    - sites:/home/frappe/frappe-bench/sites
+    - logs:/home/frappe/frappe-bench/logs
+  environment:
+    DB_HOST: db
+    DB_PORT: '3306'
+    REDIS_CACHE: redis-cache:6379
+    REDIS_QUEUE: redis-queue:6379
+    SOCKETIO_PORT: '9000'
+
+services:
+  backend:
+    <<: *app
+
+  frontend:
+    <<: *app
+    command: nginx-entrypoint.sh
+    environment:
+      BACKEND: backend:8000
+      SOCKETIO: websocket:9000
+      FRAPPE_SITE_NAME_HEADER: ${ERP_SITE:-erp.clickdz.ai}
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: 'off'
+      PROXY_READ_TIMEOUT: 120
+      CLIENT_MAX_BODY_SIZE: 50m
+    ports:
+      - '${ERP_HTTP_PORT:-8080}:8080'
+    depends_on:
+      - backend
+      - websocket
+
+  websocket:
+    <<: *app
+    command: node /home/frappe/frappe-bench/apps/frappe/socketio.js
+
+  queue-short:
+    <<: *app
+    command: bench worker --queue short,default
+
+  queue-long:
+    <<: *app
+    command: bench worker --queue long,default,short
+
+  scheduler:
+    <<: *app
+    command: bench schedule
+
+  db:
+    image: mariadb:10.6
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: mysqladmin ping -h localhost --password=${DB_ROOT_PASSWORD}
+      interval: 10s
+      retries: 10
+
+  redis-cache:
+    image: redis:6.2-alpine
+    restart: unless-stopped
+
+  redis-queue:
+    image: redis:6.2-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-queue-data:/data
+
+  # -------- one-shot jobs (run once at first install) --------
+  configurator:
+    <<: *app
+    restart: 'no'
+    entrypoint: ['bash', '-c']
+    command:
+      - >
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
+        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
+        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+    depends_on:
+      db:
+        condition: service_healthy
+
+  create-site:
+    <<: *app
+    restart: 'no'
+    entrypoint: ['bash', '-c']
+    command:
+      - >
+        wait-for-it -t 120 db:3306;
+        wait-for-it -t 120 redis-cache:6379;
+        wait-for-it -t 120 redis-queue:6379;
+        bench new-site ${ERP_SITE:-erp.clickdz.ai}
+        --mariadb-user-host-login-scope='%'
+        --admin-password=${ERP_ADMIN_PASSWORD}
+        --db-root-username=root
+        --db-root-password=${DB_ROOT_PASSWORD}
+        --install-app erpnext
+        --set-default;
+    depends_on:
+      - configurator
+
+volumes:
+  sites:
+  logs:
+  db-data:
+  redis-queue-data:
