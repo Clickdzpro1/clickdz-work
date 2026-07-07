@@ -49,9 +49,11 @@ export class QuotaStateService {
       ]);
     const flags = {
       ...resolved.flags,
-      unlimitedCopilot: entitlements.some(
-        entitlement => entitlement.plan === 'ai'
-      ),
+      // ClickDz Work: self-hosted instances have no AI paywall — copilot is
+      // unlimited for every account (AI runs on the owner's Make credits).
+      unlimitedCopilot:
+        env.selfhosted ||
+        entitlements.some(entitlement => entitlement.plan === 'ai'),
     };
     const now = new Date();
 
