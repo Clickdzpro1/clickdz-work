@@ -87,6 +87,45 @@ const PATCHES = [
     ],
   ],
   [
+    'packages/frontend/component/src/components/affine-other-page-layout/layout.tsx',
+    [
+      [
+        "import { Logo1Icon } from '@blocksuite/icons/rc';",
+        "import { ClickDzLogo as Logo1Icon } from './clickdz-logo';",
+        1,
+      ],
+    ],
+  ],
+  [
+    'packages/frontend/component/src/components/affine-other-page-layout/use-nav-config.ts',
+    [
+      ["path: 'https://affine.pro/blog',", "path: 'https://clickdz.ai/blog',", 1],
+      ["path: 'https://affine.pro/about-us',", "path: 'https://clickdz.ai/about',", 1],
+      ["path: 'https://affine.pro',", "path: 'https://clickdz.ai',", 1],
+    ],
+  ],
+  [
+    'packages/frontend/admin/src/modules/about/about.tsx',
+    [
+      ["stable: 'AFFiNE',", `stable: '${BRAND}',`, 1],
+      ["canary: 'AFFiNE Canary',", `canary: '${BRAND} Canary',`, 1],
+      ["beta: 'AFFiNE Beta',", `beta: '${BRAND} Beta',`, 1],
+      ["internal: 'AFFiNE Internal',", `internal: '${BRAND} Internal',`, 1],
+      ["'Star AFFiNE on GitHub'", `'Star ${BRAND} on GitHub'`, 0],
+      ["Star AFFiNE on GitHub", `Star ${BRAND} on GitHub`, 0],
+      [
+        "'https://docs.affine.pro/docs/self-host-affine'",
+        `'${FORK}'`,
+        0,
+      ],
+      [
+        "'https://affine.pro/pricing/?type=selfhost#table'",
+        "'https://clickdz.ai'",
+        0,
+      ],
+    ],
+  ],
+  [
     'packages/frontend/admin/src/modules/setup/form.tsx',
     [
       ['Welcome to AFFiNE', `Welcome to ${BRAND}`, 1],

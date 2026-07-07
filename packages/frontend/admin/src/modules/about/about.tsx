@@ -12,10 +12,10 @@ import {
 type Channel = 'stable' | 'canary' | 'beta' | 'internal';
 
 const appNames = {
-  stable: 'AFFiNE',
-  canary: 'AFFiNE Canary',
-  beta: 'AFFiNE Beta',
-  internal: 'AFFiNE Internal',
+  stable: 'ClickDz Work',
+  canary: 'ClickDz Work Canary',
+  beta: 'ClickDz Work Beta',
+  internal: 'ClickDz Work Internal',
 } satisfies Record<Channel, string>;
 const appName = appNames[BUILD_CONFIG.appBuildType];
 
@@ -23,7 +23,7 @@ const links = [
   {
     href: BUILD_CONFIG.githubUrl,
     icon: <GithubIcon size={20} />,
-    label: 'Star AFFiNE on GitHub',
+    label: 'Star ClickDz Work on GitHub',
   },
   {
     href: BUILD_CONFIG.githubUrl,
@@ -31,12 +31,12 @@ const links = [
     label: 'Report an Issue',
   },
   {
-    href: 'https://docs.affine.pro/docs/self-host-affine',
+    href: 'https://github.com/Clickdzpro1/clickdz-work',
     icon: <AlbumIcon size={20} />,
     label: 'Self-host Document',
   },
   {
-    href: 'https://affine.pro/pricing/?type=selfhost#table',
+    href: 'https://clickdz.ai',
     icon: <UploadCloudIcon size={20} />,
     label: 'Upgrade to Team',
   },
