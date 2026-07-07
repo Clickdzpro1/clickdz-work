@@ -1,4 +1,5 @@
 import { uniReactRoot } from '@affine/component';
+import { ClickDzWorkspaceBoot } from '@affine/core/clickdz/workspace-boot';
 import { AiLoginRequiredModal } from '@affine/core/components/affine/auth/ai-login-required';
 import { useResponsiveSidebar } from '@affine/core/components/hooks/use-responsive-siedebar';
 import { SWRConfigProvider } from '@affine/core/components/providers/swr-config-provider';
@@ -53,7 +54,10 @@ const WorkspaceLayoutUIContainer = ({ children }: PropsWithChildren) => {
   useResponsiveSidebar();
 
   return (
-    <AppContainer data-current-path={currentPath}>{children}</AppContainer>
+    <AppContainer data-current-path={currentPath}>
+      {children}
+      <ClickDzWorkspaceBoot />
+    </AppContainer>
   );
 };
 const WorkspaceLayoutInner = ({ children }: PropsWithChildren) => {

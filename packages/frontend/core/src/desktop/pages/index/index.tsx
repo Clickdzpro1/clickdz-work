@@ -101,6 +101,17 @@ export const Component = ({
       return;
     }
 
+    // ClickDz Work: first-run onboarding wizard (collect info + pick templates)
+    // runs once before the app. The wizard sets the flag then returns to '/'.
+    try {
+      if (!localStorage.getItem('clickdz:onboarded:v1')) {
+        window.location.replace('/welcome');
+        return;
+      }
+    } catch {
+      /* storage unavailable — skip onboarding */
+    }
+
     // check is user logged in && has cloud workspace
     if (searchParams.get('initCloud') === 'true') {
       if (loggedIn) {

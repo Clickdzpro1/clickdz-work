@@ -143,6 +143,66 @@ export class MailSender {
       };
     }
 
+    // ClickDz Work: prefer Resend's HTTP API (port 443) when a key is present.
+    // SMTP ports (465/587) are blocked on some hosts (Railway trial); HTTP is
+    // always reachable, so this makes OTP / magic-link mail work permanently.
+    const resendKey = process.env.RESEND_API_KEY;
+    if (resendKey) {
+      const from =
+        process.env.MAILER_SENDER ||
+        this.config.mailer.SMTP.sender ||
+        'ClickDz Work <noreply@clickdz.ai>';
+      metrics.mail.counter('send_total').add(1, { name });
+      try {
+        const resp = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${resendKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from,
+            to: options.to,
+            subject: options.subject,
+            html: options.html,
+            text: options.text,
+          }),
+        });
+        if (resp.ok) {
+          const data = (await resp.json().catch(() => ({}))) as {
+            id?: string;
+          };
+          metrics.mail.counter('accepted_total').add(1, { name });
+          this.logger.debug(`Mail [${name}] sent via Resend HTTP.`);
+          return {
+            status: 'accepted',
+            providerMessageId: data?.id,
+            retryable: false,
+          };
+        }
+        const errText = await resp.text().catch(() => '');
+        metrics.mail.counter('failed_total').add(1, { name });
+        this.logger.error(
+          `Resend HTTP send failed [${name}]: ${resp.status} ${errText}`
+        );
+        return {
+          status: 'failed',
+          retryable: true,
+          errorCode: 'resend_http_failed',
+          error: errText,
+        };
+      } catch (e) {
+        metrics.mail.counter('failed_total').add(1, { name });
+        this.logger.error(`Resend HTTP error [${name}].`, e);
+        return {
+          status: 'failed',
+          retryable: true,
+          errorCode: 'resend_http_error',
+          error: e instanceof Error ? e.message : String(e),
+        };
+      }
+    }
+
     const [smtpClient, from] = this.getSender(domain);
     if (!smtpClient) {
       this.logger.warn(`Mailer SMTP transport is not configured to send mail.`);

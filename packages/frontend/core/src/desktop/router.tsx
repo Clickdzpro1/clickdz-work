@@ -45,6 +45,10 @@ export const topLevelRoutes = [
         lazy: () => import('./pages/index'),
       },
       {
+        path: '/welcome',
+        lazy: () => import('./pages/clickdz-welcome'),
+      },
+      {
         path: WORKSPACE_ROUTE_PATH,
         lazy: () => import('./pages/workspace/index'),
       },
