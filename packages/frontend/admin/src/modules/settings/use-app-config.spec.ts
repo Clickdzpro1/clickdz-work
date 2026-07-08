@@ -53,20 +53,20 @@ const mocked = vi.hoisted(() => {
   };
 });
 
-vi.mock('@ClickDz Work/admin/use-query', () => ({
+vi.mock('@affine/admin/use-query', () => ({
   useQuery: () => ({
     data: mocked.getQueryState(),
     mutate: mocked.mutateMock,
   }),
 }));
 
-vi.mock('@ClickDz Work/admin/use-mutation', () => ({
+vi.mock('@affine/admin/use-mutation', () => ({
   useMutation: () => ({
     trigger: mocked.saveUpdatesMock,
   }),
 }));
 
-vi.mock('@ClickDz Work/component', () => ({
+vi.mock('@affine/component', () => ({
   notify: {
     success: mocked.notifySuccessMock,
     error: mocked.notifyErrorMock,

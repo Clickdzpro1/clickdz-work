@@ -1,6 +1,6 @@
-import { buttonVariants } from '@ClickDz Work/admin/components/ui/button';
-import { Separator } from '@ClickDz Work/admin/components/ui/separator';
-import { cn } from '@ClickDz Work/admin/utils';
+import { buttonVariants } from '@affine/admin/components/ui/button';
+import { Separator } from '@affine/admin/components/ui/separator';
+import { cn } from '@affine/admin/utils';
 import {
   AlbumIcon,
   ChevronRightIcon,

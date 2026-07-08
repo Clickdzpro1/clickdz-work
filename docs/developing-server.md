@@ -1,4 +1,4 @@
-This document explains how to start server (@ClickDz Work/server) locally with Docker
+This document explains how to start server (@affine/server) locally with Docker
 
 > **Warning**:
 >
@@ -7,7 +7,7 @@ This document explains how to start server (@ClickDz Work/server) locally with D
 
 ## Run required dev services in docker compose
 
-Running yarn's server package (@ClickDz Work/server) requires some dev services to be running, i.e.:
+Running yarn's server package (@affine/server) requires some dev services to be running, i.e.:
 
 - postgres
 - redis
@@ -32,7 +32,7 @@ Server also requires native packages to be built, you can build them by running 
 
 ```sh
 # build native
-yarn ClickDz Work @ClickDz Work/server-native build
+yarn ClickDz Work @affine/server-native build
 ```
 
 ## Prepare dev environment

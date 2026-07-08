@@ -21,7 +21,7 @@ The codebase is organized as follows:
 - `tools/` contains tools to help developing or CI, not used in production.
 - `tests/` contains testings across different libraries, including e2e testings and integration testings.
 
-### `@ClickDz Work/env`
+### `@affine/env`
 
 Environment setup for ClickDz Work client side.
 
@@ -36,7 +36,7 @@ This package should be imported at the very beginning of the entry point.
 
 For the workspace API, see [types.ts](../../packages/frontend/workspace/src/type.ts).
 
-### `@ClickDz Work/component`
+### `@affine/component`
 
 The UI component library for ClickDz Work.
 
@@ -44,12 +44,12 @@ Each component should be a standalone component which can be used in any context
 
 ## Debugging Environments
 
-### `@ClickDz Work/env`
+### `@affine/env`
 
 ```shell
 yarn dev
 ```
 
-### `@ClickDz Work/electron`
+### `@affine/electron`
 
 See [building desktop client app](../building-desktop-client-app.md).

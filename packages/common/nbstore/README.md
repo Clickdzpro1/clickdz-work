@@ -5,8 +5,8 @@
 ### Independent Storage usage
 
 ```ts
-import type { ConnectionStatus } from '@ClickDz Work/nbstore';
-import { IndexedDBDocStorage } from '@ClickDz Work/nbstore/idb';
+import type { ConnectionStatus } from '@affine/nbstore';
+import { IndexedDBDocStorage } from '@affine/nbstore/idb';
 
 const storage = new IndexedDBDocStorage({
   peer: 'local'
@@ -25,10 +25,10 @@ const doc = await storage.getDoc('my-first-doc');
 ### Use All storages together
 
 ```ts
-import { SpaceStorage } from '@ClickDz Work/nbstore';
-import type { ConnectionStatus } from '@ClickDz Work/nbstore';
-import { IndexedDBDocStorage } from '@ClickDz Work/nbstore/idb';
-import { SqliteBlobStorage } from '@ClickDz Work/nbstore/sqlite';
+import { SpaceStorage } from '@affine/nbstore';
+import type { ConnectionStatus } from '@affine/nbstore';
+import { IndexedDBDocStorage } from '@affine/nbstore/idb';
+import { SqliteBlobStorage } from '@affine/nbstore/sqlite';
 
 const storage = new SpaceStorage([new IndexedDBDocStorage({}), new SqliteBlobStorage({})]);
 
@@ -44,9 +44,9 @@ await storage.tryGet('blob')?.get('img');
 ### Put Storage behind Worker
 
 ```ts
-import { SpaceStorageWorkerClient } from '@ClickDz Work/nbstore/op';
-import type { ConnectionStatus } from '@ClickDz Work/nbstore';
-import { IndexedDBDocStorage } from '@ClickDz Work/nbstore/idb';
+import { SpaceStorageWorkerClient } from '@affine/nbstore/op';
+import type { ConnectionStatus } from '@affine/nbstore';
+import { IndexedDBDocStorage } from '@affine/nbstore/idb';
 
 const client = new SpaceStorageWorkerClient();
 client.addStorage(IndexedDBDocStorage, {

@@ -1,3 +1,3 @@
-# @ClickDz Work/error
+# @affine/error
 
 ClickDz Work error handler utilities

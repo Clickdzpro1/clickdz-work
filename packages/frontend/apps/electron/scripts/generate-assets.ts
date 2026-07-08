@@ -45,14 +45,14 @@ const cwd = repoRootDir;
 
 // step 1: build web dist
 if (!process.env.SKIP_WEB_BUILD) {
-  spawnSync('yarn', ['ClickDz Work', '@ClickDz Work/electron-renderer', 'build'], {
+  spawnSync('yarn', ['ClickDz Work', '@affine/electron-renderer', 'build'], {
     stdio: 'inherit',
     env: process.env,
     cwd,
     shell: true,
   });
 
-  spawnSync('yarn', ['ClickDz Work', '@ClickDz Work/electron', 'build'], {
+  spawnSync('yarn', ['ClickDz Work', '@affine/electron', 'build'], {
     stdio: 'inherit',
     env: process.env,
     cwd,

@@ -1,29 +1,29 @@
-import { notify } from '@ClickDz Work/component';
-import { configureElectronStateStorageImpls } from '@ClickDz Work/core/desktop/storage';
-import { configureCommonModules } from '@ClickDz Work/core/modules';
-import { configureAppTabsHeaderModule } from '@ClickDz Work/core/modules/app-tabs-header';
-import { configureDesktopBackupModule } from '@ClickDz Work/core/modules/backup';
+import { notify } from '@affine/component';
+import { configureElectronStateStorageImpls } from '@affine/core/desktop/storage';
+import { configureCommonModules } from '@affine/core/modules';
+import { configureAppTabsHeaderModule } from '@affine/core/modules/app-tabs-header';
+import { configureDesktopBackupModule } from '@affine/core/modules/backup';
 import {
   AuthProvider,
   ServerScope,
   ServerService,
   ValidatorProvider,
-} from '@ClickDz Work/core/modules/cloud';
+} from '@affine/core/modules/cloud';
 import {
   configureDesktopApiModule,
   DesktopApiService,
-} from '@ClickDz Work/core/modules/desktop-api';
+} from '@affine/core/modules/desktop-api';
 import {
   configureSpellCheckSettingModule,
   configureTraySettingModule,
-} from '@ClickDz Work/core/modules/editor-setting';
-import { configureFindInPageModule } from '@ClickDz Work/core/modules/find-in-page';
+} from '@affine/core/modules/editor-setting';
+import { configureFindInPageModule } from '@affine/core/modules/find-in-page';
 import {
   ClientSchemeProvider,
   PopupWindowProvider,
-} from '@ClickDz Work/core/modules/url';
-import { configureDesktopWorkbenchModule } from '@ClickDz Work/core/modules/workbench';
-import { configureBrowserWorkspaceFlavours } from '@ClickDz Work/core/modules/workspace-engine';
+} from '@affine/core/modules/url';
+import { configureDesktopWorkbenchModule } from '@affine/core/modules/workbench';
+import { configureBrowserWorkspaceFlavours } from '@affine/core/modules/workspace-engine';
 import { Framework } from '@toeverything/infra';
 
 function notifySessionOnlySignIn(sessionOnly?: boolean) {

@@ -46,7 +46,7 @@ yarn ClickDz Work init
 
 ```json
 {
-  "name": "@ClickDz Work/demo",
+  "name": "@affine/demo",
   "scripts": {
     "dev": "node ./dev.ts"
   }
@@ -54,19 +54,19 @@ yarn ClickDz Work init
 ```
 
 ```bash
-ClickDz Work @ClickDz Work/demo dev
+ClickDz Work @affine/demo dev
 ```
 
 or
 
 ```json
 {
-  "name": "@ClickDz Work/demo",
+  "name": "@affine/demo",
   "scripts": {
     "dev": "r ./src/index.ts"
   },
   "devDependencies": {
-    "@ClickDz Work-tools/cli": "workspace:*"
+    "@affine-tools/cli": "workspace:*"
   }
 }
 ```

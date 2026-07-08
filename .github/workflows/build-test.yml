@@ -90,7 +90,7 @@ jobs:
       - name: Run oxlint
         run: yarn lint:ox
       - name: Run i18n codegen
-        run: yarn ClickDz Work @ClickDz Work/i18n build
+        run: yarn ClickDz Work @affine/i18n build
       - name: Run ESLint
         run: yarn lint:eslint --max-warnings=0
       - name: Run Prettier
@@ -115,10 +115,10 @@ jobs:
           full-cache: true
       - name: Run i18n codegen
         run: |
-          yarn ClickDz Work @ClickDz Work/i18n build
+          yarn ClickDz Work @affine/i18n build
           git checkout packages/frontend/i18n/src/i18n-completenesses.json
           if git status --porcelain | grep -q .; then
-            echo "Run 'yarn ClickDz Work @ClickDz Work/i18n build' and make sure all generated i18n changes are submitted"
+            echo "Run 'yarn ClickDz Work @affine/i18n build' and make sure all generated i18n changes are submitted"
             exit 1
           else
             echo "All generated i18n changes are submitted"
@@ -177,7 +177,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work-tools/cli @ClickDz Work/android
+          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-tools/cli @affine/android
           electron-install: false
 
       - uses: actions/setup-java@v5
@@ -194,7 +194,7 @@ jobs:
           no-build: 'true'
 
       - name: Build Android web assets
-        run: yarn ClickDz Work @ClickDz Work/android build
+        run: yarn ClickDz Work @affine/android build
         env:
           PUBLIC_PATH: '/'
 
@@ -233,7 +233,7 @@ jobs:
           JSON
 
       - name: Cap sync
-        run: yarn workspace @ClickDz Work/android cap sync
+        run: yarn workspace @affine/android cap sync
 
       - name: Build Android debug app
         working-directory: packages/frontend/apps/android/App
@@ -251,7 +251,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work-tools/cli @ClickDz Work/ios
+          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-tools/cli @affine/ios
           electron-install: false
           hard-link-nm: false
 
@@ -267,12 +267,12 @@ jobs:
           no-build: 'true'
 
       - name: Build iOS web assets
-        run: yarn ClickDz Work @ClickDz Work/ios build
+        run: yarn ClickDz Work @affine/ios build
         env:
           PUBLIC_PATH: '/'
 
       - name: Cap sync
-        run: yarn workspace @ClickDz Work/ios sync
+        run: yarn workspace @affine/ios sync
 
       - name: Build iOS simulator app
         run: |
@@ -388,7 +388,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work-test/blocksuite @blocksuite/playground @blocksuite/integration-test
+          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/blocksuite @blocksuite/playground @blocksuite/integration-test
           playwright-install: true
           playwright-platform: 'chromium'
           electron-install: false
@@ -416,7 +416,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work-test/blocksuite @blocksuite/playground @blocksuite/integration-test
+          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/blocksuite @blocksuite/playground @blocksuite/integration-test
           playwright-install: true
           playwright-platform: 'chromium,firefox,webkit'
           electron-install: false
@@ -457,7 +457,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work-test/ClickDz Work-local @ClickDz Work/web @ClickDz Work/server
+          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/ClickDz Work-local @affine/web @affine/server
           playwright-install: true
           playwright-platform: 'chromium'
           electron-install: false
@@ -489,7 +489,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work-test/ClickDz Work-mobile @ClickDz Work/mobile
+          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/ClickDz Work-mobile @affine/mobile
           playwright-install: true
           electron-install: false
           full-cache: true
@@ -554,7 +554,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/native
+          extra-flags: workspaces focus @affine/native
           electron-install: false
       - name: Setup filename
         id: filename
@@ -567,7 +567,7 @@ jobs:
         uses: ./.github/actions/build-rust
         with:
           target: x86_64-unknown-linux-gnu
-          package: '@ClickDz Work/native'
+          package: '@affine/native'
       - name: Upload ${{ steps.filename.outputs.filename }}
         uses: actions/upload-artifact@v4
         if: always()
@@ -593,7 +593,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/native
+          extra-flags: workspaces focus @affine/native
           electron-install: false
       - name: Setup filename
         id: filename
@@ -606,7 +606,7 @@ jobs:
         uses: ./.github/actions/build-rust
         with:
           target: ${{ matrix.spec.target }}
-          package: '@ClickDz Work/native'
+          package: '@affine/native'
       - name: Upload ${{ steps.filename.outputs.filename }}
         uses: actions/upload-artifact@v4
         if: always()
@@ -642,7 +642,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/native
+          extra-flags: workspaces focus @affine/native
           electron-install: false
       - name: Setup filename
         id: filename
@@ -655,7 +655,7 @@ jobs:
         uses: ./.github/actions/build-rust
         with:
           target: ${{ matrix.spec.target }}
-          package: '@ClickDz Work/native'
+          package: '@affine/native'
       - name: Upload ${{ steps.filename.outputs.filename }}
         uses: actions/upload-artifact@v4
         if: always()
@@ -674,13 +674,13 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/server-native
+          extra-flags: workspaces focus @affine/server-native
           electron-install: false
       - name: Build Rust
         uses: ./.github/actions/build-rust
         with:
           target: 'x86_64-unknown-linux-gnu'
-          package: '@ClickDz Work/server-native'
+          package: '@affine/server-native'
       - name: Upload server-native.node
         uses: actions/upload-artifact@v4
         if: always()
@@ -690,18 +690,18 @@ jobs:
           if-no-files-found: error
 
   build-electron-renderer:
-    name: Build @ClickDz Work/electron renderer
+    name: Build @affine/electron renderer
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work/electron-renderer @ClickDz Work/nbstore @toeverything/infra
+          extra-flags: workspaces focus @affine/monorepo @affine/electron-renderer @affine/nbstore @toeverything/infra
           electron-install: false
           full-cache: true
       - name: Build Electron renderer
-        run: yarn ClickDz Work @ClickDz Work/electron-renderer build
+        run: yarn ClickDz Work @affine/electron-renderer build
         env:
           DISTRIBUTION: desktop
       - name: zip web
@@ -724,7 +724,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work-tools/cli @ClickDz Work/monorepo @ClickDz Work/native
+          extra-flags: workspaces focus @ClickDz Work-tools/cli @affine/monorepo @affine/native
           electron-install: false
       - name: Download ClickDz Work.linux-x64-gnu.node
         uses: actions/download-artifact@v4
@@ -732,7 +732,7 @@ jobs:
           name: ClickDz Work.linux-x64-gnu.node
           path: ./packages/frontend/native
       - name: Unit Test
-        run: yarn ClickDz Work @ClickDz Work/native test
+        run: yarn ClickDz Work @affine/native test
 
   server-test:
     name: Server Test
@@ -779,7 +779,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work/server
+          extra-flags: workspaces focus @affine/monorepo @affine/server
           electron-install: false
           full-cache: true
 
@@ -793,7 +793,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests
-        run: yarn ClickDz Work @ClickDz Work/server test:coverage --forbid-only
+        run: yarn ClickDz Work @affine/server test:coverage --forbid-only
         env:
           CARGO_TARGET_DIR: '${{ github.workspace }}/target'
           CI_NODE_INDEX: ${{ matrix.node_index }}
@@ -860,7 +860,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work/server
+          extra-flags: workspaces focus @affine/monorepo @affine/server
           electron-install: false
           full-cache: true
 
@@ -874,7 +874,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests with elasticsearch only
-        run: yarn ClickDz Work @ClickDz Work/server test:coverage "**/*/*elasticsearch.spec.ts" --forbid-only
+        run: yarn ClickDz Work @affine/server test:coverage "**/*/*elasticsearch.spec.ts" --forbid-only
         env:
           CARGO_TARGET_DIR: '${{ github.workspace }}/target'
 
@@ -923,7 +923,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work/server
+          extra-flags: workspaces focus @affine/monorepo @affine/server
           electron-install: false
           full-cache: true
 
@@ -937,7 +937,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests
-        run: yarn ClickDz Work @ClickDz Work/server e2e:coverage --forbid-only
+        run: yarn ClickDz Work @affine/server e2e:coverage --forbid-only
 
       - name: Upload server test coverage results
         uses: codecov/codecov-action@v5
@@ -1054,7 +1054,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work/server
+          extra-flags: workspaces focus @affine/monorepo @affine/server
           electron-install: false
           full-cache: true
 
@@ -1070,7 +1070,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests
-        run: yarn ClickDz Work @ClickDz Work/server test:copilot:coverage --forbid-only
+        run: yarn ClickDz Work @affine/server test:copilot:coverage --forbid-only
         env:
           CARGO_TARGET_DIR: '${{ github.workspace }}/target'
 
@@ -1127,7 +1127,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work-test/ClickDz Work-cloud-copilot @ClickDz Work/web @ClickDz Work/server
+          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/ClickDz Work-cloud-copilot @affine/web @affine/server
           playwright-install: true
           playwright-platform: 'chromium'
           electron-install: false
@@ -1173,7 +1173,7 @@ jobs:
           - name: 'Cloud Desktop E2E Test'
             shard: desktop
             script: |
-              yarn ClickDz Work @ClickDz Work/electron build:dev
+              yarn ClickDz Work @affine/electron build:dev
               # Workaround for Electron apps failing to initialize on Ubuntu 24.04 due to AppArmor restrictions
               # Disables unprivileged user namespaces restriction to allow Electron apps to run
               # Reference: https://github.com/electron/electron/issues/42510
@@ -1210,7 +1210,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/monorepo @ClickDz Work-test/ClickDz Work-cloud @ClickDz Work-test/ClickDz Work-desktop-cloud @ClickDz Work/web @ClickDz Work/server @ClickDz Work/electron @ClickDz Work/electron-renderer @ClickDz Work/nbstore @toeverything/infra
+          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/ClickDz Work-cloud @ClickDz Work-test/ClickDz Work-desktop-cloud @affine/web @affine/server @affine/electron @affine/electron-renderer @affine/nbstore @toeverything/infra
           playwright-install: true
           playwright-platform: 'chromium'
           electron-install: ${{ matrix.tests.shard == 'desktop' && 'true' || 'false' }}
@@ -1291,7 +1291,7 @@ jobs:
         uses: ./.github/actions/setup-node
         timeout-minutes: 10
         with:
-          extra-flags: workspaces focus @ClickDz Work/electron @ClickDz Work/monorepo @ClickDz Work-test/ClickDz Work-desktop @ClickDz Work/nbstore @toeverything/infra
+          extra-flags: workspaces focus @affine/electron @affine/monorepo @ClickDz Work-test/ClickDz Work-desktop @affine/nbstore @toeverything/infra
           playwright-install: ${{ matrix.spec.test && 'true' || 'false' }}
           playwright-platform: 'chromium'
           hard-link-nm: false
@@ -1313,7 +1313,7 @@ jobs:
       - name: Run unit tests
         if: ${{ matrix.spec.test }}
         shell: bash
-        run: yarn ClickDz Work @ClickDz Work/electron vitest
+        run: yarn ClickDz Work @affine/electron vitest
 
       - name: Download web artifact
         uses: ./.github/actions/download-web
@@ -1321,7 +1321,7 @@ jobs:
           path: packages/frontend/apps/electron/resources/web-static
 
       - name: Build Desktop Layers
-        run: yarn ClickDz Work @ClickDz Work/electron build
+        run: yarn ClickDz Work @affine/electron build
 
       - name: Run desktop tests
         if: ${{ matrix.spec.os == 'ubuntu-latest' }}
@@ -1342,7 +1342,7 @@ jobs:
           SKIP_BUNDLE: true
           SKIP_WEB_BUILD: true
           HOIST_NODE_MODULES: 1
-        run: yarn ClickDz Work @ClickDz Work/electron package --platform=darwin --arch=arm64
+        run: yarn ClickDz Work @affine/electron package --platform=darwin --arch=arm64
 
       - name: Make Bundle (Windows)
         if: ${{ matrix.spec.target == 'x86_64-pc-windows-msvc' }}
@@ -1352,9 +1352,9 @@ jobs:
           SKIP_WEB_BUILD: true
           HOIST_NODE_MODULES: 1
         run: |
-          rm -rf packages/frontend/apps/electron/node_modules/@ClickDz Work/nbstore/node_modules/@blocksuite/ClickDz Work/node_modules
-          rm -rf packages/frontend/apps/electron/node_modules/@ClickDz Work/native/node_modules
-          yarn ClickDz Work @ClickDz Work/electron package --platform=win32 --arch=x64
+          rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/ClickDz Work/node_modules
+          rm -rf packages/frontend/apps/electron/node_modules/@affine/native/node_modules
+          yarn ClickDz Work @affine/electron package --platform=win32 --arch=x64
 
       - name: Make Bundle (Linux)
         run: |
@@ -1364,7 +1364,7 @@ jobs:
           flatpak update
           # some flatpak deps need git protocol.file.allow
           git config --global protocol.file.allow always
-          yarn ClickDz Work @ClickDz Work/electron make --platform=linux --arch=x64
+          yarn ClickDz Work @affine/electron make --platform=linux --arch=x64
         if: ${{ matrix.spec.target == 'x86_64-unknown-linux-gnu' }}
         env:
           SKIP_WEB_BUILD: 1
@@ -1373,7 +1373,7 @@ jobs:
       - name: Output check
         if: ${{ matrix.spec.os == 'macos-latest' && matrix.spec.arch == 'arm64' }}
         run: |
-          yarn ClickDz Work @ClickDz Work/electron node ./scripts/macos-arm64-output-check.ts
+          yarn ClickDz Work @affine/electron node ./scripts/macos-arm64-output-check.ts
 
       - name: Upload test results
         if: always()

@@ -14,13 +14,13 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/server-native
+          extra-flags: workspaces focus @affine/server-native
           electron-install: false
       - name: Build Rust
         uses: ./.github/actions/build-rust
         with:
           target: 'x86_64-unknown-linux-gnu'
-          package: '@ClickDz Work/server-native'
+          package: '@affine/server-native'
       - name: Upload server-native.node
         uses: actions/upload-artifact@v4
         with:
@@ -85,7 +85,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests
-        run: yarn ClickDz Work @ClickDz Work/server test:copilot:coverage --forbid-only
+        run: yarn ClickDz Work @affine/server test:copilot:coverage --forbid-only
         env:
           CARGO_TARGET_DIR: '${{ github.workspace }}/target'
 
@@ -173,7 +173,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: 'workspaces focus @ClickDz Work/copilot-result'
+          extra-flags: 'workspaces focus @affine/copilot-result'
           electron-install: false
       - name: Post Success event to a Slack channel
         if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}

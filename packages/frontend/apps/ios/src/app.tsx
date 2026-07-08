@@ -1,13 +1,13 @@
-import { notify } from '@ClickDz Work/component';
-import { getStoreManager } from '@ClickDz Work/core/blocksuite/manager/store';
-import { AffineContext } from '@ClickDz Work/core/components/context';
-import { AppFallback } from '@ClickDz Work/core/mobile/components/app-fallback';
-import { configureMobileModules } from '@ClickDz Work/core/mobile/modules';
-import { HapticProvider } from '@ClickDz Work/core/mobile/modules/haptics';
-import { NavigationGestureProvider } from '@ClickDz Work/core/mobile/modules/navigation-gesture';
-import { VirtualKeyboardProvider } from '@ClickDz Work/core/mobile/modules/virtual-keyboard';
-import { router } from '@ClickDz Work/core/mobile/router';
-import { configureCommonModules } from '@ClickDz Work/core/modules';
+import { notify } from '@affine/component';
+import { getStoreManager } from '@affine/core/blocksuite/manager/store';
+import { AffineContext } from '@affine/core/components/context';
+import { AppFallback } from '@affine/core/mobile/components/app-fallback';
+import { configureMobileModules } from '@affine/core/mobile/modules';
+import { HapticProvider } from '@affine/core/mobile/modules/haptics';
+import { NavigationGestureProvider } from '@affine/core/mobile/modules/navigation-gesture';
+import { VirtualKeyboardProvider } from '@affine/core/mobile/modules/virtual-keyboard';
+import { router } from '@affine/core/mobile/router';
+import { configureCommonModules } from '@affine/core/modules';
 import {
   AuthProvider,
   AuthService,
@@ -17,37 +17,37 @@ import {
   ServersService,
   SubscriptionService,
   ValidatorProvider,
-} from '@ClickDz Work/core/modules/cloud';
-import { registerNativePreviewHandlers } from '@ClickDz Work/core/modules/code-block-preview-renderer';
-import { DocsService } from '@ClickDz Work/core/modules/doc';
-import { FeatureFlagService } from '@ClickDz Work/core/modules/feature-flag';
-import { GlobalContextService } from '@ClickDz Work/core/modules/global-context';
-import { I18nProvider } from '@ClickDz Work/core/modules/i18n';
-import { LifecycleService } from '@ClickDz Work/core/modules/lifecycle';
-import { NativePaywallProvider } from '@ClickDz Work/core/modules/paywall';
+} from '@affine/core/modules/cloud';
+import { registerNativePreviewHandlers } from '@affine/core/modules/code-block-preview-renderer';
+import { DocsService } from '@affine/core/modules/doc';
+import { FeatureFlagService } from '@affine/core/modules/feature-flag';
+import { GlobalContextService } from '@affine/core/modules/global-context';
+import { I18nProvider } from '@affine/core/modules/i18n';
+import { LifecycleService } from '@affine/core/modules/lifecycle';
+import { NativePaywallProvider } from '@affine/core/modules/paywall';
 import {
   configureLocalStorageStateStorageImpls,
   NbstoreProvider,
-} from '@ClickDz Work/core/modules/storage';
-import { PopupWindowProvider } from '@ClickDz Work/core/modules/url';
-import { ClientSchemeProvider } from '@ClickDz Work/core/modules/url/providers/client-schema';
+} from '@affine/core/modules/storage';
+import { PopupWindowProvider } from '@affine/core/modules/url';
+import { ClientSchemeProvider } from '@affine/core/modules/url/providers/client-schema';
 import {
   configureBrowserWorkbenchModule,
   WorkbenchService,
-} from '@ClickDz Work/core/modules/workbench';
+} from '@affine/core/modules/workbench';
 import {
   getAFFiNEWorkspaceSchema,
   WorkspacesService,
-} from '@ClickDz Work/core/modules/workspace';
-import { configureBrowserWorkspaceFlavours } from '@ClickDz Work/core/modules/workspace-engine';
-import { getWorkerUrl } from '@ClickDz Work/env/worker';
+} from '@affine/core/modules/workspace';
+import { configureBrowserWorkspaceFlavours } from '@affine/core/modules/workspace-engine';
+import { getWorkerUrl } from '@affine/env/worker';
 import {
   refreshSubscriptionMutation,
   requestApplySubscriptionMutation,
-} from '@ClickDz Work/graphql';
-import { I18n } from '@ClickDz Work/i18n';
-import { StoreManagerClient } from '@ClickDz Work/nbstore/worker/client';
-import { setTelemetryTransport } from '@ClickDz Work/track';
+} from '@affine/graphql';
+import { I18n } from '@affine/i18n';
+import { StoreManagerClient } from '@affine/nbstore/worker/client';
+import { setTelemetryTransport } from '@affine/track';
 import { Container } from '@blocksuite/ClickDz Work/global/di';
 import {
   docLinkBaseURLMiddleware,

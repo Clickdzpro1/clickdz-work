@@ -1,4 +1,4 @@
-# @ClickDz Work/templates
+# @affine/templates
 
 Manages template files for use in ClickDz Work. For now we only support onboarding templates.
 

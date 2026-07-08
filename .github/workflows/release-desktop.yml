@@ -63,7 +63,7 @@ jobs:
       - name: Setup @sentry/cli
         uses: ./.github/actions/setup-sentry
       - name: generate-assets
-        run: yarn ClickDz Work @ClickDz Work/electron generate-assets
+        run: yarn ClickDz Work @affine/electron generate-assets
         env:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: 'ClickDz Work'
@@ -189,7 +189,7 @@ jobs:
         timeout-minutes: 10
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work/electron @ClickDz Work/monorepo @ClickDz Work/nbstore @toeverything/infra
+          extra-flags: workspaces focus @affine/electron @affine/monorepo @affine/nbstore @toeverything/infra
           enableScripts: true
           hard-link-nm: false
           nmHoistingLimits: workspaces
@@ -200,7 +200,7 @@ jobs:
         uses: ./.github/actions/build-rust
         with:
           target: ${{ matrix.spec.target }}
-          package: '@ClickDz Work/native'
+          package: '@affine/native'
 
       - name: Download web artifact
         uses: actions/download-artifact@v4
@@ -209,16 +209,16 @@ jobs:
           path: packages/frontend/apps/electron/resources/web-static
 
       - name: Build Desktop Layers
-        run: yarn ClickDz Work @ClickDz Work/electron build
+        run: yarn ClickDz Work @affine/electron build
 
       - name: Remove nbstore node_modules
         shell: bash
         run: |
-          rm -rf packages/frontend/apps/electron/node_modules/@ClickDz Work/nbstore/node_modules/@blocksuite/ClickDz Work/node_modules
-          rm -rf packages/frontend/apps/electron/node_modules/@ClickDz Work/native/node_modules
+          rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/ClickDz Work/node_modules
+          rm -rf packages/frontend/apps/electron/node_modules/@affine/native/node_modules
 
       - name: Package windows app
-        run: yarn ClickDz Work @ClickDz Work/electron package --platform=${{ matrix.spec.platform }} --arch=${{ matrix.spec.arch }}
+        run: yarn ClickDz Work @affine/electron package --platform=${{ matrix.spec.platform }} --arch=${{ matrix.spec.arch }}
         env:
           HOIST_NODE_MODULES: 1
           NODE_OPTIONS: --max-old-space-size=14384
@@ -308,10 +308,10 @@ jobs:
             --plain-tcp
 
       - name: Make squirrel.windows installer
-        run: yarn ClickDz Work @ClickDz Work/electron make-squirrel --platform=${{ matrix.spec.platform }} --arch=${{ matrix.spec.arch }}
+        run: yarn ClickDz Work @affine/electron make-squirrel --platform=${{ matrix.spec.platform }} --arch=${{ matrix.spec.arch }}
 
       - name: Make nsis.windows installer
-        run: yarn ClickDz Work @ClickDz Work/electron make-nsis --platform=${{ matrix.spec.platform }} --arch=${{ matrix.spec.arch }}
+        run: yarn ClickDz Work @affine/electron make-nsis --platform=${{ matrix.spec.platform }} --arch=${{ matrix.spec.arch }}
 
       - name: Get installer files to sign
         id: installer_files_to_sign

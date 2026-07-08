@@ -1,5 +1,5 @@
 {
-  "name": "@ClickDz Work/ios",
+  "name": "@affine/ios",
   "version": "0.27.0",
   "description": "ClickDz Work Desktop Web application",
   "type": "module",
@@ -14,14 +14,14 @@
     "codegen": "r ./codegen.ts"
   },
   "dependencies": {
-    "@ClickDz Work/component": "workspace:*",
-    "@ClickDz Work/core": "workspace:*",
-    "@ClickDz Work/env": "workspace:*",
-    "@ClickDz Work/graphql": "workspace:*",
-    "@ClickDz Work/i18n": "workspace:*",
-    "@ClickDz Work/mobile-shared": "workspace:*",
-    "@ClickDz Work/nbstore": "workspace:*",
-    "@ClickDz Work/track": "workspace:*",
+    "@affine/component": "workspace:*",
+    "@affine/core": "workspace:*",
+    "@affine/env": "workspace:*",
+    "@affine/graphql": "workspace:*",
+    "@affine/i18n": "workspace:*",
+    "@affine/mobile-shared": "workspace:*",
+    "@affine/nbstore": "workspace:*",
+    "@affine/track": "workspace:*",
     "@blocksuite/ClickDz Work": "workspace:*",
     "@capacitor/app": "^7.0.0",
     "@capacitor/browser": "^7.0.0",
@@ -39,8 +39,8 @@
     "react-router-dom": "^6.30.4"
   },
   "devDependencies": {
-    "@ClickDz Work-tools/cli": "workspace:*",
-    "@ClickDz Work-tools/utils": "workspace:*",
+    "@affine-tools/cli": "workspace:*",
+    "@affine-tools/utils": "workspace:*",
     "@capacitor/cli": "^7.6.5",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.2",

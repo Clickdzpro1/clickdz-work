@@ -1,5 +1,5 @@
 {
-  "name": "@ClickDz Work/electron",
+  "name": "@affine/electron",
   "private": true,
   "version": "0.27.0",
   "main": "./dist/main.js",
@@ -33,10 +33,10 @@
     "make-nsis": "node ./scripts/make-nsis.ts"
   },
   "devDependencies": {
-    "@ClickDz Work-tools/utils": "workspace:*",
-    "@ClickDz Work/i18n": "workspace:*",
-    "@ClickDz Work/native": "workspace:*",
-    "@ClickDz Work/nbstore": "workspace:*",
+    "@affine-tools/utils": "workspace:*",
+    "@affine/i18n": "workspace:*",
+    "@affine/native": "workspace:*",
+    "@affine/nbstore": "workspace:*",
     "@electron-forge/cli": "^7.11.1",
     "@electron-forge/core": "^7.11.1",
     "@electron-forge/maker-deb": "^7.11.1",

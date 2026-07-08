@@ -1,4 +1,4 @@
-import { ScrollArea } from '@ClickDz Work/admin/components/ui/scroll-area';
+import { ScrollArea } from '@affine/admin/components/ui/scroll-area';
 
 import { Header } from '../header';
 import { AboutAFFiNE } from './about';

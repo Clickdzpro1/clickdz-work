@@ -7,7 +7,7 @@ To run ClickDz Work Desktop Client Application locally, run the following comman
 ```sh
 # in repo root
 yarn install
-yarn ClickDz Work @ClickDz Work/native build
+yarn ClickDz Work @affine/native build
 yarn dev
 
 # in packages/frontend/apps/electron

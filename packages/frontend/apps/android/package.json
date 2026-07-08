@@ -1,5 +1,5 @@
 {
-  "name": "@ClickDz Work/android",
+  "name": "@affine/android",
   "version": "0.27.0",
   "description": "ClickDz Work Desktop Web application",
   "private": true,
@@ -11,13 +11,13 @@
     "studio": "cap open android"
   },
   "dependencies": {
-    "@ClickDz Work/component": "workspace:*",
-    "@ClickDz Work/core": "workspace:*",
-    "@ClickDz Work/env": "workspace:*",
-    "@ClickDz Work/i18n": "workspace:*",
-    "@ClickDz Work/mobile-shared": "workspace:*",
-    "@ClickDz Work/nbstore": "workspace:*",
-    "@ClickDz Work/track": "workspace:*",
+    "@affine/component": "workspace:*",
+    "@affine/core": "workspace:*",
+    "@affine/env": "workspace:*",
+    "@affine/i18n": "workspace:*",
+    "@affine/mobile-shared": "workspace:*",
+    "@affine/nbstore": "workspace:*",
+    "@affine/track": "workspace:*",
     "@blocksuite/ClickDz Work": "workspace:*",
     "@capacitor/android": "^7.0.0",
     "@capacitor/app": "^7.0.0",

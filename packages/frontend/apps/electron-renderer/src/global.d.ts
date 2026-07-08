@@ -1,4 +1,4 @@
-import type { apis, events } from '@ClickDz Work/electron-api';
+import type { apis, events } from '@affine/electron-api';
 
 /**
  * Extends the global Window interface to include ClickDz Work's 

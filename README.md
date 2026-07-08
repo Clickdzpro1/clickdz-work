@@ -142,7 +142,7 @@ Welcome to the ClickDz Work blog section! Here, you’ll find the latest insight
 
 | Name                                             |                            |                                                                                                                                         |
 | ------------------------------------------------ | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| [@ClickDz Work/component](packages/frontend/component) | ClickDz Work Component Resources | ![](https://img.shields.io/codecov/c/github/toeverything/ClickDz Work?style=flat-square)                                                      |
+| [@affine/component](packages/frontend/component) | ClickDz Work Component Resources | ![](https://img.shields.io/codecov/c/github/toeverything/ClickDz Work?style=flat-square)                                                      |
 | [@toeverything/theme](packages/common/theme)     | ClickDz Work theme               | [![](https://img.shields.io/npm/dm/@toeverything/theme?style=flat-square&color=eee)](https://www.npmjs.com/package/@toeverything/theme) |
 
 ## Upstreams

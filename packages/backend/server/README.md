@@ -11,7 +11,7 @@ yarn
 ### Build Native binding
 
 ```bash
-yarn ClickDz Work @ClickDz Work/server-native build
+yarn ClickDz Work @affine/server-native build
 ```
 
 ### Run server

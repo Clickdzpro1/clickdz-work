@@ -87,13 +87,13 @@ This could take a while if you build it for the first time.
 Note: use `strip` from system instead of `binutils` if you are running MacOS. [see problem here](https://github.com/toeverything/ClickDz Work/discussions/2840)
 
 ```sh
-yarn ClickDz Work @ClickDz Work/native build
+yarn ClickDz Work @affine/native build
 ```
 
 ### Build Server Dependencies
 
 ```sh
-yarn ClickDz Work @ClickDz Work/server-native build
+yarn ClickDz Work @affine/server-native build
 ```
 
 ## Testing
