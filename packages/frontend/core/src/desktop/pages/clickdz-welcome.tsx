@@ -2,13 +2,12 @@
 // Collects the user's name, language and business niche, lets them pick
 // template packs, saves the selection for the in-workspace installer, then
 // enters the app. Self-contained: no engine services, inline styles only.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import {
   NICHES,
   ONBOARDED_KEY,
-  ONBOARDING_CSS_FIX,
   PENDING_KEY,
   type PendingSelection,
 } from '../../clickdz/niches';
@@ -63,24 +62,6 @@ const T = {
     skip: 'Start empty',
     building: 'Preparing your workspace…',
   },
-  ar: {
-    badge: 'مساحة العمل الذكية — من clickdz.ai',
-    title1: 'مرحباً بك في',
-    subtitle: 'دقيقتان لإعداد مساحة عمل مخصصة لك.',
-    nameLabel: 'ما اسمك؟',
-    namePh: 'اسمك أو اسم فريقك',
-    langLabel: 'اللغة المفضلة',
-    next: 'استمر',
-    back: 'رجوع',
-    nicheTitle: 'ما هو مجال عملك؟',
-    nicheSub: 'نُعد مساحة عملك حسب نشاطك.',
-    packTitle: 'مستندات البداية',
-    packSub: 'مختارة لمجالك — أزل التحديد عن ما لا تريده، أو أضف حزمات أخرى.',
-    docs: '3 مستندات: مركز القيادة، سير العمل، المتتبع',
-    finish: 'إنشاء مساحتي ✨',
-    skip: 'ابدأ فارغاً',
-    building: 'جاري إعداد مساحة العمل…',
-  },
 };
 
 const page: React.CSSProperties = {
@@ -92,7 +73,7 @@ const page: React.CSSProperties = {
   justifyContent: 'center',
   padding: 24,
   fontFamily:
-    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans Arabic', sans-serif",
+    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
   color: C.fg,
 };
 
@@ -132,26 +113,13 @@ const btnGhost: React.CSSProperties = {
 export const Component = () => {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
-  const [lang, setLang] = useState<'fr' | 'en' | 'ar'>('fr');
+  const [lang, setLang] = useState<'fr' | 'en'>('fr');
   const [name, setName] = useState('');
   const [niche, setNiche] = useState<string | null>(null);
   const [packs, setPacks] = useState<string[]>([]);
   const t = T[lang];
 
   const orderedNiches = useMemo(() => NICHES, []);
-
-  const isRTL = lang === 'ar';
-
-  // Inject CSS fix for white text on white backgrounds
-  useEffect(() => {
-    const styleId = 'clickdz-welcome-css-fix';
-    if (!document.getElementById(styleId)) {
-      const style = document.createElement('style');
-      style.id = styleId;
-      style.textContent = ONBOARDING_CSS_FIX;
-      document.head.appendChild(style);
-    }
-  }, []);
 
   const chooseNiche = useCallback((id: string) => {
     setNiche(id);
@@ -186,7 +154,7 @@ export const Component = () => {
   );
 
   return (
-    <div className="clickdz-welcome-page" style={page} dir={isRTL ? 'rtl' : 'ltr'}>
+    <div style={page}>
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 26 }}>
           <img src="/favicon-96.png" alt="" width={34} height={34} style={{ borderRadius: 9 }} />
@@ -214,14 +182,14 @@ export const Component = () => {
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder={t.namePh}
-              style={{ width: '100%', boxSizing: 'border-box', padding: '13px 16px', fontSize: 15, borderRadius: 12, border: `1.5px solid ${C.border}`, outline: 'none', marginBottom: 22, color: '#1a1a1a', background: '#fff' }}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '13px 16px', fontSize: 15, borderRadius: 12, border: `1.5px solid ${C.border}`, outline: 'none', marginBottom: 22 }}
             />
 
             <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
               {t.langLabel}
             </label>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 30, flexWrap: 'wrap' }}>
-              {(['fr', 'en', 'ar'] as const).map(l => (
+            <div style={{ display: 'flex', gap: 10, marginBottom: 30 }}>
+              {(['fr', 'en'] as const).map(l => (
                 <button
                   key={l}
                   onClick={() => setLang(l)}
@@ -232,14 +200,14 @@ export const Component = () => {
                       : {}),
                   }}
                 >
-                  {l === 'fr' ? '🇫🇷 Français' : l === 'en' ? '🇬🇧 English' : '🇸🇦 العربية'}
+                  {l === 'fr' ? '🇫🇷 Français' : '🇬🇧 English'}
                 </button>
               ))}
             </div>
 
-            <div style={{ display: 'flex', justifyContent: isRTL ? 'flex-start' : 'flex-end' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button style={btnPrimary} onClick={() => setStep(1)}>
-                {isRTL ? '← ' + t.next : t.next + ' →'}
+                {t.next} →
               </button>
             </div>
           </div>
@@ -263,13 +231,13 @@ export const Component = () => {
                   }}
                 >
                   <span style={{ fontSize: 20 }}>{n.emoji}</span>
-                  {lang === 'fr' ? n.fr : lang === 'ar' ? n.ar : n.en}
+                  {lang === 'fr' ? n.fr : n.en}
                 </button>
               ))}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 24, flexDirection: isRTL ? 'row-reverse' : 'row' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 24 }}>
               <button style={btnGhost} onClick={() => setStep(0)}>
-                {isRTL ? t.back + ' →' : '← ' + t.back}
+                ← {t.back}
               </button>
               <button style={btnGhost} onClick={() => finish([])}>
                 {t.skip}
@@ -293,21 +261,21 @@ export const Component = () => {
                       display: 'flex', flexDirection: 'column', gap: 4,
                       padding: '13px 15px', borderRadius: 14, cursor: 'pointer',
                       border: `1.5px solid ${on ? C.primary : C.border}`,
-                      background: on ? C.soft : '#fff', textAlign: isRTL ? 'right' : 'left',
+                      background: on ? C.soft : '#fff', textAlign: 'left',
                     }}
                   >
                     <span style={{ fontWeight: 700, fontSize: 14 }}>
                       {on ? '✅' : '⬜'} {n.emoji}{' '}
-                      {lang === 'fr' ? n.fr : lang === 'ar' ? n.ar : n.en}
+                      {lang === 'fr' ? n.fr : n.en}
                     </span>
                     <span style={{ fontSize: 12, color: C.muted }}>{t.docs}</span>
                   </button>
                 );
               })}
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 20, flexDirection: isRTL ? 'row-reverse' : 'row' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 20 }}>
               <button style={btnGhost} onClick={() => setStep(1)}>
-                {isRTL ? t.back + ' →' : '← ' + t.back}
+                ← {t.back}
               </button>
               <button style={btnPrimary} onClick={() => finish(packs)}>
                 {t.finish}

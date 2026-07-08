@@ -57,7 +57,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
       - name: generate-assets
-        run: yarn ClickDz Work @affine/electron generate-assets
+        run: yarn affine @affine/electron generate-assets
         env:
           RELEASE_VERSION: ${{ needs.meta.outputs.app-version }}
       - name: Upload web artifact

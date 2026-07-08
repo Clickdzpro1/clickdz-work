@@ -90,7 +90,7 @@ jobs:
       - name: Run oxlint
         run: yarn lint:ox
       - name: Run i18n codegen
-        run: yarn ClickDz Work @affine/i18n build
+        run: yarn affine @affine/i18n build
       - name: Run ESLint
         run: yarn lint:eslint --max-warnings=0
       - name: Run Prettier
@@ -115,10 +115,10 @@ jobs:
           full-cache: true
       - name: Run i18n codegen
         run: |
-          yarn ClickDz Work @affine/i18n build
+          yarn affine @affine/i18n build
           git checkout packages/frontend/i18n/src/i18n-completenesses.json
           if git status --porcelain | grep -q .; then
-            echo "Run 'yarn ClickDz Work @affine/i18n build' and make sure all generated i18n changes are submitted"
+            echo "Run 'yarn affine @affine/i18n build' and make sure all generated i18n changes are submitted"
             exit 1
           else
             echo "All generated i18n changes are submitted"
@@ -127,9 +127,9 @@ jobs:
         run: yarn typecheck
       - name: Run BS Docs Build
         run: |
-          yarn ClickDz Work bs-docs build
+          yarn affine bs-docs build
           if git status --porcelain | grep -q .; then
-            echo "Run 'yarn typecheck && yarn ClickDz Work bs-docs build' and make sure all changes are submitted"
+            echo "Run 'yarn typecheck && yarn affine bs-docs build' and make sure all changes are submitted"
             exit 1
           else
             echo "All changes are submitted"
@@ -194,7 +194,7 @@ jobs:
           no-build: 'true'
 
       - name: Build Android web assets
-        run: yarn ClickDz Work @affine/android build
+        run: yarn affine @affine/android build
         env:
           PUBLIC_PATH: '/'
 
@@ -267,7 +267,7 @@ jobs:
           no-build: 'true'
 
       - name: Build iOS web assets
-        run: yarn ClickDz Work @affine/ios build
+        run: yarn affine @affine/ios build
         env:
           PUBLIC_PATH: '/'
 
@@ -352,13 +352,13 @@ jobs:
 
       - name: Run Check
         run: |
-          yarn ClickDz Work init
-          yarn ClickDz Work gql build
-          yarn ClickDz Work i18n build
-          yarn ClickDz Work server genconfig
+          yarn affine init
+          yarn affine gql build
+          yarn affine i18n build
+          yarn affine server genconfig
           git checkout packages/frontend/i18n/src/i18n-completenesses.json
           if git status --porcelain | grep -q .; then
-            echo "Run 'yarn ClickDz Work init && yarn ClickDz Work gql build && yarn ClickDz Work i18n build && yarn ClickDz Work server genconfig' and make sure all changes are submitted"
+            echo "Run 'yarn affine init && yarn affine gql build && yarn affine i18n build && yarn affine server genconfig' and make sure all changes are submitted"
             exit 1
           else
             echo "All changes are submitted"
@@ -388,7 +388,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/blocksuite @blocksuite/playground @blocksuite/integration-test
+          extra-flags: workspaces focus @affine/monorepo @affine-test/blocksuite @blocksuite/playground @blocksuite/integration-test
           playwright-install: true
           playwright-platform: 'chromium'
           electron-install: false
@@ -398,7 +398,7 @@ jobs:
         run: yarn workspace @blocksuite/playground build
 
       - name: Run playwright tests
-        run: yarn workspace @ClickDz Work-test/blocksuite test --forbid-only --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        run: yarn workspace @affine-test/blocksuite test --forbid-only --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Upload test results
         if: always()
@@ -416,7 +416,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/blocksuite @blocksuite/playground @blocksuite/integration-test
+          extra-flags: workspaces focus @affine/monorepo @affine-test/blocksuite @blocksuite/playground @blocksuite/integration-test
           playwright-install: true
           playwright-platform: 'chromium,firefox,webkit'
           electron-install: false
@@ -431,7 +431,7 @@ jobs:
 
       - name: Run cross-platform playwright tests
         timeout-minutes: 10
-        run: yarn workspace @ClickDz Work-test/blocksuite test "cross-platform/" --forbid-only
+        run: yarn workspace @affine-test/blocksuite test "cross-platform/" --forbid-only
 
       - name: Upload test results
         if: always()
@@ -457,14 +457,14 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/ClickDz Work-local @affine/web @affine/server
+          extra-flags: workspaces focus @affine/monorepo @affine-test/affine-local @affine/web @affine/server
           playwright-install: true
           playwright-platform: 'chromium'
           electron-install: false
           full-cache: true
 
       - name: Run playwright tests
-        run: yarn ClickDz Work @ClickDz Work-test/ClickDz Work-local e2e --forbid-only --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        run: yarn affine @affine-test/affine-local e2e --forbid-only --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Upload test results
         if: always()
@@ -489,13 +489,13 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/ClickDz Work-mobile @affine/mobile
+          extra-flags: workspaces focus @affine/monorepo @affine-test/affine-mobile @affine/mobile
           playwright-install: true
           electron-install: false
           full-cache: true
 
       - name: Run playwright tests
-        run: yarn ClickDz Work @ClickDz Work-test/ClickDz Work-mobile e2e --forbid-only --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        run: yarn affine @affine-test/affine-mobile e2e --forbid-only --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Upload test results
         if: always()
@@ -701,7 +701,7 @@ jobs:
           electron-install: false
           full-cache: true
       - name: Build Electron renderer
-        run: yarn ClickDz Work @affine/electron-renderer build
+        run: yarn affine @affine/electron-renderer build
         env:
           DISTRIBUTION: desktop
       - name: zip web
@@ -732,7 +732,7 @@ jobs:
           name: ClickDz Work.linux-x64-gnu.node
           path: ./packages/frontend/native
       - name: Unit Test
-        run: yarn ClickDz Work @affine/native test
+        run: yarn affine @affine/native test
 
   server-test:
     name: Server Test
@@ -793,7 +793,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests
-        run: yarn ClickDz Work @affine/server test:coverage --forbid-only
+        run: yarn affine @affine/server test:coverage --forbid-only
         env:
           CARGO_TARGET_DIR: '${{ github.workspace }}/target'
           CI_NODE_INDEX: ${{ matrix.node_index }}
@@ -874,7 +874,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests with elasticsearch only
-        run: yarn ClickDz Work @affine/server test:coverage "**/*/*elasticsearch.spec.ts" --forbid-only
+        run: yarn affine @affine/server test:coverage "**/*/*elasticsearch.spec.ts" --forbid-only
         env:
           CARGO_TARGET_DIR: '${{ github.workspace }}/target'
 
@@ -937,7 +937,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests
-        run: yarn ClickDz Work @affine/server e2e:coverage --forbid-only
+        run: yarn affine @affine/server e2e:coverage --forbid-only
 
       - name: Upload server test coverage results
         uses: codecov/codecov-action@v5
@@ -1070,7 +1070,7 @@ jobs:
         uses: ./.github/actions/server-test-env
 
       - name: Run server tests
-        run: yarn ClickDz Work @affine/server test:copilot:coverage --forbid-only
+        run: yarn affine @affine/server test:copilot:coverage --forbid-only
         env:
           CARGO_TARGET_DIR: '${{ github.workspace }}/target'
 
@@ -1127,7 +1127,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/ClickDz Work-cloud-copilot @affine/web @affine/server
+          extra-flags: workspaces focus @affine/monorepo @affine-test/affine-cloud-copilot @affine/web @affine/server
           playwright-install: true
           playwright-platform: 'chromium'
           electron-install: false
@@ -1147,7 +1147,7 @@ jobs:
       - name: Run Copilot E2E Test ${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
         uses: ./.github/actions/copilot-test
         with:
-          script: yarn ClickDz Work @ClickDz Work-test/ClickDz Work-cloud-copilot e2e --forbid-only --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+          script: yarn affine @affine-test/affine-cloud-copilot e2e --forbid-only --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
 
   cloud-e2e-test:
     name: ${{ matrix.tests.name }}
@@ -1166,19 +1166,19 @@ jobs:
         tests:
           - name: 'Cloud E2E Test 1/2'
             shard: 1
-            script: yarn ClickDz Work @ClickDz Work-test/ClickDz Work-cloud e2e --forbid-only --shard=1/2
+            script: yarn affine @affine-test/affine-cloud e2e --forbid-only --shard=1/2
           - name: 'Cloud E2E Test 2/2'
             shard: 2
-            script: yarn ClickDz Work @ClickDz Work-test/ClickDz Work-cloud e2e --forbid-only --shard=2/2
+            script: yarn affine @affine-test/affine-cloud e2e --forbid-only --shard=2/2
           - name: 'Cloud Desktop E2E Test'
             shard: desktop
             script: |
-              yarn ClickDz Work @affine/electron build:dev
+              yarn affine @affine/electron build:dev
               # Workaround for Electron apps failing to initialize on Ubuntu 24.04 due to AppArmor restrictions
               # Disables unprivileged user namespaces restriction to allow Electron apps to run
               # Reference: https://github.com/electron/electron/issues/42510
               sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-              xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- yarn ClickDz Work @ClickDz Work-test/ClickDz Work-desktop-cloud e2e
+              xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- yarn affine @affine-test/affine-desktop-cloud e2e
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -1210,7 +1210,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-test/ClickDz Work-cloud @ClickDz Work-test/ClickDz Work-desktop-cloud @affine/web @affine/server @affine/electron @affine/electron-renderer @affine/nbstore @toeverything/infra
+          extra-flags: workspaces focus @affine/monorepo @affine-test/affine-cloud @affine-test/affine-desktop-cloud @affine/web @affine/server @affine/electron @affine/electron-renderer @affine/nbstore @toeverything/infra
           playwright-install: true
           playwright-platform: 'chromium'
           electron-install: ${{ matrix.tests.shard == 'desktop' && 'true' || 'false' }}
@@ -1291,7 +1291,7 @@ jobs:
         uses: ./.github/actions/setup-node
         timeout-minutes: 10
         with:
-          extra-flags: workspaces focus @affine/electron @affine/monorepo @ClickDz Work-test/ClickDz Work-desktop @affine/nbstore @toeverything/infra
+          extra-flags: workspaces focus @affine/electron @affine/monorepo @affine-test/affine-desktop @affine/nbstore @toeverything/infra
           playwright-install: ${{ matrix.spec.test && 'true' || 'false' }}
           playwright-platform: 'chromium'
           hard-link-nm: false
@@ -1313,7 +1313,7 @@ jobs:
       - name: Run unit tests
         if: ${{ matrix.spec.test }}
         shell: bash
-        run: yarn ClickDz Work @affine/electron vitest
+        run: yarn affine @affine/electron vitest
 
       - name: Download web artifact
         uses: ./.github/actions/download-web
@@ -1321,7 +1321,7 @@ jobs:
           path: packages/frontend/apps/electron/resources/web-static
 
       - name: Build Desktop Layers
-        run: yarn ClickDz Work @affine/electron build
+        run: yarn affine @affine/electron build
 
       - name: Run desktop tests
         if: ${{ matrix.spec.os == 'ubuntu-latest' }}
@@ -1330,11 +1330,11 @@ jobs:
           # Disables unprivileged user namespaces restriction to allow Electron apps to run
           # Reference: https://github.com/electron/electron/issues/42510
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- yarn ClickDz Work @ClickDz Work-test/ClickDz Work-desktop e2e
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x960x24" -- yarn affine @affine-test/affine-desktop e2e
 
       - name: Run desktop tests
         if: ${{ matrix.spec.test && matrix.spec.os != 'ubuntu-latest' }}
-        run: yarn ClickDz Work @ClickDz Work-test/ClickDz Work-desktop e2e
+        run: yarn affine @affine-test/affine-desktop e2e
 
       - name: Make bundle (macOS)
         if: ${{ matrix.spec.target == 'aarch64-apple-darwin' }}
@@ -1342,7 +1342,7 @@ jobs:
           SKIP_BUNDLE: true
           SKIP_WEB_BUILD: true
           HOIST_NODE_MODULES: 1
-        run: yarn ClickDz Work @affine/electron package --platform=darwin --arch=arm64
+        run: yarn affine @affine/electron package --platform=darwin --arch=arm64
 
       - name: Make Bundle (Windows)
         if: ${{ matrix.spec.target == 'x86_64-pc-windows-msvc' }}
@@ -1354,7 +1354,7 @@ jobs:
         run: |
           rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/ClickDz Work/node_modules
           rm -rf packages/frontend/apps/electron/node_modules/@affine/native/node_modules
-          yarn ClickDz Work @affine/electron package --platform=win32 --arch=x64
+          yarn affine @affine/electron package --platform=win32 --arch=x64
 
       - name: Make Bundle (Linux)
         run: |
@@ -1364,7 +1364,7 @@ jobs:
           flatpak update
           # some flatpak deps need git protocol.file.allow
           git config --global protocol.file.allow always
-          yarn ClickDz Work @affine/electron make --platform=linux --arch=x64
+          yarn affine @affine/electron make --platform=linux --arch=x64
         if: ${{ matrix.spec.target == 'x86_64-unknown-linux-gnu' }}
         env:
           SKIP_WEB_BUILD: 1
@@ -1373,7 +1373,7 @@ jobs:
       - name: Output check
         if: ${{ matrix.spec.os == 'macos-latest' && matrix.spec.arch == 'arm64' }}
         run: |
-          yarn ClickDz Work @affine/electron node ./scripts/macos-arm64-output-check.ts
+          yarn affine @affine/electron node ./scripts/macos-arm64-output-check.ts
 
       - name: Upload test results
         if: always()

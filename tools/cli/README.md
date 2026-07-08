@@ -3,13 +3,13 @@
 ## Start
 
 ```bash
-yarn ClickDz Work -h
+yarn affine -h
 ```
 
 ### Run build command defined in package.json
 
 ```bash
-yarn ClickDz Work i18n build
+yarn affine i18n build
 # or
 yarn build -p i18n
 ```
@@ -17,7 +17,7 @@ yarn build -p i18n
 ### Run dev command defined in package.json
 
 ```bash
-yarn ClickDz Work web dev
+yarn affine web dev
 # or
 yarn dev -p i18n
 ```
@@ -25,9 +25,9 @@ yarn dev -p i18n
 ### Clean
 
 ```bash
-yarn ClickDz Work clean --dist --rust
+yarn affine clean --dist --rust
 # clean node_modules
-yarn ClickDz Work clean --node-modules
+yarn affine clean --node-modules
 ```
 
 ### Init
@@ -35,14 +35,14 @@ yarn ClickDz Work clean --node-modules
 > Generate files that make the monorepo work properly, the per project codegen will not be included anymore
 
 ```bash
-yarn ClickDz Work init
+yarn affine init
 ```
 
 ## Tricks
 
 ### Define scripts to run a .ts files without manually wiring a TypeScript loader
 
-`ClickDz Work run` will automatically inject `tsx` for your scripts
+`affine run` will automatically inject `tsx` for your scripts
 
 ```json
 {
@@ -54,7 +54,7 @@ yarn ClickDz Work init
 ```
 
 ```bash
-ClickDz Work @affine/demo dev
+affine @affine/demo dev
 ```
 
 or
@@ -86,13 +86,13 @@ create file `af` in the root of ClickDz Work project with the following content
 
 ```bash
 #!/usr/bin/env sh
-./tools/scripts/bin/runner.js ClickDz Work.ts $@
+./tools/scripts/bin/runner.js affine.ts $@
 ```
 
 or on windows:
 
 ```cmd
-node "./tools/cli/bin/runner.js" ClickDz Work.ts %*
+node "./tools/cli/bin/runner.js" affine.ts %*
 ```
 
 and give it executable permission

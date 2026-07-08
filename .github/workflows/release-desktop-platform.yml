@@ -97,7 +97,7 @@ jobs:
           path: packages/frontend/apps/electron/resources/web-static
 
       - name: Build Desktop Layers
-        run: yarn ClickDz Work @affine/electron build
+        run: yarn affine @affine/electron build
 
       - name: Signing By Apple Developer ID
         if: ${{ inputs.platform == 'darwin' && inputs.apple_codesign }}
@@ -142,7 +142,7 @@ jobs:
 
       - name: make
         if: ${{ inputs.platform != 'win32' }}
-        run: yarn ClickDz Work @affine/electron make --platform=${{ inputs.platform }} --arch=${{ inputs.arch }}
+        run: yarn affine @affine/electron make --platform=${{ inputs.platform }} --arch=${{ inputs.arch }}
         env:
           SKIP_WEB_BUILD: 1
           HOIST_NODE_MODULES: 1
@@ -151,7 +151,7 @@ jobs:
       - name: package
         if: ${{ inputs.platform == 'win32' }}
         run: |
-          yarn ClickDz Work @affine/electron package --platform=${{ inputs.platform }} --arch=${{ inputs.arch }}
+          yarn affine @affine/electron package --platform=${{ inputs.platform }} --arch=${{ inputs.arch }}
         env:
           SKIP_WEB_BUILD: 1
           HOIST_NODE_MODULES: 1
