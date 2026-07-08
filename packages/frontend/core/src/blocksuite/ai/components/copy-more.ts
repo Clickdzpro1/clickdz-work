@@ -134,6 +134,67 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
   @property({ attribute: false })
   accessor notificationService!: NotificationService;
 
+  // ---- TTS state ----
+  private _ttsAudio: HTMLAudioElement | null = null;
+  private _isSpeaking = false;
+  private static _autoPlayEnabled = false;
+
+  // Inline SVG icon for speaker (lit-compatible)
+  private _SpeakerIcon = (active: boolean) => html`
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+      ${active
+        ? html`<path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>`
+        : html`<line x1="23" y1="9" x2="17" y2="15"></line>
+             <line x1="17" y1="9" x2="23" y2="15"></line>`}
+    </svg>
+  `;
+
+  private async _speak(text: string) {
+    if (!text) return;
+    // Stop any current speech
+    if (this._ttsAudio) {
+      this._ttsAudio.pause();
+      this._ttsAudio = null;
+    }
+    this._isSpeaking = true;
+    this.requestUpdate();
+    try {
+      const res = await fetch('https://clickdz-ai-bridge-techportal.vercel.app/api/voice/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) throw new Error(`TTS ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      this._ttsAudio = audio;
+      await new Promise<void>((resolve) => {
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+        audio.play().catch(() => resolve());
+      });
+    } catch {
+      // TTS failure is non-fatal
+    } finally {
+      this._isSpeaking = false;
+      this._ttsAudio = null;
+      this.requestUpdate();
+    }
+  }
+
+  private _toggleAutoPlay() {
+    ChatCopyMore._autoPlayEnabled = !ChatCopyMore._autoPlayEnabled;
+    this.requestUpdate();
+  }
+
   private _toggle() {
     this._morePopper?.toggle();
   }
@@ -147,6 +208,13 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
   };
 
   protected override updated(changed: PropertyValues): void {
+    // Auto-play TTS when new assistant message arrives
+    if ((changed.has('isLast') || changed.has('content')) && this.isLast && this.content && ChatCopyMore._autoPlayEnabled && !this._isSpeaking) {
+      const oldContent = changed.get('content') as string | undefined;
+      if (oldContent !== this.content) {
+        this._speak(this.content);
+      }
+    }
     if (changed.has('isLast')) {
       if (this.isLast) {
         this._morePopper?.dispose();
@@ -202,6 +270,30 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
               ${ResetIcon({ width: '20px', height: '20px' })}
               <affine-tooltip .autoShift=${true}>Retry</affine-tooltip>
             </div>`
+          : nothing}
+        ${content
+          ? html`<div
+                class="button speak"
+                @click=${() => this._speak(content)}
+                data-testid="action-speak-button"
+                style="${this._isSpeaking ? 'color: var(--affine-primary-color);' : ''}"
+              >
+                ${this._SpeakerIcon(this._isSpeaking)}
+                <affine-tooltip>${this._isSpeaking ? 'Speaking...' : 'Read aloud'}</affine-tooltip>
+              </div>
+              ${isLast
+                ? html`<div
+                      class="button auto-play"
+                      @click=${() => this._toggleAutoPlay()}
+                      data-testid="action-auto-play-button"
+                      style="${ChatCopyMore._autoPlayEnabled ? 'color: var(--affine-primary-color);' : ''}"
+                    >
+                      ${ChatCopyMore._autoPlayEnabled
+                        ? html`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path><circle cx="20" cy="4" r="3" fill="currentColor" stroke="none"></circle></svg>`
+                        : html`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line></svg>`}
+                      <affine-tooltip>${ChatCopyMore._autoPlayEnabled ? 'Auto-play ON — new messages will be spoken' : 'Auto-play OFF — click to enable'}</affine-tooltip>
+                    </div>`
+                : nothing}`
           : nothing}
         ${showMoreIcon && host
           ? html`<div
