@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
+import { Public } from '../../core/auth';
+
 const MAKE_API_BASE = process.env.MAKE_API_BASE || 'https://eu1.make.com/api/v2';
 const MAKE_API_KEY = process.env.MAKE_API_KEY || '';
 const MAKE_TEAM_ID = process.env.MAKE_TEAM_ID || '';
@@ -20,6 +22,10 @@ const OPENAI_IMAGE_API_KEY = process.env.OPENAI_IMAGE_API_KEY || process.env.OPE
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
 const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
 const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
+const MAKE_BUILDER_AGENT_ID = process.env.MAKE_BUILDER_AGENT_ID || '';
+// machine access token for external OpenAI-compatible clients
+// (ClickDz Builder / bolt.diy). Unset = machine access disabled.
+const CLICKDZ_BRIDGE_TOKEN = process.env.CLICKDZ_BRIDGE_TOKEN || '';
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
 
@@ -110,6 +116,8 @@ const IMAGE_ENHANCER_GUIDELINES = [
 ].join('\n');
 
 const MODELS = [
+  'clickdz-ultra',
+  'clickdz-builder',
   'clickdz-fast',
   'clickdz-smart',
   'clickdz-arabic',
@@ -198,6 +206,49 @@ function parseMakeAgentResponse(raw: unknown): string {
 export class ClickDzBridgeController {
   private readonly logger = new Logger(ClickDzBridgeController.name);
 
+  /** bearer-token gate for external OpenAI-compatible clients */
+  private assertBridgeToken(req: Request) {
+    if (!CLICKDZ_BRIDGE_TOKEN) {
+      throw new HttpException(
+        { error: { message: 'Machine access to the ClickDz bridge is not configured', type: 'configuration_error', code: 'bridge_token_missing' } },
+        HttpStatus.SERVICE_UNAVAILABLE
+      );
+    }
+    const auth = String(req.headers.authorization || '');
+    if (auth !== `Bearer ${CLICKDZ_BRIDGE_TOKEN}`) {
+      throw new HttpException(
+        { error: { message: 'Invalid bridge token', type: 'authentication_error', code: 'invalid_bridge_token' } },
+        HttpStatus.UNAUTHORIZED
+      );
+    }
+  }
+
+  /**
+   * ClickDz smart router: picks the best Make agent for the request.
+   * - clickdz-builder -> the high-token Builder runtime (IDE traffic)
+   * - clickdz-ultra   -> intent-based routing across all agents
+   * - everything else -> default agent selection (incl. Arabic detection)
+   */
+  private resolveAgentForRequest(
+    model: string,
+    messages: Array<{ role: string; content: string }>
+  ): string | undefined {
+    if (model === 'clickdz-builder' && MAKE_BUILDER_AGENT_ID) {
+      return MAKE_BUILDER_AGENT_ID;
+    }
+    if (model !== 'clickdz-ultra') return undefined;
+    const joined = messages.map(m => m.content).join('\n');
+    const codeSignals =
+      /```|<\/?[a-z]+>|\bfunction\b|\bconst\b|\bimport\b|\bcode\b|\bdebug\b|\bapp\b|\bcomponent\b|\bAPI\b/i;
+    if (codeSignals.test(joined)) {
+      return MAKE_BUILDER_AGENT_ID || MAKE_CODE_AGENT_ID || undefined;
+    }
+    if (hasArabic(joined)) return MAKE_ARABIC_AGENT_ID || undefined;
+    // heavy/analytical and default traffic both fall through: the default
+    // agent selection already prefers the Make super-agent when configured
+    return undefined;
+  }
+
   private assertMakeReady() {
     if (!MAKE_API_KEY || !MAKE_TEAM_ID || !MAKE_AGENT_ID) {
       throw new HttpException(
@@ -267,8 +318,10 @@ export class ClickDzBridgeController {
     return parseMakeAgentResponse(data.response ?? data);
   }
 
+  @Public()
   @Get(['/api/v1/models', '/v1/models'])
-  models() {
+  models(@Req() req: Request) {
+    this.assertBridgeToken(req);
     return {
       object: 'list',
       data: MODELS.map(id => ({
@@ -280,12 +333,19 @@ export class ClickDzBridgeController {
     };
   }
 
+  @Public()
   @Post(['/api/v1/chat/completions', '/v1/chat/completions'])
-  async chatCompletions(@Body() body: any, @Res() res: Response) {
+  async chatCompletions(
+    @Req() req: Request,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    this.assertBridgeToken(req);
     const id = `chatcmpl_${Date.now()}`;
     const model = body?.model || 'clickdz-smart';
     const messages = normalizeMessages(body?.messages || []);
-    const content = await this.runMakeAgent(messages, model);
+    const agentOverride = this.resolveAgentForRequest(model, messages);
+    const content = await this.runMakeAgent(messages, model, agentOverride);
 
     if (body?.stream) {
       res.setHeader('Content-Type', 'text/event-stream');
