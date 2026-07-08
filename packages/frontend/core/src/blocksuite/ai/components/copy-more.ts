@@ -238,10 +238,11 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
     this._isGeneratingImage = true;
     this.requestUpdate();
     try {
+      // ClickDz 1.0: Make-enhanced super prompt -> gpt-image-1
       const res = await fetch('/api/v1/images/generations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'dall-e-3', prompt, n: 1, size: '1024x1024', response_format: 'url' }),
+        body: JSON.stringify({ model: 'clickdz-image-1.0', prompt, n: 1, size: '1024x1024' }),
       });
       if (!res.ok) throw new Error(`Image ${res.status}`);
       const data = await res.json();

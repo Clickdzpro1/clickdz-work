@@ -1,5 +1,9 @@
 import type { AIToolsConfigService } from '@affine/core/modules/ai-button';
-import type { AIModelService } from '@affine/core/modules/ai-button/services/models';
+import {
+  type AIModelService,
+  COUNCIL_MODEL_ID,
+  COUNCIL_SEATS,
+} from '@affine/core/modules/ai-button/services/models';
 import type {
   ServerService,
   SubscriptionService,
@@ -384,6 +388,63 @@ export class ChatInputPreference extends SignalWatcher(
 
     // when the model sub-menu opens, bring the selected model into view
     this.watchModelSubMenuOpen();
+
+    // council member picker — choose the 3 models that sit on the council
+    const councilMembers = this.aiModelService.getCouncilMembers();
+    const councilCandidates = allModels.filter(
+      model => model.id !== COUNCIL_MODEL_ID && !model.id.includes('image')
+    );
+    const councilMemberItems = councilCandidates.map(model => {
+      const isMember = councilMembers.includes(model.id);
+      const chipInitial = model.category.slice(0, 1).toUpperCase();
+      return menu.action({
+        name: model.name,
+        class: {
+          'ai-model-item': true,
+          'ai-model-selected': isMember,
+        },
+        prefix: html`
+          <div class="ai-model-prefix">
+            <span class="ai-model-chip" data-cat=${model.category}>
+              ${chipInitial}
+            </span>
+          </div>
+        `,
+        postfix: html`
+          <div class="ai-model-postfix">
+            ${isMember
+              ? html`<span class="ai-model-check">${DoneIcon()}</span>`
+              : undefined}
+          </div>
+        `,
+        closeOnSelect: false,
+        select: () => {
+          const next = this.aiModelService.toggleCouncilMember(model.id);
+          const names = next.map(
+            id => allModels.find(m => m.id === id)?.name ?? id
+          );
+          this.notificationService.toast(
+            names.length
+              ? `Council (${Math.min(names.length, COUNCIL_SEATS)}/${COUNCIL_SEATS}): ${names.join(' · ')}`
+              : 'Council reset to the default members'
+          );
+        },
+      });
+    });
+
+    modelItems.push(
+      menu.subMenu({
+        name: 'Council members',
+        prefix: AiOutlineIcon(),
+        middleware: modelSubMenuMiddleware,
+        postfix: html`
+          <span class="ai-active-model-name">${COUNCIL_SEATS} seats</span>
+        `,
+        options: {
+          items: councilMemberItems,
+        },
+      })
+    );
 
     modelItems.push(
       menu.toggleSwitch({

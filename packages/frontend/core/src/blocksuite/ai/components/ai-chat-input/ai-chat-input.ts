@@ -2,7 +2,10 @@ import type {
   AIDraftService,
   AIToolsConfigService,
 } from '@affine/core/modules/ai-button';
-import type { AIModelService } from '@affine/core/modules/ai-button/services/models';
+import {
+  type AIModelService,
+  COUNCIL_MODEL_ID,
+} from '@affine/core/modules/ai-button/services/models';
 import type {
   ServerService,
   SubscriptionService,
@@ -142,6 +145,45 @@ export class AIChatInput extends SignalWatcher(
         background: var(--affine-quote-color);
         border-radius: 18px;
       }
+    }
+
+    .chat-mode-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 2px;
+      border-radius: 8px;
+      background: var(--affine-v2-layer-background-hoverOverlay);
+    }
+    .chat-mode-option {
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 20px;
+      padding: 1px 10px;
+      border-radius: 6px;
+      color: var(--affine-v2-text-secondary);
+      transition:
+        background-color 0.16s ease,
+        color 0.16s ease,
+        transform 0.16s ease;
+      white-space: nowrap;
+    }
+    .chat-mode-option:hover {
+      color: var(--affine-v2-text-primary);
+    }
+    .chat-mode-option:active {
+      transform: scale(0.96);
+    }
+    .chat-mode-option.active {
+      background: var(--affine-v2-layer-background-primary);
+      color: var(--affine-v2-text-primary);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+    }
+    .chat-mode-option.council.active {
+      color: #6e56cf;
     }
 
     .chat-panel-input-actions {
@@ -625,6 +667,28 @@ export class AIChatInput extends SignalWatcher(
           ></ai-chat-add-context>
         </div>
         <div class="chat-input-footer-spacer"></div>
+        <div class="chat-mode-toggle" data-testid="chat-mode-toggle">
+          <button
+            class="chat-mode-option ${this.aiModelService.modelId.value !==
+            COUNCIL_MODEL_ID
+              ? 'active'
+              : ''}"
+            @click=${() => this.aiModelService.setCouncilMode(false)}
+            title="Chat with a single model"
+          >
+            Chat
+          </button>
+          <button
+            class="chat-mode-option council ${this.aiModelService.modelId
+              .value === COUNCIL_MODEL_ID
+              ? 'active'
+              : ''}"
+            @click=${() => this.aiModelService.setCouncilMode(true)}
+            title="Three models answer together with a synthesis"
+          >
+            🏛️ Council
+          </button>
+        </div>
         <chat-input-preference
           .session=${this.session}
           .extendedThinking=${this._isReasoningActive}
@@ -826,16 +890,20 @@ export class AIChatInput extends SignalWatcher(
     let userInput = (markdown ? `${markdown}\n` : '') + text;
     // ClickDz Council mode: decorate the message so the Make-backed bridge
     // answers as a three-member council with a final synthesis
-    if (this.aiModelService.modelId.value === 'clickdz-council') {
+    if (this.aiModelService.modelId.value === COUNCIL_MODEL_ID) {
+      const memberIds = this.aiModelService.getCouncilMembers();
+      const allModels = this.aiModelService.models.value;
+      const memberNames = memberIds.map(
+        id => allModels.find(model => model.id === id)?.name ?? id
+      );
       userInput = [
-        '[ClickDz Council — members: Claude Opus 4.8 | Gemini 3.5 Pro | GPT-5.5]',
+        `[ClickDz Council — members: ${memberNames.join(' | ')}]`,
         'Answer as a three-member expert council. Produce one section per member,',
         'each headed "### <member name>", written from that model family’s',
-        'characteristic strengths (Opus 4.8: depth, nuance and caveats; Gemini 3.5',
-        'Pro: breadth, structure and data; GPT-5.5: precision, pragmatism and',
-        'actionable steps). The members may disagree. End with "### ⚖️ Council',
-        'synthesis" that reconciles them into one clear recommendation. Answer in',
-        'the language of the question. Keep each section tight.',
+        'characteristic strengths and point of view. The members may disagree.',
+        'End with "### ⚖️ Council synthesis" that reconciles them into one clear',
+        'recommendation. Answer in the language of the question. Keep each',
+        'section tight.',
         '',
         `Question: ${userInput}`,
       ].join('\n');
