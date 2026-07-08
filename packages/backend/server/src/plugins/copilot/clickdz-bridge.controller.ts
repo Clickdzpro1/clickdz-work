@@ -214,24 +214,40 @@ export class ClickDzBridgeController {
         HttpStatus.SERVICE_UNAVAILABLE
       );
     }
+    const model =
+      body?.model && body.model !== 'clickdz-image' ? body.model : 'dall-e-3';
+    // gpt-image-1 rejects response_format/style and always returns b64_json;
+    // dall-e-* accept response_format url. Build a valid payload for both.
+    const isGptImage = String(model).startsWith('gpt-image');
+    const payload: Record<string, unknown> = {
+      model,
+      prompt: body?.prompt || '',
+      n: Math.min(Number(body?.n || 1), 1),
+      size: body?.size || '1024x1024',
+    };
+    if (!isGptImage) {
+      payload.response_format = body?.response_format || 'url';
+      payload.style = body?.style || 'vivid';
+    }
     const response = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${OPENAI_IMAGE_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: body?.model && body.model !== 'clickdz-image' ? body.model : 'dall-e-3',
-        prompt: body?.prompt || '',
-        n: Math.min(Number(body?.n || 1), 1),
-        size: body?.size || '1024x1024',
-        response_format: body?.response_format || 'url',
-        style: body?.style || 'vivid',
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await response.json();
     if (!response.ok) {
       throw new HttpException(data, response.status);
+    }
+    // normalize: expose a data URL for b64 responses so url-consumers work
+    if (Array.isArray(data?.data)) {
+      for (const item of data.data) {
+        if (item && !item.url && typeof item.b64_json === 'string') {
+          item.url = `data:image/png;base64,${item.b64_json}`;
+        }
+      }
     }
     return data;
   }
