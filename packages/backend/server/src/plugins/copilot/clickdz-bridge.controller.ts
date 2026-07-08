@@ -42,15 +42,17 @@ const CLICKDZ_APP_WATERMARK =
   '<div style="position:fixed;bottom:10px;right:12px;font:600 11px system-ui;opacity:.55;z-index:99999"><a href="https://work.clickdz.ai" style="color:inherit;text-decoration:none" target="_blank" rel="noopener">⚡ Built with ClickDz</a></div>';
 
 function slugifyAppName(input: string): string {
+  // keep slugs short: long project names make Vercel truncate the
+  // auto-assigned <project>.vercel.app domain unpredictably
   const base = (input || '')
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, '')
     .trim()
     .split(/\s+/)
-    .slice(0, 4)
+    .slice(0, 3)
     .join('-')
     .replace(/-+/g, '-')
-    .slice(0, 40)
+    .slice(0, 18)
     .replace(/^-|-$/g, '');
   const rand = Math.random().toString(36).slice(2, 6);
   return base ? `${base}-${rand}` : `app-${rand}`;
@@ -447,10 +449,32 @@ export class ClickDzBridgeController {
       const polled = (await pollRes.json()) as any;
       state = polled.readyState || state;
     }
+    // never GUESS the live URL — Vercel may truncate long project names when
+    // assigning the <project>.vercel.app domain, so read the real one
+    let liveUrl = created.url ? `https://${created.url}` : undefined;
+    try {
+      const domainsRes = await fetch(
+        `https://api.vercel.com/v9/projects/${encodeURIComponent(projectName)}/domains${teamQuery}`,
+        {
+          headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+          signal: AbortSignal.timeout(15000),
+        }
+      );
+      const domains = (await domainsRes.json()) as any;
+      const assigned =
+        (domains?.domains || []).find(
+          (d: any) => d.verified && String(d.name).endsWith('.vercel.app')
+        ) ?? (domains?.domains || [])[0];
+      if (assigned?.name) {
+        liveUrl = `https://${assigned.name}`;
+      }
+    } catch {
+      // keep the deployment-specific URL as a safe fallback
+    }
     return {
       slug,
       state,
-      url: `https://${projectName}.vercel.app`,
+      url: liveUrl ?? `https://${projectName}.vercel.app`,
       deploymentUrl: created.url ? `https://${created.url}` : undefined,
     };
   }
