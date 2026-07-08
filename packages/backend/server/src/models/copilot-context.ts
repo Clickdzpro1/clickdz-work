@@ -16,6 +16,7 @@ import {
   Embedding,
   EMBEDDING_DIMENSIONS,
   FileChunkSimilarity,
+  isCopilotEmbeddingDisabled,
   MinimalContextConfigSchema,
 } from './common/copilot';
 
@@ -166,6 +167,9 @@ export class CopilotContextModel extends BaseModel {
   // ================ embeddings ================
 
   async checkEmbeddingAvailable(): Promise<boolean> {
+    // explicit kill switch: treat embeddings as unavailable even when the
+    // pgvector tables exist (e.g. no embedding-capable provider configured)
+    if (isCopilotEmbeddingDisabled()) return false;
     const [{ count }] = await this.db.$queryRaw<
       { count: number }[]
     >`SELECT count(1) FROM pg_tables WHERE tablename in ('ai_context_embeddings', 'ai_workspace_embeddings')`;

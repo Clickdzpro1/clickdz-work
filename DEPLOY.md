@@ -39,6 +39,7 @@ Go to Service → Variables, add:
 | `AFFINE_SERVER_HOST` | `work.clickdz.ai` |
 | `COPILOT_OPENAI_API_KEY` | `sk-...` (for AI features) |
 | `AFFINE_INDEXER_ENABLED` | `true` |
+| `COPILOT_EMBEDDING_DISABLED` | `true` — kill switch that disables copilot doc/file embeddings (jobs + semantic search). Set while no embedding-capable provider is configured (e.g. providers point at the Make bridge); remove once a real OpenAI/Gemini embedding endpoint is available. |
 
 ### 4. Custom Start Command
 

@@ -187,7 +187,7 @@ export class CopilotContextService implements OnApplicationBootstrap {
     threshold: number = 0.5,
     routeContext?: EmbeddingRouteContext
   ) {
-    const client = this.embeddingClient;
+    const client = this.canEmbedding ? this.embeddingClient : undefined;
     if (!client) return [];
     const options = this.embeddingOptions(workspaceId, signal, routeContext);
     const embedding = await client.getEmbedding(content, options);
@@ -212,7 +212,7 @@ export class CopilotContextService implements OnApplicationBootstrap {
     threshold: number = 0.5,
     routeContext?: EmbeddingRouteContext
   ) {
-    const client = this.embeddingClient;
+    const client = this.canEmbedding ? this.embeddingClient : undefined;
     if (!client) return [];
     const options = this.embeddingOptions(workspaceId, signal, routeContext);
     const embedding = await client.getEmbedding(content, options);
@@ -237,7 +237,7 @@ export class CopilotContextService implements OnApplicationBootstrap {
     threshold: number = 0.5,
     routeContext?: EmbeddingRouteContext
   ) {
-    const client = this.embeddingClient;
+    const client = this.canEmbedding ? this.embeddingClient : undefined;
     if (!client) return [];
     const options = this.embeddingOptions(workspaceId, signal, routeContext);
     const embedding = await client.getEmbedding(content, options);
@@ -265,7 +265,7 @@ export class CopilotContextService implements OnApplicationBootstrap {
     scopedThreshold: number = 0.85,
     routeContext?: EmbeddingRouteContext
   ) {
-    const client = this.embeddingClient;
+    const client = this.canEmbedding ? this.embeddingClient : undefined;
     if (!client) return [];
     const options = this.embeddingOptions(workspaceId, signal, routeContext);
     const embedding = await client.getEmbedding(content, options);

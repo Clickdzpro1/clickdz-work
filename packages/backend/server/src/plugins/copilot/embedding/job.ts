@@ -55,6 +55,10 @@ export class CopilotEmbeddingJob {
       await this.models.copilotContext.checkEmbeddingAvailable();
     if (this.supportEmbedding) {
       this.client = await this.embeddingClients.refresh();
+    } else {
+      this.logger.warn(
+        'Copilot embedding is unavailable (disabled via COPILOT_EMBEDDING_DISABLED or missing pgvector tables); embedding jobs will be skipped.'
+      );
     }
   }
 

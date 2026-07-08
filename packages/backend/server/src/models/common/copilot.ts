@@ -151,6 +151,25 @@ export type IgnoredDoc = {
 
 export const EMBEDDING_DIMENSIONS = 1024;
 
+/**
+ * Emergency kill switch for copilot embeddings.
+ *
+ * When the env var `COPILOT_EMBEDDING_DISABLED` is set to a truthy value
+ * ('1' | 'true' | 'yes', case-insensitive), all embedding features are
+ * treated as unavailable: embedding jobs are skipped, semantic search
+ * returns empty results and the CopilotEmbedding server feature is not
+ * advertised to clients.
+ *
+ * Use this when no embedding-capable provider is configured (e.g. the
+ * configured providers point at a chat-only bridge that cannot serve
+ * Gemini/OpenAI shaped embedding responses). Remove the env var once a
+ * real embedding endpoint is available.
+ */
+export function isCopilotEmbeddingDisabled(): boolean {
+  const value = process.env.COPILOT_EMBEDDING_DISABLED?.trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes';
+}
+
 const FILTER_PREFIX = [
   'Title: ',
   'Created at: ',

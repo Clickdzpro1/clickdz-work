@@ -14,6 +14,7 @@ import {
   type Embedding,
   type FileChunkSimilarity,
   type IgnoredDoc,
+  isCopilotEmbeddingDisabled,
 } from './common';
 
 @Injectable()
@@ -289,6 +290,9 @@ export class CopilotWorkspaceConfigModel extends BaseModel {
   // ================ embeddings ================
 
   async checkEmbeddingAvailable(): Promise<boolean> {
+    // explicit kill switch: treat embeddings as unavailable even when the
+    // pgvector tables exist (e.g. no embedding-capable provider configured)
+    if (isCopilotEmbeddingDisabled()) return false;
     const [{ count }] = await this.db.$queryRaw<
       { count: number }[]
     >`SELECT count(1) FROM pg_tables WHERE tablename in ('ai_workspace_embeddings', 'ai_workspace_file_embeddings', 'ai_workspace_blob_embeddings')`;

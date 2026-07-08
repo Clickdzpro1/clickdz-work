@@ -35,6 +35,11 @@ export const buildDocSearchGetter = (
         'Missing workspace, user, or query for doc_semantic_search.'
       );
     }
+    if (!context.canEmbedding) {
+      // embeddings are unavailable (disabled or no embedding provider):
+      // return no results so the model falls back to keyword-based search
+      return [];
+    }
     const workspace = await models.workspace.get(options.workspace);
     if (!workspace) {
       return workspaceSyncRequiredError();
