@@ -2,7 +2,7 @@ import type {
   TableCellSerialized,
   TableColumn,
   TableRow,
-} from '@blocksuite/ClickDz Work-model';
+} from '@blocksuite/affine-model';
 import type { ServiceProvider } from '@blocksuite/global/di';
 import {
   BaseAdapter,

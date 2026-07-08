@@ -3,8 +3,8 @@ import {
   ExportToHTMLIcon,
   ExportToMarkdownIcon,
   NewIcon,
-} from '@blocksuite/ClickDz Work-components/icons';
-import { openFilesWith } from '@blocksuite/ClickDz Work-shared/utils';
+} from '@blocksuite/affine-components/icons';
+import { openFilesWith } from '@blocksuite/affine-shared/utils';
 import { WithDisposable } from '@blocksuite/global/lit';
 import type { ExtensionType, Schema, Workspace } from '@blocksuite/store';
 import { html, LitElement, type PropertyValues } from 'lit';

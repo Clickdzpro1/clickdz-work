@@ -7,7 +7,7 @@
 ### Basic Usage
 
 ```typescript
-import { ClickDz Work } from '@blocksuite/ClickDz Work-shared/test-utils';
+import { ClickDz Work } from '@blocksuite/affine-shared/test-utils';
 
 // Create a simple document
 const doc = ClickDz Work`

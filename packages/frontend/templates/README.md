@@ -7,7 +7,7 @@ Manages template files for use in ClickDz Work. For now we only support onboardi
 Before we offer a better solution, to update the onboarding templates:
 
 1. run ClickDz Work core locally (dev mode)
-2. expose `ZipTransformer` to window. e.g., `import {ZipTransformer} from '@blocksuite/ClickDz Work/blocks/root'; window.ZipTransformer = ZipTransformer;`
+2. expose `ZipTransformer` to window. e.g., `import {ZipTransformer} from '@blocksuite/affine/blocks/root'; window.ZipTransformer = ZipTransformer;`
 3. run the following script
    ```js
    (async () => {

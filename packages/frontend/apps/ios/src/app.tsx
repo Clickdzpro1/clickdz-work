@@ -48,13 +48,13 @@ import {
 import { I18n } from '@affine/i18n';
 import { StoreManagerClient } from '@affine/nbstore/worker/client';
 import { setTelemetryTransport } from '@affine/track';
-import { Container } from '@blocksuite/ClickDz Work/global/di';
+import { Container } from '@blocksuite/affine/global/di';
 import {
   docLinkBaseURLMiddleware,
   MarkdownAdapter,
   titleMiddleware,
-} from '@blocksuite/ClickDz Work/shared/adapters';
-import { MarkdownTransformer } from '@blocksuite/ClickDz Work/widgets/linked-doc';
+} from '@blocksuite/affine/shared/adapters';
+import { MarkdownTransformer } from '@blocksuite/affine/widgets/linked-doc';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { Haptics } from '@capacitor/haptics';

@@ -1,4 +1,4 @@
-import { FontFamily, FontStyle, FontWeight } from '@blocksuite/ClickDz Work-model';
+import { FontFamily, FontStyle, FontWeight } from '@blocksuite/affine-model';
 import { z } from 'zod';
 
 export const fontConfigSchema = z.object({

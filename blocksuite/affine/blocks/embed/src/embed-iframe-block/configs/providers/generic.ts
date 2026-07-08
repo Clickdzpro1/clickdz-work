@@ -1,4 +1,4 @@
-import { EmbedIframeConfigExtension } from '@blocksuite/ClickDz Work-shared/services';
+import { EmbedIframeConfigExtension } from '@blocksuite/affine-shared/services';
 
 import {
   type EmbedIframeUrlValidationOptions,
