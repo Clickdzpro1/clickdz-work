@@ -147,6 +147,118 @@ export class AIChatInput extends SignalWatcher(
       }
     }
 
+    .clickdz-image-mode-btn {
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 15px;
+      line-height: 20px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      filter: grayscale(1) opacity(0.75);
+      transition:
+        filter 0.16s ease,
+        background-color 0.16s ease,
+        transform 0.16s ease;
+    }
+    .clickdz-image-mode-btn:hover {
+      filter: grayscale(0.3) opacity(1);
+      background: var(--affine-v2-layer-background-hoverOverlay);
+    }
+    .clickdz-image-mode-btn:active {
+      transform: scale(0.92);
+    }
+    .clickdz-image-mode-btn.active {
+      filter: none;
+      background: color-mix(in srgb, #6e56cf 18%, transparent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, #6e56cf 45%, transparent);
+    }
+
+    .clickdz-image-card {
+      margin: 0 0 8px;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      background: var(--affine-v2-layer-background-secondary);
+      animation: clickdz-card-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes clickdz-card-in {
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .clickdz-image-loading {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--affine-v2-text-secondary);
+      padding: 10px 4px;
+    }
+    .clickdz-image-spinner {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 2px solid color-mix(in srgb, #6e56cf 30%, transparent);
+      border-top-color: #6e56cf;
+      animation: clickdz-spin 0.8s linear infinite;
+    }
+    @keyframes clickdz-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    .clickdz-image-error {
+      font-size: 13px;
+      color: var(--affine-v2-status-error, #eb4335);
+      padding: 6px 4px;
+    }
+    .clickdz-image-preview {
+      display: block;
+      width: 100%;
+      max-height: 280px;
+      object-fit: contain;
+      border-radius: 8px;
+      background: var(--affine-v2-layer-background-primary);
+    }
+    .clickdz-image-caption {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--affine-v2-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .clickdz-image-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .clickdz-image-action {
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 20px;
+      padding: 2px 10px;
+      border-radius: 6px;
+      color: var(--affine-v2-text-secondary);
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      text-decoration: none;
+      transition:
+        color 0.15s ease,
+        background-color 0.15s ease;
+    }
+    .clickdz-image-action:hover {
+      color: var(--affine-v2-text-primary);
+      background: color-mix(in srgb, #6e56cf 20%, transparent);
+    }
+
     .chat-mode-toggle {
       display: inline-flex;
       align-items: center;
@@ -395,6 +507,23 @@ export class AIChatInput extends SignalWatcher(
   @state()
   accessor isInputEmpty = true;
 
+  // ClickDz 1.0 image mode: the next send creates an image instead of a chat
+  @state()
+  accessor imageMode = false;
+
+  @state()
+  accessor imageBusy = false;
+
+  @state()
+  accessor imageResult: {
+    url: string;
+    prompt: string;
+    enhanced?: string;
+  } | null = null;
+
+  @state()
+  accessor imageError = '';
+
   @state()
   accessor focused = false;
 
@@ -640,9 +769,62 @@ export class AIChatInput extends SignalWatcher(
             </div>
           </div>`
         : nothing}
+      ${this.imageBusy || this.imageResult || this.imageError
+        ? html`<div class="clickdz-image-card">
+            ${this.imageBusy
+              ? html`<div class="clickdz-image-loading">
+                  <span class="clickdz-image-spinner"></span>
+                  ClickDz 1.0 is imagining…
+                </div>`
+              : this.imageError
+                ? html`<div class="clickdz-image-error">
+                    ⚠️ ${this.imageError}
+                  </div>`
+                : this.imageResult
+                  ? html`<img
+                        class="clickdz-image-preview"
+                        src=${this.imageResult.url}
+                        alt=${this.imageResult.prompt}
+                      />
+                      <div class="clickdz-image-caption">
+                        ${this.imageResult.prompt}
+                      </div>
+                      <div class="clickdz-image-actions">
+                        <a
+                          class="clickdz-image-action"
+                          href=${this.imageResult.url}
+                          download="clickdz-image.png"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          >Download</a
+                        >
+                        <button
+                          class="clickdz-image-action"
+                          @click=${() =>
+                            this._generateClickDzImage(
+                              this.imageResult?.prompt ?? ''
+                            )}
+                        >
+                          Regenerate
+                        </button>
+                        <button
+                          class="clickdz-image-action"
+                          @click=${() => {
+                            this.imageResult = null;
+                            this.imageError = '';
+                          }}
+                        >
+                          Close
+                        </button>
+                      </div>`
+                  : nothing}
+          </div>`
+        : nothing}
       <textarea
         rows="1"
-        placeholder="What are your thoughts?"
+        placeholder=${this.imageMode
+          ? 'Describe the image ClickDz 1.0 should create…'
+          : 'What are your thoughts?'}
         @input=${this._handleInput}
         @keydown=${this._handleKeyDown}
         @focus=${() => {
@@ -666,6 +848,16 @@ export class AIChatInput extends SignalWatcher(
             .portalContainer=${this.portalContainer}
           ></ai-chat-add-context>
         </div>
+        <button
+          class="clickdz-image-mode-btn ${this.imageMode ? 'active' : ''}"
+          data-testid="clickdz-image-mode"
+          title="ClickDz 1.0 image — describe it, we imagine it"
+          @click=${() => {
+            this.imageMode = !this.imageMode;
+          }}
+        >
+          🎨
+        </button>
         <div class="chat-input-footer-spacer"></div>
         <div class="chat-mode-toggle" data-testid="chat-mode-toggle">
           <button
@@ -883,11 +1075,75 @@ export class AIChatInput extends SignalWatcher(
     await this.send(value);
   };
 
+  /** ClickDz 1.0: generate an image from the prompt typed in the chat box */
+  private readonly _generateClickDzImage = async (prompt: string) => {
+    if (!prompt.trim() || this.imageBusy) return;
+    this.imageBusy = true;
+    this.imageError = '';
+    this.imageResult = null;
+    try {
+      const res = await fetch('/api/v1/images/generations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'clickdz-image-1.0',
+          prompt,
+          n: 1,
+          size: '1024x1024',
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          data?.error?.message || `Image generation failed (${res.status})`
+        );
+      }
+      const url = data?.data?.[0]?.url;
+      if (!url) throw new Error('No image returned');
+      this.imageResult = {
+        url,
+        prompt,
+        enhanced: data?.clickdz?.enhanced_prompt,
+      };
+    } catch (error) {
+      this.imageError =
+        error instanceof Error ? error.message : 'Image generation failed';
+    } finally {
+      this.imageBusy = false;
+    }
+  };
+
   send = async (text: string) => {
     if (!this.runtime) return;
+    // image mode intercepts the send and creates a ClickDz 1.0 image instead
+    if (this.imageMode) {
+      await this._generateClickDzImage(text);
+      return;
+    }
     const { markdown, images, snapshot, combinedElementsMarkdown, html } =
       this.chatContextValue;
     let userInput = (markdown ? `${markdown}\n` : '') + text;
+    const sessionKey = this.session?.sessionId ?? 'draft';
+    const isCouncil = this.aiModelService.modelId.value === COUNCIL_MODEL_ID;
+    // when a thread previously answered in council format, an explicit reset
+    // stops the model from mimicking that structure in normal mode
+    if (
+      !isCouncil &&
+      this.aiModelService.getSessionMode(sessionKey) === 'council'
+    ) {
+      userInput = [
+        '[ClickDz mode: standard]',
+        'Ignore the council format used earlier in this conversation. From now',
+        'on answer normally as a single assistant, with no member sections and',
+        'no synthesis.',
+        '',
+        `Question: ${userInput}`,
+      ].join('\n');
+    }
+    this.aiModelService.setSessionMode(
+      sessionKey,
+      isCouncil ? 'council' : 'standard'
+    );
     // ClickDz Council mode: decorate the message so the Make-backed bridge
     // answers as a three-member council with a final synthesis
     if (this.aiModelService.modelId.value === COUNCIL_MODEL_ID) {

@@ -9,6 +9,10 @@ import { type ChatMessage } from '../../components/ai-chat-messages';
 // instructions never render in the user's bubble — only a sleek badge
 const COUNCIL_BRIEFING_RE =
   /^\[ClickDz Council — members: ([^\]\n]+)\]\n[\s\S]*?\n\nQuestion: ([\s\S]*)$/;
+// matches the standard-mode reset injected after leaving council mode —
+// rendered as just the question, no chrome
+const STANDARD_RESET_RE =
+  /^\[ClickDz mode: standard\]\n[\s\S]*?\n\nQuestion: ([\s\S]*)$/;
 
 export class ChatMessageUser extends WithDisposable(ShadowlessElement) {
   static override styles = css`
@@ -74,6 +78,9 @@ export class ChatMessageUser extends WithDisposable(ShadowlessElement) {
   renderContent() {
     const { item } = this;
     const councilMatch = item.content.match(COUNCIL_BRIEFING_RE);
+    const standardMatch = councilMatch
+      ? null
+      : item.content.match(STANDARD_RESET_RE);
 
     return html`
       ${item.attachments
@@ -97,7 +104,11 @@ export class ChatMessageUser extends WithDisposable(ShadowlessElement) {
         style="max-width: 100%;"
       >
         <chat-content-pure-text
-          .text=${councilMatch ? councilMatch[2] : item.content}
+          .text=${councilMatch
+            ? councilMatch[2]
+            : standardMatch
+              ? standardMatch[1]
+              : item.content}
         ></chat-content-pure-text>
       </div>
     `;

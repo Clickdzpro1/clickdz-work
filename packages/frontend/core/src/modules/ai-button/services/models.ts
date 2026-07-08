@@ -88,6 +88,16 @@ export class AIModelService extends Service {
     this.globalStateService.globalState.set(AI_MODEL_ID_KEY, undefined);
   };
 
+  // remembers whether each session last received a council- or standard-mode
+  // message, so the chat can inject a format reset when the mode flips
+  private readonly sessionModes = new Map<string, 'council' | 'standard'>();
+
+  getSessionMode = (sessionId: string) => this.sessionModes.get(sessionId);
+
+  setSessionMode = (sessionId: string, mode: 'council' | 'standard') => {
+    this.sessionModes.set(sessionId, mode);
+  };
+
   /** the 3 council member model ids (falls back to the default trio) */
   getCouncilMembers = (): string[] => {
     const stored = this.councilMembers.value;

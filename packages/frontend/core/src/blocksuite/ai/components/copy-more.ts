@@ -159,12 +159,26 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
     </svg>
   `;
 
+  private _stopSpeaking() {
+    if (this._ttsAudio) {
+      try {
+        this._ttsAudio.pause();
+        this._ttsAudio.src = '';
+      } catch {
+        // ignore teardown errors
+      }
+      this._ttsAudio = null;
+    }
+    this._isSpeaking = false;
+    this.requestUpdate();
+  }
+
   private async _speak(text: string) {
     if (!text) return;
-    // Stop any current speech
-    if (this._ttsAudio) {
-      this._ttsAudio.pause();
-      this._ttsAudio = null;
+    // toggle: clicking while speaking STOPS playback
+    if (this._isSpeaking || this._ttsAudio) {
+      this._stopSpeaking();
+      return;
     }
     this._isSpeaking = true;
     this.requestUpdate();
@@ -185,6 +199,11 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
           resolve();
         };
         audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+        // manual stop pauses the audio — resolve the wait instead of hanging
+        audio.onpause = () => {
           URL.revokeObjectURL(url);
           resolve();
         };
@@ -309,6 +328,10 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
           from { transform: rotate(0deg); }
           to { transform: rotate(360deg); }
         }
+        @keyframes clickdz-speak-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.45; }
+        }
       </style>
       <div class="copy-more">
         ${content
@@ -341,10 +364,12 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
                 class="button speak"
                 @click=${() => this._speak(content)}
                 data-testid="action-speak-button"
-                style="${this._isSpeaking ? 'color: var(--affine-primary-color);' : ''}"
+                style="${this._isSpeaking ? 'color: var(--affine-primary-color); animation: clickdz-speak-pulse 1.2s ease-in-out infinite;' : ''}"
               >
-                ${this._SpeakerIcon(this._isSpeaking)}
-                <affine-tooltip>${this._isSpeaking ? 'Speaking...' : 'Read aloud'}</affine-tooltip>
+                ${this._isSpeaking
+                  ? html`<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>`
+                  : this._SpeakerIcon(false)}
+                <affine-tooltip>${this._isSpeaking ? 'Stop' : 'Read aloud'}</affine-tooltip>
               </div>
               <div
                 class="button generate-image"
