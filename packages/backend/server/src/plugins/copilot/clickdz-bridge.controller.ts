@@ -207,7 +207,7 @@ export class ClickDzBridgeController {
     res.json(openAIChatResponse(id, model, content));
   }
 
-  @Post('/api/v1beta/models/:model:generateContent')
+  @Post('/api/v1beta/models/:model/generateContent')
   async geminiGenerate(@Param('model') model: string, @Body() body: any) {
     const parts = body?.contents?.flatMap((content: any) => content?.parts || []) || [];
     const text = parts.map((part: any) => part?.text || '').join('\n');
