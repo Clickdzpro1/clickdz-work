@@ -150,6 +150,15 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
     </svg>
   `;
 
+  // Inline SVG icon for image generation
+  private _ImageIcon = () => html`
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+      <circle cx="8.5" cy="8.5" r="1.5"></circle>
+      <polyline points="21 15 16 10 5 21"></polyline>
+    </svg>
+  `;
+
   private async _speak(text: string) {
     if (!text) return;
     // Stop any current speech
@@ -193,6 +202,57 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
   private _toggleAutoPlay() {
     ChatCopyMore._autoPlayEnabled = !ChatCopyMore._autoPlayEnabled;
     this.requestUpdate();
+  }
+
+  // ---- Image Generation state ----
+  @state()
+  private accessor _isGeneratingImage = false;
+  private _imageBlob: string | null = null;
+
+  // ClickDz AI prompt enhancer — transforms simple prompts into high-quality image prompts
+  private _enhanceImagePrompt(userPrompt: string): string {
+    const enhancerBase = `You are a world-class prompt engineer for DALL-E 3 / GPT-4o image generation. Transform the user's simple description into a highly detailed, visually rich prompt that produces professional, stunning images. Add: artistic style, lighting, composition, mood, color palette, camera angle, and quality keywords. Keep it concise (under 400 chars). Output ONLY the enhanced prompt — no explanations, no markdown.`;
+    // For now, use a simple rule-based enhancement + creative expansion
+    const clean = userPrompt.trim().replace(/^(generate|create|make|draw|image of|picture of)\s*/i, '');
+    if (!clean) return 'Abstract digital art, vibrant colors, flowing geometry, studio lighting, 8k render, professional quality';
+    // Rule-based enhancement with art-direction
+    const enhancements = [
+      'professional photography style',
+      'cinematic lighting',
+      'highly detailed',
+      '8k resolution',
+      'masterpiece quality',
+      'vivid colors',
+      'sharp focus',
+    ];
+    // If user prompt is short, expand it; otherwise just enhance
+    if (clean.length < 60) {
+      return `${clean}, ${enhancements.slice(0, 4).join(', ')}, digital art, ultra-detailed, award-winning composition`;
+    }
+    return `${clean}, ${enhancements.slice(0, 2).join(', ')}`;
+  }
+
+  private async _generateImage() {
+    if (this._isGeneratingImage) return;
+    const prompt = this._enhanceImagePrompt(this.content);
+    this._isGeneratingImage = true;
+    this.requestUpdate();
+    try {
+      const res = await fetch('https://clickdz-ai-bridge-techportal.vercel.app/api/voice/image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      if (!res.ok) throw new Error(`Image ${res.status}`);
+      const data = await res.json();
+      this._imageBlob = data.url || data.imageUrl || data.data?.[0]?.url || null;
+      this._notifySuccess('Image generated!');
+    } catch {
+      this._notifySuccess('Image generation failed');
+    } finally {
+      this._isGeneratingImage = false;
+      this.requestUpdate();
+    }
   }
 
   private _toggle() {
@@ -244,6 +304,10 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
         .more-menu {
           padding: ${this._showMoreMenu ? '8px' : '0px'};
         }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
       </style>
       <div class="copy-more">
         ${content
@@ -281,6 +345,17 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
                 ${this._SpeakerIcon(this._isSpeaking)}
                 <affine-tooltip>${this._isSpeaking ? 'Speaking...' : 'Read aloud'}</affine-tooltip>
               </div>
+              <div
+                class="button generate-image"
+                @click=${() => this._generateImage()}
+                data-testid="action-generate-image-button"
+                style="${this._isGeneratingImage ? 'color: var(--affine-primary-color);' : ''}"
+              >
+                ${this._isGeneratingImage
+                  ? html`<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>`
+                  : this._ImageIcon()}
+                <affine-tooltip>Generate image from this message</affine-tooltip>
+              </div>
               ${isLast
                 ? html`<div
                       class="button auto-play"
@@ -295,6 +370,12 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
                     </div>`
                 : nothing}`
           : nothing}
+
+      ${this._imageBlob
+        ? html`<div class="clickdz-image-preview" style="margin-top:8px; border-radius:12px; overflow:hidden; border:1px solid var(--affine-border-color); max-width:400px;">
+             <img src="${this._imageBlob}" alt="AI generated" style="width:100%; display:block;" />
+           </div>`
+        : nothing}
         ${showMoreIcon && host
           ? html`<div
               class="button more"
