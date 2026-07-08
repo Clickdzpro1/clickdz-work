@@ -11,6 +11,14 @@ import type { GlobalStateService } from '../../storage';
 
 const AI_MODEL_ID_KEY = 'AIModelId';
 
+const CLICKDZ_FALLBACK_MODELS: AIModel[] = [
+  { name: 'ClickDz Smart', id: 'clickdz-smart', category: 'ClickDz', version: 'Smart', isPro: false, isDefault: true },
+  { name: 'ClickDz Fast', id: 'clickdz-fast', category: 'ClickDz', version: 'Fast', isPro: false, isDefault: false },
+  { name: 'ClickDz Arabic', id: 'clickdz-arabic', category: 'ClickDz', version: 'Arabic', isPro: false, isDefault: false },
+  { name: 'Claude Sonnet', id: 'claude-sonnet-5', category: 'Claude', version: 'Sonnet', isPro: false, isDefault: false },
+  { name: 'Gemini Pro', id: 'gemini-2.5-pro', category: 'Gemini', version: 'Pro', isPro: false, isDefault: false },
+];
+
 export interface AIModel {
   name: string;
   id: string;
@@ -86,18 +94,25 @@ export class AIModelService extends Service {
     const models = await this.getModelsByPrompt(promptName);
     if (models) {
       const { defaultModel, optionalModels, proModels } = models;
-      this.models.value = optionalModels.map(model => {
+      const merged = [...optionalModels];
+      for (const proModel of proModels) {
+        if (!merged.some(model => model.id === proModel.id)) merged.push(proModel);
+      }
+      this.models.value = merged.map(model => {
         const [category] = model.name.split(' ');
-        const version = model.name.slice(category.length + 1);
+        const version = model.name.slice(category.length + 1) || category;
         return {
           name: model.name,
           id: model.id,
           version,
           category,
-          isPro: proModels.some(proModel => proModel.id === model.id),
+          isPro: false,
           isDefault: model.id === defaultModel,
         };
       });
+    }
+    if (!this.models.value.length) {
+      this.models.value = CLICKDZ_FALLBACK_MODELS;
     }
   };
 

@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-const BRIDGE = 'https://clickdz-ai-bridge-techportal.vercel.app';
+const BRIDGE = '';
 
 const SYSTEM_PROMPT =
   'You are ClickDz AI, the friendly in-app voice guide for ClickDz Work — the AI workspace by clickdz.ai. Answer briefly (2-4 sentences, spoken style) and help the user use the app: docs, edgeless whiteboards, AI chat, templates, journals, folders, sharing. Reply in the language the user spoke (Arabic/Darija, French, or English).';
