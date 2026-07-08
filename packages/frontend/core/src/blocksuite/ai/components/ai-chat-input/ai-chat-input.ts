@@ -177,10 +177,163 @@ export class AIChatInput extends SignalWatcher(
     .clickdz-image-card {
       margin: 0 0 8px;
       padding: 10px;
-      border-radius: 10px;
+      border-radius: 12px;
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
       background: var(--affine-v2-layer-background-secondary);
       animation: clickdz-card-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+      position: relative;
+    }
+    /* animated gradient ring while generating */
+    .clickdz-image-card.generating {
+      border-color: transparent;
+      background:
+        linear-gradient(
+            var(--affine-v2-layer-background-secondary),
+            var(--affine-v2-layer-background-secondary)
+          )
+          padding-box,
+        conic-gradient(
+            from var(--clickdz-ring, 0deg),
+            #6e56cf,
+            #4285f4,
+            #10a37f,
+            #d97757,
+            #6e56cf
+          )
+          border-box;
+      border: 1.5px solid transparent;
+      animation:
+        clickdz-card-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both,
+        clickdz-ring-spin 2.6s linear infinite;
+    }
+    @property --clickdz-ring {
+      syntax: '<angle>';
+      inherits: false;
+      initial-value: 0deg;
+    }
+    @keyframes clickdz-ring-spin {
+      to {
+        --clickdz-ring: 360deg;
+      }
+    }
+
+    /* staged loading */
+    .clickdz-gen-loading {
+      padding: 6px 4px 4px;
+    }
+    .clickdz-gen-stage {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--affine-v2-text-primary);
+    }
+    .clickdz-gen-stage-text {
+      flex: 1;
+      animation: clickdz-stage-fade 0.4s ease both;
+    }
+    @keyframes clickdz-stage-fade {
+      from {
+        opacity: 0;
+        transform: translateY(3px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .clickdz-gen-elapsed {
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: var(--affine-v2-text-secondary);
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      border-radius: 999px;
+      padding: 1px 8px;
+    }
+    .clickdz-gen-orb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #9d8cff, #6e56cf);
+      animation: clickdz-orb-breathe 1.6s ease-in-out infinite;
+    }
+    @keyframes clickdz-orb-breathe {
+      0%,
+      100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(110, 86, 207, 0.5);
+      }
+      50% {
+        transform: scale(1.15);
+        box-shadow: 0 0 0 7px rgba(110, 86, 207, 0);
+      }
+    }
+    .clickdz-gen-bar {
+      margin-top: 10px;
+      height: 4px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: var(--affine-v2-layer-background-hoverOverlay);
+    }
+    .clickdz-gen-bar span {
+      display: block;
+      height: 100%;
+      width: 40%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #6e56cf, #4285f4);
+      animation: clickdz-bar-slide 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+    }
+    @keyframes clickdz-bar-slide {
+      0% {
+        transform: translateX(-110%);
+      }
+      100% {
+        transform: translateX(280%);
+      }
+    }
+
+    /* browser-chrome frame for shipped apps */
+    .clickdz-app-chrome {
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      animation: clickdz-card-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .clickdz-app-chrome-bar {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 7px 10px;
+      background: var(--affine-v2-layer-background-primary);
+      border-bottom: 1px solid var(--affine-v2-layer-insideBorder-border);
+    }
+    .clickdz-chrome-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+    }
+    .clickdz-chrome-dot.red {
+      background: #ff5f57;
+    }
+    .clickdz-chrome-dot.yellow {
+      background: #febc2e;
+    }
+    .clickdz-chrome-dot.green {
+      background: #28c840;
+    }
+    .clickdz-app-chrome-url {
+      margin-left: 8px;
+      flex: 1;
+      font-size: 11px;
+      line-height: 18px;
+      color: var(--affine-v2-text-secondary);
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      border-radius: 6px;
+      padding: 0 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     @keyframes clickdz-card-in {
       from {
@@ -550,6 +703,41 @@ export class AIChatInput extends SignalWatcher(
   @state()
   accessor appSlug: string | null = null;
 
+  // shared generation clock driving the staged loading experience
+  @state()
+  accessor loadingSeconds = 0;
+
+  private _loadingTimer: ReturnType<typeof setInterval> | null = null;
+
+  private _startLoadingClock() {
+    this._stopLoadingClock();
+    this.loadingSeconds = 0;
+    this._loadingTimer = setInterval(() => {
+      this.loadingSeconds += 1;
+    }, 1000);
+  }
+
+  private _stopLoadingClock() {
+    if (this._loadingTimer) {
+      clearInterval(this._loadingTimer);
+      this._loadingTimer = null;
+    }
+  }
+
+  private get appStage() {
+    const s = this.loadingSeconds;
+    if (s < 10) return '🧠 Designing the interface…';
+    if (s < 45) return '✍️ Writing the code — gpt-5.4 at work…';
+    if (s < 75) return '✨ Polishing interactions…';
+    return '🚀 Deploying to the web…';
+  }
+
+  private get imageStage() {
+    const s = this.loadingSeconds;
+    if (s < 8) return '✨ Enhancing your prompt…';
+    return '🎨 Painting with ClickDz 1.0…';
+  }
+
   @state()
   accessor focused = false;
 
@@ -796,23 +984,40 @@ export class AIChatInput extends SignalWatcher(
           </div>`
         : nothing}
       ${this.appBusy || this.appResult || this.appError
-        ? html`<div class="clickdz-image-card">
+        ? html`<div class="clickdz-image-card ${this.appBusy ? 'generating' : ''}">
             ${this.appBusy
-              ? html`<div class="clickdz-image-loading">
-                  <span class="clickdz-image-spinner"></span>
-                  ClickDz is building your app… (up to a minute)
+              ? html`<div class="clickdz-gen-loading">
+                  <div class="clickdz-gen-stage">
+                    <span class="clickdz-gen-orb"></span>
+                    <span class="clickdz-gen-stage-text">${this.appStage}</span>
+                    <span class="clickdz-gen-elapsed"
+                      >${this.loadingSeconds}s</span
+                    >
+                  </div>
+                  <div class="clickdz-gen-bar"><span></span></div>
                 </div>`
               : this.appError
                 ? html`<div class="clickdz-image-error">⚠️ ${this.appError}</div>`
                 : this.appResult
-                  ? html`<iframe
-                        class="clickdz-app-frame"
-                        src=${this.appResult.url}
-                        sandbox="allow-scripts allow-same-origin allow-popups"
-                        title=${this.appResult.prompt}
-                      ></iframe>
+                  ? html`<div class="clickdz-app-chrome">
+                        <div class="clickdz-app-chrome-bar">
+                          <span class="clickdz-chrome-dot red"></span>
+                          <span class="clickdz-chrome-dot yellow"></span>
+                          <span class="clickdz-chrome-dot green"></span>
+                          <span class="clickdz-app-chrome-url"
+                            >${this.appResult.url.replace('https://', '')}</span
+                          >
+                        </div>
+                        <iframe
+                          class="clickdz-app-frame"
+                          src=${this.appResult.url}
+                          sandbox="allow-scripts allow-same-origin allow-popups"
+                          title=${this.appResult.prompt}
+                        ></iframe>
+                      </div>
                       <div class="clickdz-image-caption">
-                        🚀 Live at ${this.appResult.url}
+                        🚀 Live · built by ClickDz from “${this.appResult
+                          .prompt}”
                       </div>
                       <div class="clickdz-image-actions">
                         <a
@@ -856,11 +1061,19 @@ export class AIChatInput extends SignalWatcher(
           </div>`
         : nothing}
       ${this.imageBusy || this.imageResult || this.imageError
-        ? html`<div class="clickdz-image-card">
+        ? html`<div
+            class="clickdz-image-card ${this.imageBusy ? 'generating' : ''}"
+          >
             ${this.imageBusy
-              ? html`<div class="clickdz-image-loading">
-                  <span class="clickdz-image-spinner"></span>
-                  ClickDz 1.0 is imagining…
+              ? html`<div class="clickdz-gen-loading">
+                  <div class="clickdz-gen-stage">
+                    <span class="clickdz-gen-orb"></span>
+                    <span class="clickdz-gen-stage-text">${this.imageStage}</span>
+                    <span class="clickdz-gen-elapsed"
+                      >${this.loadingSeconds}s</span
+                    >
+                  </div>
+                  <div class="clickdz-gen-bar"><span></span></div>
                 </div>`
               : this.imageError
                 ? html`<div class="clickdz-image-error">
@@ -1181,6 +1394,7 @@ export class AIChatInput extends SignalWatcher(
     this.imageBusy = true;
     this.imageError = '';
     this.imageResult = null;
+    this._startLoadingClock();
     try {
       const res = await fetch('/api/v1/images/generations', {
         method: 'POST',
@@ -1210,6 +1424,7 @@ export class AIChatInput extends SignalWatcher(
         error instanceof Error ? error.message : 'Image generation failed';
     } finally {
       this.imageBusy = false;
+      this._stopLoadingClock();
     }
   };
 
@@ -1218,6 +1433,7 @@ export class AIChatInput extends SignalWatcher(
     if (!prompt.trim() || this.appBusy) return;
     this.appBusy = true;
     this.appError = '';
+    this._startLoadingClock();
     try {
       const res = await fetch('/api/v1/apps/generate', {
         method: 'POST',
@@ -1240,6 +1456,7 @@ export class AIChatInput extends SignalWatcher(
         error instanceof Error ? error.message : 'App build failed';
     } finally {
       this.appBusy = false;
+      this._stopLoadingClock();
     }
   };
 

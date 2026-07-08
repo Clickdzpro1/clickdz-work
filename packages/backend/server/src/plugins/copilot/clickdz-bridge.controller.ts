@@ -4,6 +4,7 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Logger,
   Post,
   Req,
   Res,
@@ -170,6 +171,8 @@ function parseMakeAgentResponse(raw: unknown): string {
 
 @Controller()
 export class ClickDzBridgeController {
+  private readonly logger = new Logger(ClickDzBridgeController.name);
+
   private assertMakeReady() {
     if (!MAKE_API_KEY || !MAKE_TEAM_ID || !MAKE_AGENT_ID) {
       throw new HttpException(
@@ -216,6 +219,9 @@ export class ClickDzBridgeController {
           ],
           config: {},
         }),
+        // large code generations can take a couple of minutes — fail
+        // controlled instead of hanging forever
+        signal: AbortSignal.timeout(240000),
       }
     );
 
@@ -451,7 +457,12 @@ export class ClickDzBridgeController {
 
   @Post('/api/v1/apps/generate')
   async generateApp(@Body() body: any) {
+    const startedAt = Date.now();
+    this.logger.log(
+      `[apps] generate request: prompt=${String(body?.prompt || '').slice(0, 80)}`
+    );
     if (!VERCEL_TOKEN) {
+      this.logger.warn('[apps] rejected: VERCEL_TOKEN missing');
       throw new HttpException(
         { error: { message: 'Vercel deployment is not configured', type: 'configuration_error', code: 'vercel_token_missing' } },
         HttpStatus.SERVICE_UNAVAILABLE
@@ -467,6 +478,9 @@ export class ClickDzBridgeController {
 
     // 1. generate the app with the Make code agent (falls back to the
     //    default agent with inline guidelines when no dedicated agent is set)
+    this.logger.log(
+      `[apps] codegen start via agent=${MAKE_CODE_AGENT_ID ? 'code-agent' : 'default'}`
+    );
     const reply = await this.runMakeAgent(
       [
         {
@@ -476,6 +490,9 @@ export class ClickDzBridgeController {
       ],
       'clickdz-apps',
       MAKE_CODE_AGENT_ID || undefined
+    );
+    this.logger.log(
+      `[apps] codegen done in ${Math.round((Date.now() - startedAt) / 1000)}s, reply=${(reply || '').length} chars`
     );
     let html = extractHtmlApp(reply || '');
     if (!html) {
@@ -496,8 +513,17 @@ export class ClickDzBridgeController {
       typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
         ? body.slug
         : slugifyAppName(prompt);
+    this.logger.log(`[apps] deploying ${html.length} chars as slug=${slug}`);
     const deployed = await this.deployAppToVercel(slug, html);
-    return { ...deployed, prompt, bytes: html.length };
+    this.logger.log(
+      `[apps] done in ${Math.round((Date.now() - startedAt) / 1000)}s: ${deployed.url} (${deployed.state})`
+    );
+    return {
+      ...deployed,
+      prompt,
+      bytes: html.length,
+      seconds: Math.round((Date.now() - startedAt) / 1000),
+    };
   }
 
   @Post('/api/voice/token')
