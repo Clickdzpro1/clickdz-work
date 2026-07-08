@@ -463,6 +463,31 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     ]),
   });
 
+  // ClickDz virtual models — Make-backed through the proven Gemini-protocol
+  // bridge path (the bridge forwards the requested model id to the Make agent)
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "gemini_api".to_string(),
+    canonical_key: "clickdz-council".to_string(),
+    raw_model_id: "clickdz-council".to_string(),
+    display_name: Some("ClickDz Council".to_string()),
+    aliases: vec!["clickdz-council".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(gemini_attachment.clone()),
+      structured_attachments: Some(gemini_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("gemini".to_string()),
+    request_layer: Some("gemini_api".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec![
+      "prefetch_remote_attachments".to_string(),
+      "structured_retry".to_string(),
+    ]),
+  });
+
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "gemini_api".to_string(),
     canonical_key: "gemini-3-flash-preview".to_string(),

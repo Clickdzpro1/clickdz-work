@@ -17,6 +17,26 @@ const MAKE_AGENT_ID = process.env.MAKE_SUPERAGENT_ID || process.env.MAKE_AGENT_I
 const MAKE_ARABIC_AGENT_ID = process.env.MAKE_ARABIC_AGENT_ID || MAKE_AGENT_ID;
 const OPENAI_IMAGE_API_KEY = process.env.OPENAI_IMAGE_API_KEY || process.env.OPENAI_API_KEY || '';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
+const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
+
+// ClickDz 1.0 — the smart image model: Make-enhanced prompt -> gpt-image-1
+const CLICKDZ_IMAGE_MODEL_IDS = new Set(['clickdz-image-1.0', 'clickdz-image']);
+const CLICKDZ_IMAGE_ENGINE = 'gpt-image-1';
+const IMAGE_ENHANCER_GUIDELINES = [
+  'You are ClickDz 1.0, an elite image prompt engineer. Rewrite the request',
+  'below into ONE masterful English image-generation prompt.',
+  'Rules:',
+  '- preserve the user intent and every explicit detail they gave',
+  '- specify: subject, setting, composition (framing, perspective), lighting',
+  '  (quality, direction, mood), color palette, style or medium, fine textures',
+  '- add tasteful photographic/artistic vocabulary (lens, film stock, render',
+  '  style) only when it fits the request',
+  '- if the request is Arabic or French, translate the intent faithfully into',
+  '  English, but keep any text that must appear INSIDE the image in its',
+  '  original language, wrapped in double quotes',
+  '- never invent brands, logos, real people or watermarks not requested',
+  '- output ONLY the final prompt text, no commentary, at most 180 words',
+].join('\n');
 
 const MODELS = [
   'clickdz-fast',
@@ -206,6 +226,51 @@ export class ClickDzBridgeController {
     res.json(openAIChatResponse(id, model, content));
   }
 
+  /** extract text from an attached image via the Make OCR scenario */
+  private async ocrImageContext(fileUrl: string): Promise<string> {
+    if (!MAKE_OCR_WEBHOOK_URL || !fileUrl) return '';
+    try {
+      const response = await fetch(MAKE_OCR_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_url: fileUrl }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!response.ok) return '';
+      const data = (await response.json()) as { text?: string };
+      return typeof data?.text === 'string' ? data.text.slice(0, 4000) : '';
+    } catch {
+      // OCR is best-effort context — never block generation on it
+      return '';
+    }
+  }
+
+  /** enhance a raw image prompt through the Make agent (best-effort) */
+  private async enhanceImagePrompt(
+    rawPrompt: string,
+    ocrContext: string
+  ): Promise<string> {
+    try {
+      const parts = [IMAGE_ENHANCER_GUIDELINES];
+      if (ocrContext) {
+        parts.push(
+          `Content extracted from the user's attached reference image:\n"""${ocrContext}"""\nBlend this reference faithfully into the scene.`
+        );
+      }
+      parts.push(`Request: ${rawPrompt}`);
+      const enhanced = await this.runMakeAgent(
+        [{ role: 'user', content: parts.join('\n\n') }],
+        'clickdz-image-enhancer'
+      );
+      const cleaned = (enhanced || '').trim().replace(/^["'`]+|["'`]+$/g, '');
+      // sanity: reject junk enhancements, keep the user's own words instead
+      if (cleaned.length < 10 || cleaned.length > 4000) return rawPrompt;
+      return cleaned;
+    } catch {
+      return rawPrompt;
+    }
+  }
+
   @Post(['/api/v1/images/generations', '/v1/images/generations'])
   async imageGenerations(@Body() body: any) {
     if (!OPENAI_IMAGE_API_KEY) {
@@ -214,14 +279,33 @@ export class ClickDzBridgeController {
         HttpStatus.SERVICE_UNAVAILABLE
       );
     }
-    const model =
-      body?.model && body.model !== 'clickdz-image' ? body.model : 'dall-e-3';
+    const requestedModel = String(body?.model || '');
+    const isClickDzImage = CLICKDZ_IMAGE_MODEL_IDS.has(requestedModel);
+
+    let prompt = String(body?.prompt || '');
+    let enhancedPrompt: string | undefined;
+    let ocrUsed = false;
+    if (isClickDzImage && prompt) {
+      // ClickDz 1.0 pipeline: OCR reference (optional) -> Make enhancement
+      const imageUrl =
+        typeof body?.image_url === 'string' ? body.image_url : '';
+      const ocrContext = imageUrl ? await this.ocrImageContext(imageUrl) : '';
+      ocrUsed = !!ocrContext;
+      enhancedPrompt = await this.enhanceImagePrompt(prompt, ocrContext);
+      prompt = enhancedPrompt;
+    }
+
+    const model = isClickDzImage
+      ? CLICKDZ_IMAGE_ENGINE
+      : body?.model && body.model !== 'clickdz-image'
+        ? body.model
+        : 'dall-e-3';
     // gpt-image-1 rejects response_format/style and always returns b64_json;
     // dall-e-* accept response_format url. Build a valid payload for both.
     const isGptImage = String(model).startsWith('gpt-image');
     const payload: Record<string, unknown> = {
       model,
-      prompt: body?.prompt || '',
+      prompt: prompt || body?.prompt || '',
       n: Math.min(Number(body?.n || 1), 1),
       size: body?.size || '1024x1024',
     };
@@ -248,6 +332,14 @@ export class ClickDzBridgeController {
           item.url = `data:image/png;base64,${item.b64_json}`;
         }
       }
+    }
+    if (isClickDzImage) {
+      data.clickdz = {
+        model: 'clickdz-image-1.0',
+        engine: CLICKDZ_IMAGE_ENGINE,
+        enhanced_prompt: enhancedPrompt,
+        reference_ocr_used: ocrUsed,
+      };
     }
     return data;
   }

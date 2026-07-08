@@ -13,6 +13,7 @@ const AI_MODEL_ID_KEY = 'AIModelId';
 
 const CLICKDZ_FALLBACK_MODELS: AIModel[] = [
   { name: 'ClickDz Smart', id: 'clickdz-smart', category: 'ClickDz', version: 'Smart', isPro: false, isDefault: true },
+  { name: 'ClickDz Council', id: 'clickdz-council', category: 'ClickDz', version: 'Council', isPro: false, isDefault: false },
   { name: 'ClickDz Fast', id: 'clickdz-fast', category: 'ClickDz', version: 'Fast', isPro: false, isDefault: false },
   { name: 'ClickDz Arabic', id: 'clickdz-arabic', category: 'ClickDz', version: 'Arabic', isPro: false, isDefault: false },
   { name: 'Claude Sonnet', id: 'claude-sonnet-5', category: 'Claude', version: 'Sonnet', isPro: false, isDefault: false },

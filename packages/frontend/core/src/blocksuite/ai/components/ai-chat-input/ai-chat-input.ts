@@ -823,7 +823,23 @@ export class AIChatInput extends SignalWatcher(
     if (!this.runtime) return;
     const { markdown, images, snapshot, combinedElementsMarkdown, html } =
       this.chatContextValue;
-    const userInput = (markdown ? `${markdown}\n` : '') + text;
+    let userInput = (markdown ? `${markdown}\n` : '') + text;
+    // ClickDz Council mode: decorate the message so the Make-backed bridge
+    // answers as a three-member council with a final synthesis
+    if (this.aiModelService.modelId.value === 'clickdz-council') {
+      userInput = [
+        '[ClickDz Council — members: Claude Opus 4.8 | Gemini 3.5 Pro | GPT-5.5]',
+        'Answer as a three-member expert council. Produce one section per member,',
+        'each headed "### <member name>", written from that model family’s',
+        'characteristic strengths (Opus 4.8: depth, nuance and caveats; Gemini 3.5',
+        'Pro: breadth, structure and data; GPT-5.5: precision, pragmatism and',
+        'actionable steps). The members may disagree. End with "### ⚖️ Council',
+        'synthesis" that reconciles them into one clear recommendation. Answer in',
+        'the language of the question. Keep each section tight.',
+        '',
+        `Question: ${userInput}`,
+      ].join('\n');
+    }
     const imageAttachments = await Promise.all(
       images?.map(image => readBlobAsURL(image))
     );
