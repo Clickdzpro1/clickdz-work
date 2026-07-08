@@ -257,6 +257,27 @@ export class TextRenderer extends SignalWatcher(
 
   private _answers: string[] = [];
 
+  // ClickDz paced typewriter: reveal the answer progressively even when the
+  // provider delivers it in one big chunk, so generation always feels live
+  private _target = '';
+
+  private _revealed = 0;
+
+  private get _isPacing() {
+    return this._revealed < this._target.length;
+  }
+
+  private readonly _tick = () => {
+    if (this._isPacing) {
+      const remaining = this._target.length - this._revealed;
+      // adaptive speed: lively on short texts, catches large backlogs in ~2s
+      const step = Math.max(3, Math.ceil(remaining / 20));
+      this._revealed = Math.min(this._revealed + step, this._target.length);
+      this._answers.push(this._target.slice(0, this._revealed));
+    }
+    this._updateDoc();
+  };
+
   private _maxContainerHeight = 0;
 
   private readonly _clearTimer = () => {
@@ -343,7 +364,8 @@ export class TextRenderer extends SignalWatcher(
             });
             this._doc.readonly = true;
             this.requestUpdate();
-            if (this.state !== 'generating') {
+            // finish only once generation ended AND the pacer caught up
+            if (this.state !== 'generating' && !this._isPacing) {
               this._doc.load();
               const imageProxyService = this._host.std.get(ImageProxyService);
               imageProxyService.setImageProxyURL(
@@ -359,12 +381,16 @@ export class TextRenderer extends SignalWatcher(
 
   override connectedCallback() {
     super.connectedCallback();
-    this._answers.push(this.answer);
-
-    this._updateDoc();
     if (this.state === 'generating') {
-      // ClickDz: faster update for smooth typewriter effect (was 600ms)
-      this._timer = setInterval(this._updateDoc, 250);
+      // paced typewriter reveal for live generation
+      this._target = this.answer ?? '';
+      this._revealed = 0;
+      this._timer = setInterval(this._tick, 100);
+      this._tick();
+    } else {
+      // historical/finished content renders instantly
+      this._answers.push(this.answer);
+      this._updateDoc();
     }
   }
 
@@ -388,7 +414,7 @@ export class TextRenderer extends SignalWatcher(
     }
 
     const { customHeading, testId = 'ai-text-renderer' } = this.options;
-    const isGenerating = this.state === 'generating';
+    const isGenerating = this.state === 'generating' || this._isPacing;
     const classes = classMap({
       'text-renderer-container': true,
       'custom-heading': !!customHeading,
@@ -415,7 +441,16 @@ export class TextRenderer extends SignalWatcher(
 
   override shouldUpdate(changedProperties: PropertyValues) {
     if (changedProperties.has('answer')) {
-      this._answers.push(this.answer);
+      if (this.state === 'generating' || this._timer) {
+        // feed the pacer; the interval reveals it progressively
+        this._target = this.answer ?? '';
+        if (!this._timer) {
+          this._timer = setInterval(this._tick, 100);
+        }
+      } else {
+        this._answers.push(this.answer);
+        this._updateDoc();
+      }
       return false;
     }
 
@@ -426,8 +461,8 @@ export class TextRenderer extends SignalWatcher(
     super.updated(changedProperties);
     requestAnimationFrame(() => {
       if (!this._container) return;
-      // Track max height during generation
-      if (this.state === 'generating') {
+      // Track max height during generation (including paced reveal)
+      if (this.state === 'generating' || this._isPacing) {
         this._maxContainerHeight = Math.max(
           this._maxContainerHeight,
           this._container.scrollHeight
