@@ -731,7 +731,7 @@
     ]
   },
   {
-    "name": "Chat With ClickDz Work AI",
+    "name": "Chat With AFFiNE AI",
     "model": "gemini-2.5-flash",
     "optionalModels": [
       "gemini-3.5-flash",
