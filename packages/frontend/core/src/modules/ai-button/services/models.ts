@@ -91,7 +91,14 @@ export class AIModelService extends Service {
 
   private readonly initModels = async (prompt?: string) => {
     const promptName = prompt || 'Chat With AFFiNE AI';
-    const models = await this.getModelsByPrompt(promptName);
+    let models;
+    try {
+      models = await this.getModelsByPrompt(promptName);
+    } catch (error) {
+      // never let a failed models query leave the selector empty —
+      // fall through to CLICKDZ_FALLBACK_MODELS below
+      console.error(`Failed to load AI models for "${promptName}"`, error);
+    }
     if (models) {
       const { defaultModel, optionalModels, proModels } = models;
       const merged = [...optionalModels];

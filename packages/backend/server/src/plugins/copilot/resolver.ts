@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import {
   Args,
   Field,
@@ -362,6 +362,7 @@ export class CopilotType {
 @Throttle()
 @Resolver(() => CopilotType)
 export class CopilotResolver {
+  private readonly logger = new Logger(CopilotResolver.name);
   private readonly modelNames = new Map<string, string>();
 
   constructor(
@@ -426,17 +427,28 @@ export class CopilotResolver {
           const cachedName = this.modelNames.get(id);
           if (cachedName) return { id, name: cachedName };
 
-          const resolved = await this.providerFactory.resolveProvider({
-            modelId: id,
-            outputType: ModelOutputType.Text,
-          });
-          const name = resolved?.provider.resolveModel(
-            resolved.modelId ?? id,
-            resolved.execution
-          )?.name;
-          if (name) {
-            this.modelNames.set(id, name);
-            return { id, name };
+          try {
+            const resolved = await this.providerFactory.resolveProvider({
+              modelId: id,
+              outputType: ModelOutputType.Text,
+            });
+            const name = resolved?.provider.resolveModel(
+              resolved.modelId ?? id,
+              resolved.execution
+            )?.name;
+            if (name) {
+              this.modelNames.set(id, name);
+              return { id, name };
+            }
+          } catch (error) {
+            // an unknown or ambiguous model id listed in a prompt's
+            // optionalModels (e.g. "Ambiguous raw_model_id" from the native
+            // model registry) must not break the whole model list — skip it
+            this.logger.warn(
+              `Skipping unresolvable model "${id}" in prompt "${promptName}": ${
+                error instanceof Error ? error.message : error
+              }`
+            );
           }
           return null;
         })
