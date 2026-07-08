@@ -356,7 +356,7 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
                       >ClickDz AI is loading history...</span
                     >`
                   : html`<span data-testid="chat-panel-empty-state"
-                      >What can I help you with?</span
+                      >✨ ClickDz AI is ready — what can I help you with?</span
                     >`}
               </div>
               ${this.independentMode ? nothing : this._renderAIOnboarding()}

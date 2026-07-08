@@ -191,6 +191,67 @@ export class TextRenderer extends SignalWatcher(
       }
     }
 
+    /* ── ClickDz Typewriter Effect ──────────────────────────────────── */
+    .text-renderer-container.typewriter-active .ai-answer-text-editor {
+      position: relative;
+    }
+
+    .text-renderer-container.typewriter-active .ai-answer-text-editor::after {
+      content: '';
+      position: absolute;
+      bottom: 4px;
+      right: 0;
+      width: 8px;
+      height: 1.2em;
+      background: ${unsafeCSSVarV2('text/primary')};
+      animation: clickdz-cursor-blink 0.8s step-end infinite;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    @keyframes clickdz-cursor-blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    .text-renderer-container.typewriter-active .affine-block-children-container > * {
+      animation: clickdz-fade-in-up 0.3s ease-out forwards;
+      opacity: 0;
+      transform: translateY(4px);
+    }
+
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(1) { animation-delay: 0.02s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(2) { animation-delay: 0.04s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(3) { animation-delay: 0.06s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(4) { animation-delay: 0.08s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(5) { animation-delay: 0.10s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(6) { animation-delay: 0.12s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(7) { animation-delay: 0.14s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(8) { animation-delay: 0.16s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(9) { animation-delay: 0.18s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(10) { animation-delay: 0.20s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(11) { animation-delay: 0.22s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(12) { animation-delay: 0.24s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(13) { animation-delay: 0.26s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(14) { animation-delay: 0.28s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(15) { animation-delay: 0.30s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(16) { animation-delay: 0.32s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(17) { animation-delay: 0.34s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(18) { animation-delay: 0.36s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(19) { animation-delay: 0.38s; }
+    .text-renderer-container.typewriter-active .affine-block-children-container > *:nth-child(20) { animation-delay: 0.40s; }
+
+    @keyframes clickdz-fade-in-up {
+      0% {
+        opacity: 0;
+        transform: translateY(4px);
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
     ${customHeadingStyles}
   `;
 
@@ -302,7 +363,8 @@ export class TextRenderer extends SignalWatcher(
 
     this._updateDoc();
     if (this.state === 'generating') {
-      this._timer = setInterval(this._updateDoc, 600);
+      // ClickDz: faster update for smooth typewriter effect (was 600ms)
+      this._timer = setInterval(this._updateDoc, 250);
     }
   }
 
@@ -326,10 +388,12 @@ export class TextRenderer extends SignalWatcher(
     }
 
     const { customHeading, testId = 'ai-text-renderer' } = this.options;
+    const isGenerating = this.state === 'generating';
     const classes = classMap({
       'text-renderer-container': true,
       'custom-heading': !!customHeading,
       scrollable: this.options.scrollable !== false,
+      'typewriter-active': isGenerating,
     });
     const theme = this.options.theme?.value;
     return html`
@@ -337,6 +401,7 @@ export class TextRenderer extends SignalWatcher(
         class=${classes}
         data-testid=${testId}
         data-app-theme=${theme ?? 'light'}
+        data-generating=${isGenerating}
       >
         ${keyed(
           this._doc,
