@@ -62,6 +62,25 @@ const T = {
     skip: 'Start empty',
     building: 'Preparing your workspace…',
   },
+  ar: {
+    badge: 'مساحة العمل الذكية — من clickdz.ai',
+    title1: 'مرحباً بك في',
+    subtitle: 'دقيقتان لإعداد مساحة عمل مُخصصة لك.',
+    nameLabel: 'ما اسمك؟',
+    namePh: 'اسمك أو اسم فريقك',
+    langLabel: 'اللغة المفضلة',
+    next: 'متابعة',
+    back: 'رجوع',
+    nicheTitle: 'ما هو مجال عملك؟',
+    nicheSub: 'نُجهز مساحة عملك حسب نشاطك.',
+    packTitle: 'مستنداتك الأولى',
+    packSub:
+      'مختارة لمجالك — أزل ما لا تريد أو أضف المزيد.',
+    docs: '٣ مستندات: مركز القيادة، سير العمل، المتتبع',
+    finish: 'إنشاء مساحتي ✨',
+    skip: 'بدء فارغ',
+    building: 'جاري إعداد مساحة العمل…',
+  },
 };
 
 const page: React.CSSProperties = {
@@ -113,7 +132,7 @@ const btnGhost: React.CSSProperties = {
 export const Component = () => {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
-  const [lang, setLang] = useState<'fr' | 'en'>('fr');
+  const [lang, setLang] = useState<'fr' | 'en' | 'ar'>('fr');
   const [name, setName] = useState('');
   const [niche, setNiche] = useState<string | null>(null);
   const [packs, setPacks] = useState<string[]>([]);
@@ -182,14 +201,14 @@ export const Component = () => {
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder={t.namePh}
-              style={{ width: '100%', boxSizing: 'border-box', padding: '13px 16px', fontSize: 15, borderRadius: 12, border: `1.5px solid ${C.border}`, outline: 'none', marginBottom: 22 }}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '13px 16px', fontSize: 15, borderRadius: 12, border: `1.5px solid ${C.border}`, outline: 'none', marginBottom: 22, color: '#1a1a1a', backgroundColor: '#fff' }}
             />
 
             <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
               {t.langLabel}
             </label>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 30 }}>
-              {(['fr', 'en'] as const).map(l => (
+            <div style={{ display: 'flex', gap: 10, marginBottom: 30, flexWrap: 'wrap' }}>
+              {(['fr', 'en', 'ar'] as const).map(l => (
                 <button
                   key={l}
                   onClick={() => setLang(l)}
@@ -200,7 +219,7 @@ export const Component = () => {
                       : {}),
                   }}
                 >
-                  {l === 'fr' ? '🇫🇷 Français' : '🇬🇧 English'}
+                  {l === 'fr' ? '🇫🇷 Français' : l === 'ar' ? '🇸🇦 العربية' : '🇬🇧 English'}
                 </button>
               ))}
             </div>
@@ -217,7 +236,7 @@ export const Component = () => {
           <div>
             <h2 style={{ fontSize: 26, margin: '4px 0 4px' }}>{t.nicheTitle}</h2>
             <p style={{ color: C.muted, margin: '0 0 22px' }}>{t.nicheSub}</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10, maxHeight: 380, overflowY: 'auto', paddingRight: 4 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10, maxHeight: '60vh', overflowY: 'auto', paddingRight: 8 }}>
               {orderedNiches.map(n => (
                 <button
                   key={n.id}
@@ -231,7 +250,7 @@ export const Component = () => {
                   }}
                 >
                   <span style={{ fontSize: 20 }}>{n.emoji}</span>
-                  {lang === 'fr' ? n.fr : n.en}
+                  {lang === 'fr' ? n.fr : lang === 'ar' ? n.ar : n.en}
                 </button>
               ))}
             </div>
@@ -250,7 +269,7 @@ export const Component = () => {
           <div>
             <h2 style={{ fontSize: 26, margin: '4px 0 4px' }}>{t.packTitle}</h2>
             <p style={{ color: C.muted, margin: '0 0 20px' }}>{t.packSub}</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 10, maxHeight: 340, overflowY: 'auto', paddingRight: 4, marginBottom: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 10, maxHeight: '55vh', overflowY: 'auto', paddingRight: 8, marginBottom: 8 }}>
               {orderedNiches.map(n => {
                 const on = packs.includes(n.id);
                 return (
@@ -266,9 +285,11 @@ export const Component = () => {
                   >
                     <span style={{ fontWeight: 700, fontSize: 14 }}>
                       {on ? '✅' : '⬜'} {n.emoji}{' '}
-                      {lang === 'fr' ? n.fr : n.en}
+                      {lang === 'fr' ? n.fr : lang === 'ar' ? n.ar : n.en}
                     </span>
-                    <span style={{ fontSize: 12, color: C.muted }}>{t.docs}</span>
+                    <span style={{ fontSize: 12, color: C.muted }}>
+                      {lang === 'fr' ? n.descriptionFr : lang === 'ar' ? n.descriptionAr : n.descriptionEn}
+                    </span>
                   </button>
                 );
               })}

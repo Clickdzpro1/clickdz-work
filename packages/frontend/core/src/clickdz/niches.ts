@@ -4,29 +4,33 @@ export interface Niche {
   emoji: string;
   fr: string;
   en: string;
+  ar: string;
+  descriptionFr: string;
+  descriptionEn: string;
+  descriptionAr: string;
 }
 
 export const NICHES: Niche[] = [
-  { id: 'digital-agency', emoji: '🚀', fr: 'Agence digitale', en: 'Digital agency' },
-  { id: 'ecommerce', emoji: '🛒', fr: 'E-commerce / COD', en: 'E-commerce' },
-  { id: 'restaurant', emoji: '🍽️', fr: 'Restaurant / Café', en: 'Restaurant' },
-  { id: 'real-estate', emoji: '🏠', fr: 'Immobilier', en: 'Real estate' },
-  { id: 'freelancer', emoji: '💼', fr: 'Freelance / Créateur', en: 'Freelancer' },
-  { id: 'startup', emoji: '⚡', fr: 'Startup / SaaS', en: 'Startup' },
-  { id: 'clinic', emoji: '🩺', fr: 'Cabinet médical', en: 'Medical clinic' },
-  { id: 'law-office', emoji: '⚖️', fr: "Cabinet d'avocat", en: 'Law office' },
-  { id: 'construction', emoji: '🏗️', fr: 'BTP / Construction', en: 'Construction' },
-  { id: 'education', emoji: '🎓', fr: 'Éducation / Formation', en: 'Education' },
-  { id: 'retail', emoji: '🛍️', fr: 'Boutique / Retail', en: 'Retail shop' },
-  { id: 'import-export', emoji: '🚢', fr: 'Import-Export', en: 'Import-Export' },
-  { id: 'marketing-team', emoji: '📣', fr: 'Équipe marketing', en: 'Marketing team' },
-  { id: 'hr-recruiting', emoji: '👥', fr: 'RH & Recrutement', en: 'HR & Recruiting' },
-  { id: 'finance', emoji: '💰', fr: 'Comptabilité / Finance', en: 'Finance' },
-  { id: 'events', emoji: '🎉', fr: 'Événementiel', en: 'Events' },
-  { id: 'ngo', emoji: '🤝', fr: 'Association / ONG', en: 'NGO' },
-  { id: 'creative-studio', emoji: '🎬', fr: 'Studio créatif', en: 'Creative studio' },
-  { id: 'it-services', emoji: '💻', fr: 'Services IT / Dev', en: 'IT services' },
-  { id: 'personal', emoji: '🌱', fr: 'Personnel / Étudiant', en: 'Personal' },
+  { id: 'digital-agency', emoji: '🚀', fr: 'Agence digitale', en: 'Digital agency', ar: 'وكالة رقمية', descriptionFr: 'Clients, campagnes, KPIs, devis et facturation', descriptionEn: 'Clients, campaigns, KPIs, quotes and billing', descriptionAr: 'عملاء، حملات، مؤشرات أداء، عروض أسعار وفوترة' },
+  { id: 'ecommerce', emoji: '🛒', fr: 'E-commerce / COD', en: 'E-commerce', ar: 'تجارة إلكترونية', descriptionFr: 'Commandes, stock, paiement à la livraison, retours', descriptionEn: 'Orders, inventory, cash on delivery, returns', descriptionAr: 'طلبات، مخزون، الدفع عند الاستلام، إرجاع' },
+  { id: 'restaurant', emoji: '🍽️', fr: 'Restaurant / Café', en: 'Restaurant', ar: 'مطعم / مقهى', descriptionFr: 'Menu, réservations, stock cuisine, service', descriptionEn: 'Menu, reservations, kitchen stock, service', descriptionAr: 'قائمة، حجوزات، مخزون المطبخ، خدمة' },
+  { id: 'real-estate', emoji: '🏠', fr: 'Immobilier', en: 'Real estate', ar: 'عقارات', descriptionFr: 'Biens, leads, visites, négociations', descriptionEn: 'Properties, leads, visits, negotiations', descriptionAr: 'عقارات، عملاء محتملون، زيارات، تفاوض' },
+  { id: 'freelancer', emoji: '💼', fr: 'Freelance / Créateur', en: 'Freelancer', ar: 'مستقل / مبدع', descriptionFr: 'Missions, deadlines, portfolio, facturation', descriptionEn: 'Projects, deadlines, portfolio, invoicing', descriptionAr: 'مشاريع، مواعيد نهائية، أعمال، فوترة' },
+  { id: 'startup', emoji: '⚡', fr: 'Startup / SaaS', en: 'Startup', ar: 'شركة ناشئة', descriptionFr: 'Roadmap, sprints, feedback utilisateurs, métriques', descriptionEn: 'Roadmap, sprints, user feedback, metrics', descriptionAr: 'خارطة طريق، sprint، ملاحظات المستخدمين، مؤشرات' },
+  { id: 'clinic', emoji: '🩺', fr: 'Cabinet médical', en: 'Medical clinic', ar: 'عيادة طبية', descriptionFr: 'Patients, rendez-vous, dossiers médicaux, ordonnances', descriptionEn: 'Patients, appointments, medical records, prescriptions', descriptionAr: 'مرضى، مواعيد، سجلات طبية، وصفات طبية' },
+  { id: 'law-office', emoji: '⚖️', fr: "Cabinet d'avocat", en: 'Law office', ar: 'مكتب محاماة', descriptionFr: 'Dossiers, échéances, jurisprudence, plaidoiries', descriptionEn: 'Cases, deadlines, case law, pleadings', descriptionAr: 'قضايا، مواعيد نهائية، أحكام، مرافعات' },
+  { id: 'construction', emoji: '🏗️', fr: 'BTP / Construction', en: 'Construction', ar: 'بناء / مقاولات', descriptionFr: 'Chantiers, fournisseurs, situations, devis', descriptionEn: 'Sites, suppliers, progress reports, quotes', descriptionAr: 'مواقع، موردين، تقارير تقدم، عروض أسعار' },
+  { id: 'education', emoji: '🎓', fr: 'Éducation / Formation', en: 'Education', ar: 'تعليم / تدريب', descriptionFr: 'Classes, élèves, supports, progression', descriptionEn: 'Classes, students, materials, progress', descriptionAr: 'فصول، طلاب، مواد تعليمية، تقدم' },
+  { id: 'retail', emoji: '🛍️', fr: 'Boutique / Retail', en: 'Retail shop', ar: 'متجر / تجزئة', descriptionFr: 'Stock, ventes, fournisseurs, inventaire', descriptionEn: 'Inventory, sales, suppliers, stocktaking', descriptionAr: 'مخزون، مبيعات، موردين، جرد' },
+  { id: 'import-export', emoji: '🚢', fr: 'Import-Export', en: 'Import-Export', ar: 'استيراد وتصدير', descriptionFr: 'Expéditions, douane, devises, fournisseurs', descriptionEn: 'Shipments, customs, currencies, suppliers', descriptionAr: 'شحنات، جمارك، عملات، موردين' },
+  { id: 'marketing-team', emoji: '📣', fr: 'Équipe marketing', en: 'Marketing team', ar: 'فريق تسويق', descriptionFr: 'Campagnes, calendrier éditorial, KPIs, contenu', descriptionEn: 'Campaigns, editorial calendar, KPIs, content', descriptionAr: 'حملات، تقويم تحريري، مؤشرات أداء، محتوى' },
+  { id: 'hr-recruiting', emoji: '👥', fr: 'RH & Recrutement', en: 'HR & Recruiting', ar: 'موارد بشرية', descriptionFr: 'Postes, candidats, entretiens, onboarding', descriptionEn: 'Positions, candidates, interviews, onboarding', descriptionAr: 'وظائف، مرشحين، مقابلات، إدماج' },
+  { id: 'finance', emoji: '💰', fr: 'Comptabilité / Finance', en: 'Finance', ar: 'محاسبة / مالية', descriptionFr: 'Factures, TVA, trésorerie, déclarations', descriptionEn: 'Invoices, VAT, cash flow, tax returns', descriptionAr: 'فواتير، ضريبة قيمة مضافة، تدفق نقدي، إقرارات' },
+  { id: 'events', emoji: '🎉', fr: 'Événementiel', en: 'Events', ar: 'تنظيم فعاليات', descriptionFr: 'Mariages, corporate, prestataires, planning', descriptionEn: 'Weddings, corporate, vendors, planning', descriptionAr: 'أعراس، شركات، موردين، تخطيط' },
+  { id: 'ngo', emoji: '🤝', fr: 'Association / ONG', en: 'NGO', ar: 'جمعية / منظمة', descriptionFr: 'Projets, adhérents, subventions, bilan', descriptionEn: 'Projects, members, grants, reports', descriptionAr: 'مشاريع، أعضاء، منح، تقارير' },
+  { id: 'creative-studio', emoji: '🎬', fr: 'Studio créatif', en: 'Creative studio', ar: 'استوديو إبداعي', descriptionFr: 'Shootings, livrables, matériel, post-prod', descriptionEn: 'Shoots, deliverables, gear, post-production', descriptionAr: 'تصوير، تسليمات، معدات، ما بعد الإنتاج' },
+  { id: 'it-services', emoji: '💻', fr: 'Services IT / Dev', en: 'IT services', ar: 'خدمات تكنولوجيا', descriptionFr: 'Sprints, tickets, support, infrastructure', descriptionEn: 'Sprints, tickets, support, infrastructure', descriptionAr: 'sprint، تذاكر، دعم، بنية تحتية' },
+  { id: 'personal', emoji: '🌱', fr: 'Personnel / Étudiant', en: 'Personal', ar: 'شخصي / طالب', descriptionFr: 'Objectifs, notes, emploi du temps, projets', descriptionEn: 'Goals, notes, schedule, projects', descriptionAr: 'أهداف، ملاحظات، جدول، مشاريع' },
 ];
 
 export const ONBOARDED_KEY = 'clickdz:onboarded:v1';
