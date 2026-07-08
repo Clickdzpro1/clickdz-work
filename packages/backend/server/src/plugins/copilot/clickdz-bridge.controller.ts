@@ -33,9 +33,32 @@ const APP_BUILDER_GUIDELINES = [
   '- No external network calls or CDNs (Google Fonts via <link> is allowed).',
   '- Beautiful and modern: thoughtful typography, generous spacing, a coherent',
   '  palette that works on dark screens, subtle motion and hover states.',
-  '- Fully functional interactivity; use localStorage when persistence helps.',
+  '- Fully functional interactivity on first load; design empty states.',
   '- Accessible (semantic HTML, labels, contrast) and responsive mobile-first.',
   '- If the request is in Arabic, build the interface right-to-left (dir="rtl").',
+  '',
+  'DATA — the ClickDz Data API (shared, persistent, multi-user storage):',
+  '- When the app benefits from data that survives reloads and is shared',
+  '  between users/devices (dashboards, trackers, forms, leaderboards,',
+  '  mini-CRMs, bookings), use the platform Data API with plain fetch —',
+  '  no keys, no auth:',
+  "  const DATA = '__CLICKDZ_DATA_URL__'; // injected by the platform",
+  '  save:   await (await fetch(`${DATA}/items`, { method: "POST",',
+  '            headers: { "Content-Type": "application/json" },',
+  '            body: JSON.stringify(record) })).json()',
+  '  load:   await (await fetch(`${DATA}/items`)).json() // newest first',
+  '  remove: await fetch(`${DATA}/items/${id}`, { method: "DELETE" })',
+  '- Collections are free-form lowercase names (items, sales, entries…).',
+  '  Every saved record gains auto id + createdAt. Limits: 8KB per record,',
+  '  500 records per collection. Handle fetch errors gracefully.',
+  '- Use localStorage only for device-local preferences (theme, filters).',
+  '',
+  'DASHBOARDS:',
+  '- Structure: a KPI stat-card row on top, then charts and a data table.',
+  '- Draw charts with inline SVG or <canvas> (bars, lines, donuts) — no chart',
+  '  libraries; animate values counting up on load.',
+  '- Feed everything from Data API collections; provide an obvious way to add',
+  '  records and a "Seed demo data" button when the collection is empty.',
 ].join('\n');
 
 const CLICKDZ_APP_WATERMARK =
@@ -528,15 +551,23 @@ export class ClickDzBridgeController {
     if (html.length > 400_000) {
       html = html.slice(0, 400_000);
     }
-    if (html.includes('</body>')) {
-      html = html.replace('</body>', `${CLICKDZ_APP_WATERMARK}</body>`);
-    }
 
     // 2. deploy — reusing the slug keeps the same live URL across iterations
     const slug =
       typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
         ? body.slug
         : slugifyAppName(prompt);
+    // wire the app to its own Data API namespace
+    const externalBase = (
+      process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+    ).replace(/\/+$/, '');
+    html = html.replaceAll(
+      '__CLICKDZ_DATA_URL__',
+      `${externalBase}/api/apps-data/${slug}`
+    );
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', `${CLICKDZ_APP_WATERMARK}</body>`);
+    }
     this.logger.log(`[apps] deploying ${html.length} chars as slug=${slug}`);
     const deployed = await this.deployAppToVercel(slug, html);
     this.logger.log(

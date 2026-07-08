@@ -11,6 +11,7 @@ import { StorageModule } from '../../core/storage';
 import { WorkspaceModule } from '../../core/workspaces';
 import { IndexerModule } from '../indexer';
 import { ClickDzBridgeController } from './clickdz-bridge.controller';
+import { ClickDzDataController } from './clickdz-data.controller';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import {
@@ -71,6 +72,11 @@ export class CopilotApiModule {}
 
 @Module({
   imports: [CopilotKernelModule, CopilotFeatureModule, CopilotApiModule],
-  controllers: [CopilotController, ClickDzBridgeController, WorkspaceMcpController],
+  controllers: [
+    CopilotController,
+    ClickDzBridgeController,
+    ClickDzDataController,
+    WorkspaceMcpController,
+  ],
 })
 export class CopilotModule {}
