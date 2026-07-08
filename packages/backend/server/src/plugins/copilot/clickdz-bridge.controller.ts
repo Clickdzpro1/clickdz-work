@@ -18,6 +18,51 @@ const MAKE_ARABIC_AGENT_ID = process.env.MAKE_ARABIC_AGENT_ID || MAKE_AGENT_ID;
 const OPENAI_IMAGE_API_KEY = process.env.OPENAI_IMAGE_API_KEY || process.env.OPENAI_API_KEY || '';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
 const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
+const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
+const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
+const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
+
+// ClickDz Apps — models build single-file web apps, deployed to Vercel
+const APP_BUILDER_GUIDELINES = [
+  'You are ClickDz Apps, an elite front-end engineer. Build ONE complete,',
+  'production-quality single-file web app for the request below.',
+  'Rules:',
+  '- Output ONLY the code, inside a single ```html code block. No commentary.',
+  '- One self-contained index.html: inline <style> and <script>, vanilla JS.',
+  '- No external network calls or CDNs (Google Fonts via <link> is allowed).',
+  '- Beautiful and modern: thoughtful typography, generous spacing, a coherent',
+  '  palette that works on dark screens, subtle motion and hover states.',
+  '- Fully functional interactivity; use localStorage when persistence helps.',
+  '- Accessible (semantic HTML, labels, contrast) and responsive mobile-first.',
+  '- If the request is in Arabic, build the interface right-to-left (dir="rtl").',
+].join('\n');
+
+const CLICKDZ_APP_WATERMARK =
+  '<div style="position:fixed;bottom:10px;right:12px;font:600 11px system-ui;opacity:.55;z-index:99999"><a href="https://work.clickdz.ai" style="color:inherit;text-decoration:none" target="_blank" rel="noopener">⚡ Built with ClickDz</a></div>';
+
+function slugifyAppName(input: string): string {
+  const base = (input || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 4)
+    .join('-')
+    .replace(/-+/g, '-')
+    .slice(0, 40)
+    .replace(/^-|-$/g, '');
+  const rand = Math.random().toString(36).slice(2, 6);
+  return base ? `${base}-${rand}` : `app-${rand}`;
+}
+
+function extractHtmlApp(reply: string): string {
+  const block = reply.match(/```html\s*([\s\S]*?)```/i)?.[1];
+  const candidate = (block ?? reply).trim();
+  if (/^<!doctype html/i.test(candidate) || /^<html[\s>]/i.test(candidate)) {
+    return candidate;
+  }
+  return '';
+}
 
 // ClickDz 1.0 — the smart image model: Make-enhanced prompt -> gpt-image-1
 const CLICKDZ_IMAGE_MODEL_IDS = new Set(['clickdz-image-1.0', 'clickdz-image']);
@@ -140,12 +185,20 @@ export class ClickDzBridgeController {
     }
   }
 
-  private async runMakeAgent(messages: Array<{ role: string; content: string }>, model: string) {
+  private async runMakeAgent(
+    messages: Array<{ role: string; content: string }>,
+    model: string,
+    agentIdOverride?: string
+  ) {
     this.assertMakeReady();
     const joined = messages
       .map(message => `${message.role.toUpperCase()}: ${message.content}`)
       .join('\n\n');
-    const agentId = hasArabic(joined) || model.includes('arabic') ? MAKE_ARABIC_AGENT_ID : MAKE_AGENT_ID;
+    const agentId =
+      agentIdOverride ||
+      (hasArabic(joined) || model.includes('arabic')
+        ? MAKE_ARABIC_AGENT_ID
+        : MAKE_AGENT_ID);
     const response = await fetch(
       `${MAKE_API_BASE}/ai-agents/v1/agents/${agentId}/run?teamId=${MAKE_TEAM_ID}`,
       {
@@ -342,6 +395,109 @@ export class ClickDzBridgeController {
       };
     }
     return data;
+  }
+
+  /** deploy a single-file app to Vercel and wait briefly for it to go live */
+  private async deployAppToVercel(slug: string, html: string) {
+    const projectName = `clickdz-app-${slug}`.slice(0, 52);
+    const teamQuery = VERCEL_TEAM_ID
+      ? `?teamId=${encodeURIComponent(VERCEL_TEAM_ID)}`
+      : '';
+    const createRes = await fetch(
+      `https://api.vercel.com/v13/deployments${teamQuery}`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${VERCEL_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: projectName,
+          files: [{ file: 'index.html', data: html }],
+          projectSettings: { framework: null },
+          target: 'production',
+        }),
+        signal: AbortSignal.timeout(30000),
+      }
+    );
+    const created = (await createRes.json()) as any;
+    if (!createRes.ok) {
+      throw new HttpException(
+        { error: { message: created?.error?.message || 'Vercel deployment failed', type: 'provider_error', code: 'vercel_deploy_failed' } },
+        HttpStatus.BAD_GATEWAY
+      );
+    }
+    // poll briefly until the deployment is READY (static deploys are fast)
+    let state = created.readyState as string;
+    for (let i = 0; i < 10 && state !== 'READY' && state !== 'ERROR'; i++) {
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      const pollRes = await fetch(
+        `https://api.vercel.com/v13/deployments/${created.id}${teamQuery}`,
+        {
+          headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+          signal: AbortSignal.timeout(15000),
+        }
+      );
+      const polled = (await pollRes.json()) as any;
+      state = polled.readyState || state;
+    }
+    return {
+      slug,
+      state,
+      url: `https://${projectName}.vercel.app`,
+      deploymentUrl: created.url ? `https://${created.url}` : undefined,
+    };
+  }
+
+  @Post('/api/v1/apps/generate')
+  async generateApp(@Body() body: any) {
+    if (!VERCEL_TOKEN) {
+      throw new HttpException(
+        { error: { message: 'Vercel deployment is not configured', type: 'configuration_error', code: 'vercel_token_missing' } },
+        HttpStatus.SERVICE_UNAVAILABLE
+      );
+    }
+    const prompt = String(body?.prompt || '').trim();
+    if (!prompt) {
+      throw new HttpException(
+        { error: { message: 'A description of the app is required', type: 'invalid_request_error', code: 'prompt_missing' } },
+        HttpStatus.BAD_REQUEST
+      );
+    }
+
+    // 1. generate the app with the Make code agent (falls back to the
+    //    default agent with inline guidelines when no dedicated agent is set)
+    const reply = await this.runMakeAgent(
+      [
+        {
+          role: 'user',
+          content: `${APP_BUILDER_GUIDELINES}\n\nRequest: ${prompt}`,
+        },
+      ],
+      'clickdz-apps',
+      MAKE_CODE_AGENT_ID || undefined
+    );
+    let html = extractHtmlApp(reply || '');
+    if (!html) {
+      throw new HttpException(
+        { error: { message: 'The model did not return a valid app. Try a simpler description.', type: 'provider_error', code: 'app_generation_failed' } },
+        HttpStatus.BAD_GATEWAY
+      );
+    }
+    if (html.length > 400_000) {
+      html = html.slice(0, 400_000);
+    }
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', `${CLICKDZ_APP_WATERMARK}</body>`);
+    }
+
+    // 2. deploy — reusing the slug keeps the same live URL across iterations
+    const slug =
+      typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
+        ? body.slug
+        : slugifyAppName(prompt);
+    const deployed = await this.deployAppToVercel(slug, html);
+    return { ...deployed, prompt, bytes: html.length };
   }
 
   @Post('/api/voice/token')

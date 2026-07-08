@@ -226,6 +226,14 @@ export class AIChatInput extends SignalWatcher(
       border-radius: 8px;
       background: var(--affine-v2-layer-background-primary);
     }
+    .clickdz-app-frame {
+      display: block;
+      width: 100%;
+      height: 280px;
+      border: none;
+      border-radius: 8px;
+      background: #fff;
+    }
     .clickdz-image-caption {
       margin-top: 6px;
       font-size: 12px;
@@ -524,6 +532,24 @@ export class AIChatInput extends SignalWatcher(
   @state()
   accessor imageError = '';
 
+  // ClickDz Apps mode: the next send builds and deploys a live web app
+  @state()
+  accessor appMode = false;
+
+  @state()
+  accessor appBusy = false;
+
+  @state()
+  accessor appResult: { url: string; slug: string; prompt: string } | null =
+    null;
+
+  @state()
+  accessor appError = '';
+
+  // keeping the slug means iterations redeploy to the same live URL
+  @state()
+  accessor appSlug: string | null = null;
+
   @state()
   accessor focused = false;
 
@@ -769,6 +795,66 @@ export class AIChatInput extends SignalWatcher(
             </div>
           </div>`
         : nothing}
+      ${this.appBusy || this.appResult || this.appError
+        ? html`<div class="clickdz-image-card">
+            ${this.appBusy
+              ? html`<div class="clickdz-image-loading">
+                  <span class="clickdz-image-spinner"></span>
+                  ClickDz is building your app… (up to a minute)
+                </div>`
+              : this.appError
+                ? html`<div class="clickdz-image-error">⚠️ ${this.appError}</div>`
+                : this.appResult
+                  ? html`<iframe
+                        class="clickdz-app-frame"
+                        src=${this.appResult.url}
+                        sandbox="allow-scripts allow-same-origin allow-popups"
+                        title=${this.appResult.prompt}
+                      ></iframe>
+                      <div class="clickdz-image-caption">
+                        🚀 Live at ${this.appResult.url}
+                      </div>
+                      <div class="clickdz-image-actions">
+                        <a
+                          class="clickdz-image-action"
+                          href=${this.appResult.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          >Open app</a
+                        >
+                        <button
+                          class="clickdz-image-action"
+                          @click=${() => {
+                            navigator.clipboard
+                              .writeText(this.appResult?.url ?? '')
+                              .catch(() => {});
+                          }}
+                        >
+                          Copy URL
+                        </button>
+                        <button
+                          class="clickdz-image-action"
+                          @click=${() =>
+                            this._generateClickDzApp(
+                              this.appResult?.prompt ?? ''
+                            )}
+                        >
+                          Rebuild
+                        </button>
+                        <button
+                          class="clickdz-image-action"
+                          @click=${() => {
+                            this.appResult = null;
+                            this.appError = '';
+                            this.appSlug = null;
+                          }}
+                        >
+                          Close
+                        </button>
+                      </div>`
+                  : nothing}
+          </div>`
+        : nothing}
       ${this.imageBusy || this.imageResult || this.imageError
         ? html`<div class="clickdz-image-card">
             ${this.imageBusy
@@ -822,9 +908,11 @@ export class AIChatInput extends SignalWatcher(
         : nothing}
       <textarea
         rows="1"
-        placeholder=${this.imageMode
-          ? 'Describe the image ClickDz 1.0 should create…'
-          : 'What are your thoughts?'}
+        placeholder=${this.appMode
+          ? 'Describe the app to build — ClickDz ships it live…'
+          : this.imageMode
+            ? 'Describe the image ClickDz 1.0 should create…'
+            : 'What are your thoughts?'}
         @input=${this._handleInput}
         @keydown=${this._handleKeyDown}
         @focus=${() => {
@@ -854,9 +942,21 @@ export class AIChatInput extends SignalWatcher(
           title="ClickDz 1.0 image — describe it, we imagine it"
           @click=${() => {
             this.imageMode = !this.imageMode;
+            if (this.imageMode) this.appMode = false;
           }}
         >
           🎨
+        </button>
+        <button
+          class="clickdz-image-mode-btn ${this.appMode ? 'active' : ''}"
+          data-testid="clickdz-app-mode"
+          title="ClickDz Apps — describe an app, get a live URL"
+          @click=${() => {
+            this.appMode = !this.appMode;
+            if (this.appMode) this.imageMode = false;
+          }}
+        >
+          🚀
         </button>
         <div class="chat-input-footer-spacer"></div>
         <div class="chat-mode-toggle" data-testid="chat-mode-toggle">
@@ -1113,8 +1213,43 @@ export class AIChatInput extends SignalWatcher(
     }
   };
 
+  /** ClickDz Apps: generate a single-file app and deploy it live to Vercel */
+  private readonly _generateClickDzApp = async (prompt: string) => {
+    if (!prompt.trim() || this.appBusy) return;
+    this.appBusy = true;
+    this.appError = '';
+    try {
+      const res = await fetch('/api/v1/apps/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          slug: this.appSlug ?? undefined,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(
+          data?.error?.message || `App build failed (${res.status})`
+        );
+      }
+      this.appResult = { url: data.url, slug: data.slug, prompt };
+      this.appSlug = data.slug;
+    } catch (error) {
+      this.appError =
+        error instanceof Error ? error.message : 'App build failed';
+    } finally {
+      this.appBusy = false;
+    }
+  };
+
   send = async (text: string) => {
     if (!this.runtime) return;
+    // app mode intercepts the send and ships a live ClickDz app instead
+    if (this.appMode) {
+      await this._generateClickDzApp(text);
+      return;
+    }
     // image mode intercepts the send and creates a ClickDz 1.0 image instead
     if (this.imageMode) {
       await this._generateClickDzImage(text);
