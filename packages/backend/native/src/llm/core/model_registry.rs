@@ -499,11 +499,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec![
-        "text".to_string(),
-        "object".to_string(),
-        "structured".to_string(),
-      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -522,11 +518,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec![
-        "text".to_string(),
-        "object".to_string(),
-        "structured".to_string(),
-      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -545,11 +537,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec![
-        "text".to_string(),
-        "object".to_string(),
-        "structured".to_string(),
-      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -568,11 +556,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec![
-        "text".to_string(),
-        "object".to_string(),
-        "structured".to_string(),
-      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -591,11 +575,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec![
-        "text".to_string(),
-        "object".to_string(),
-        "structured".to_string(),
-      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -614,11 +594,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec![
-        "text".to_string(),
-        "object".to_string(),
-        "structured".to_string(),
-      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -637,11 +613,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec![
-        "text".to_string(),
-        "object".to_string(),
-        "structured".to_string(),
-      ],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
