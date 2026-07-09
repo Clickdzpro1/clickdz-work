@@ -9,6 +9,7 @@ import { property } from 'lit/decorators.js';
 import { classMap } from 'lit/directives/class-map.js';
 import { repeat } from 'lit/directives/repeat.js';
 
+import { stripCdzDirectivesToText } from '../../../_common/cdz-directives';
 import {
   type ChatMessage,
   type StreamObject,
@@ -61,7 +62,9 @@ export class AIChatBlockMessage extends LitElement {
           <div class=${messageClasses}>
             ${streamObjects?.length
               ? this.renderStreamObjects(streamObjects)
-              : this.renderRichText(content)}
+              : this.renderRichText(
+                  role === 'user' ? stripCdzDirectivesToText(content) : content
+                )}
           </div>
         </div>
       </div>

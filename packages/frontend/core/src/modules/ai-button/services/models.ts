@@ -25,6 +25,15 @@ const CLICKDZ_FALLBACK_MODELS: AIModel[] = [
   { name: 'CDZ Scholar', id: 'cdz-scholar', category: 'CDZ', version: '3.1', isPro: false, isDefault: false },
   { name: 'CDZ Flash', id: 'cdz-flash', category: 'CDZ', version: '3.5', isPro: false, isDefault: false },
   { name: 'CDZ Polyglot', id: 'cdz-polyglot', category: 'CDZ', version: '5.4', isPro: false, isDefault: false },
+  // raw engine models served through the CDZ AI passthrough (Make engine)
+  { name: 'Claude Opus 4.8', id: 'claude-opus-4-8', category: 'Claude', version: 'Opus 4.8', isPro: false, isDefault: false },
+  { name: 'Gemini 3.1 Pro', id: 'gemini-3.1-pro-preview', category: 'Gemini', version: '3.1 Pro', isPro: false, isDefault: false },
+  { name: 'GPT 5.5', id: 'gpt-5.5', category: 'GPT', version: '5.5', isPro: false, isDefault: false },
+  { name: 'Claude Sonnet 4.6', id: 'claude-sonnet-4-6', category: 'Claude', version: 'Sonnet 4.6', isPro: false, isDefault: false },
+  { name: 'Gemini 3.5 Flash', id: 'gemini-3.5-flash', category: 'Gemini', version: '3.5 Flash', isPro: false, isDefault: false },
+  { name: 'GPT 5.4', id: 'gpt-5.4', category: 'GPT', version: '5.4', isPro: false, isDefault: false },
+  { name: 'Claude Haiku 4.5', id: 'claude-haiku-4-5', category: 'Claude', version: 'Haiku 4.5', isPro: false, isDefault: false },
+  { name: 'GPT 5.4 Mini', id: 'gpt-5.4-mini', category: 'GPT', version: '5.4 Mini', isPro: false, isDefault: false },
 ];
 
 export interface AIModel {

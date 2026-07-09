@@ -152,6 +152,66 @@ function authorized(req) {
   return API_KEYS.includes(key);
 }
 
+/**
+ * OpenAI `response_format` support: when a client requests JSON output,
+ * append a strict output contract so the engine models return raw JSON,
+ * and post-process the answer (strip markdown fences / surrounding prose).
+ */
+function jsonContractMessage(responseFormat) {
+  if (
+    !responseFormat ||
+    (responseFormat.type !== 'json_object' &&
+      responseFormat.type !== 'json_schema')
+  ) {
+    return null;
+  }
+  const schema = responseFormat.json_schema?.schema
+    ? JSON.stringify(responseFormat.json_schema.schema)
+    : '';
+  return {
+    role: 'system',
+    content:
+      'CRITICAL OUTPUT CONTRACT: Respond with ONLY a single valid JSON ' +
+      (schema
+        ? `document that strictly conforms to this JSON Schema:\n${schema}`
+        : 'object') +
+      '\nNo markdown fences, no commentary, no text before or after the JSON.',
+  };
+}
+
+/** best-effort extraction of a JSON document from a model answer */
+function extractJsonAnswer(text) {
+  const raw = String(text || '').trim();
+  const tryParse = s => {
+    try {
+      JSON.parse(s);
+      return s;
+    } catch {
+      return null;
+    }
+  };
+  if (tryParse(raw)) return raw;
+  // ```json fenced block
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) {
+    const inner = fence[1].trim();
+    if (tryParse(inner)) return inner;
+  }
+  // first balanced {...} or [...] slice
+  for (const [open, close] of [
+    ['{', '}'],
+    ['[', ']'],
+  ]) {
+    const start = raw.indexOf(open);
+    const end = raw.lastIndexOf(close);
+    if (start !== -1 && end > start) {
+      const slice = raw.slice(start, end + 1);
+      if (tryParse(slice)) return slice;
+    }
+  }
+  return raw; // let the caller's validator report the failure
+}
+
 async function callHook(url, payload, timeoutMs = ENGINE_TIMEOUT_MS) {
   usage.engineCalls++;
   const res = await fetch(url, {
@@ -487,7 +547,13 @@ const server = http.createServer(async (req, res) => {
       const model = parsed.model || 'cdz-ultra';
       usage.byModel[model] = (usage.byModel[model] || 0) + 1;
       const maxTokens = Math.min(Number(parsed.max_tokens) || 4000, 16000);
-      const text = await completeChat(model, parsed.messages || [], maxTokens);
+      // structured output: enforce the JSON contract + clean the answer
+      const contract = jsonContractMessage(parsed.response_format);
+      const messages = contract
+        ? [...(parsed.messages || []), contract]
+        : parsed.messages || [];
+      let text = await completeChat(model, messages, maxTokens);
+      if (contract) text = extractJsonAnswer(text);
       if (parsed.stream) return streamAnswer(res, model, text);
       return json(res, 200, {
         id: `chatcmpl-cdz-${Date.now()}`,

@@ -70,7 +70,7 @@
   {
     "name": "Generate a caption",
     "action": "Generate a caption",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "config": {
       "requireContent": false,
       "requireAttachment": true
@@ -85,7 +85,7 @@
   {
     "name": "Conversation Summary",
     "action": "Conversation Summary",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "config": {
       "requireContent": false
     },
@@ -103,7 +103,7 @@
   {
     "name": "Summary",
     "action": "Summary",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -118,7 +118,7 @@
   {
     "name": "Summary as title",
     "action": "Summary as title",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -133,7 +133,7 @@
   {
     "name": "Summary the webpage",
     "action": "Summary the webpage",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "user",
@@ -144,7 +144,7 @@
   {
     "name": "Explain this",
     "action": "Explain this",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "builtins": [
       "language"
     ],
@@ -162,7 +162,7 @@
   {
     "name": "Explain this image",
     "action": "Explain this image",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "config": {
       "requireContent": false,
       "requireAttachment": true
@@ -181,7 +181,7 @@
   {
     "name": "Explain this code",
     "action": "Explain this code",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -196,7 +196,7 @@
   {
     "name": "Translate to",
     "action": "Translate",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "params": {
       "language": {
         "default": "English",
@@ -229,7 +229,7 @@
   {
     "name": "Summarize the meeting structured",
     "action": "Summarize the meeting structured",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -244,7 +244,7 @@
   {
     "name": "Summarize the meeting",
     "action": "Summarize the meeting",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -259,7 +259,7 @@
   {
     "name": "Find action for summary",
     "action": "Find action for summary",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -274,7 +274,7 @@
   {
     "name": "Write an article about this",
     "action": "Write an article about this",
-    "model": "gemini-2.5-pro",
+    "model": "cdz-sage",
     "messages": [
       {
         "role": "system",
@@ -289,7 +289,7 @@
   {
     "name": "Write a twitter about this",
     "action": "Write a twitter about this",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -304,7 +304,7 @@
   {
     "name": "Write a poem about this",
     "action": "Write a poem about this",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -319,7 +319,7 @@
   {
     "name": "Write a blog post about this",
     "action": "Write a blog post about this",
-    "model": "gemini-2.5-pro",
+    "model": "cdz-sage",
     "messages": [
       {
         "role": "system",
@@ -334,7 +334,7 @@
   {
     "name": "Write outline",
     "action": "Write outline",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -349,7 +349,7 @@
   {
     "name": "Change tone to",
     "action": "Change tone",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "params": {
       "tone": {
         "default": "professional",
@@ -376,7 +376,7 @@
   {
     "name": "Brainstorm ideas about this",
     "action": "Brainstorm ideas about this",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -391,7 +391,7 @@
   {
     "name": "Brainstorm mindmap",
     "action": "Brainstorm mindmap",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -406,7 +406,7 @@
   {
     "name": "Expand mind map",
     "action": "Expand mind map",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -425,7 +425,7 @@
   {
     "name": "Improve writing for it",
     "action": "Improve writing for it",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -440,7 +440,7 @@
   {
     "name": "Improve grammar for it",
     "action": "Improve grammar for it",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -455,7 +455,7 @@
   {
     "name": "Fix spelling for it",
     "action": "Fix spelling for it",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -470,7 +470,7 @@
   {
     "name": "Find action items from it",
     "action": "Find action items from it",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -485,7 +485,7 @@
   {
     "name": "Check code error",
     "action": "Check code error",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -500,7 +500,7 @@
   {
     "name": "Create a presentation",
     "action": "Create a presentation",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -515,7 +515,7 @@
   {
     "name": "Create headings",
     "action": "Create headings",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -530,7 +530,7 @@
   {
     "name": "Make it real",
     "action": "Make it real",
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "cdz-architect",
     "messages": [
       {
         "role": "system",
@@ -545,7 +545,7 @@
   {
     "name": "Make it real with text",
     "action": "Make it real with text",
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "cdz-architect",
     "messages": [
       {
         "role": "system",
@@ -560,7 +560,7 @@
   {
     "name": "Make it longer",
     "action": "Make it longer",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -575,7 +575,7 @@
   {
     "name": "Make it shorter",
     "action": "Make it shorter",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -590,7 +590,7 @@
   {
     "name": "Continue writing",
     "action": "Continue writing",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -605,7 +605,7 @@
   {
     "name": "Section Edit",
     "action": "Section Edit",
-    "model": "claude-sonnet-4-20250514",
+    "model": "cdz-sage",
     "messages": [
       {
         "role": "system",
@@ -718,7 +718,7 @@
   },
   {
     "name": "Code Artifact",
-    "model": "claude-sonnet-4-5-20250929",
+    "model": "cdz-architect",
     "messages": [
       {
         "role": "system",
@@ -732,7 +732,7 @@
   },
   {
     "name": "Chat With AFFiNE AI",
-    "model": "gemini-2.5-flash",
+    "model": "cdz-ultra",
     "optionalModels": [
       "cdz-ultra",
       "cdz-council",
@@ -741,47 +741,14 @@
       "cdz-scholar",
       "cdz-flash",
       "cdz-polyglot",
-      "clickdz-council",
-      "gemini-3.5-flash",
-      "gemini-3.1-pro-preview",
-      "gemini-3-flash-preview",
-      "gemini-2.5-pro",
-      "gemini-2.5-flash",
       "claude-opus-4-8",
-      "claude-opus-4-7",
-      "claude-sonnet-4-6",
-      "claude-opus-4-6",
-      "claude-sonnet-4-5",
-      "claude-sonnet-4-5-20250929",
-      "claude-haiku-4-5",
-      "claude-opus-4-5",
-      "claude-opus-4-1",
-      "claude-opus-4",
-      "claude-sonnet-4",
-      "claude-sonnet-4-20250514",
-      "claude-3-7-sonnet",
-      "claude-3-5-sonnet",
-      "claude-3-5-haiku",
-      "claude-3-opus",
-      "claude-3-haiku",
+      "gemini-3.1-pro-preview",
       "gpt-5.5",
+      "claude-sonnet-4-6",
+      "gemini-3.5-flash",
       "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.4-nano",
-      "gpt-5.3",
-      "gpt-5.2",
-      "gpt-5.1",
-      "gpt-5",
-      "gpt-5-mini",
-      "gpt-5-nano",
-      "gpt-4o",
-      "gpt-4o-mini",
-      "gpt-4-turbo",
-      "gpt-4",
-      "gpt-3.5-turbo",
-      "o1-preview",
-      "o1-mini",
-      "o3-mini"
+      "claude-haiku-4-5",
+      "gpt-5.4-mini"
     ],
     "config": {
       "tools": [
@@ -821,7 +788,7 @@
   {
     "name": "mindmap.generate",
     "action": "mindmap.generate",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "config": {
       "frequencyPenalty": 0.5,
       "presencePenalty": 0.5,
@@ -846,7 +813,7 @@
   {
     "name": "slides.outline",
     "action": "slides.outline",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -865,7 +832,7 @@
   {
     "name": "image.filter.sketch",
     "action": "image.filter.sketch",
-    "model": "lora/image-to-image",
+    "model": "gpt-image-1",
     "config": {
       "modelName": "stabilityai/stable-diffusion-xl-base-1.0",
       "loras": [
@@ -885,7 +852,7 @@
   {
     "name": "image.filter.clay",
     "action": "image.filter.clay",
-    "model": "lora/image-to-image",
+    "model": "gpt-image-1",
     "config": {
       "modelName": "stabilityai/stable-diffusion-xl-base-1.0",
       "loras": [
@@ -905,7 +872,7 @@
   {
     "name": "image.filter.anime",
     "action": "image.filter.anime",
-    "model": "lora/image-to-image",
+    "model": "gpt-image-1",
     "config": {
       "modelName": "stabilityai/stable-diffusion-xl-base-1.0",
       "loras": [
@@ -925,7 +892,7 @@
   {
     "name": "image.filter.pixel",
     "action": "image.filter.pixel",
-    "model": "lora/image-to-image",
+    "model": "gpt-image-1",
     "config": {
       "modelName": "stabilityai/stable-diffusion-xl-base-1.0",
       "loras": [
@@ -951,7 +918,7 @@
   {
     "name": "workflow:presentation:step1",
     "action": "workflow:presentation:step1",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "config": {
       "temperature": 0.7
     },
@@ -969,7 +936,7 @@
   {
     "name": "workflow:presentation:step2",
     "action": "workflow:presentation:step2",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -988,7 +955,7 @@
   {
     "name": "workflow:presentation:step4",
     "action": "workflow:presentation:step4",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "messages": [
       {
         "role": "system",
@@ -1013,7 +980,7 @@
   {
     "name": "workflow:brainstorm:step1",
     "action": "workflow:brainstorm:step1",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "config": {
       "temperature": 0.7
     },
@@ -1031,7 +998,7 @@
   {
     "name": "workflow:brainstorm:step2",
     "action": "workflow:brainstorm:step2",
-    "model": "gpt-5-mini",
+    "model": "cdz-flash",
     "config": {
       "frequencyPenalty": 0.5,
       "presencePenalty": 0.5,

@@ -7,6 +7,7 @@ import { css, html, type PropertyValues } from 'lit';
 import { property } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 
+import { stripCdzDirectivesToText } from '../../_common/cdz-directives';
 import type { AIChatRuntime, AIChatSnapshot } from '../../runtime/chat';
 
 const DEFAULT_TAB_TITLE = 'New chat';
@@ -25,7 +26,9 @@ function deriveTabTitle(session: CopilotChatHistoryFragment): string {
   const explicit = session.title?.trim();
   if (explicit) return truncate(explicit);
   const firstUserMessage = session.messages?.find(m => m.role === 'user');
-  const raw = firstUserMessage?.content?.trim();
+  const raw = stripCdzDirectivesToText(
+    firstUserMessage?.content ?? ''
+  ).trim();
   if (!raw) return DEFAULT_TAB_TITLE;
   const newlineIdx = raw.indexOf('\n');
   return truncate(newlineIdx === -1 ? raw : raw.slice(0, newlineIdx));
