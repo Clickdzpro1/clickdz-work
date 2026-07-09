@@ -1,0 +1,13 @@
+{
+  "name": "cdz-ai",
+  "version": "1.0.0",
+  "description": "CDZ AI — ClickDz supermodel platform: OpenAI-compatible API + MCP server, powered by the Make multi-vendor engine",
+  "type": "module",
+  "main": "index.mjs",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
