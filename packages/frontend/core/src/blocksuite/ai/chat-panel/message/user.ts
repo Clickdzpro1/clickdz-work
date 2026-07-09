@@ -3,6 +3,7 @@ import { ShadowlessElement } from '@blocksuite/affine/std';
 import { css, html, nothing } from 'lit';
 import { property } from 'lit/decorators.js';
 
+import { stripCdzDirectives } from '../../_common/cdz-directives';
 import { type ChatMessage } from '../../components/ai-chat-messages';
 
 export class ChatMessageUser extends WithDisposable(ShadowlessElement) {
@@ -31,6 +32,28 @@ export class ChatMessageUser extends WithDisposable(ShadowlessElement) {
     .text-content-wrapper {
       align-self: flex-end;
     }
+
+    /* compact chips standing in for hidden directives (worker / plan) */
+    .cdz-mode-badges {
+      display: flex;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .cdz-mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 18px;
+      padding: 0 8px;
+      border-radius: 999px;
+      color: var(--affine-v2-text-secondary);
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      border: 0.5px solid var(--affine-v2-layer-insideBorder-border);
+    }
   `;
 
   @property({ attribute: false })
@@ -41,6 +64,9 @@ export class ChatMessageUser extends WithDisposable(ShadowlessElement) {
 
   renderContent() {
     const { item } = this;
+    // hidden directives (worker skills, plan mode) never render — show a
+    // compact mode chip instead of the raw instruction text
+    const { text, badges } = stripCdzDirectives(item.content);
 
     return html`
       ${item.attachments
@@ -49,12 +75,22 @@ export class ChatMessageUser extends WithDisposable(ShadowlessElement) {
             .images=${item.attachments}
           ></chat-content-images>`
         : nothing}
+      ${badges.length
+        ? html`<div class="cdz-mode-badges">
+            ${badges.map(
+              badge =>
+                html`<span class="cdz-mode-badge"
+                  >${badge.icon ?? ''} ${badge.label ?? badge.kind}</span
+                >`
+            )}
+          </div>`
+        : nothing}
       <div
         class="text-content-wrapper"
         data-test-id="chat-content-user-text"
         style="max-width: 100%;"
       >
-        <chat-content-pure-text .text=${item.content}></chat-content-pure-text>
+        <chat-content-pure-text .text=${text}></chat-content-pure-text>
       </div>
     `;
   }

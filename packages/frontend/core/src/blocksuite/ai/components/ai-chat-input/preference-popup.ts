@@ -1,6 +1,10 @@
 import type { AIToolsConfigService } from '@affine/core/modules/ai-button';
 import { type AIModelService } from '@affine/core/modules/ai-button/services/models';
-import { CDZ_MODEL_ICONS, CDZ_VENDOR_ICONS } from '../../_common/cdz-assets';
+import {
+  CDZ_FLAGSHIP_MODELS,
+  CDZ_MODEL_ICONS,
+  CDZ_VENDOR_ICONS,
+} from '../../_common/cdz-assets';
 import type {
   ServerService,
   SubscriptionService,
@@ -169,12 +173,116 @@ export class ChatInputPreference extends SignalWatcher(
     .ai-model-chip[data-cat='o1'],
     .ai-model-chip[data-cat='o3'] { --chip-color: #10a37f; }
     .ai-model-chip[data-cat='Claude'] { --chip-color: #d97757; }
+
+    /* ===== icon frame (polished squircle, gold ring for flagships) ===== */
+    .ai-model-icon-frame {
+      position: relative;
+      width: 26px;
+      height: 26px;
+      padding: 1px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      box-shadow: inset 0 0 0 0.5px var(--affine-v2-layer-insideBorder-border);
+      transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .ai-model-item:hover .ai-model-icon-frame {
+      transform: scale(1.08);
+    }
     .ai-model-icon {
-      width: 24px;
-      height: 24px;
+      width: 100%;
+      height: 100%;
       border-radius: 7px;
       object-fit: cover;
-      box-shadow: 0 2px 8px rgba(47, 123, 255, 0.28);
+      display: block;
+    }
+    /* vendor SVG marks breathe inside the chip */
+    .ai-model-icon[data-kind='vendor'] {
+      object-fit: contain;
+      padding: 3px;
+      box-sizing: border-box;
+    }
+    /* gold flagship ring — a slowly turning gold sheen + soft glow that
+       marks the most powerful engines (Ultra, Council, Opus 4.8, GPT 5.5,
+       Gemini 3.1 Pro) */
+    @property --cdz-gold-angle {
+      syntax: '<angle>';
+      initial-value: 0deg;
+      inherits: false;
+    }
+    .ai-model-icon-frame.gold {
+      padding: 2px;
+      background: conic-gradient(
+        from var(--cdz-gold-angle, 0deg),
+        #fff3c4,
+        #ffd700 22%,
+        #b8860b 46%,
+        #ffe14d 68%,
+        #b8860b 84%,
+        #fff3c4
+      );
+      box-shadow:
+        0 0 8px rgba(255, 200, 40, 0.4),
+        0 0 1px rgba(184, 134, 11, 0.8);
+      animation:
+        cdz-gold-spin 3.2s linear infinite,
+        cdz-gold-glow 2.4s ease-in-out infinite;
+    }
+    .ai-model-icon-frame.gold .ai-model-icon {
+      background: var(--affine-v2-layer-background-primary, #fff);
+    }
+    @keyframes cdz-gold-spin {
+      to {
+        --cdz-gold-angle: 360deg;
+      }
+    }
+    @keyframes cdz-gold-glow {
+      0%,
+      100% {
+        box-shadow:
+          0 0 6px rgba(255, 200, 40, 0.35),
+          0 0 1px rgba(184, 134, 11, 0.8);
+      }
+      50% {
+        box-shadow:
+          0 0 12px rgba(255, 210, 60, 0.6),
+          0 0 2px rgba(184, 134, 11, 0.9);
+      }
+    }
+    /* flagship rows glow softly in the list */
+    .ai-model-flagship {
+      background: linear-gradient(
+        90deg,
+        rgba(255, 200, 40, 0.09),
+        rgba(255, 200, 40, 0.02) 55%,
+        transparent
+      );
+    }
+    .ai-model-flagship:hover {
+      background: linear-gradient(
+        90deg,
+        rgba(255, 200, 40, 0.16),
+        rgba(255, 200, 40, 0.04) 60%,
+        transparent
+      );
+    }
+    .ai-model-flagship-badge {
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 16px;
+      padding: 0 6px;
+      border-radius: 999px;
+      letter-spacing: 0.03em;
+      color: #7a5901;
+      background: linear-gradient(120deg, #ffe89a, #ffd700 55%, #f3c14b);
+      box-shadow: 0 0 6px rgba(255, 200, 40, 0.35);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ai-model-icon-frame.gold {
+        animation: none;
+      }
     }
 
     /* ===== selected check / badges ===== */
@@ -323,10 +431,15 @@ export class ChatInputPreference extends SignalWatcher(
     const modelItems = [];
     const searchItems = [];
 
-    // model switch — restyled rows with provider chips, animated selection
-    // and a genuinely scrollable list (see :has(.ai-model-item) styles)
+    // model switch — restyled rows with real vendor icons, a gold flagship
+    // tier, animated selection and a genuinely scrollable list
     const allModels = this.aiModelService.models.value;
-    const modelActionItems = allModels.map(model => {
+    // flagships surface first (stable within each tier)
+    const orderedModels = [
+      ...allModels.filter(model => CDZ_FLAGSHIP_MODELS.has(model.id)),
+      ...allModels.filter(model => !CDZ_FLAGSHIP_MODELS.has(model.id)),
+    ];
+    const modelActionItems = orderedModels.map(model => {
       const isSelected = model.id === this.model.value?.id;
       const isSelfHosted =
         this.serverService.server.config$.value?.type ===
@@ -334,25 +447,43 @@ export class ChatInputPreference extends SignalWatcher(
       const status =
         this.subscriptionService.subscription.ai$.value?.status;
       const isSubscribed = status === SubscriptionStatus.Active;
+      const isFlagship = CDZ_FLAGSHIP_MODELS.has(model.id);
       const chipInitial = model.category.slice(0, 1).toUpperCase();
-      const modelIcon =
-        CDZ_MODEL_ICONS[model.id] || CDZ_VENDOR_ICONS[model.category];
+      const cdzIcon = CDZ_MODEL_ICONS[model.id];
+      const vendorIcon = CDZ_VENDOR_ICONS[model.category];
+      const modelIcon = cdzIcon || vendorIcon;
       return menu.action({
         name: model.name,
         class: {
           'ai-model-item': true,
           'ai-model-selected': isSelected,
+          'ai-model-flagship': isFlagship,
         },
-        info: model.isDefault
-          ? html`<span class="ai-model-default-badge">Default</span>`
-          : undefined,
+        info:
+          isFlagship || model.isDefault
+            ? html`
+                ${isFlagship
+                  ? html`<span class="ai-model-flagship-badge">★</span>`
+                  : ''}
+                ${model.isDefault
+                  ? html`<span class="ai-model-default-badge">Default</span>`
+                  : ''}
+              `
+            : undefined,
         prefix: html`
           <div class="ai-model-prefix">
-            ${modelIcon
-              ? html`<img class="ai-model-icon" src=${modelIcon} alt="" />`
-              : html`<span class="ai-model-chip" data-cat=${model.category}>
-                  ${chipInitial}
-                </span>`}
+            <span class="ai-model-icon-frame ${isFlagship ? 'gold' : ''}">
+              ${modelIcon
+                ? html`<img
+                    class="ai-model-icon"
+                    data-kind=${cdzIcon ? 'cdz' : 'vendor'}
+                    src=${modelIcon}
+                    alt=""
+                  />`
+                : html`<span class="ai-model-chip" data-cat=${model.category}>
+                    ${chipInitial}
+                  </span>`}
+            </span>
           </div>
         `,
         postfix: html`
