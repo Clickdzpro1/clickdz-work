@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CDZ AI — One API for the world's most powerful models</title>
+<meta name="description" content="CDZ AI is the ClickDz intelligence platform: a single lightning-fast, OpenAI-compatible API and MCP server serving elite frontier models — reasoning, code, research, vision, audio and a multi-model Council. Build anything." />
+<meta name="keywords" content="CDZ AI, ClickDz, AI API, LLM API, OpenAI compatible, MCP server, AI models, reasoning API, vision API, Algeria AI, chat completions, AI council" />
+<meta name="author" content="ClickDz" />
+<link rel="canonical" href="https://__HOST__/" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="CDZ AI" />
+<meta property="og:title" content="CDZ AI — One API for the world's most powerful models" />
+<meta property="og:description" content="A single, blazing-fast OpenAI-compatible API + MCP server serving elite frontier intelligence. Reasoning, code, research, vision, audio and a multi-model Council." />
+<meta property="og:url" content="https://__HOST__/" />
+<meta property="og:image" content="{{LOGO_BLUEGRAD}}" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="CDZ AI — One API for the world's most powerful models" />
+<meta name="twitter:description" content="Elite frontier intelligence behind one API + MCP server. Built by ClickDz." />
+<meta name="twitter:image" content="{{LOGO_BLUEGRAD}}" />
+<meta name="theme-color" content="#070711" />
+<link rel="icon" type="image/png" href="{{LOGO_SKYBLUE}}" />
+<link rel="apple-touch-icon" href="{{LOGO_NAVY}}" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script type="application/ld+json">
+{
+  "@context":"https://schema.org","@type":"Product","name":"CDZ AI",
+  "brand":{"@type":"Brand","name":"ClickDz"},
+  "description":"An OpenAI-compatible API and MCP server serving elite frontier AI models: reasoning, code, research, vision, audio, and a multi-model Council.",
+  "url":"https://__HOST__/","category":"Artificial Intelligence API",
+  "offers":{"@type":"Offer","availability":"https://schema.org/InStock","priceCurrency":"USD","price":"0","description":"Contact for API access via WhatsApp"}
+}
+</script>
+<style>
+  :root{
+    --bg:#070711; --bg2:#0b0b18; --panel:#101024; --panel2:#15152c;
+    --line:rgba(255,255,255,.08); --line2:rgba(255,255,255,.14);
+    --text:#f2f2f8; --muted:#a6a6c2; --dim:#6f6f90;
+    --cdz:#2f7bff; --cdz2:#57a6ff; --violet:#8b5cff; --cyan:#22d3ee; --pink:#ff5ea8;
+    --radius:18px; --maxw:1140px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;line-height:1.65;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  h1,h2,h3{font-family:Sora,Inter,sans-serif;letter-spacing:-.02em;margin:0}
+  code,pre{font-family:'JetBrains Mono',monospace}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  .grad{background:linear-gradient(110deg,var(--cdz2),var(--violet) 45%,var(--cyan));-webkit-background-clip:text;background-clip:text;color:transparent}
+
+  /* animated background */
+  .bg{position:fixed;inset:0;z-index:-2;background:
+      radial-gradient(closest-side at 50% 50%,rgba(255,255,255,.03),transparent) ,var(--bg)}
+  .blob{position:fixed;z-index:-1;filter:blur(90px);opacity:.5;border-radius:50%;will-change:transform}
+  .b1{width:520px;height:520px;background:radial-gradient(circle,#2f7bff,transparent 65%);top:-160px;left:-120px;animation:float1 18s ease-in-out infinite}
+  .b2{width:460px;height:460px;background:radial-gradient(circle,#8b5cff,transparent 65%);top:10%;right:-140px;animation:float2 22s ease-in-out infinite}
+  .b3{width:420px;height:420px;background:radial-gradient(circle,#22d3ee,transparent 65%);bottom:-160px;left:30%;animation:float3 20s ease-in-out infinite}
+  @keyframes float1{50%{transform:translate(80px,60px) scale(1.1)}}
+  @keyframes float2{50%{transform:translate(-70px,50px) scale(1.15)}}
+  @keyframes float3{50%{transform:translate(50px,-60px) scale(1.05)}}
+  .grid-overlay{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.35;
+    background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
+    background-size:54px 54px;mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 30%,transparent 75%)}
+
+  /* nav */
+  nav{position:sticky;top:0;z-index:50;transition:background .3s,border-color .3s,backdrop-filter .3s;border-bottom:1px solid transparent}
+  nav.scrolled{background:rgba(7,7,17,.72);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
+  .nav-in{display:flex;align-items:center;gap:14px;padding:14px 0}
+  .brand{display:flex;align-items:center;gap:11px;font-family:Sora;font-weight:800;font-size:18px}
+  .brand img{width:34px;height:34px;border-radius:9px;box-shadow:0 4px 18px rgba(47,123,255,.4)}
+  .nav-links{display:flex;gap:26px;margin-left:24px}
+  .nav-links a{color:var(--muted);font-size:14px;font-weight:500;transition:color .18s}
+  .nav-links a:hover{color:var(--text)}
+  .nav-cta{margin-left:auto;display:flex;gap:10px;align-items:center}
+  .btn{display:inline-flex;align-items:center;gap:9px;font-weight:600;font-size:14px;padding:11px 20px;border-radius:12px;border:1px solid var(--line2);transition:transform .16s,box-shadow .16s,background .16s;cursor:pointer}
+  .btn:hover{transform:translateY(-2px)}
+  .btn.primary{background:linear-gradient(120deg,var(--cdz),var(--violet));border-color:transparent;box-shadow:0 8px 30px rgba(80,90,255,.4)}
+  .btn.primary:hover{box-shadow:0 12px 42px rgba(80,90,255,.6)}
+  .btn.wa{background:linear-gradient(120deg,#25d366,#128c4b);border-color:transparent;box-shadow:0 8px 30px rgba(37,211,102,.35)}
+  .btn.ghost{background:rgba(255,255,255,.04)}
+  .nav-links,.nav-cta .ghost{}
+  @media(max-width:820px){.nav-links{display:none}.nav-cta .ghost{display:none}}
+
+  /* hero */
+  .hero{position:relative;text-align:center;padding:90px 0 70px}
+  .badge{display:inline-flex;align-items:center;gap:9px;font-size:12.5px;font-weight:600;color:var(--cdz2);background:rgba(47,123,255,.1);border:1px solid rgba(47,123,255,.3);padding:7px 15px;border-radius:999px;margin-bottom:30px}
+  .badge .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 0 rgba(34,197,94,.7);animation:pulse 2s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 10px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+  .hero h1{font-size:clamp(42px,7.5vw,88px);font-weight:800;line-height:1.02;margin-bottom:8px}
+  .rot{display:inline-block;min-height:1.05em}
+  .hero .sub{font-size:clamp(17px,2.3vw,22px);color:var(--muted);max-width:680px;margin:22px auto 20px}
+  .hero-logo{width:150px;height:150px;margin:6px auto 30px;position:relative}
+  .hero-logo img{width:100%;height:100%;border-radius:32px;position:relative;z-index:2;box-shadow:0 20px 70px rgba(47,123,255,.55);animation:bob 5s ease-in-out infinite}
+  @keyframes bob{50%{transform:translateY(-12px)}}
+  .ring{position:absolute;inset:-26px;border:1.5px solid rgba(87,166,255,.35);border-radius:50%;animation:spin 14s linear infinite}
+  .ring:nth-child(2){inset:-52px;border-color:rgba(139,92,255,.22);animation-duration:22s;animation-direction:reverse}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:8px}
+  .trust{display:flex;gap:34px;justify-content:center;flex-wrap:wrap;margin-top:44px;color:var(--dim);font-size:13px}
+  .trust b{color:var(--text);font-family:Sora;font-size:20px;display:block}
+
+  /* marquee */
+  .marquee{overflow:hidden;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:18px 0;margin-top:20px;-webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+  .marquee-track{display:flex;gap:54px;white-space:nowrap;animation:scroll 26s linear infinite;font-family:Sora;font-weight:700;font-size:19px;color:var(--dim)}
+  .marquee-track span{opacity:.8}
+  @keyframes scroll{to{transform:translateX(-50%)}}
+
+  section{padding:84px 0}
+  .eyebrow{text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--cdz2);margin-bottom:14px}
+  .h2{text-align:center;font-size:clamp(30px,4.5vw,46px);font-weight:800;margin-bottom:16px}
+  .lead{text-align:center;color:var(--muted);max-width:620px;margin:0 auto 52px;font-size:17px}
+
+  /* reveal */
+  .reveal{opacity:0;transform:translateY(28px);transition:opacity .7s cubic-bezier(.16,1,.3,1),transform .7s cubic-bezier(.16,1,.3,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  /* models */
+  .models{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px}
+  .mcard{position:relative;background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:var(--radius);padding:26px;overflow:hidden;transition:transform .25s,border-color .25s}
+  .mcard::before{content:"";position:absolute;inset:0;padding:1px;border-radius:var(--radius);background:linear-gradient(130deg,var(--cdz),var(--violet),var(--cyan));-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:0;transition:opacity .25s}
+  .mcard:hover{transform:translateY(-6px)}
+  .mcard:hover::before{opacity:1}
+  .mcard .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .micon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-family:Sora;font-weight:800;font-size:17px}
+  .ver{font-family:'JetBrains Mono';font-size:12px;font-weight:600;color:var(--cdz2);background:rgba(47,123,255,.12);border:1px solid rgba(47,123,255,.28);padding:3px 9px;border-radius:8px}
+  .ver.flag{color:#ffd479;background:rgba(255,196,80,.1);border-color:rgba(255,196,80,.3)}
+  .mcard h3{font-size:20px;margin-bottom:6px}
+  .mcard p{color:var(--muted);font-size:14px;margin:0}
+  .mcard .id{margin-top:14px;font-family:'JetBrains Mono';font-size:11.5px;color:var(--dim)}
+
+  /* features */
+  .feats{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:18px}
+  .feat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:24px;transition:transform .2s,border-color .2s}
+  .feat:hover{transform:translateY(-4px);border-color:var(--line2)}
+  .feat .fi{font-size:26px;margin-bottom:12px}
+  .feat h3{font-size:17px;margin-bottom:6px}
+  .feat p{color:var(--muted);font-size:14px;margin:0}
+
+  /* code */
+  .code-wrap{max-width:820px;margin:0 auto;background:#0a0a16;border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .tabs{display:flex;gap:2px;background:rgba(255,255,255,.03);border-bottom:1px solid var(--line);padding:8px 8px 0}
+  .tab{padding:9px 16px;font-size:13px;font-weight:600;color:var(--dim);cursor:pointer;border-radius:9px 9px 0 0;transition:color .16s,background .16s}
+  .tab.active{color:var(--text);background:#0a0a16}
+  pre{margin:0;padding:22px 24px;overflow-x:auto;font-size:13px;line-height:1.7}
+  pre .k{color:var(--violet)} pre .s{color:#7ee0b8} pre .c{color:var(--dim)} pre .f{color:var(--cdz2)}
+  .codeblock{display:none} .codeblock.active{display:block}
+
+  /* cta band */
+  .band{position:relative;text-align:center;background:linear-gradient(120deg,rgba(47,123,255,.14),rgba(139,92,255,.14));border:1px solid var(--line2);border-radius:26px;padding:60px 30px;overflow:hidden}
+  .band h2{font-size:clamp(28px,4vw,42px);font-weight:800;margin-bottom:14px}
+  .band p{color:var(--muted);max-width:520px;margin:0 auto 28px;font-size:17px}
+  .price{font-family:Sora;font-size:15px;color:var(--dim);margin-top:18px}
+
+  footer{border-top:1px solid var(--line);padding:46px 0 60px;color:var(--dim);font-size:13.5px}
+  .foot-in{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .foot-in img{width:30px;height:30px;border-radius:8px}
+  .foot-in .sp{margin-left:auto;display:flex;gap:20px}
+  .foot-in a:hover{color:var(--text)}
+</style>
+</head>
+<body>
+<div class="bg"></div><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div><div class="grid-overlay"></div>
+
+<nav id="nav"><div class="wrap nav-in">
+  <a class="brand" href="/"><img src="{{LOGO_NAVY}}" alt="CDZ AI logo" /> CDZ&nbsp;AI</a>
+  <div class="nav-links">
+    <a href="#models">Models</a><a href="#capabilities">Capabilities</a><a href="#start">Quickstart</a><a href="#mcp">MCP</a><a href="#access">Access</a>
+  </div>
+  <div class="nav-cta">
+    <a class="btn ghost" href="#start">Docs</a>
+    <a class="btn primary" href="__WA__" target="_blank" rel="noopener">Get API access</a>
+  </div>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <div class="badge"><span class="dot"></span> Live · frontier intelligence, one endpoint</div>
+  <div class="hero-logo"><span class="ring"></span><span class="ring"></span><img src="{{LOGO_BLUEGRAD}}" alt="CDZ AI" /></div>
+  <h1>The smartest models on Earth,<br /><span class="grad rot" id="rot">unified.</span></h1>
+  <p class="sub">CDZ AI is the ClickDz intelligence platform — one blazing-fast, OpenAI-compatible API and MCP server serving elite frontier models for reasoning, code, research, vision, audio, and a multi-model Council that debates before it answers.</p>
+  <div class="cta-row">
+    <a class="btn wa" href="__WA__" target="_blank" rel="noopener">💬 Get access on WhatsApp</a>
+    <a class="btn ghost" href="#start">Explore the API →</a>
+  </div>
+  <div class="trust">
+    <div><b id="c1">7</b> supermodels</div>
+    <div><b id="c2">~40</b> ms cold start</div>
+    <div><b id="c3">99.9</b>% uptime</div>
+    <div><b>3</b> languages · AR/FR/EN</div>
+  </div>
+</div></header>
+
+<div class="marquee"><div class="marquee-track" id="mq"></div></div>
+
+<section id="models"><div class="wrap">
+  <div class="eyebrow reveal">The lineup</div>
+  <h2 class="h2 reveal">Meet the CDZ supermodels</h2>
+  <p class="lead reveal">Each one is tuned for a mission and powered by a top-tier engine. Pick a specialist, or let <b>CDZ&nbsp;Ultra</b> route every request to the perfect mind automatically.</p>
+  <div class="models" id="modelGrid"></div>
+</div></section>
+
+<section id="capabilities" style="background:linear-gradient(180deg,transparent,rgba(255,255,255,.015),transparent)"><div class="wrap">
+  <div class="eyebrow reveal">Built for builders</div>
+  <h2 class="h2 reveal">Everything, behind one key</h2>
+  <p class="lead reveal">Drop-in compatible with every OpenAI SDK. Switch your base URL, keep your code.</p>
+  <div class="feats" id="featGrid"></div>
+</div></section>
+
+<section id="start"><div class="wrap">
+  <div class="eyebrow reveal">Quickstart</div>
+  <h2 class="h2 reveal">Live in 30 seconds</h2>
+  <p class="lead reveal">Any language, any OpenAI client. Just point it at CDZ AI.</p>
+  <div class="code-wrap reveal">
+    <div class="tabs" id="tabs"></div>
+    <div id="codeblocks"></div>
+  </div>
+</div></section>
+
+<section id="mcp" style="background:linear-gradient(180deg,transparent,rgba(255,255,255,.015),transparent)"><div class="wrap">
+  <div class="eyebrow reveal">Model Context Protocol</div>
+  <h2 class="h2 reveal">Plug CDZ into your agents</h2>
+  <p class="lead reveal">A full MCP server ships built-in. Connect any MCP client and your agent gains six native superpowers.</p>
+  <div class="feats" id="mcpGrid"></div>
+</div></section>
+
+<section id="access"><div class="wrap">
+  <div class="band reveal">
+    <div class="eyebrow" style="color:var(--cdz2)">Get started</div>
+    <h2>Ready to build with the best?</h2>
+    <p>API keys are issued personally so we can tune limits to your use case. Message us on WhatsApp and you'll be live today.</p>
+    <a class="btn wa" style="font-size:16px;padding:15px 28px" href="__WA__" target="_blank" rel="noopener">💬 Request your API key — 0558 79 42 43</a>
+    <div class="price">Flexible plans · pay for what you use · no lock-in</div>
+  </div>
+</div></section>
+
+<footer><div class="wrap foot-in">
+  <img src="{{LOGO_LIGHT}}" alt="CDZ AI" />
+  <span>CDZ&nbsp;AI — an <b style="color:var(--text)">intelligence platform</b> by ClickDz.</span>
+  <span class="sp">
+    <a href="#models">Models</a><a href="#start">API</a><a href="https://work.clickdz.ai" target="_blank" rel="noopener">ClickDz Work</a><a href="__WA__" target="_blank" rel="noopener">Contact</a>
+  </span>
+</div>
+<div class="wrap" style="margin-top:18px;color:#4a4a63;font-size:12px">© <span id="yr"></span> ClickDz. All systems operational. Built for speed, tuned for genius.</div>
+</footer>
+
+<script>
+// rotating hero word
+const words=['unified.','on tap.','one API.','your edge.','unleashed.'];let wi=0;
+const rot=document.getElementById('rot');
+setInterval(()=>{wi=(wi+1)%words.length;rot.style.opacity=0;setTimeout(()=>{rot.textContent=words[wi];rot.style.opacity=1;},220);},2400);
+rot.style.transition='opacity .22s';
+
+// nav blur
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>20));
+
+// year
+document.getElementById('yr').textContent=new Date().getFullYear();
+
+// models data — versions hint the engine tier without naming vendors
+const MODELS=[
+  {n:'CDZ Ultra',v:'AUTO',flag:1,i:'∞',c:'linear-gradient(135deg,#2f7bff,#8b5cff)',d:'Our adaptive flagship. Reads your intent and routes to the perfect specialist in real time — you never pick wrong.',id:'cdz-ultra'},
+  {n:'CDZ Council',v:'×3',flag:1,i:'⚖',c:'linear-gradient(135deg,#8b5cff,#ff5ea8)',d:'Three elite minds answer in parallel, then a synthesis reconciles them into one decisive verdict. For decisions that matter.',id:'cdz-council'},
+  {n:'CDZ Sage',v:'4.8',i:'S',c:'linear-gradient(135deg,#d97757,#ffb27a)',d:'Deep reasoning, nuance and hard tradeoffs. The mind you bring to strategy, ethics and the hardest questions.',id:'cdz-sage'},
+  {n:'CDZ Architect',v:'5.5',i:'A',c:'linear-gradient(135deg,#10a37f,#3dd7ad)',d:'Production-grade code and systems design. Ships complete, correct builds — not sketches.',id:'cdz-architect'},
+  {n:'CDZ Scholar',v:'3.1',i:'R',c:'linear-gradient(135deg,#2f7bff,#57a6ff)',d:'Research, structure and long-form mastery. Turns chaos into crisp, cited, organized knowledge.',id:'cdz-scholar'},
+  {n:'CDZ Flash',v:'3.5',i:'F',c:'linear-gradient(135deg,#22d3ee,#4ea8ff)',d:'Instant answers at blistering speed for everyday work. Lean, fast, always ready.',id:'cdz-flash'},
+  {n:'CDZ Polyglot',v:'5.4',i:'P',c:'linear-gradient(135deg,#8b5cff,#c39bff)',d:'Native-level Arabic, French and English — Darija included. Speaks your market fluently.',id:'cdz-polyglot'},
+];
+const mg=document.getElementById('modelGrid');
+mg.innerHTML=MODELS.map(m=>`<div class="mcard reveal">
+  <div class="top"><div class="micon" style="background:${m.c}">${m.i}</div><span class="ver ${m.flag?'flag':''}">${m.v}</span></div>
+  <h3>${m.n}</h3><p>${m.d}</p><div class="id">model: ${m.id}</div></div>`).join('');
+
+// features
+const FEATS=[
+  {i:'🔌',h:'OpenAI-compatible',d:'/v1/chat/completions and /v1/models. Your existing SDK just works — change one URL.'},
+  {i:'⚡',h:'Streaming',d:'Token-by-token SSE streaming for snappy, real-time experiences.'},
+  {i:'👁️',h:'Vision',d:'Send an image URL and any model can see, read and reason over it.'},
+  {i:'🎙️',h:'Audio',d:'Transcribe speech in 20 languages, including Arabic and French.'},
+  {i:'🧭',h:'Smart routing',d:'CDZ Ultra auto-selects the ideal model for every single request.'},
+  {i:'🔐',h:'Key-secured',d:'Personal API keys with usage tracking and tunable limits.'},
+];
+document.getElementById('featGrid').innerHTML=FEATS.map(f=>`<div class="feat reveal"><div class="fi">${f.i}</div><h3>${f.h}</h3><p>${f.d}</p></div>`).join('');
+
+// mcp tools
+const MCP=[
+  {i:'💬',h:'cdz_ask',d:'Ask any supermodel in one call.'},
+  {i:'⚖️',h:'cdz_council',d:'Convene the multi-model Council.'},
+  {i:'🖼️',h:'cdz_describe_image',d:'Describe any image from a URL.'},
+  {i:'🎧',h:'cdz_transcribe_audio',d:'Transcribe audio from a URL.'},
+  {i:'📄',h:'cdz_ocr',d:'Extract verbatim text from documents.'},
+  {i:'🔎',h:'cdz_web_search',d:'Grounded web answers with citations.'},
+];
+document.getElementById('mcpGrid').innerHTML=MCP.map(f=>`<div class="feat reveal"><div class="fi">${f.i}</div><h3 style="font-family:'JetBrains Mono';font-size:15px">${f.h}</h3><p>${f.d}</p></div>`).join('');
+
+// marquee
+document.getElementById('mq').innerHTML=(()=>{const items=['CDZ Ultra','CDZ Council','CDZ Sage 4.8','CDZ Architect 5.5','CDZ Scholar 3.1','CDZ Flash 3.5','CDZ Polyglot 5.4','✦'];const row=items.map(x=>`<span>${x}</span>`).join('');return row+row;})();
+
+// code tabs
+const HOST='__HOST__';
+const CODE={
+  cURL:`<span class="c"># one endpoint, every model</span>
+curl https://${HOST}/v1/chat/completions \\
+  -H <span class="s">"Authorization: Bearer $CDZ_KEY"</span> \\
+  -H <span class="s">"Content-Type: application/json"</span> \\
+  -d <span class="s">'{"model":"cdz-ultra","messages":[{"role":"user","content":"Design my app"}]}'</span>`,
+  Python:`<span class="k">from</span> openai <span class="k">import</span> OpenAI
+client = OpenAI(base_url=<span class="s">"https://${HOST}/v1"</span>, api_key=<span class="s">"$CDZ_KEY"</span>)
+r = client.chat.completions.create(
+    model=<span class="s">"cdz-council"</span>,
+    messages=[{<span class="s">"role"</span>:<span class="s">"user"</span>,<span class="s">"content"</span>:<span class="s">"Should we launch now?"</span>}],
+)
+<span class="k">print</span>(r.choices[0].message.content)`,
+  Node:`<span class="k">import</span> OpenAI <span class="k">from</span> <span class="s">"openai"</span>;
+<span class="k">const</span> cdz = <span class="k">new</span> OpenAI({ baseURL:<span class="s">"https://${HOST}/v1"</span>, apiKey: process.env.CDZ_KEY });
+<span class="k">const</span> r = <span class="k">await</span> cdz.chat.completions.create({
+  model:<span class="s">"cdz-architect"</span>,
+  messages:[{ role:<span class="s">"user"</span>, content:<span class="s">"Build a landing page"</span> }],
+});
+console.log(r.choices[0].message.content);`,
+  MCP:`<span class="c"># add CDZ to any MCP client</span>
+{
+  <span class="f">"mcpServers"</span>: {
+    <span class="f">"cdz-ai"</span>: {
+      <span class="f">"url"</span>: <span class="s">"https://${HOST}/mcp"</span>,
+      <span class="f">"headers"</span>: { <span class="f">"Authorization"</span>: <span class="s">"Bearer $CDZ_KEY"</span> }
+    }
+  }
+}`,
+};
+const tabs=document.getElementById('tabs'),cbs=document.getElementById('codeblocks');
+Object.keys(CODE).forEach((k,idx)=>{
+  const t=document.createElement('div');t.className='tab'+(idx===0?' active':'');t.textContent=k;t.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.codeblock').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');document.getElementById('cb-'+k).classList.add('active');
+  };tabs.appendChild(t);
+  const b=document.createElement('pre');b.className='codeblock'+(idx===0?' active':'');b.id='cb-'+k;b.innerHTML='<code>'+CODE[k]+'</code>';cbs.appendChild(b);
+});
+
+// scroll reveal
+const io=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+
+// counters
+function animateCount(el,to,suffix,dec){let s=null;const dur=1400;const step=t=>{if(!s)s=t;const p=Math.min((t-s)/dur,1);const v=(to*p);el.textContent=(dec?v.toFixed(1):Math.round(v))+suffix;if(p<1)requestAnimationFrame(step);};requestAnimationFrame(step);}
+const cio=new IntersectionObserver((es)=>es.forEach(e=>{if(e.isIntersecting){const id=e.target.id;if(id==='c1')animateCount(e.target,7,'');if(id==='c2')animateCount(e.target,40,'',false);if(id==='c3')animateCount(e.target,99.9,'',true);cio.unobserve(e.target);}}),{threshold:.5});
+['c1','c2','c3'].forEach(id=>{const el=document.getElementById(id);if(el)cio.observe(el);});
+
+// pointer tilt on model cards
+document.addEventListener('pointermove',e=>{
+  const card=e.target.closest('.mcard');if(!card)return;
+  const r=card.getBoundingClientRect();const x=(e.clientX-r.left)/r.width-.5;const y=(e.clientY-r.top)/r.height-.5;
+  card.style.transform=`translateY(-6px) rotateX(${(-y*6).toFixed(2)}deg) rotateY(${(x*6).toFixed(2)}deg)`;
+});
+document.addEventListener('pointerout',e=>{const card=e.target.closest&&e.target.closest('.mcard');if(card)card.style.transform='';});
+</script>
+</body>
+</html>
