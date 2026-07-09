@@ -488,6 +488,162 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     ]),
   });
 
+  // CDZ AI supermodels — real multi-vendor backend via CDZ AI's
+  // OpenAI-compatible /v1/chat/completions endpoint (api.clickdz.ai)
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "cdz-ultra".to_string(),
+    raw_model_id: "cdz-ultra".to_string(),
+    display_name: Some("CDZ Ultra".to_string()),
+    aliases: vec!["cdz-ultra".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "cdz-council".to_string(),
+    raw_model_id: "cdz-council".to_string(),
+    display_name: Some("CDZ Council".to_string()),
+    aliases: vec!["cdz-council".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "cdz-sage".to_string(),
+    raw_model_id: "cdz-sage".to_string(),
+    display_name: Some("CDZ Sage".to_string()),
+    aliases: vec!["cdz-sage".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "cdz-architect".to_string(),
+    raw_model_id: "cdz-architect".to_string(),
+    display_name: Some("CDZ Architect".to_string()),
+    aliases: vec!["cdz-architect".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "cdz-scholar".to_string(),
+    raw_model_id: "cdz-scholar".to_string(),
+    display_name: Some("CDZ Scholar".to_string()),
+    aliases: vec!["cdz-scholar".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "cdz-flash".to_string(),
+    raw_model_id: "cdz-flash".to_string(),
+    display_name: Some("CDZ Flash".to_string()),
+    aliases: vec!["cdz-flash".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "cdz-polyglot".to_string(),
+    raw_model_id: "cdz-polyglot".to_string(),
+    display_name: Some("CDZ Polyglot".to_string()),
+    aliases: vec!["cdz-polyglot".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+  // gap-fill: gemini-3.1-pro-preview is only reached via CDZ AI passthrough
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "gemini-3.1-pro-preview".to_string(),
+    raw_model_id: "gemini-3.1-pro-preview".to_string(),
+    display_name: Some("Gemini 3.1 Pro".to_string()),
+    aliases: vec!["gemini-3.1-pro-preview".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "gemini_api".to_string(),
     canonical_key: "gemini-3-flash-preview".to_string(),

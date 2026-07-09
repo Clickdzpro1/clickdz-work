@@ -13,7 +13,10 @@ const AI_MODEL_ID_KEY = 'AIModelId';
 const AI_COUNCIL_MEMBERS_KEY = 'AICouncilMembers';
 const AI_PRE_COUNCIL_MODEL_KEY = 'AIPreCouncilModelId';
 
-export const COUNCIL_MODEL_ID = 'clickdz-council';
+// cdz-council is now a REAL backend model (server-side 3-vendor fan-out +
+// synthesis via CDZ AI). Membership is fixed server-side, so the client no
+// longer sends member selection — it just selects the model id.
+export const COUNCIL_MODEL_ID = 'cdz-council';
 export const COUNCIL_SEATS = 3;
 export const DEFAULT_COUNCIL_MEMBERS = [
   'claude-opus-4-8',
@@ -22,12 +25,13 @@ export const DEFAULT_COUNCIL_MEMBERS = [
 ];
 
 const CLICKDZ_FALLBACK_MODELS: AIModel[] = [
-  { name: 'ClickDz Smart', id: 'clickdz-smart', category: 'ClickDz', version: 'Smart', isPro: false, isDefault: true },
-  { name: 'ClickDz Council', id: 'clickdz-council', category: 'ClickDz', version: 'Council', isPro: false, isDefault: false },
-  { name: 'ClickDz Fast', id: 'clickdz-fast', category: 'ClickDz', version: 'Fast', isPro: false, isDefault: false },
-  { name: 'ClickDz Arabic', id: 'clickdz-arabic', category: 'ClickDz', version: 'Arabic', isPro: false, isDefault: false },
-  { name: 'Claude Sonnet', id: 'claude-sonnet-5', category: 'Claude', version: 'Sonnet', isPro: false, isDefault: false },
-  { name: 'Gemini Pro', id: 'gemini-2.5-pro', category: 'Gemini', version: 'Pro', isPro: false, isDefault: false },
+  { name: 'CDZ Ultra', id: 'cdz-ultra', category: 'CDZ', version: 'Ultra', isPro: false, isDefault: true },
+  { name: 'CDZ Council', id: 'cdz-council', category: 'CDZ', version: 'Council', isPro: false, isDefault: false },
+  { name: 'CDZ Sage', id: 'cdz-sage', category: 'CDZ', version: '4.8', isPro: false, isDefault: false },
+  { name: 'CDZ Architect', id: 'cdz-architect', category: 'CDZ', version: '5.5', isPro: false, isDefault: false },
+  { name: 'CDZ Scholar', id: 'cdz-scholar', category: 'CDZ', version: '3.1', isPro: false, isDefault: false },
+  { name: 'CDZ Flash', id: 'cdz-flash', category: 'CDZ', version: '3.5', isPro: false, isDefault: false },
+  { name: 'CDZ Polyglot', id: 'cdz-polyglot', category: 'CDZ', version: '5.4', isPro: false, isDefault: false },
 ];
 
 export interface AIModel {
