@@ -1,0 +1,129 @@
+/*
+ * CDZ Chat — Tailwind v4 entry (scoped).
+ *
+ * Imported once by the chat components (see `cdz-tokens-injector.ts` which also
+ * injects the --cdz-* token definitions). This file sets up Tailwind v4 +
+ * tw-animate-css for the cdz-chat components only.
+ *
+ * The rspack build applies `@tailwindcss/postcss` to every .css file in
+ * @affine/core because `tailwind.config.js` exists in this package — but the
+ * config's `content` glob is scoped to `src/components/cdz-chat/**`, so only
+ * utilities actually used by the chat components are generated. The rest of
+ * @affine/core (vanilla-extract) is unaffected.
+ *
+ * NOTE on layers: we wrap the generated utilities in a layer so they cannot
+ * unintentionally override AFFiNE's own base styles. The chat components are
+ * always rendered inside a `.cdz-chat-scope` wrapper which provides isolation.
+ */
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@custom-variant dark (&:is(.dark *, [data-theme='dark'] *));
+
+/* Map Tailwind theme tokens → namespaced --cdz-* variables (defined in
+ * cdz-tokens.ts and injected at runtime). Using @theme inline means Tailwind
+ * emits `var(--cdz-*)` directly in the generated utilities rather than copying
+ * the value — so light/dark theme switching Just Works via the :root/.dark
+ * token overrides. */
+@theme inline {
+  --color-border: var(--cdz-border);
+  --color-input: var(--cdz-input);
+  --color-ring: var(--cdz-ring);
+  --color-background: var(--cdz-background);
+  --color-foreground: var(--cdz-foreground);
+
+  --color-primary: var(--cdz-primary);
+  --color-primary-foreground: var(--cdz-primary-foreground);
+
+  --color-secondary: var(--cdz-secondary);
+  --color-secondary-foreground: var(--cdz-secondary-foreground);
+
+  --color-destructive: var(--cdz-destructive);
+  --color-destructive-foreground: var(--cdz-destructive-foreground);
+
+  --color-muted: var(--cdz-muted);
+  --color-muted-foreground: var(--cdz-muted-foreground);
+
+  --color-accent: var(--cdz-accent);
+  --color-accent-foreground: var(--cdz-accent-foreground);
+
+  --color-popover: var(--cdz-popover);
+  --color-popover-foreground: var(--cdz-popover-foreground);
+
+  --color-card: var(--cdz-card);
+  --color-card-foreground: var(--cdz-card-foreground);
+
+  /* Claude-style background + text scales */
+  --color-bg-0: var(--cdz-bg-0);
+  --color-bg-000: var(--cdz-bg-000);
+  --color-bg-100: var(--cdz-bg-100);
+  --color-bg-200: var(--cdz-bg-200);
+  --color-bg-300: var(--cdz-bg-300);
+  --color-text-100: var(--cdz-text-100);
+  --color-text-200: var(--cdz-text-200);
+  --color-text-300: var(--cdz-text-300);
+  --color-text-400: var(--cdz-text-400);
+  --color-text-500: var(--cdz-text-500);
+
+  /* CDZ supermodel badge colors */
+  --color-badge-ultra: var(--cdz-badge-ultra);
+  --color-badge-council: var(--cdz-badge-council);
+  --color-badge-sage: var(--cdz-badge-sage);
+  --color-badge-architect: var(--cdz-badge-architect);
+  --color-badge-scholar: var(--cdz-badge-scholar);
+  --color-badge-flash: var(--cdz-badge-flash);
+  --color-badge-polyglot: var(--cdz-badge-polyglot);
+
+  --font-serif: var(--cdz-font-serif);
+  --font-sans: var(--cdz-font-sans);
+
+  --radius-lg: var(--cdz-radius);
+  --radius-md: calc(var(--cdz-radius) - 2px);
+  --radius-sm: calc(var(--cdz-radius) - 4px);
+
+  --animate-fade-in: cdz-fade-in 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+
+  @keyframes cdz-fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
+      filter: blur(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      filter: blur(0);
+    }
+  }
+}
+
+/* Tailwind v4 changed the default border color to currentColor. Restore the
+ * v3 behavior so borders use our --cdz-border token unless overridden. */
+@layer base {
+  .cdz-chat-scope,
+  .cdz-chat-scope *,
+  .cdz-chat-scope ::after,
+  .cdz-chat-scope ::before,
+  .cdz-chat-scope ::backdrop,
+  .cdz-chat-scope ::file-selector-button {
+    border-color: var(--cdz-border, currentColor);
+  }
+}
+
+/* Custom slim scrollbar for the prompt input (used by ai-chat-input). Kept
+ * scoped under .cdz-chat-scope so it never affects the rest of the app. */
+.cdz-chat-scope .prompt-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+  background: transparent;
+}
+.cdz-chat-scope .prompt-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cdz-chat-scope .prompt-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--cdz-muted-foreground);
+  border-radius: 4px;
+}
+.cdz-chat-scope .prompt-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: var(--cdz-muted-foreground);
+}
