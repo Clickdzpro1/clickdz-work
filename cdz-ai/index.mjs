@@ -14,6 +14,8 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 
+import { docsPage } from './docs.mjs';
+
 // ---------------------------------------------------------------- config
 const PORT = Number(process.env.PORT || 8080);
 const API_KEYS = (process.env.CDZ_API_KEYS || '')
@@ -410,7 +412,12 @@ const server = http.createServer(async (req, res) => {
     return res.end();
   }
 
-  if (path === '/' && req.method === 'GET') {
+  if ((path === '/' || path === '/docs') && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
+    return res.end(docsPage(req.headers.host || 'api.clickdz.ai'));
+  }
+
+  if (path === '/v1' && req.method === 'GET') {
     return json(res, 200, {
       name: 'CDZ AI',
       tagline: 'The ClickDz supermodel platform — real Claude, Gemini and GPT behind one API.',
