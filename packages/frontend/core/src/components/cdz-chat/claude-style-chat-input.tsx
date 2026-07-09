@@ -36,6 +36,7 @@ import {
   type CdzModelOption,
 } from './cdz-models';
 import { Icons } from './icons';
+import { useCdzI18n } from './use-cdz-i18n';
 import { useCallback, useEffect, useRef, useState, type FC } from 'react';
 
 /* --- UTILS --- */
@@ -285,8 +286,10 @@ export const ClaudeChatInput: FC<ClaudeChatInputProps> = ({
   onSendMessage,
   models = CDZ_MODELS,
   defaultModelId = CDZ_DEFAULT_MODEL_ID,
-  placeholder = 'How can ClickDz help you today?',
+  placeholder,
 }) => {
+  const t = useCdzI18n();
+  const resolvedPlaceholder = placeholder ?? t.chat.input.placeholder();
   const [message, setMessage] = useState('');
   const [files, setFiles] = useState<AttachedFile[]>([]);
   const [pastedContent, setPastedContent] = useState<PastedContent[]>([]);
@@ -329,10 +332,10 @@ export const ClaudeChatInput: FC<ClaudeChatInputProps> = ({
       if (prev) return prev;
       if (newFiles.length === 1) {
         const f = newFiles[0];
-        if (f.type.startsWith('image/')) return 'Analyzed image...';
-        return 'Analyzed document...';
+        if (f.type.startsWith('image/')) return t.chat.input.analyzedImage();
+        return t.chat.input.analyzedDocument();
       }
-      return `Analyzed ${newFiles.length} files...`;
+      return t.chat.input.analyzedFiles(newFiles.length);
     });
     newFiles.forEach(f => {
       setTimeout(() => {
@@ -383,7 +386,7 @@ export const ClaudeChatInput: FC<ClaudeChatInputProps> = ({
       };
       setPastedContent(prev => [...prev, snippet]);
       if (!message) {
-        setMessage('Analyzed pasted text...');
+        setMessage(t.chat.input.analyzedPasted());
       }
     }
   };
@@ -466,12 +469,12 @@ export const ClaudeChatInput: FC<ClaudeChatInputProps> = ({
                 onChange={e => setMessage(e.target.value)}
                 onPaste={handlePaste}
                 onKeyDown={handleKeyDown}
-                placeholder={placeholder}
+                placeholder={resolvedPlaceholder}
                 className="w-full bg-transparent border-0 outline-none text-text-100 text-[16px] placeholder:text-text-400 resize-none overflow-hidden py-0 leading-relaxed block font-normal antialiased"
                 rows={1}
                 autoFocus
                 style={{ minHeight: '1.5em' }}
-                aria-label="Chat message"
+                aria-label={t.chat.input.placeholder()}
               />
             </div>
           </div>
@@ -484,7 +487,7 @@ export const ClaudeChatInput: FC<ClaudeChatInputProps> = ({
                 onClick={() => fileInputRef.current?.click()}
                 className="inline-flex items-center justify-center relative shrink-0 transition-colors duration-200 h-8 w-8 rounded-lg active:scale-95 text-text-400 hover:text-text-200 hover:bg-bg-200"
                 type="button"
-                aria-label="Attach file"
+                aria-label={t.chat.input.attachFile()}
               >
                 <Icons.Plus className="w-5 h-5" />
               </button>
@@ -498,8 +501,8 @@ export const ClaudeChatInput: FC<ClaudeChatInputProps> = ({
                       : 'text-text-400 hover:text-text-200 hover:bg-bg-200'
                   )}
                   aria-pressed={isThinkingEnabled}
-                  aria-label="Extended thinking"
-                  title="Extended thinking"
+                  aria-label={t.chat.input.extendedThinking()}
+                  title={t.chat.input.extendedThinking()}
                 >
                   <Icons.Thinking className="w-5 h-5" />
                 </button>
@@ -525,7 +528,7 @@ export const ClaudeChatInput: FC<ClaudeChatInputProps> = ({
                       : 'bg-accent/30 text-bg-0/60 cursor-default'
                   )}
                   type="button"
-                  aria-label="Send message"
+                  aria-label={t.chat.input.send()}
                 >
                   <Icons.ArrowUp className="w-4 h-4" />
                 </button>
@@ -560,7 +563,7 @@ export const ClaudeChatInput: FC<ClaudeChatInputProps> = ({
 
       <div className="text-center mt-4">
         <p className="text-xs text-text-500">
-          AI can make mistakes. Please check important information.
+          {t.chat.input.disclaimer()}
         </p>
       </div>
     </div>

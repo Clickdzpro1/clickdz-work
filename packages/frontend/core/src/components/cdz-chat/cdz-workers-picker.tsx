@@ -24,7 +24,8 @@ import {
   type CdzWorkerCategory,
 } from './cdz-workers-catalog';
 import { Icons } from './icons';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCdzI18n } from './use-cdz-i18n';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 export interface CdzSelectedWorker {
   id: string;
@@ -51,9 +52,11 @@ export function CdzWorkersPicker({
   activeWorkerId,
 }: CdzWorkersPickerProps) {
   const { catalog, loading, error, totalCount } = useCdzWorkersCatalog();
+  const t = useCdzI18n();
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [scrollOffset, setScrollOffset] = useState(0);
+  const [activeRowIndex, setActiveRowIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -96,6 +99,39 @@ export function CdzWorkersPicker({
 
   const categories: CdzWorkerCategory[] = catalog?.categories ?? [];
 
+  // Keep the keyboard-active row in bounds when the filter result changes.
+  useEffect(() => {
+    setActiveRowIndex(0);
+  }, [query, activeCategory]);
+
+  // Keyboard navigation for the workers listbox: ArrowUp/Down to move, Enter
+  // to select, Escape to close (handled globally above). The search input
+  // delegates these keys to the list so users can navigate without tabbing.
+  const handleListKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (filtered.length === 0) return;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveRowIndex(i => Math.min(i + 1, filtered.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveRowIndex(i => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const w = filtered[activeRowIndex];
+        if (w) {
+          onSelect({
+            id: w.id,
+            name: w.name,
+            category: w.category,
+            recommendedModel: w.recommendedModel,
+          });
+        }
+      }
+    },
+    [activeRowIndex, filtered, onSelect]
+  );
+
   // Windowed rows: only render the slice visible in the viewport.
   const startIdx = Math.floor(scrollOffset / ROW_HEIGHT);
   const visibleSlice = filtered.slice(
@@ -110,7 +146,7 @@ export function CdzWorkersPicker({
       className={cn('cdz-chat-scope fixed inset-0 z-[200] flex items-center justify-center p-4')}
       role="dialog"
       aria-modal="true"
-      aria-label="CDZ Workers picker"
+      aria-label={t.workers.title()}
     >
       {/* Backdrop */}
       <div
@@ -130,16 +166,16 @@ export function CdzWorkersPicker({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-base font-semibold text-text-100 font-serif">
-                CDZ Workers
+                {t.workers.title()}
               </span>
               <span className="text-xs text-text-400">
-                {totalCount} specialist skills
+                {t.workers.count(totalCount)}
               </span>
             </div>
             <button
               onClick={onClose}
               className="p-1.5 rounded-lg text-text-400 hover:text-text-200 hover:bg-bg-200 transition-colors"
-              aria-label="Close workers picker"
+              aria-label={t.workers.close()}
             >
               <Icons.X className="w-4 h-4" />
             </button>
@@ -149,10 +185,17 @@ export function CdzWorkersPicker({
               type="text"
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Search 502 specialist skills…"
+              onKeyDown={handleListKeyDown}
+              placeholder={t.workers.search()}
               className="w-full bg-bg-200 border border-bg-300 rounded-xl px-3 py-2 text-sm text-text-100 placeholder:text-text-400 outline-none focus:border-accent focus:ring-1 focus:ring-ring"
               autoFocus
-              aria-label="Search workers"
+              aria-label={t.workers.search()}
+              aria-controls="cdz-workers-list"
+              aria-activedescendant={
+                filtered[activeRowIndex]
+                  ? `cdz-worker-${filtered[activeRowIndex].id}`
+                  : undefined
+              }
             />
           </div>
           {/* Category chips */}
@@ -167,7 +210,7 @@ export function CdzWorkersPicker({
                     : 'bg-bg-200 text-text-300 hover:text-text-200 hover:bg-bg-300'
                 )}
               >
-                All
+                {t.workers.all()}
               </button>
               {categories.map(cat => (
                 <button
@@ -195,17 +238,17 @@ export function CdzWorkersPicker({
           {loading && (
             <div className="flex items-center justify-center h-32 text-text-400 text-sm gap-2">
               <Icons.Loader2 className="w-4 h-4 animate-spin" />
-              Loading workers…
+              {t.workers.loading()}
             </div>
           )}
           {error && (
             <div className="flex items-center justify-center h-32 text-text-400 text-sm px-6 text-center">
-              Couldn't load the workers catalog. Please try again.
+              {t.workers.error()}
             </div>
           )}
           {!loading && !error && filtered.length === 0 && (
             <div className="flex items-center justify-center h-32 text-text-400 text-sm">
-              No workers match “{query}”.
+              {t.workers.noResults(query)}
             </div>
           )}
           {!loading && !error && filtered.length > 0 && (
@@ -214,18 +257,22 @@ export function CdzWorkersPicker({
               className="h-full overflow-y-auto prompt-scrollbar"
               onScroll={e => setScrollOffset((e.target as HTMLDivElement).scrollTop)}
               role="listbox"
-              aria-label="Workers"
+              aria-label={t.workers.title()}
+              id="cdz-workers-list"
             >
               {/* Spacer to keep scroll height correct for windowing */}
               <div style={{ height: filtered.length * ROW_HEIGHT }} className="relative">
                 {visibleSlice.map((w, i) => {
                   const idx = startIdx + i;
                   const isActive = w.id === activeWorkerId;
+                  const isKeyboardActive = idx === activeRowIndex;
                   return (
                     <button
                       key={`${w.id}-${idx}`}
+                      id={`cdz-worker-${w.id}`}
                       role="option"
                       aria-selected={isActive}
+                      onMouseEnter={() => setActiveRowIndex(idx)}
                       onClick={() =>
                         onSelect({
                           id: w.id,
@@ -245,7 +292,9 @@ export function CdzWorkersPicker({
                         'w-full text-left px-4 flex flex-col justify-center gap-0.5 transition-colors',
                         isActive
                           ? 'bg-accent/10 border-l-2 border-accent'
-                          : 'hover:bg-bg-200 border-l-2 border-transparent'
+                          : isKeyboardActive
+                            ? 'bg-bg-200 border-l-2 border-accent/50'
+                            : 'hover:bg-bg-200 border-l-2 border-transparent'
                       )}
                     >
                       <div className="flex items-center gap-2">

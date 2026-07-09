@@ -1091,6 +1091,154 @@ export function useAFFiNEI18N(): {
       */
     ["com.affine.appearanceSettings.showLinkedDocInSidebar.description"](): string;
     /**
+      * `How can ClickDz help you today?`
+      */
+    ["com.affine.cdz.chat.input.placeholder"](): string;
+    /**
+      * `Attach file`
+      */
+    ["com.affine.cdz.chat.input.attach-file"](): string;
+    /**
+      * `Extended thinking`
+      */
+    ["com.affine.cdz.chat.input.extended-thinking"](): string;
+    /**
+      * `Send message`
+      */
+    ["com.affine.cdz.chat.input.send"](): string;
+    /**
+      * `AI can make mistakes. Please check important information.`
+      */
+    ["com.affine.cdz.chat.input.disclaimer"](): string;
+    /**
+      * `Analyzed image...`
+      */
+    ["com.affine.cdz.chat.input.analyzed-image"](): string;
+    /**
+      * `Analyzed document...`
+      */
+    ["com.affine.cdz.chat.input.analyzed-document"](): string;
+    /**
+      * `Analyzed {{count}} files...`
+      */
+    ["com.affine.cdz.chat.input.analyzed-files"](options: Readonly<{
+        readonly count: string;
+    }>): string;
+    /**
+      * `Analyzed pasted text...`
+      */
+    ["com.affine.cdz.chat.input.analyzed-pasted"](): string;
+    /**
+      * `Select model`
+      */
+    ["com.affine.cdz.chat.model.select"](): string;
+    /**
+      * `CDZ Ultra`
+      */
+    ["com.affine.cdz.chat.model.ultra"](): string;
+    /**
+      * `CDZ Council`
+      */
+    ["com.affine.cdz.chat.model.council"](): string;
+    /**
+      * `CDZ Sage`
+      */
+    ["com.affine.cdz.chat.model.sage"](): string;
+    /**
+      * `CDZ Architect`
+      */
+    ["com.affine.cdz.chat.model.architect"](): string;
+    /**
+      * `CDZ Scholar`
+      */
+    ["com.affine.cdz.chat.model.scholar"](): string;
+    /**
+      * `CDZ Flash`
+      */
+    ["com.affine.cdz.chat.model.flash"](): string;
+    /**
+      * `CDZ Polyglot`
+      */
+    ["com.affine.cdz.chat.model.polyglot"](): string;
+    /**
+      * `CDZ Workers`
+      */
+    ["com.affine.cdz.workers.title"](): string;
+    /**
+      * `Search specialist skills…`
+      */
+    ["com.affine.cdz.workers.search"](): string;
+    /**
+      * `All`
+      */
+    ["com.affine.cdz.workers.all"](): string;
+    /**
+      * `Browse specialist skills`
+      */
+    ["com.affine.cdz.workers.browse"](): string;
+    /**
+      * `Loading workers…`
+      */
+    ["com.affine.cdz.workers.loading"](): string;
+    /**
+      * `Couldn't load the workers catalog. Please try again.`
+      */
+    ["com.affine.cdz.workers.error"](): string;
+    /**
+      * `No workers match "{{query}}".`
+      */
+    ["com.affine.cdz.workers.no-results"](options: Readonly<{
+        readonly query: string;
+    }>): string;
+    /**
+      * `{{count}} specialist skills`
+      */
+    ["com.affine.cdz.workers.count"](options: Readonly<{
+        readonly count: string;
+    }>): string;
+    /**
+      * `Close workers picker`
+      */
+    ["com.affine.cdz.workers.close"](): string;
+    /**
+      * `Clear worker`
+      */
+    ["com.affine.cdz.workers.clear"](): string;
+    /**
+      * `Answering as {{name}}`
+      */
+    ["com.affine.cdz.workers.answering-as"](options: Readonly<{
+        readonly name: string;
+    }>): string;
+    /**
+      * `Council`
+      */
+    ["com.affine.cdz.council.trigger"](): string;
+    /**
+      * `Council on`
+      */
+    ["com.affine.cdz.council.on"](): string;
+    /**
+      * `Enable Council mode — 3-vendor fan-out + synthesis`
+      */
+    ["com.affine.cdz.council.enable"](): string;
+    /**
+      * `Disable Council mode`
+      */
+    ["com.affine.cdz.council.disable"](): string;
+    /**
+      * `Council mode is on (3-vendor fan-out + synthesis)`
+      */
+    ["com.affine.cdz.council.active"](): string;
+    /**
+      * `CDZ Chat`
+      */
+    ["com.affine.settings.workspace.experimental-features.enable-cdz-chat.name"](): string;
+    /**
+      * `Use the new Claude-style CDZ chat input with the Workers picker and Council mode.`
+      */
+    ["com.affine.settings.workspace.experimental-features.enable-cdz-chat.description"](): string;
+    /**
       * `Your current email is {{email}}. We'll send a confirmation link there first so you can securely switch to a new email address.`
       */
     ["com.affine.auth.change.email.message"](options: {

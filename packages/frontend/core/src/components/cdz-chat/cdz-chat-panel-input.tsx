@@ -34,6 +34,7 @@ import {
   type CdzSelectedWorker,
 } from './cdz-workers-picker';
 import { Icons } from './icons';
+import { useCdzI18n } from './use-cdz-i18n';
 import type { AIChatRuntime } from '@affine/core/blocksuite/ai';
 import { useCallback, useEffect, useState } from 'react';
 
@@ -54,6 +55,7 @@ export function CdzChatPanelInput({
   const { models, selectedModelId, setSelectedModelId } =
     useCdzModelsFromService(sessionId);
   const dispatch = useCdzChatDispatch(runtime);
+  const t = useCdzI18n();
 
   const [workersPickerOpen, setWorkersPickerOpen] = useState(false);
   const [activeWorker, setActiveWorker] = useState<CdzActiveWorker | null>(null);
@@ -124,8 +126,8 @@ export function CdzChatPanelInput({
               ? 'bg-accent/15 text-accent border border-accent/40'
               : 'text-text-400 hover:text-text-200 hover:bg-bg-200 border border-transparent'
           )}
-          aria-label="Open CDZ Workers picker"
-          title="Browse 502 specialist skills"
+          aria-label={t.workers.title()}
+          title={t.workers.browse()}
         >
           <svg
             width="16"
@@ -138,7 +140,7 @@ export function CdzChatPanelInput({
           >
             <path d="M3 7h18M3 12h18M3 17h18" strokeLinecap="round" />
           </svg>
-          <span>{activeWorker ? activeWorker.name : 'Workers'}</span>
+          <span>{activeWorker ? activeWorker.name : t.workers.title()}</span>
         </button>
 
         <CdzCouncilTrigger />
@@ -148,11 +150,11 @@ export function CdzChatPanelInput({
             type="button"
             onClick={handleClearWorker}
             className="inline-flex items-center gap-1 h-8 px-2 rounded-lg text-xs text-text-400 hover:text-text-200 hover:bg-bg-200 transition-colors"
-            aria-label={`Clear active worker ${activeWorker.name}`}
-            title="Clear worker"
+            aria-label={`${t.workers.clear()} ${activeWorker.name}`}
+            title={t.workers.clear()}
           >
             <Icons.X className="w-3 h-3" />
-            clear
+            {t.workers.clear().toLowerCase()}
           </button>
         )}
       </div>
@@ -162,7 +164,7 @@ export function CdzChatPanelInput({
         <div className="px-1 -mb-1">
           <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] bg-accent/10 text-accent border border-accent/30">
             <Icons.Thinking className="w-3 h-3" />
-            Answering as <strong className="font-semibold">{activeWorker.name}</strong>
+            <span>{t.workers.answeringAs(activeWorker.name)}</span>
             <span className="text-accent/70">· {activeWorker.category}</span>
           </span>
         </div>

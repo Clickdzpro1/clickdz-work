@@ -18,6 +18,7 @@ import { AIModelService } from '@affine/core/modules/ai-button/services/models';
 import { useService } from '@toeverything/infra';
 import { cn } from './cn';
 import { ensureCdzChatStyles } from './cdz-styles';
+import { useCdzI18n } from './use-cdz-i18n';
 import { useEffect, useState } from 'react';
 
 export interface CdzCouncilTriggerProps {
@@ -27,6 +28,7 @@ export interface CdzCouncilTriggerProps {
 
 export function CdzCouncilTrigger({ className }: CdzCouncilTriggerProps) {
   const aiModelService = useService(AIModelService);
+  const t = useCdzI18n();
   const [active, setActive] = useState(false);
 
   useEffect(() => {
@@ -52,12 +54,8 @@ export function CdzCouncilTrigger({ className }: CdzCouncilTriggerProps) {
       type="button"
       onClick={toggle}
       aria-pressed={active}
-      aria-label={active ? 'Disable Council mode' : 'Enable Council mode — 3-vendor fan-out'}
-      title={
-        active
-          ? 'Council mode is on (3-vendor fan-out + synthesis)'
-          : 'Enable Council mode — 3-vendor fan-out + synthesis'
-      }
+      aria-label={active ? t.council.disable() : t.council.enable()}
+      title={active ? t.council.active() : t.council.enable()}
       className={cn(
         'cdz-chat-scope inline-flex items-center gap-1.5 h-8 px-3 rounded-xl text-xs font-medium transition-all duration-200 active:scale-95',
         active
@@ -82,7 +80,7 @@ export function CdzCouncilTrigger({ className }: CdzCouncilTriggerProps) {
         <circle cx="12" cy="6" r="3" />
         <path d="M9 12h6M8 9l8 6M8 15l8-6" opacity="0.4" />
       </svg>
-      <span>{active ? 'Council on' : 'Council'}</span>
+      <span>{active ? t.council.on() : t.council.trigger()}</span>
     </button>
   );
 }
