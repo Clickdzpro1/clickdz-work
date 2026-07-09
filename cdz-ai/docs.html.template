@@ -94,8 +94,6 @@
   .hero-logo{width:150px;height:150px;margin:6px auto 30px;position:relative}
   .hero-logo img{width:100%;height:100%;border-radius:32px;position:relative;z-index:2;box-shadow:0 20px 70px rgba(47,123,255,.55);animation:bob 5s ease-in-out infinite}
   @keyframes bob{50%{transform:translateY(-12px)}}
-  .ring{position:absolute;inset:-26px;border:1.5px solid rgba(87,166,255,.35);border-radius:50%;animation:spin 14s linear infinite}
-  .ring:nth-child(2){inset:-52px;border-color:rgba(139,92,255,.22);animation-duration:22s;animation-direction:reverse}
   @keyframes spin{to{transform:rotate(360deg)}}
   .cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:8px}
   .trust{display:flex;gap:34px;justify-content:center;flex-wrap:wrap;margin-top:44px;color:var(--dim);font-size:13px}
@@ -123,7 +121,13 @@
   .mcard:hover{transform:translateY(-6px)}
   .mcard:hover::before{opacity:1}
   .mcard .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
-  .micon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-family:Sora;font-weight:800;font-size:17px}
+  .micon{width:52px;height:52px;border-radius:14px;overflow:hidden;box-shadow:0 6px 22px rgba(47,123,255,.28)}
+  .micon img{width:100%;height:100%;display:block}
+  .spec-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:13px}
+  .spec-chips span{font-family:'JetBrains Mono';font-size:10.5px;color:var(--muted);background:rgba(255,255,255,.05);border:1px solid var(--line);padding:3px 8px;border-radius:7px;white-space:nowrap}
+  .powers{margin:13px 0 0;padding:0;list-style:none}
+  .powers li{position:relative;padding-left:18px;color:var(--muted);font-size:13px;margin-bottom:6px}
+  .powers li::before{content:"✦";position:absolute;left:0;color:var(--cdz2);font-size:11px;top:2px}
   .ver{font-family:'JetBrains Mono';font-size:12px;font-weight:600;color:var(--cdz2);background:rgba(47,123,255,.12);border:1px solid rgba(47,123,255,.28);padding:3px 9px;border-radius:8px}
   .ver.flag{color:#ffd479;background:rgba(255,196,80,.1);border-color:rgba(255,196,80,.3)}
   .mcard h3{font-size:20px;margin-bottom:6px}
@@ -176,8 +180,8 @@
 
 <header class="hero"><div class="wrap">
   <div class="badge"><span class="dot"></span> Live · frontier intelligence, one endpoint</div>
-  <div class="hero-logo"><span class="ring"></span><span class="ring"></span><img src="{{LOGO_BLUEGRAD}}" alt="CDZ AI" /></div>
-  <h1>The smartest models on Earth,<br /><span class="grad rot" id="rot">unified.</span></h1>
+  <div class="hero-logo"><img src="{{LOGO_BLUEGRAD}}" alt="CDZ AI" /></div>
+  <h1>The smartest models,<br /><span class="grad rot" id="rot">unified.</span></h1>
   <p class="sub">CDZ AI is the ClickDz intelligence platform — one blazing-fast, OpenAI-compatible API and MCP server serving elite frontier models for reasoning, code, research, vision, audio, and a multi-model Council that debates before it answers.</p>
   <div class="cta-row">
     <a class="btn wa" href="__WA__" target="_blank" rel="noopener">💬 Get access on WhatsApp</a>
@@ -258,20 +262,45 @@ addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>20));
 // year
 document.getElementById('yr').textContent=new Date().getFullYear();
 
-// models data — versions hint the engine tier without naming vendors
+// models data — versions hint the engine tier without naming vendors;
+// specs sourced from the engines' official documentation
 const MODELS=[
-  {n:'CDZ Ultra',v:'AUTO',flag:1,i:'∞',c:'linear-gradient(135deg,#2f7bff,#8b5cff)',d:'Our adaptive flagship. Reads your intent and routes to the perfect specialist in real time — you never pick wrong.',id:'cdz-ultra'},
-  {n:'CDZ Council',v:'×3',flag:1,i:'⚖',c:'linear-gradient(135deg,#8b5cff,#ff5ea8)',d:'Three elite minds answer in parallel, then a synthesis reconciles them into one decisive verdict. For decisions that matter.',id:'cdz-council'},
-  {n:'CDZ Sage',v:'4.8',i:'S',c:'linear-gradient(135deg,#d97757,#ffb27a)',d:'Deep reasoning, nuance and hard tradeoffs. The mind you bring to strategy, ethics and the hardest questions.',id:'cdz-sage'},
-  {n:'CDZ Architect',v:'5.5',i:'A',c:'linear-gradient(135deg,#10a37f,#3dd7ad)',d:'Production-grade code and systems design. Ships complete, correct builds — not sketches.',id:'cdz-architect'},
-  {n:'CDZ Scholar',v:'3.1',i:'R',c:'linear-gradient(135deg,#2f7bff,#57a6ff)',d:'Research, structure and long-form mastery. Turns chaos into crisp, cited, organized knowledge.',id:'cdz-scholar'},
-  {n:'CDZ Flash',v:'3.5',i:'F',c:'linear-gradient(135deg,#22d3ee,#4ea8ff)',d:'Instant answers at blistering speed for everyday work. Lean, fast, always ready.',id:'cdz-flash'},
-  {n:'CDZ Polyglot',v:'5.4',i:'P',c:'linear-gradient(135deg,#8b5cff,#c39bff)',d:'Native-level Arabic, French and English — Darija included. Speaks your market fluently.',id:'cdz-polyglot'},
+  {n:'CDZ Ultra',v:'AUTO',flag:1,img:'{{ICON_ULTRA}}',id:'cdz-ultra',
+   d:'Our adaptive flagship. Reads your intent and routes every request to the perfect specialist in real time — you never pick wrong.',
+   spec:['adaptive routing','all engines','zero config'],
+   powers:['Detects code, research, Arabic or speed intent instantly','Always answers with the strongest engine for the job','One model id to integrate — the platform does the rest']},
+  {n:'CDZ Council',v:'×3',flag:1,img:'{{ICON_COUNCIL}}',id:'cdz-council',
+   d:'Three elite minds answer in parallel, then a synthesis reconciles them into one decisive verdict. For decisions that matter.',
+   spec:['3 engines in parallel','synthesis verdict','~20s deliberation'],
+   powers:['Genuinely different reasoning styles, not one voice ×3','Members are encouraged to disagree — you see the debate','Closes with a bold verdict and concrete next steps']},
+  {n:'CDZ Sage',v:'4.8',img:'{{ICON_SAGE}}',id:'cdz-sage',
+   d:'Deep reasoning, nuance and hard tradeoffs. The mind you bring to strategy, ethics and the questions that keep you up at night.',
+   spec:['1M context','128K output','adaptive thinking'],
+   powers:['Holds entire codebases or contract sets in working memory','Calibrates thinking depth per request — instant or deliberate','Flags its own uncertainty instead of overstating']},
+  {n:'CDZ Architect',v:'5.5',img:'{{ICON_ARCHITECT}}',id:'cdz-architect',
+   d:'Production-grade code and systems design. Ships complete, correct builds — not sketches.',
+   spec:['1M context','128K output','vision input','reasoning to xhigh'],
+   powers:['Writes complete production systems in one pass','State-of-the-art on real-world engineering benchmarks','Dial reasoning from instant to maximum-depth']},
+  {n:'CDZ Scholar',v:'3.1',img:'{{ICON_SCHOLAR}}',id:'cdz-scholar',
+   d:'Research, structure and long-form mastery. Turns chaos into crisp, organized, factual knowledge.',
+   spec:['1M context','65K output','reads video · audio · PDF'],
+   powers:['Digests a million tokens of documents in one request','Sees images, video frames, audio and PDFs natively','Elite abstract-reasoning scores on the hardest benchmarks']},
+  {n:'CDZ Flash',v:'3.5',img:'{{ICON_FLASH}}',id:'cdz-flash',
+   d:'Near-flagship intelligence at breathtaking speed. The default for everyday work.',
+   spec:['1M context','65K output','speed-tier latency'],
+   powers:['Instant answers without sacrificing depth','Built for high-volume, rapid-fire workloads','Multimodal input at a fraction of flagship cost']},
+  {n:'CDZ Polyglot',v:'5.4',img:'{{ICON_POLYGLOT}}',id:'cdz-polyglot',
+   d:'Native-level Arabic, French and English — Darija included. Speaks your market fluently.',
+   spec:['1M context','128K output','vision input'],
+   powers:['Answers in the language you ask — flawlessly','Algeria-aware: DZD, local context, Darija nuance','The most token-efficient reasoning of its generation']},
 ];
 const mg=document.getElementById('modelGrid');
 mg.innerHTML=MODELS.map(m=>`<div class="mcard reveal">
-  <div class="top"><div class="micon" style="background:${m.c}">${m.i}</div><span class="ver ${m.flag?'flag':''}">${m.v}</span></div>
-  <h3>${m.n}</h3><p>${m.d}</p><div class="id">model: ${m.id}</div></div>`).join('');
+  <div class="top"><div class="micon"><img src="${m.img}" alt="${m.n} icon" loading="lazy" /></div><span class="ver ${m.flag?'flag':''}">${m.v}</span></div>
+  <h3>${m.n}</h3><p>${m.d}</p>
+  <div class="spec-chips">${m.spec.map(s=>`<span>${s}</span>`).join('')}</div>
+  <ul class="powers">${m.powers.map(p=>`<li>${p}</li>`).join('')}</ul>
+  <div class="id">model: ${m.id}</div></div>`).join('');
 
 // features
 const FEATS=[
