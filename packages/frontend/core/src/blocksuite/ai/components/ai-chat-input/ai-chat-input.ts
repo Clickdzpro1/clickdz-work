@@ -428,6 +428,13 @@ export class AIChatInput extends SignalWatcher(
       border-bottom: 1px solid var(--affine-v2-layer-insideBorder-border);
       background: var(--affine-v2-layer-background-primary);
     }
+    .clickdz-builder-brand {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--affine-v2-text-primary);
+      margin-right: 4px;
+      white-space: nowrap;
+    }
     .clickdz-seg {
       display: inline-flex;
       gap: 2px;
@@ -876,6 +883,16 @@ export class AIChatInput extends SignalWatcher(
     .chat-mode-option.council.active {
       color: #6e56cf;
     }
+    .chat-mode-option.plan {
+      margin-left: 6px;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 8px;
+    }
+    .chat-mode-option.plan.active {
+      color: #10a37f;
+      background: color-mix(in srgb, #10a37f 16%, transparent);
+      border-color: color-mix(in srgb, #10a37f 40%, transparent);
+    }
 
     .chat-panel-input-actions {
       display: flex;
@@ -1138,6 +1155,10 @@ export class AIChatInput extends SignalWatcher(
   // keeping the slug means iterations edit + redeploy the same app/URL
   @state()
   accessor appSlug: string | null = null;
+
+  // Plan mode: the model plans its approach before answering (better results)
+  @state()
+  accessor planMode = false;
 
   // ===== Workers: 500+ specialist skills =====
   @state()
@@ -1676,6 +1697,7 @@ export class AIChatInput extends SignalWatcher(
                 : this.appResult
                   ? html`
                       <div class="clickdz-canvas-toolbar">
+                        <span class="clickdz-builder-brand">🚀 ClickDz Builder</span>
                         <div class="clickdz-seg">
                           <button
                             class="clickdz-seg-btn ${this.appView === 'preview'
@@ -1797,14 +1819,6 @@ export class AIChatInput extends SignalWatcher(
                                 Copy URL
                               </button>`
                           : nothing}
-                        <a
-                          class="clickdz-cta ghost"
-                          href=${this._builderUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Open the full ClickDz Builder IDE"
-                          >Edit in Builder ↗</a
-                        >
                         <span class="clickdz-canvas-spacer"></span>
                         <span class="clickdz-hint"
                           >Type a change below to edit this app ✨</span
@@ -1975,6 +1989,14 @@ export class AIChatInput extends SignalWatcher(
             🏛️ Council
           </button>
         </div>
+        <button
+          class="chat-mode-option plan ${this.planMode ? 'active' : ''}"
+          data-testid="clickdz-plan-mode"
+          title="Plan mode — the model plans its approach, then delivers the best answer"
+          @click=${() => (this.planMode = !this.planMode)}
+        >
+          🧭 Plan
+        </button>
         <chat-input-preference
           .session=${this.session}
           .extendedThinking=${this._isReasoningActive}
@@ -2295,11 +2317,6 @@ export class AIChatInput extends SignalWatcher(
         : '100%';
   }
 
-  private get _builderUrl() {
-    // hand off to the standalone ClickDz Builder (bolt) for the full IDE
-    return 'https://builder-production-5bcc.up.railway.app';
-  }
-
   send = async (text: string) => {
     if (!this.runtime) return;
     // app mode intercepts the send and ships a live ClickDz app instead
@@ -2331,6 +2348,19 @@ export class AIChatInput extends SignalWatcher(
           userInput,
         ].join('\n');
       }
+    }
+    // Plan mode: ask the model to plan its approach first, then deliver the
+    // best complete answer — improves quality on non-trivial tasks.
+    if (this.planMode) {
+      userInput = [
+        '[Plan mode]',
+        'Before answering, briefly think through the best approach and outline',
+        'a short plan (a few bullet steps). Then execute it fully and deliver',
+        'the best, most complete and correct result. Prefer depth and accuracy',
+        'over speed.',
+        '',
+        userInput,
+      ].join('\n');
     }
     // cdz-council is a real backend model: CDZ AI runs the 3-vendor fan-out
     // and synthesis server-side, so the client sends the plain question — no

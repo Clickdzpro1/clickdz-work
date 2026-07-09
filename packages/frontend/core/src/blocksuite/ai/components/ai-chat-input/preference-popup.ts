@@ -1,6 +1,6 @@
 import type { AIToolsConfigService } from '@affine/core/modules/ai-button';
 import { type AIModelService } from '@affine/core/modules/ai-button/services/models';
-import { CDZ_MODEL_ICONS } from '../../_common/cdz-assets';
+import { CDZ_MODEL_ICONS, CDZ_VENDOR_ICONS } from '../../_common/cdz-assets';
 import type {
   ServerService,
   SubscriptionService,
@@ -335,7 +335,8 @@ export class ChatInputPreference extends SignalWatcher(
         this.subscriptionService.subscription.ai$.value?.status;
       const isSubscribed = status === SubscriptionStatus.Active;
       const chipInitial = model.category.slice(0, 1).toUpperCase();
-      const modelIcon = CDZ_MODEL_ICONS[model.id];
+      const modelIcon =
+        CDZ_MODEL_ICONS[model.id] || CDZ_VENDOR_ICONS[model.category];
       return menu.action({
         name: model.name,
         class: {
