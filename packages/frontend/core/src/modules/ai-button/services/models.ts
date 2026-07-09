@@ -10,19 +10,12 @@ import type { GraphQLService, SubscriptionService } from '../../cloud';
 import type { GlobalStateService } from '../../storage';
 
 const AI_MODEL_ID_KEY = 'AIModelId';
-const AI_COUNCIL_MEMBERS_KEY = 'AICouncilMembers';
 const AI_PRE_COUNCIL_MODEL_KEY = 'AIPreCouncilModelId';
 
-// cdz-council is now a REAL backend model (server-side 3-vendor fan-out +
-// synthesis via CDZ AI). Membership is fixed server-side, so the client no
-// longer sends member selection — it just selects the model id.
+// cdz-council is a REAL backend model: CDZ AI runs the 3-vendor fan-out +
+// synthesis server-side. Membership is fixed there, so the client only needs
+// to select the model id (no client-side member picker).
 export const COUNCIL_MODEL_ID = 'cdz-council';
-export const COUNCIL_SEATS = 3;
-export const DEFAULT_COUNCIL_MEMBERS = [
-  'claude-opus-4-8',
-  'gemini-3.1-pro-preview',
-  'gpt-5.5',
-];
 
 const CLICKDZ_FALLBACK_MODELS: AIModel[] = [
   { name: 'CDZ Ultra', id: 'cdz-ultra', category: 'CDZ', version: 'Ultra', isPro: false, isDefault: true },
@@ -53,15 +46,6 @@ export class AIModelService extends Service {
     undefined
   );
 
-  councilMembers: Signal<string[] | undefined>;
-
-  private readonly councilMembers$ = LiveData.from(
-    this.globalStateService.globalState.watch<string[]>(
-      AI_COUNCIL_MEMBERS_KEY
-    ),
-    undefined
-  );
-
   constructor(
     private readonly globalStateService: GlobalStateService,
     private readonly gqlService: GraphQLService,
@@ -75,14 +59,6 @@ export class AIModelService extends Service {
     this.modelId = modelId;
     this.disposables.push(cleanup);
 
-    const { signal: councilMembers, cleanup: councilCleanup } =
-      createSignalFromObservable<string[] | undefined>(
-        this.councilMembers$,
-        undefined
-      );
-    this.councilMembers = councilMembers;
-    this.disposables.push(councilCleanup);
-
     this.init().catch(err => {
       console.error(err);
     });
@@ -92,43 +68,13 @@ export class AIModelService extends Service {
     this.globalStateService.globalState.set(AI_MODEL_ID_KEY, undefined);
   };
 
-  // remembers whether each session last received a council- or standard-mode
-  // message, so the chat can inject a format reset when the mode flips
+  // tracks whether each session is in council or standard mode (for UI only)
   private readonly sessionModes = new Map<string, 'council' | 'standard'>();
 
   getSessionMode = (sessionId: string) => this.sessionModes.get(sessionId);
 
   setSessionMode = (sessionId: string, mode: 'council' | 'standard') => {
     this.sessionModes.set(sessionId, mode);
-  };
-
-  /** the 3 council member model ids (falls back to the default trio) */
-  getCouncilMembers = (): string[] => {
-    const stored = this.councilMembers.value;
-    const members = (stored?.length ? stored : DEFAULT_COUNCIL_MEMBERS).slice(
-      0,
-      COUNCIL_SEATS
-    );
-    while (members.length < COUNCIL_SEATS) {
-      const filler = DEFAULT_COUNCIL_MEMBERS.find(id => !members.includes(id));
-      if (!filler) break;
-      members.push(filler);
-    }
-    return members;
-  };
-
-  /** toggle a model in/out of the council; oldest member rotates out at 3 */
-  toggleCouncilMember = (modelId: string): string[] => {
-    const current = this.getCouncilMembers();
-    let next: string[];
-    if (current.includes(modelId)) {
-      next = current.filter(id => id !== modelId);
-    } else {
-      next = [...current, modelId];
-      while (next.length > COUNCIL_SEATS) next.shift();
-    }
-    this.globalStateService.globalState.set(AI_COUNCIL_MEMBERS_KEY, next);
-    return next;
   };
 
   /** switch between normal chat and council mode, remembering the last model */

@@ -562,19 +562,48 @@ export class ClickDzBridgeController {
     };
   }
 
+  /** run the code agent to produce a complete single-file app (new or edited) */
+  private async buildAppHtml(
+    prompt: string,
+    currentHtml?: string
+  ): Promise<string> {
+    const isEdit = !!currentHtml && currentHtml.length > 20;
+    const content = isEdit
+      ? [
+          APP_BUILDER_GUIDELINES,
+          '',
+          'You are EDITING an existing app. Apply the requested change and',
+          'return the COMPLETE updated index.html (never a diff or fragment).',
+          'Preserve everything that works; change only what the request asks.',
+          '',
+          'Current app:',
+          '```html',
+          currentHtml.slice(0, 300_000),
+          '```',
+          '',
+          `Change request: ${prompt}`,
+        ].join('\n')
+      : `${APP_BUILDER_GUIDELINES}\n\nRequest: ${prompt}`;
+    const reply = await this.runMakeAgent(
+      [{ role: 'user', content }],
+      'clickdz-apps',
+      MAKE_CODE_AGENT_ID || undefined
+    );
+    let html = extractHtmlApp(reply || '');
+    if (!html) {
+      throw new HttpException(
+        { error: { message: 'The model did not return a valid app. Try rephrasing.', type: 'provider_error', code: 'app_generation_failed' } },
+        HttpStatus.BAD_GATEWAY
+      );
+    }
+    if (html.length > 400_000) html = html.slice(0, 400_000);
+    return html;
+  }
+
+  /** GENERATE ONLY — returns full HTML for instant preview; does NOT deploy */
   @Post('/api/v1/apps/generate')
   async generateApp(@Body() body: any) {
     const startedAt = Date.now();
-    this.logger.log(
-      `[apps] generate request: prompt=${String(body?.prompt || '').slice(0, 80)}`
-    );
-    if (!VERCEL_TOKEN) {
-      this.logger.warn('[apps] rejected: VERCEL_TOKEN missing');
-      throw new HttpException(
-        { error: { message: 'Vercel deployment is not configured', type: 'configuration_error', code: 'vercel_token_missing' } },
-        HttpStatus.SERVICE_UNAVAILABLE
-      );
-    }
     const prompt = String(body?.prompt || '').trim();
     if (!prompt) {
       throw new HttpException(
@@ -582,42 +611,17 @@ export class ClickDzBridgeController {
         HttpStatus.BAD_REQUEST
       );
     }
-
-    // 1. generate the app with the Make code agent (falls back to the
-    //    default agent with inline guidelines when no dedicated agent is set)
-    this.logger.log(
-      `[apps] codegen start via agent=${MAKE_CODE_AGENT_ID ? 'code-agent' : 'default'}`
-    );
-    const reply = await this.runMakeAgent(
-      [
-        {
-          role: 'user',
-          content: `${APP_BUILDER_GUIDELINES}\n\nRequest: ${prompt}`,
-        },
-      ],
-      'clickdz-apps',
-      MAKE_CODE_AGENT_ID || undefined
-    );
-    this.logger.log(
-      `[apps] codegen done in ${Math.round((Date.now() - startedAt) / 1000)}s, reply=${(reply || '').length} chars`
-    );
-    let html = extractHtmlApp(reply || '');
-    if (!html) {
-      throw new HttpException(
-        { error: { message: 'The model did not return a valid app. Try a simpler description.', type: 'provider_error', code: 'app_generation_failed' } },
-        HttpStatus.BAD_GATEWAY
-      );
-    }
-    if (html.length > 400_000) {
-      html = html.slice(0, 400_000);
-    }
-
-    // 2. deploy — reusing the slug keeps the same live URL across iterations
+    const currentHtml =
+      typeof body?.currentHtml === 'string' ? body.currentHtml : undefined;
     const slug =
       typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
         ? body.slug
         : slugifyAppName(prompt);
-    // wire the app to its own Data API namespace
+    this.logger.log(
+      `[apps] generate (${currentHtml ? 'edit' : 'new'}) slug=${slug} prompt=${prompt.slice(0, 80)}`
+    );
+    let html = await this.buildAppHtml(prompt, currentHtml);
+    // wire the app to its own Data API namespace so preview + live share state
     const externalBase = (
       process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
     ).replace(/\/+$/, '');
@@ -625,20 +629,46 @@ export class ClickDzBridgeController {
       '__CLICKDZ_DATA_URL__',
       `${externalBase}/api/apps-data/${slug}`
     );
-    if (html.includes('</body>')) {
+    this.logger.log(
+      `[apps] generated ${html.length} chars in ${Math.round((Date.now() - startedAt) / 1000)}s`
+    );
+    return {
+      slug,
+      prompt,
+      html,
+      bytes: html.length,
+      seconds: Math.round((Date.now() - startedAt) / 1000),
+    };
+  }
+
+  /** DEPLOY — takes reviewed HTML + slug, publishes to Vercel, returns URL */
+  @Post('/api/v1/apps/deploy')
+  async deployApp(@Body() body: any) {
+    if (!VERCEL_TOKEN) {
+      throw new HttpException(
+        { error: { message: 'Vercel deployment is not configured', type: 'configuration_error', code: 'vercel_token_missing' } },
+        HttpStatus.SERVICE_UNAVAILABLE
+      );
+    }
+    let html = String(body?.html || '');
+    if (html.length < 20) {
+      throw new HttpException(
+        { error: { message: 'No app HTML to deploy', type: 'invalid_request_error', code: 'html_missing' } },
+        HttpStatus.BAD_REQUEST
+      );
+    }
+    if (html.length > 400_000) html = html.slice(0, 400_000);
+    const slug =
+      typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
+        ? body.slug
+        : slugifyAppName('app');
+    if (!html.includes('Built with ClickDz') && html.includes('</body>')) {
       html = html.replace('</body>', `${CLICKDZ_APP_WATERMARK}</body>`);
     }
     this.logger.log(`[apps] deploying ${html.length} chars as slug=${slug}`);
     const deployed = await this.deployAppToVercel(slug, html);
-    this.logger.log(
-      `[apps] done in ${Math.round((Date.now() - startedAt) / 1000)}s: ${deployed.url} (${deployed.state})`
-    );
-    return {
-      ...deployed,
-      prompt,
-      bytes: html.length,
-      seconds: Math.round((Date.now() - startedAt) / 1000),
-    };
+    this.logger.log(`[apps] deployed: ${deployed.url} (${deployed.state})`);
+    return { ...deployed, bytes: html.length };
   }
 
   @Post('/api/voice/token')

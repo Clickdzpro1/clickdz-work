@@ -379,13 +379,197 @@ export class AIChatInput extends SignalWatcher(
       border-radius: 8px;
       background: var(--affine-v2-layer-background-primary);
     }
+    /* ===== ClickDz app canvas (bolt-style) ===== */
+    .clickdz-canvas {
+      margin: 0 0 8px;
+      border-radius: 14px;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      background: var(--affine-v2-layer-background-secondary);
+      overflow: hidden;
+      animation: clickdz-card-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .clickdz-canvas.generating {
+      border-color: transparent;
+      background:
+        linear-gradient(
+            var(--affine-v2-layer-background-secondary),
+            var(--affine-v2-layer-background-secondary)
+          )
+          padding-box,
+        conic-gradient(
+            from var(--clickdz-ring, 0deg),
+            #6e56cf,
+            #4285f4,
+            #10a37f,
+            #d97757,
+            #6e56cf
+          )
+          border-box;
+      border: 1.5px solid transparent;
+      padding: 10px;
+      animation:
+        clickdz-card-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both,
+        clickdz-ring-spin 2.6s linear infinite;
+    }
+    .clickdz-canvas.expanded {
+      position: fixed;
+      inset: 3vh 3vw;
+      z-index: 2000;
+      margin: 0;
+      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
+      display: flex;
+      flex-direction: column;
+    }
+    .clickdz-canvas-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--affine-v2-layer-insideBorder-border);
+      background: var(--affine-v2-layer-background-primary);
+    }
+    .clickdz-seg {
+      display: inline-flex;
+      gap: 2px;
+      padding: 2px;
+      border-radius: 8px;
+      background: var(--affine-v2-layer-background-hoverOverlay);
+    }
+    .clickdz-seg.devices {
+      margin-left: 6px;
+    }
+    .clickdz-seg-btn {
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 20px;
+      padding: 2px 10px;
+      border-radius: 6px;
+      color: var(--affine-v2-text-secondary);
+      transition:
+        background 0.15s,
+        color 0.15s;
+    }
+    .clickdz-seg-btn.on {
+      background: var(--affine-v2-layer-background-primary);
+      color: var(--affine-v2-text-primary);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+    }
+    .clickdz-icon-btn {
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 3px 7px;
+      border-radius: 6px;
+      color: var(--affine-v2-text-secondary);
+    }
+    .clickdz-icon-btn:hover {
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      color: var(--affine-v2-text-primary);
+    }
+    .clickdz-canvas-spacer {
+      flex: 1;
+    }
+    .clickdz-live-dot {
+      font-size: 11px;
+      font-weight: 600;
+      color: #22c55e;
+    }
+    .clickdz-draft-dot {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--affine-v2-text-tertiary, #888);
+    }
+    .clickdz-preview-stage {
+      display: flex;
+      justify-content: center;
+      background: repeating-conic-gradient(
+          rgba(128, 128, 128, 0.06) 0% 25%,
+          transparent 0% 50%
+        )
+        50% / 20px 20px;
+      padding: 12px;
+    }
     .clickdz-app-frame {
       display: block;
       width: 100%;
-      height: 280px;
+      height: 420px;
       border: none;
       border-radius: 8px;
       background: #fff;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+      transition: width 0.2s ease;
+    }
+    .clickdz-canvas.expanded .clickdz-preview-stage {
+      flex: 1;
+    }
+    .clickdz-canvas.expanded .clickdz-app-frame {
+      height: 100%;
+      min-height: 60vh;
+    }
+    .clickdz-code {
+      margin: 0;
+      max-height: 420px;
+      overflow: auto;
+      padding: 16px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--affine-v2-text-primary);
+      background: #0d0d16;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .clickdz-canvas.expanded .clickdz-code {
+      flex: 1;
+      max-height: none;
+    }
+    .clickdz-canvas-foot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 10px;
+      border-top: 1px solid var(--affine-v2-layer-insideBorder-border);
+    }
+    .clickdz-cta {
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      background: var(--affine-v2-layer-background-primary);
+      color: var(--affine-v2-text-primary);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 20px;
+      padding: 6px 14px;
+      border-radius: 9px;
+      text-decoration: none;
+      transition:
+        transform 0.15s,
+        box-shadow 0.15s,
+        background 0.15s;
+    }
+    .clickdz-cta:hover {
+      transform: translateY(-1px);
+    }
+    .clickdz-cta.primary {
+      background: linear-gradient(120deg, #2f7bff, #8b5cff);
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 6px 20px rgba(80, 90, 255, 0.35);
+    }
+    .clickdz-cta.ghost:hover {
+      background: var(--affine-v2-layer-background-hoverOverlay);
+    }
+    .clickdz-cta[disabled] {
+      opacity: 0.6;
+      cursor: default;
+      transform: none;
+    }
+    .clickdz-hint {
+      font-size: 12px;
+      color: var(--affine-v2-text-tertiary, #888);
     }
     .clickdz-image-caption {
       margin-top: 6px;
@@ -692,14 +876,32 @@ export class AIChatInput extends SignalWatcher(
   @state()
   accessor appBusy = false;
 
+  // the generated app: html is previewed instantly (blob), url exists once published
   @state()
-  accessor appResult: { url: string; slug: string; prompt: string } | null =
-    null;
+  accessor appResult: {
+    slug: string;
+    prompt: string;
+    html: string;
+    url?: string;
+  } | null = null;
 
   @state()
   accessor appError = '';
 
-  // keeping the slug means iterations redeploy to the same live URL
+  // canvas UI state
+  @state()
+  accessor appView: 'preview' | 'code' = 'preview';
+
+  @state()
+  accessor appDevice: 'desktop' | 'tablet' | 'mobile' = 'desktop';
+
+  @state()
+  accessor appExpanded = false;
+
+  @state()
+  accessor appDeploying = false;
+
+  // keeping the slug means iterations edit + redeploy the same app/URL
   @state()
   accessor appSlug: string | null = null;
 
@@ -727,9 +929,9 @@ export class AIChatInput extends SignalWatcher(
   private get appStage() {
     const s = this.loadingSeconds;
     if (s < 10) return '🧠 Designing the interface…';
-    if (s < 45) return '✍️ Writing the code — gpt-5.4 at work…';
+    if (s < 45) return '✍️ Writing the code — CDZ Architect at work…';
     if (s < 75) return '✨ Polishing interactions…';
-    return '🚀 Deploying to the web…';
+    return '📦 Finalizing your app…';
   }
 
   private get imageStage() {
@@ -984,79 +1186,163 @@ export class AIChatInput extends SignalWatcher(
           </div>`
         : nothing}
       ${this.appBusy || this.appResult || this.appError
-        ? html`<div class="clickdz-image-card ${this.appBusy ? 'generating' : ''}">
+        ? html`<div
+            class="clickdz-canvas ${this.appExpanded ? 'expanded' : ''} ${this
+              .appBusy
+              ? 'generating'
+              : ''}"
+          >
             ${this.appBusy
               ? html`<div class="clickdz-gen-loading">
                   <div class="clickdz-gen-stage">
                     <span class="clickdz-gen-orb"></span>
                     <span class="clickdz-gen-stage-text">${this.appStage}</span>
-                    <span class="clickdz-gen-elapsed"
-                      >${this.loadingSeconds}s</span
-                    >
+                    <span class="clickdz-gen-elapsed">${this.loadingSeconds}s</span>
                   </div>
                   <div class="clickdz-gen-bar"><span></span></div>
                 </div>`
-              : this.appError
+              : this.appError && !this.appResult
                 ? html`<div class="clickdz-image-error">⚠️ ${this.appError}</div>`
                 : this.appResult
-                  ? html`<div class="clickdz-app-chrome">
-                        <div class="clickdz-app-chrome-bar">
-                          <span class="clickdz-chrome-dot red"></span>
-                          <span class="clickdz-chrome-dot yellow"></span>
-                          <span class="clickdz-chrome-dot green"></span>
-                          <span class="clickdz-app-chrome-url"
-                            >${this.appResult.url.replace('https://', '')}</span
+                  ? html`
+                      <div class="clickdz-canvas-toolbar">
+                        <div class="clickdz-seg">
+                          <button
+                            class="clickdz-seg-btn ${this.appView === 'preview'
+                              ? 'on'
+                              : ''}"
+                            @click=${() => (this.appView = 'preview')}
                           >
+                            Preview
+                          </button>
+                          <button
+                            class="clickdz-seg-btn ${this.appView === 'code'
+                              ? 'on'
+                              : ''}"
+                            @click=${() => (this.appView = 'code')}
+                          >
+                            Code
+                          </button>
                         </div>
-                        <iframe
-                          class="clickdz-app-frame"
-                          src=${this.appResult.url}
-                          sandbox="allow-scripts allow-same-origin allow-popups"
-                          title=${this.appResult.prompt}
-                        ></iframe>
+                        ${this.appView === 'preview'
+                          ? html`<div class="clickdz-seg devices">
+                              <button
+                                class="clickdz-seg-btn ${this.appDevice ===
+                                'desktop'
+                                  ? 'on'
+                                  : ''}"
+                                title="Desktop"
+                                @click=${() => (this.appDevice = 'desktop')}
+                              >
+                                🖥
+                              </button>
+                              <button
+                                class="clickdz-seg-btn ${this.appDevice ===
+                                'tablet'
+                                  ? 'on'
+                                  : ''}"
+                                title="Tablet"
+                                @click=${() => (this.appDevice = 'tablet')}
+                              >
+                                ▭
+                              </button>
+                              <button
+                                class="clickdz-seg-btn ${this.appDevice ===
+                                'mobile'
+                                  ? 'on'
+                                  : ''}"
+                                title="Mobile"
+                                @click=${() => (this.appDevice = 'mobile')}
+                              >
+                                📱
+                              </button>
+                            </div>`
+                          : nothing}
+                        <span class="clickdz-canvas-spacer"></span>
+                        ${this.appResult.url
+                          ? html`<span class="clickdz-live-dot" title="Published"
+                              >● live</span
+                            >`
+                          : html`<span class="clickdz-draft-dot" title="Not published yet"
+                              >draft</span
+                            >`}
+                        <button
+                          class="clickdz-icon-btn"
+                          title=${this.appExpanded ? 'Shrink' : 'Expand'}
+                          @click=${() => (this.appExpanded = !this.appExpanded)}
+                        >
+                          ${this.appExpanded ? '🗕' : '⛶'}
+                        </button>
+                        <button
+                          class="clickdz-icon-btn"
+                          title="Close"
+                          @click=${() => this._closeApp()}
+                        >
+                          ✕
+                        </button>
                       </div>
-                      <div class="clickdz-image-caption">
-                        🚀 Live · built by ClickDz from “${this.appResult
-                          .prompt}”
-                      </div>
-                      <div class="clickdz-image-actions">
+
+                      ${this.appView === 'preview'
+                        ? html`<div class="clickdz-preview-stage">
+                            <iframe
+                              class="clickdz-app-frame"
+                              style="width:${this._deviceWidth}"
+                              .srcdoc=${this.appResult.html}
+                              sandbox="allow-scripts allow-forms allow-popups allow-modals"
+                              title=${this.appResult.prompt}
+                            ></iframe>
+                          </div>`
+                        : html`<pre class="clickdz-code"><code>${this
+                            .appResult.html}</code></pre>`}
+
+                      <div class="clickdz-canvas-foot">
+                        <button
+                          class="clickdz-cta ${this.appResult.url
+                            ? 'ghost'
+                            : 'primary'}"
+                          ?disabled=${this.appDeploying}
+                          @click=${() => this._publishClickDzApp()}
+                        >
+                          ${this.appDeploying
+                            ? 'Publishing…'
+                            : this.appResult.url
+                              ? 'Republish'
+                              : '🚀 Publish to the web'}
+                        </button>
+                        ${this.appResult.url
+                          ? html`<a
+                                class="clickdz-cta ghost"
+                                href=${this.appResult.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                >Open ↗</a
+                              >
+                              <button
+                                class="clickdz-cta ghost"
+                                @click=${() =>
+                                  navigator.clipboard
+                                    .writeText(this.appResult?.url ?? '')
+                                    .catch(() => {})}
+                              >
+                                Copy URL
+                              </button>`
+                          : nothing}
                         <a
-                          class="clickdz-image-action"
-                          href=${this.appResult.url}
+                          class="clickdz-cta ghost"
+                          href=${this._builderUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          >Open app</a
+                          title="Open the full ClickDz Builder IDE"
+                          >Edit in Builder ↗</a
                         >
-                        <button
-                          class="clickdz-image-action"
-                          @click=${() => {
-                            navigator.clipboard
-                              .writeText(this.appResult?.url ?? '')
-                              .catch(() => {});
-                          }}
+                        <span class="clickdz-canvas-spacer"></span>
+                        <span class="clickdz-hint"
+                          >Type a change below to edit this app ✨</span
                         >
-                          Copy URL
-                        </button>
-                        <button
-                          class="clickdz-image-action"
-                          @click=${() =>
-                            this._generateClickDzApp(
-                              this.appResult?.prompt ?? ''
-                            )}
-                        >
-                          Rebuild
-                        </button>
-                        <button
-                          class="clickdz-image-action"
-                          @click=${() => {
-                            this.appResult = null;
-                            this.appError = '';
-                            this.appSlug = null;
-                          }}
-                        >
-                          Close
-                        </button>
-                      </div>`
+                      </div>
+                      ${this.appError
+                        ? html`<div class="clickdz-image-error">⚠️ ${this.appError}</div>`
+                        : nothing}`
                   : nothing}
           </div>`
         : nothing}
@@ -1122,7 +1408,9 @@ export class AIChatInput extends SignalWatcher(
       <textarea
         rows="1"
         placeholder=${this.appMode
-          ? 'Describe the app to build — ClickDz ships it live…'
+          ? this.appResult?.html
+            ? 'Describe a change — CDZ will edit this app…'
+            : 'Describe the app to build — CDZ ships it live…'
           : this.imageMode
             ? 'Describe the image ClickDz 1.0 should create…'
             : 'What are your thoughts?'}
@@ -1428,11 +1716,15 @@ export class AIChatInput extends SignalWatcher(
     }
   };
 
-  /** ClickDz Apps: generate a single-file app and deploy it live to Vercel */
+  /**
+   * ClickDz Apps: generate a single-file app (instant blob preview, no deploy
+   * yet). A follow-up while an app exists edits the CURRENT app (iteration).
+   */
   private readonly _generateClickDzApp = async (prompt: string) => {
-    if (!prompt.trim() || this.appBusy) return;
+    if (!prompt.trim() || this.appBusy || this.appDeploying) return;
     this.appBusy = true;
     this.appError = '';
+    const iterating = !!this.appResult?.html;
     this._startLoadingClock();
     try {
       const res = await fetch('/api/v1/apps/generate', {
@@ -1441,24 +1733,79 @@ export class AIChatInput extends SignalWatcher(
         body: JSON.stringify({
           prompt,
           slug: this.appSlug ?? undefined,
+          currentHtml: iterating ? this.appResult?.html : undefined,
         }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(
-          data?.error?.message || `App build failed (${res.status})`
-        );
+        throw new Error(data?.error?.message || `App build failed (${res.status})`);
       }
-      this.appResult = { url: data.url, slug: data.slug, prompt };
+      // preserve a previously-published URL across edits (same slug redeploys)
+      const prevUrl = this.appResult?.url;
+      this.appResult = {
+        slug: data.slug,
+        prompt,
+        html: data.html,
+        url: prevUrl,
+      };
       this.appSlug = data.slug;
+      this.appView = 'preview';
     } catch (error) {
-      this.appError =
-        error instanceof Error ? error.message : 'App build failed';
+      this.appError = error instanceof Error ? error.message : 'App build failed';
     } finally {
       this.appBusy = false;
       this._stopLoadingClock();
     }
   };
+
+  /** Publish the current previewed app HTML to Vercel */
+  private readonly _publishClickDzApp = async () => {
+    if (!this.appResult?.html || this.appDeploying) return;
+    this.appDeploying = true;
+    this.requestUpdate();
+    try {
+      const res = await fetch('/api/v1/apps/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          html: this.appResult.html,
+          slug: this.appResult.slug,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error?.message || `Publish failed (${res.status})`);
+      }
+      this.appResult = { ...this.appResult, url: data.url };
+    } catch (error) {
+      this.appError = error instanceof Error ? error.message : 'Publish failed';
+    } finally {
+      this.appDeploying = false;
+      this.requestUpdate();
+    }
+  };
+
+  private _closeApp() {
+    this.appResult = null;
+    this.appError = '';
+    this.appSlug = null;
+    this.appExpanded = false;
+    this.appView = 'preview';
+    this.appDevice = 'desktop';
+  }
+
+  private get _deviceWidth() {
+    return this.appDevice === 'mobile'
+      ? '390px'
+      : this.appDevice === 'tablet'
+        ? '820px'
+        : '100%';
+  }
+
+  private get _builderUrl() {
+    // hand off to the standalone ClickDz Builder (bolt) for the full IDE
+    return 'https://builder-production-5bcc.up.railway.app';
+  }
 
   send = async (text: string) => {
     if (!this.runtime) return;
