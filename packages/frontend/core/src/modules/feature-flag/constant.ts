@@ -27,6 +27,19 @@ export const AFFINE_FLAGS = {
     configurable: false,
     defaultState: true,
   },
+  // ClickDz: the new Claude-style chat input + CDZ Workers picker + Council
+  // trigger. Gated so the existing Lit ai-chat-input remains the default until
+  // the new React surface is verified; flip the default to true (or set the
+  // workspace flag) to roll it out. Canary-configurable for staged testing.
+  enable_cdz_chat: {
+    category: 'affine',
+    displayName:
+      'com.affine.settings.workspace.experimental-features.enable-cdz-chat.name',
+    description:
+      'com.affine.settings.workspace.experimental-features.enable-cdz-chat.description',
+    configurable: isCanaryBuild,
+    defaultState: false,
+  },
   enable_ai_playground: {
     category: 'affine',
     displayName:

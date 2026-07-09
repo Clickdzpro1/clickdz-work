@@ -14,6 +14,7 @@ import {
 } from '@affine/core/blocksuite/ai/components/ai-chat-toolbar';
 import { getViewManager } from '@affine/core/blocksuite/manager/view';
 import { NotificationServiceImpl } from '@affine/core/blocksuite/view-extensions/editor-view/notification-service';
+import { CdzChatPanelInput } from '@affine/core/components/cdz-chat/cdz-chat-panel-input';
 import { useAIChatConfig } from '@affine/core/components/hooks/affine/use-ai-chat-config';
 import { useAISpecs } from '@affine/core/components/hooks/affine/use-ai-specs';
 import { useAISubscribe } from '@affine/core/components/hooks/affine/use-ai-subscribe';
@@ -47,7 +48,7 @@ import { RefNodeSlotsProvider } from '@blocksuite/affine/inlines/reference';
 import { BlockStdScope } from '@blocksuite/affine/std';
 import type { Workspace } from '@blocksuite/affine/store';
 import { type Signal, signal } from '@preact/signals-core';
-import { useFramework, useService } from '@toeverything/infra';
+import { useFramework, useLiveData, useService } from '@toeverything/infra';
 import { nanoid } from 'nanoid';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -121,6 +122,12 @@ export const Component = () => {
     ) ?? null;
   const { docDisplayConfig, searchMenuConfig, reasoningConfig } =
     useAIChatConfig();
+
+  // ClickDz: feature-flag the new React chat input. The existing Lit
+  // ai-chat-input remains the default until this flag is flipped on (per
+  // workspace, or by changing the default in feature-flag/constant.ts).
+  const featureFlagService = useService(FeatureFlagService);
+  const enableCdzChat = useLiveData(featureFlagService.flags.enable_cdz_chat.$);
 
   const onOpenDoc = useCallback(
     (docId: string) => {
@@ -302,6 +309,17 @@ export const Component = () => {
       </ViewHeader>
       <ViewBody>
         <div className={styles.chatRoot} ref={onChatContainerRef} />
+        {/* ClickDz: when enable_cdz_chat is on, mount the new React chat input
+            (Claude-style + Workers picker + Council trigger) below the Lit
+            message list. It dispatches through the same `runtime` the Lit
+            input used, so streaming/history/abort keep working. */}
+        {enableCdzChat ? (
+          <CdzChatPanelInput
+            runtime={runtime}
+            sessionId={session?.sessionId}
+            placeholder={t['com.affine.ai.chat.input.placeholder']?.() ?? 'How can ClickDz help you today?'}
+          />
+        ) : null}
       </ViewBody>
     </>
   );
