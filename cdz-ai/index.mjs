@@ -15,6 +15,24 @@ import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 import { docsPage } from './docs.mjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+// ---------------------------------------------------------------- workers
+// The ClickDz Workers catalog: 500+ specialist skills across 20 categories.
+// Public (catalog data, not secret). Picker = categories w/o bodies; a
+// worker's body is served as a system prompt by id.
+const __dirCdz = dirname(fileURLToPath(import.meta.url));
+let WORKERS = { categories: [], workers: {} };
+try {
+  WORKERS = JSON.parse(
+    readFileSync(join(__dirCdz, 'workers.catalog.json'), 'utf8')
+  );
+} catch (e) {
+  console.warn('[cdz-ai] workers catalog not loaded:', e?.message || e);
+}
+const WORKERS_PICKER = JSON.stringify({ categories: WORKERS.categories || [] });
 
 // ---------------------------------------------------------------- config
 const PORT = Number(process.env.PORT || 8080);
@@ -415,6 +433,22 @@ const server = http.createServer(async (req, res) => {
   if ((path === '/' || path === '/docs') && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
     return res.end(docsPage(req.headers.host || 'api.clickdz.ai'));
+  }
+
+  // ---- Workers catalog (public) ----
+  if (path === '/v1/workers' && req.method === 'GET') {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Cache-Control': 'public, max-age=3600',
+    });
+    return res.end(WORKERS_PICKER);
+  }
+  if (path.startsWith('/v1/workers/') && req.method === 'GET') {
+    const id = decodeURIComponent(path.slice('/v1/workers/'.length));
+    const system = WORKERS.workers?.[id];
+    if (!system) return err(res, 404, `Unknown worker: ${id}`);
+    return json(res, 200, { id, system });
   }
 
   if (path === '/v1' && req.method === 'GET') {

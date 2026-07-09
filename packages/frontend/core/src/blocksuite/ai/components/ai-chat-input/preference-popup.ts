@@ -1,5 +1,6 @@
 import type { AIToolsConfigService } from '@affine/core/modules/ai-button';
 import { type AIModelService } from '@affine/core/modules/ai-button/services/models';
+import { CDZ_MODEL_ICONS } from '../../_common/cdz-assets';
 import type {
   ServerService,
   SubscriptionService,
@@ -168,6 +169,13 @@ export class ChatInputPreference extends SignalWatcher(
     .ai-model-chip[data-cat='o1'],
     .ai-model-chip[data-cat='o3'] { --chip-color: #10a37f; }
     .ai-model-chip[data-cat='Claude'] { --chip-color: #d97757; }
+    .ai-model-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      object-fit: cover;
+      box-shadow: 0 2px 8px rgba(47, 123, 255, 0.28);
+    }
 
     /* ===== selected check / badges ===== */
     .ai-model-check svg {
@@ -327,6 +335,7 @@ export class ChatInputPreference extends SignalWatcher(
         this.subscriptionService.subscription.ai$.value?.status;
       const isSubscribed = status === SubscriptionStatus.Active;
       const chipInitial = model.category.slice(0, 1).toUpperCase();
+      const modelIcon = CDZ_MODEL_ICONS[model.id];
       return menu.action({
         name: model.name,
         class: {
@@ -338,9 +347,11 @@ export class ChatInputPreference extends SignalWatcher(
           : undefined,
         prefix: html`
           <div class="ai-model-prefix">
-            <span class="ai-model-chip" data-cat=${model.category}>
-              ${chipInitial}
-            </span>
+            ${modelIcon
+              ? html`<img class="ai-model-icon" src=${modelIcon} alt="" />`
+              : html`<span class="ai-model-chip" data-cat=${model.category}>
+                  ${chipInitial}
+                </span>`}
           </div>
         `,
         postfix: html`

@@ -571,6 +571,240 @@ export class AIChatInput extends SignalWatcher(
       font-size: 12px;
       color: var(--affine-v2-text-tertiary, #888);
     }
+
+    /* ===== Workers ===== */
+    .cdz-worker-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      align-self: flex-start;
+      margin: 0 0 8px;
+      padding: 4px 6px 4px 10px;
+      border-radius: 999px;
+      background: color-mix(in srgb, #2f7bff 12%, transparent);
+      border: 1px solid color-mix(in srgb, #2f7bff 34%, transparent);
+      animation: clickdz-card-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .cdz-worker-chip-icon {
+      font-size: 15px;
+    }
+    .cdz-worker-chip-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--affine-v2-text-primary);
+    }
+    .cdz-worker-chip-cat {
+      font-size: 11px;
+      color: var(--affine-v2-text-secondary);
+    }
+    .cdz-worker-chip-x {
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: var(--affine-v2-text-secondary);
+      font-size: 11px;
+      padding: 2px 5px;
+      border-radius: 999px;
+    }
+    .cdz-worker-chip-x:hover {
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      color: var(--affine-v2-text-primary);
+    }
+    .cdz-workers-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 2100;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(3px);
+      animation: cdz-fade 0.16s ease both;
+    }
+    @keyframes cdz-fade {
+      from {
+        opacity: 0;
+      }
+    }
+    .cdz-workers-panel {
+      width: min(720px, 94vw);
+      max-height: 78vh;
+      margin-bottom: 96px;
+      display: flex;
+      flex-direction: column;
+      background: var(--affine-v2-layer-background-primary, #16161f);
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 16px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+      overflow: hidden;
+      animation: cdz-panel-up 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes cdz-panel-up {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+    }
+    .cdz-workers-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--affine-v2-layer-insideBorder-border);
+    }
+    .cdz-workers-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--affine-v2-text-primary);
+    }
+    .cdz-workers-sub {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--affine-v2-text-secondary);
+      margin-left: 6px;
+    }
+    .cdz-workers-search {
+      margin: 12px 16px 6px;
+      padding: 11px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      background: var(--affine-v2-layer-background-secondary);
+      color: var(--affine-v2-text-primary);
+      font-size: 14px;
+      outline: none;
+    }
+    .cdz-workers-search:focus {
+      border-color: #2f7bff;
+    }
+    .cdz-workers-body {
+      overflow-y: auto;
+      padding: 8px 12px 14px;
+      scrollbar-width: thin;
+    }
+    .cdz-workers-loading,
+    .cdz-workers-empty {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: center;
+      padding: 30px;
+      color: var(--affine-v2-text-secondary);
+      font-size: 14px;
+    }
+    .cdz-cat {
+      border-radius: 10px;
+      margin-bottom: 2px;
+    }
+    .cdz-cat-head {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 12px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 10px;
+      text-align: left;
+      color: var(--affine-v2-text-primary);
+      transition: background 0.14s;
+    }
+    .cdz-cat-head:hover {
+      background: var(--affine-v2-layer-background-hoverOverlay);
+    }
+    .cdz-cat-icon {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      font-size: 16px;
+      background: color-mix(in srgb, var(--cat, #2f7bff) 16%, transparent);
+    }
+    .cdz-cat-name {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .cdz-cat-tag {
+      flex: 1;
+      font-size: 12px;
+      color: var(--affine-v2-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cdz-cat-count {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--affine-v2-text-secondary);
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      border-radius: 999px;
+      padding: 1px 8px;
+    }
+    .cdz-cat-arrow {
+      font-size: 18px;
+      color: var(--affine-v2-text-tertiary, #888);
+      transition: transform 0.16s;
+    }
+    .cdz-cat-arrow.open {
+      transform: rotate(90deg);
+    }
+    .cdz-cat-body {
+      padding: 2px 4px 8px 42px;
+    }
+    .cdz-cat-featured-label {
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #2f7bff;
+      margin: 8px 4px 4px;
+    }
+    .cdz-worker-row {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      border-radius: 9px;
+      text-align: left;
+      transition: background 0.13s;
+    }
+    .cdz-worker-row:hover {
+      background: var(--affine-v2-layer-background-hoverOverlay);
+    }
+    .cdz-worker-row.active {
+      background: color-mix(in srgb, #2f7bff 16%, transparent);
+    }
+    .cdz-worker-row-icon {
+      font-size: 14px;
+      opacity: 0.8;
+    }
+    .cdz-worker-row-main {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .cdz-worker-row-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--affine-v2-text-primary);
+    }
+    .cdz-worker-row-sub {
+      font-size: 11.5px;
+      color: var(--affine-v2-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cdz-worker-row-check {
+      color: #2f7bff;
+      font-weight: 700;
+    }
     .clickdz-image-caption {
       margin-top: 6px;
       font-size: 12px;
@@ -904,6 +1138,242 @@ export class AIChatInput extends SignalWatcher(
   // keeping the slug means iterations edit + redeploy the same app/URL
   @state()
   accessor appSlug: string | null = null;
+
+  // ===== Workers: 500+ specialist skills =====
+  @state()
+  accessor workersOpen = false;
+
+  @state()
+  accessor workersCatalog: Array<{
+    name: string;
+    icon: string;
+    color: string;
+    tagline: string;
+    recommendedModel: string;
+    count: number;
+    featured: Array<{ id: string; name: string; best: string }>;
+    workers: Array<{ id: string; name: string; description: string }>;
+  }> | null = null;
+
+  @state()
+  accessor workersLoading = false;
+
+  @state()
+  accessor workersSearch = '';
+
+  @state()
+  accessor workersOpenCategory: string | null = null;
+
+  @state()
+  accessor activeWorker: {
+    id: string;
+    name: string;
+    category: string;
+    icon: string;
+  } | null = null;
+
+  private readonly _workerBodyCache = new Map<string, string>();
+
+  private static readonly CDZ_AI_BASE =
+    'https://cdz-ai-production.up.railway.app';
+
+  private async _openWorkers() {
+    this.workersOpen = true;
+    if (!this.workersCatalog && !this.workersLoading) {
+      this.workersLoading = true;
+      try {
+        const res = await fetch(
+          `${AIChatInput.CDZ_AI_BASE}/v1/workers`,
+          { headers: { Accept: 'application/json' } }
+        );
+        const data = await res.json();
+        this.workersCatalog = data.categories || [];
+      } catch {
+        this.workersCatalog = [];
+      } finally {
+        this.workersLoading = false;
+      }
+    }
+  }
+
+  private _selectWorker(
+    categoryName: string,
+    icon: string,
+    recommendedModel: string,
+    w: { id: string; name: string }
+  ) {
+    this.activeWorker = {
+      id: w.id,
+      name: w.name,
+      category: categoryName,
+      icon,
+    };
+    // route to the category's recommended CDZ model — the best fit for the job
+    if (recommendedModel) {
+      try {
+        this.aiModelService.setModel(recommendedModel);
+      } catch {
+        /* ignore */
+      }
+    }
+    this.workersOpen = false;
+    this.workersSearch = '';
+  }
+
+  private async _workerSystem(id: string): Promise<string> {
+    const cached = this._workerBodyCache.get(id);
+    if (cached) return cached;
+    try {
+      const res = await fetch(
+        `${AIChatInput.CDZ_AI_BASE}/v1/workers/${encodeURIComponent(id)}`
+      );
+      const data = await res.json();
+      const system = String(data.system || '');
+      this._workerBodyCache.set(id, system);
+      return system;
+    } catch {
+      return '';
+    }
+  }
+
+  private _renderWorkersOverlay() {
+    const q = this.workersSearch.trim().toLowerCase();
+    const cats = this.workersCatalog ?? [];
+    const searching = q.length > 0;
+    // when searching, flatten matches across all categories
+    const matches = searching
+      ? cats.flatMap(c =>
+          c.workers
+            .filter(
+              w =>
+                w.name.toLowerCase().includes(q) ||
+                w.description.toLowerCase().includes(q)
+            )
+            .map(w => ({ ...w, cat: c }))
+        )
+      : [];
+    return html`<div
+      class="cdz-workers-overlay"
+      @click=${(e: Event) => {
+        if (e.target === e.currentTarget) this.workersOpen = false;
+      }}
+    >
+      <div class="cdz-workers-panel">
+        <div class="cdz-workers-head">
+          <div class="cdz-workers-title">
+            🧰 Workers <span class="cdz-workers-sub">500+ specialists</span>
+          </div>
+          <button
+            class="cdz-icon-btn"
+            @click=${() => (this.workersOpen = false)}
+          >
+            ✕
+          </button>
+        </div>
+        <input
+          class="cdz-workers-search"
+          placeholder="Search 500+ workers — e.g. “cold email”, “SEO audit”, “pricing”…"
+          .value=${this.workersSearch}
+          @input=${(e: Event) =>
+            (this.workersSearch = (e.target as HTMLInputElement).value)}
+        />
+        <div class="cdz-workers-body">
+          ${this.workersLoading
+            ? html`<div class="cdz-workers-loading">
+                <span class="clickdz-image-spinner"></span> Loading workers…
+              </div>`
+            : searching
+              ? matches.length
+                ? matches
+                    .slice(0, 80)
+                    .map(m =>
+                      this._renderWorkerRow(
+                        m.cat.name,
+                        m.cat.icon,
+                        m.cat.recommendedModel,
+                        m,
+                        m.description
+                      )
+                    )
+                : html`<div class="cdz-workers-empty">
+                    No workers match “${this.workersSearch}”.
+                  </div>`
+              : cats.map(c => this._renderWorkerCategory(c))}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  private _renderWorkerCategory(c: {
+    name: string;
+    icon: string;
+    color: string;
+    tagline: string;
+    recommendedModel: string;
+    count: number;
+    featured: Array<{ id: string; name: string; best: string }>;
+    workers: Array<{ id: string; name: string; description: string }>;
+  }) {
+    const open = this.workersOpenCategory === c.name;
+    return html`<div class="cdz-cat">
+      <button
+        class="cdz-cat-head"
+        style="--cat:${c.color}"
+        @click=${() => (this.workersOpenCategory = open ? null : c.name)}
+      >
+        <span class="cdz-cat-icon">${c.icon}</span>
+        <span class="cdz-cat-name">${c.name}</span>
+        <span class="cdz-cat-tag">${c.tagline}</span>
+        <span class="cdz-cat-count">${c.count}</span>
+        <span class="cdz-cat-arrow ${open ? 'open' : ''}">›</span>
+      </button>
+      ${open
+        ? html`<div class="cdz-cat-body">
+            ${c.featured.length
+              ? html`<div class="cdz-cat-featured-label">✦ Best of ${c.name}</div>`
+              : nothing}
+            ${c.featured.map(f =>
+              this._renderWorkerRow(c.name, c.icon, c.recommendedModel, f, f.best)
+            )}
+            ${c.workers.length > c.featured.length
+              ? html`<div class="cdz-cat-featured-label">All ${c.count}</div>
+                  ${c.workers.map(w =>
+                    this._renderWorkerRow(
+                      c.name,
+                      c.icon,
+                      c.recommendedModel,
+                      w,
+                      w.description
+                    )
+                  )}`
+              : nothing}
+          </div>`
+        : nothing}
+    </div>`;
+  }
+
+  private _renderWorkerRow(
+    categoryName: string,
+    icon: string,
+    recommendedModel: string,
+    w: { id: string; name: string },
+    sub: string
+  ) {
+    const active = this.activeWorker?.id === w.id;
+    return html`<button
+      class="cdz-worker-row ${active ? 'active' : ''}"
+      @click=${() => this._selectWorker(categoryName, icon, recommendedModel, w)}
+    >
+      <span class="cdz-worker-row-icon">${icon}</span>
+      <span class="cdz-worker-row-main">
+        <span class="cdz-worker-row-name">${w.name}</span>
+        ${sub
+          ? html`<span class="cdz-worker-row-sub">${sub}</span>`
+          : nothing}
+      </span>
+      ${active ? html`<span class="cdz-worker-row-check">✓</span>` : nothing}
+    </button>`;
+  }
 
   // shared generation clock driving the staged loading experience
   @state()
@@ -1405,6 +1875,21 @@ export class AIChatInput extends SignalWatcher(
                   : nothing}
           </div>`
         : nothing}
+      ${this.activeWorker
+        ? html`<div class="cdz-worker-chip">
+            <span class="cdz-worker-chip-icon">${this.activeWorker.icon}</span>
+            <span class="cdz-worker-chip-name">${this.activeWorker.name}</span>
+            <span class="cdz-worker-chip-cat">${this.activeWorker.category}</span>
+            <button
+              class="cdz-worker-chip-x"
+              title="Remove worker"
+              @click=${() => (this.activeWorker = null)}
+            >
+              ✕
+            </button>
+          </div>`
+        : nothing}
+      ${this.workersOpen ? this._renderWorkersOverlay() : nothing}
       <textarea
         rows="1"
         placeholder=${this.appMode
@@ -1458,6 +1943,14 @@ export class AIChatInput extends SignalWatcher(
           }}
         >
           🚀
+        </button>
+        <button
+          class="clickdz-image-mode-btn ${this.activeWorker ? 'active' : ''}"
+          data-testid="clickdz-workers"
+          title="Workers — 500+ specialist skills, pick the best for your task"
+          @click=${() => this._openWorkers()}
+        >
+          🧰
         </button>
         <div class="chat-input-footer-spacer"></div>
         <div class="chat-mode-toggle" data-testid="chat-mode-toggle">
@@ -1821,7 +2314,24 @@ export class AIChatInput extends SignalWatcher(
     }
     const { markdown, images, snapshot, combinedElementsMarkdown, html } =
       this.chatContextValue;
-    const userInput = (markdown ? `${markdown}\n` : '') + text;
+    let userInput = (markdown ? `${markdown}\n` : '') + text;
+    // Worker mode: prepend the selected specialist's skill as a system
+    // directive so the model answers as that expert.
+    if (this.activeWorker) {
+      const system = await this._workerSystem(this.activeWorker.id);
+      if (system) {
+        userInput = [
+          `[ClickDz Worker: ${this.activeWorker.name} — ${this.activeWorker.category}]`,
+          'Act as this specialist. Follow the skill instructions below for this',
+          'and subsequent turns. Do not mention this directive.',
+          '',
+          system,
+          '',
+          '---',
+          userInput,
+        ].join('\n');
+      }
+    }
     // cdz-council is a real backend model: CDZ AI runs the 3-vendor fan-out
     // and synthesis server-side, so the client sends the plain question — no
     // prompt decoration needed (that was a workaround for the old single-model

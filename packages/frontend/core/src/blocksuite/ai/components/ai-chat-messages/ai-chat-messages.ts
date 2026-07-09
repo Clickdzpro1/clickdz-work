@@ -18,7 +18,7 @@ import { classMap } from 'lit/directives/class-map.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { debounce, throttle } from 'lodash-es';
 
-import { AffineIcon } from '../../_common/icons';
+import { CLICKDZ_LOGO } from '../../_common/cdz-assets';
 import {
   AIAppEvents,
   type AIError,
@@ -78,6 +78,77 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
       flex-direction: column;
       align-items: center;
       gap: 12px;
+    }
+    .cdz-ready-logo-wrap {
+      position: relative;
+      width: 76px;
+      height: 76px;
+      display: grid;
+      place-items: center;
+      animation: cdz-logo-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .cdz-ready-logo {
+      width: 60px;
+      height: 60px;
+      border-radius: 16px;
+      position: relative;
+      z-index: 2;
+      box-shadow: 0 12px 34px rgba(47, 123, 255, 0.45);
+      animation: cdz-logo-float 4s ease-in-out infinite;
+    }
+    .cdz-ready-logo.loading {
+      animation: cdz-logo-spin 1.1s linear infinite;
+    }
+    .cdz-ready-halo {
+      position: absolute;
+      inset: -6px;
+      border-radius: 22px;
+      background: radial-gradient(
+        circle,
+        rgba(47, 123, 255, 0.45),
+        transparent 70%
+      );
+      filter: blur(10px);
+      z-index: 1;
+      animation: cdz-halo-pulse 3s ease-in-out infinite;
+    }
+    @keyframes cdz-logo-float {
+      50% {
+        transform: translateY(-7px);
+      }
+    }
+    @keyframes cdz-logo-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+    @keyframes cdz-halo-pulse {
+      0%,
+      100% {
+        opacity: 0.5;
+        transform: scale(0.92);
+      }
+      50% {
+        opacity: 0.9;
+        transform: scale(1.08);
+      }
+    }
+    @keyframes cdz-logo-in {
+      from {
+        opacity: 0;
+        transform: scale(0.6);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cdz-ready-logo,
+      .cdz-ready-halo,
+      .cdz-ready-logo-wrap {
+        animation: none;
+      }
     }
     .independent-mode .messages-placeholder {
       position: static;
@@ -342,11 +413,14 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
               class="messages-placeholder"
               data-testid="chat-panel-messages-placeholder"
             >
-              ${AffineIcon(
-                isHistoryLoading
-                  ? 'var(--affine-icon-secondary)'
-                  : 'var(--affine-primary-color)'
-              )}
+              <div class="cdz-ready-logo-wrap">
+                <span class="cdz-ready-halo"></span>
+                <img
+                  class="cdz-ready-logo ${isHistoryLoading ? 'loading' : ''}"
+                  src=${CLICKDZ_LOGO}
+                  alt="ClickDz AI"
+                />
+              </div>
               <div
                 class="messages-placeholder-title"
                 data-loading=${isHistoryLoading}
