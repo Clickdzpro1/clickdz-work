@@ -499,7 +499,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec!["text".to_string(), "object".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -507,7 +507,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     protocol: Some("openai_chat".to_string()),
     request_layer: Some("chat_completions".to_string()),
     route_overrides: None,
-    behavior_flags: None,
+    behavior_flags: Some(vec!["structured_retry".to_string()]),
   });
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "openai_chat".to_string(),
@@ -518,7 +518,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec!["text".to_string(), "object".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -526,7 +526,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     protocol: Some("openai_chat".to_string()),
     request_layer: Some("chat_completions".to_string()),
     route_overrides: None,
-    behavior_flags: None,
+    behavior_flags: Some(vec!["structured_retry".to_string()]),
   });
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "openai_chat".to_string(),
@@ -537,7 +537,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec!["text".to_string(), "object".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -545,7 +545,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     protocol: Some("openai_chat".to_string()),
     request_layer: Some("chat_completions".to_string()),
     route_overrides: None,
-    behavior_flags: None,
+    behavior_flags: Some(vec!["structured_retry".to_string()]),
   });
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "openai_chat".to_string(),
@@ -556,7 +556,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec!["text".to_string(), "object".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -564,7 +564,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     protocol: Some("openai_chat".to_string()),
     request_layer: Some("chat_completions".to_string()),
     route_overrides: None,
-    behavior_flags: None,
+    behavior_flags: Some(vec!["structured_retry".to_string()]),
   });
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "openai_chat".to_string(),
@@ -575,7 +575,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec!["text".to_string(), "object".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -583,7 +583,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     protocol: Some("openai_chat".to_string()),
     request_layer: Some("chat_completions".to_string()),
     route_overrides: None,
-    behavior_flags: None,
+    behavior_flags: Some(vec!["structured_retry".to_string()]),
   });
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "openai_chat".to_string(),
@@ -594,7 +594,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
-      output: vec!["text".to_string(), "object".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
       attachments: Some(image_attachment.clone()),
       structured_attachments: None,
       default_for_output_type: None,
@@ -602,7 +602,7 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     protocol: Some("openai_chat".to_string()),
     request_layer: Some("chat_completions".to_string()),
     route_overrides: None,
-    behavior_flags: None,
+    behavior_flags: Some(vec!["structured_retry".to_string()]),
   });
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "openai_chat".to_string(),
@@ -610,6 +610,26 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     raw_model_id: "cdz-polyglot".to_string(),
     display_name: Some("CDZ Polyglot".to_string()),
     aliases: vec!["cdz-polyglot".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string(), "structured".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: Some(vec!["structured_retry".to_string()]),
+  });
+  // gap-fill: gemini-3.1-pro-preview is only reached via CDZ AI passthrough
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "gemini-3.1-pro-preview".to_string(),
+    raw_model_id: "gemini-3.1-pro-preview".to_string(),
+    display_name: Some("Gemini 3.1 Pro".to_string()),
+    aliases: vec!["gemini-3.1-pro-preview".to_string()],
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],
@@ -623,13 +643,135 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     route_overrides: None,
     behavior_flags: None,
   });
-  // gap-fill: gemini-3.1-pro-preview is only reached via CDZ AI passthrough
+
+  // Raw engine passthrough models — served by CDZ AI's
+  // /v1/chat/completions (Make engine), same path as the cdz-* ids.
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "openai_chat".to_string(),
-    canonical_key: "gemini-3.1-pro-preview".to_string(),
-    raw_model_id: "gemini-3.1-pro-preview".to_string(),
-    display_name: Some("Gemini 3.1 Pro".to_string()),
-    aliases: vec!["gemini-3.1-pro-preview".to_string()],
+    canonical_key: "claude-opus-4-8".to_string(),
+    raw_model_id: "claude-opus-4-8".to_string(),
+    display_name: Some("Claude Opus 4.8".to_string()),
+    aliases: vec!["claude-opus-4-8".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "claude-sonnet-4-6".to_string(),
+    raw_model_id: "claude-sonnet-4-6".to_string(),
+    display_name: Some("Claude Sonnet 4.6".to_string()),
+    aliases: vec!["claude-sonnet-4-6".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "claude-haiku-4-5".to_string(),
+    raw_model_id: "claude-haiku-4-5".to_string(),
+    display_name: Some("Claude Haiku 4.5".to_string()),
+    aliases: vec!["claude-haiku-4-5".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "gemini-3.5-flash".to_string(),
+    raw_model_id: "gemini-3.5-flash".to_string(),
+    display_name: Some("Gemini 3.5 Flash".to_string()),
+    aliases: vec!["gemini-3.5-flash".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "gpt-5.5".to_string(),
+    raw_model_id: "gpt-5.5".to_string(),
+    display_name: Some("GPT 5.5".to_string()),
+    aliases: vec!["gpt-5.5".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "gpt-5.4".to_string(),
+    raw_model_id: "gpt-5.4".to_string(),
+    display_name: Some("GPT 5.4".to_string()),
+    aliases: vec!["gpt-5.4".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["text".to_string(), "object".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: None,
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_chat".to_string()),
+    request_layer: Some("chat_completions".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_chat".to_string(),
+    canonical_key: "gpt-5.4-mini".to_string(),
+    raw_model_id: "gpt-5.4-mini".to_string(),
+    display_name: Some("GPT 5.4 Mini".to_string()),
+    aliases: vec!["gpt-5.4-mini".to_string()],
     legacy_aliases: None,
     capabilities: vec![llm_adapter::core::ModelCapability {
       input: vec!["text".to_string(), "image".to_string()],

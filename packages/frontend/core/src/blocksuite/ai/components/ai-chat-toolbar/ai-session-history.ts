@@ -7,6 +7,7 @@ import { DeleteIcon } from '@blocksuite/icons/lit';
 import { css, html, nothing, type PropertyValues } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
+import { stripCdzDirectivesToText } from '../../_common/cdz-directives';
 import type { DocDisplayConfig } from '../ai-chat-chips';
 
 interface GroupedSessions {
@@ -33,7 +34,9 @@ function deriveSessionTitle(session: HistorySessionWithMessages) {
   const firstUserMessage = session.messages?.find(
     message => message.role === 'user'
   );
-  const raw = firstUserMessage?.content?.trim();
+  const raw = stripCdzDirectivesToText(
+    firstUserMessage?.content ?? ''
+  ).trim();
   if (!raw) return DEFAULT_SESSION_TITLE;
   const newlineIdx = raw.indexOf('\n');
   return truncateSessionTitle(
