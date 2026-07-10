@@ -79,6 +79,21 @@ function main() {
       priority: 100,
       enabled: true,
       models: CDZ_MODELS,
+      // Explicit middleware: the default rust.stream chain for `openai` is
+      // EMPTY, and the oldApiStyle (chat-completions) decode path delivers
+      // answers as one block without stream normalization — killing the
+      // progressive typing animation. `stream_event_normalize` splits the
+      // chat-completions SSE into canonical per-token deltas and
+      // `openai_request_compat` keeps `stream: true` intact on the wire.
+      // node.text repeats the provider defaults (setting `middleware`
+      // replaces them, so they must be restated to keep citations/callouts).
+      middleware: {
+        rust: {
+          request: ['openai_request_compat'],
+          stream: ['stream_event_normalize'],
+        },
+        node: { text: ['citation_footnote', 'callout'] },
+      },
       config: {
         apiKey: KEY,
         baseURL: BASE_URL,
