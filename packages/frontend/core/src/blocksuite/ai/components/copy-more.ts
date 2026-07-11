@@ -17,10 +17,8 @@ import { repeat } from 'lit/directives/repeat.js';
 
 import type { ChatAction } from '../_common/chat-actions-handle';
 import { copyText } from '../utils/editor-actions';
-import {
-  persistGeneratedImage,
-  type CdzArtifact,
-} from '../../../modules/ai-artifacts/store';
+import { persistGeneratedImage } from './ai-tools/image-artifact';
+import { type CdzArtifact } from '../../../modules/ai-artifacts/store';
 
 noop(Tooltip);
 
