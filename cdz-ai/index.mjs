@@ -49,6 +49,19 @@ const HOOKS = {
 };
 const ENGINE_TIMEOUT_MS = Number(process.env.CDZ_ENGINE_TIMEOUT_MS || 180000);
 
+// ---- v4 unified Make engine (Path A: cdz-ai is a thin OpenAI<->Make bridge) ----
+// When CDZ_ENGINE_MODE=v4, every capability routes to ONE Make webhook
+// (feature-routed, {ok,result} envelope, x-make-apikey auth). Default 'legacy'
+// keeps the classic per-hook behavior, so this ships DARK until the v4
+// scenario is live and the mode is flipped.
+const ENGINE_MODE = (process.env.CDZ_ENGINE_MODE || 'legacy').toLowerCase();
+const ENGINE = {
+  url: process.env.CDZ_ENGINE_WEBHOOK || '',
+  key: process.env.CDZ_ENGINE_KEY || '',
+};
+const V4 = ENGINE_MODE === 'v4' && !!ENGINE.url;
+const VENDOR2PROVIDER = { claude: 'anthropic', gpt: 'openai', gemini: 'gemini' };
+
 // ------------------------------------------------------------ supermodels
 /** vendor targets available through the cdz-llm multiplexer */
 const V = {
@@ -221,14 +234,57 @@ async function callHook(url, payload, timeoutMs = ENGINE_TIMEOUT_MS) {
     signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await res.text();
-  if (!res.ok || /^Scenario failed/i.test(text)) {
-    throw new Error(`engine error: ${text.slice(0, 200)}`);
+  const trimmed = text.trim();
+  // "Accepted" is Make's default webhook ack when a scenario is off or its
+  // webhook isn't in immediate-response mode — treat it as a failure, never
+  // as a real answer (this silently poisoned vision/OCR before).
+  if (!res.ok || /^Scenario failed/i.test(trimmed) || trimmed === 'Accepted') {
+    throw new Error(`engine error: ${(trimmed || res.statusText).slice(0, 200)}`);
   }
-  return text.trim();
+  return trimmed;
 }
 
-/** call the cdz-llm multiplexer for one vendor target */
+/** call the unified v4 Make engine for one feature; returns the result text */
+async function callEngine(feature, fields, timeoutMs = ENGINE_TIMEOUT_MS) {
+  usage.engineCalls++;
+  const res = await fetch(ENGINE.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-make-apikey': ENGINE.key },
+    body: JSON.stringify({ feature, session_id: randomUUID(), ...fields }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const trimmed = (await res.text()).trim();
+  if (trimmed === 'Accepted') {
+    throw new Error('engine not active: Make returned "Accepted" (scenario off or webhook not immediate-response)');
+  }
+  let data;
+  try {
+    data = JSON.parse(trimmed);
+  } catch {
+    if (!res.ok) throw new Error(`engine error ${res.status}: ${trimmed.slice(0, 160)}`);
+    return trimmed; // tolerate a raw-text response
+  }
+  if (data.ok === false) {
+    throw new Error(`engine ${data.error_code || 'error'}: ${data.message || 'failed'}`);
+  }
+  const out = data.result ?? data.answer ?? data.description ?? data.text ?? '';
+  return typeof out === 'string' ? out : JSON.stringify(out);
+}
+
+/** map a cdz vendor target + persona to the v4 engine's feature:chat */
+function engineChat(target, system, prompt) {
+  return callEngine('chat', {
+    model_provider: VENDOR2PROVIDER[target.vendor] || 'openai',
+    model: target.model,
+    message: prompt,
+    skill_enabled: !!system,
+    skill_context: system || '',
+  });
+}
+
+/** call the chat engine for one vendor target (v4 unified, or legacy cdz-llm) */
 function askEngine(target, system, prompt, maxTokens = 4000) {
+  if (V4) return engineChat(target, system, prompt);
   return callHook(HOOKS.llm, {
     vendor: target.vendor,
     model: target.model,
@@ -320,10 +376,11 @@ async function runCouncil(system, prompt) {
 async function completeChat(model, messages, maxTokens) {
   const { system, prompt, imageUrls } = flattenMessages(messages);
   let visionContext = '';
-  if (imageUrls.length && HOOKS.vision) {
-    const descriptions = await Promise.allSettled(
-      imageUrls.map(u => callHook(HOOKS.vision, { image_url: u, prompt: 'Describe this image precisely and completely.' }, 60000))
-    );
+  if (imageUrls.length && (V4 ? ENGINE.url : HOOKS.vision)) {
+    const describe = u => V4
+      ? callEngine('ocr_describe', { file_url: u, model_provider: 'gemini' }, 60000)
+      : callHook(HOOKS.vision, { image_url: u, prompt: 'Describe this image precisely and completely.' }, 60000);
+    const descriptions = await Promise.allSettled(imageUrls.map(describe));
     visionContext = descriptions
       .map((d, i) => (d.status === 'fulfilled' ? `[Attached image ${i + 1}]: ${d.value}` : ''))
       .filter(Boolean)
@@ -426,10 +483,15 @@ async function mcpToolCall(name, args) {
     case 'cdz_council':
       return runCouncil('', args.question);
     case 'cdz_describe_image':
-      return callHook(HOOKS.vision, { image_url: args.image_url, prompt: args.prompt || 'Describe this image precisely.' }, 60000);
+      return V4
+        ? callEngine('ocr_describe', { file_url: args.image_url, model_provider: 'gemini' }, 60000)
+        : callHook(HOOKS.vision, { image_url: args.image_url, prompt: args.prompt || 'Describe this image precisely.' }, 60000);
     case 'cdz_transcribe_audio':
-      return callHook(HOOKS.audio, { file_url: args.file_url }, 120000);
+      return V4
+        ? callEngine('ocr_audio', { file_url: args.file_url }, 120000)
+        : callHook(HOOKS.audio, { file_url: args.file_url }, 120000);
     case 'cdz_ocr': {
+      if (V4) return callEngine('ocr_extract_text', { image_url: args.file_url }, 60000);
       const raw = await callHook(HOOKS.ocr, { file_url: args.file_url }, 60000);
       try { return JSON.parse(raw).text ?? raw; } catch { return raw; }
     }
@@ -568,14 +630,18 @@ const server = http.createServer(async (req, res) => {
     if (path === '/v1/images/describe' && req.method === 'POST') {
       const { image_url, prompt } = JSON.parse(body || '{}');
       if (!image_url) return err(res, 400, 'image_url required');
-      const description = await callHook(HOOKS.vision, { image_url, prompt: prompt || 'Describe this image precisely.' }, 60000);
+      const description = V4
+        ? await callEngine('ocr_describe', { file_url: image_url, model_provider: 'gemini' }, 60000)
+        : await callHook(HOOKS.vision, { image_url, prompt: prompt || 'Describe this image precisely.' }, 60000);
       return json(res, 200, { description });
     }
 
     if (path === '/v1/audio/transcriptions' && req.method === 'POST') {
       const { file_url } = JSON.parse(body || '{}');
       if (!file_url) return err(res, 400, 'file_url required (public URL)');
-      const text = await callHook(HOOKS.audio, { file_url }, 120000);
+      const text = V4
+        ? await callEngine('ocr_audio', { file_url }, 120000)
+        : await callHook(HOOKS.audio, { file_url }, 120000);
       return json(res, 200, { text });
     }
 
@@ -586,5 +652,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`[cdz-ai] listening on :${PORT} — keys:${API_KEYS.length} llm:${!!HOOKS.llm} vision:${!!HOOKS.vision} audio:${!!HOOKS.audio}`);
+  console.log(`[cdz-ai] listening on :${PORT} — keys:${API_KEYS.length} engine:${V4 ? 'v4' : 'legacy'} llm:${!!HOOKS.llm} vision:${!!HOOKS.vision} audio:${!!HOOKS.audio}`);
 });
