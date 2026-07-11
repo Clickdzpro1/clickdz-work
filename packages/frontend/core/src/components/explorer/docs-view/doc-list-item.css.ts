@@ -30,6 +30,10 @@ export const listViewRoot = style({
   gap: 8,
   borderRadius: 4,
   overflow: 'hidden',
+  // Rendered as an <li> without a list ancestor (masonry wraps rows in
+  // plain divs): explicitly suppress any UA list marker so no stray glyph
+  // can paint at the row's left edge.
+  listStyle: 'none',
   containerName: 'list-view-root',
   containerType: 'size',
   selectors: {

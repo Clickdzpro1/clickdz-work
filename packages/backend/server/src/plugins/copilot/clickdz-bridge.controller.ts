@@ -209,8 +209,43 @@ function parseMakeAgentResponse(raw: unknown): string {
 type PlanClarification = {
   question: string;
   options: string[];
+  /** Ordered, editable execution steps. Always non-empty. */
+  steps: string[];
+  /** Flat prose form of the plan, kept for backwards compatibility. */
   draftPlan: string;
 };
+
+/**
+ * Derive an ordered step list from free-form plan prose. Handles numbered
+ * ("1) …", "2. …"), bulleted ("- …", "• …"), and line-per-step formats, and
+ * falls back to sentence splitting for a single dense paragraph.
+ */
+function derivePlanSteps(plan: string): string[] {
+  const text = plan.trim();
+  if (!text) return [];
+  const numbered = text
+    .split(/(?:^|\s)(?:\d{1,2}[).:]|[-•*])\s+/)
+    .map(part => part.trim().replace(/[\s,;]+$/, ''))
+    .filter(part => part.length > 2);
+  if (numbered.length >= 2) return numbered.slice(0, 8);
+  const lines = text
+    .split(/\n+/)
+    .map(line => line.trim().replace(/^(?:\d{1,2}[).:]|[-•*])\s*/, ''))
+    .filter(Boolean);
+  if (lines.length >= 2) return lines.slice(0, 8);
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map(sentence => sentence.trim())
+    .filter(sentence => sentence.length > 2);
+  if (sentences.length >= 2) return sentences.slice(0, 8);
+  return [text];
+}
+
+const FALLBACK_PLAN_STEPS = [
+  'Confirm the target outcome and constraints.',
+  'Execute the request end to end.',
+  'Verify the result and report what was done.',
+];
 
 function parsePlanClarification(raw: string): PlanClarification {
   const unfenced = raw.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
@@ -229,18 +264,35 @@ function parsePlanClarification(raw: string): PlanClarification {
             .filter(Boolean)
             .slice(0, 4)
         : [];
+      const steps = Array.isArray(parsed.steps)
+        ? parsed.steps
+            .map(step => String(step).trim())
+            .filter(Boolean)
+            .slice(0, 8)
+        : [];
       const draftPlan = String(parsed.draftPlan || '').trim();
-      if (question && draftPlan) {
-        return { question, options, draftPlan };
+      const resolvedSteps = steps.length
+        ? steps
+        : derivePlanSteps(draftPlan);
+      if (question && resolvedSteps.length) {
+        return {
+          question,
+          options,
+          steps: resolvedSteps,
+          draftPlan: draftPlan || resolvedSteps.join('\n'),
+        };
       }
     } catch {
       // fall through to a useful deterministic clarification
     }
   }
+  const fallbackSteps = derivePlanSteps(raw);
+  const steps = fallbackSteps.length ? fallbackSteps : FALLBACK_PLAN_STEPS;
   return {
     question: 'What outcome matters most before I execute this plan?',
     options: ['Fast first version', 'Highest quality', 'Lowest risk'],
-    draftPlan: raw.trim() || 'Clarify the goal, execute the request, then verify the result.',
+    steps,
+    draftPlan: raw.trim() || steps.join('\n'),
   };
 }
 
@@ -365,8 +417,8 @@ export class ClickDzBridgeController {
     const prompt = [
       'Act as the fast planning preflight for ClickDz Work.',
       'Read the request and return ONLY valid JSON with this shape:',
-      '{"question":"one decisive clarification in the user language","options":["2 to 4 short choices"],"draftPlan":"a concise editable execution plan"}',
-      'Ask exactly one high-value question. Do not execute the request.',
+      '{"question":"one decisive clarification in the user language","options":["2 to 4 short choices"],"steps":["3 to 6 short imperative execution steps"],"draftPlan":"one sentence stating the plan goal"}',
+      'Ask exactly one high-value question. Each step must be a single concrete action, ordered. Do not execute the request.',
       '',
       `REQUEST:\n${request.slice(0, 12000)}`,
     ].join('\n');
