@@ -1,6 +1,6 @@
 import type { CopilotChatHistoryFragment } from '@affine/graphql';
 
-import type { AIChatContextItem, AIChatScope } from './state';
+import type { AIChatContextItem, AIChatMessage, AIChatScope } from './state';
 
 export type AIChatSendOptions = {
   input?: string;
@@ -55,6 +55,24 @@ export type AIChatAction =
   | { type: 'startContextPolling' }
   | { type: 'stopContextPolling' }
   | { type: 'pollEmbeddingStatus' }
+  | {
+      type: 'beginLocalExchange';
+      exchangeId: string;
+      input: string;
+      userInfo?: AIChatSendOptions['userInfo'];
+    }
+  | {
+      type: 'completeLocalExchange';
+      exchangeId: string;
+      content?: string;
+      attachments?: string[];
+      streamObjects?: AIChatMessage['streamObjects'];
+    }
+  | {
+      type: 'failLocalExchange';
+      exchangeId: string;
+      message: string;
+    }
   | ({ type: 'send' } & AIChatSendOptions)
   | { type: 'retry'; messageId: string }
   | { type: 'stop' };

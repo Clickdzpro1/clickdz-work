@@ -192,6 +192,10 @@ export class ChatContentStreamObjects extends WithDisposable(
             .notificationService=${this.notificationService}
           ></doc-compose-tool>
         `;
+      case 'clickdz_app':
+        return html`<clickdz-app-result
+          .data=${streamObject}
+        ></clickdz-app-result>`;
       case 'code_artifact':
         return html`
           <code-artifact-tool

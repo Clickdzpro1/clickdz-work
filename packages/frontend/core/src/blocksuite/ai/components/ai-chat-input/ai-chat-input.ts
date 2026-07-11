@@ -10,6 +10,11 @@ import type {
   ServerService,
   SubscriptionService,
 } from '@affine/core/modules/cloud';
+import {
+  artifactStore,
+  newArtifactId,
+  type CdzArtifact,
+} from '@affine/core/modules/ai-artifacts/store';
 import type { FeatureFlagService } from '@affine/core/modules/feature-flag';
 import type { CopilotChatHistoryFragment } from '@affine/graphql';
 import track, { type EventArgs } from '@affine/track';
@@ -152,10 +157,15 @@ export class AIChatInput extends SignalWatcher(
       border: none;
       background: transparent;
       cursor: pointer;
-      font-size: 15px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 13px;
+      font-weight: 600;
       line-height: 20px;
-      padding: 2px 6px;
+      padding: 2px 7px;
       border-radius: 6px;
+      color: var(--affine-v2-text-secondary);
       filter: grayscale(1) opacity(0.75);
       transition:
         filter 0.16s ease,
@@ -171,8 +181,12 @@ export class AIChatInput extends SignalWatcher(
     }
     .clickdz-image-mode-btn.active {
       filter: none;
+      color: var(--affine-v2-text-primary);
       background: color-mix(in srgb, #6e56cf 18%, transparent);
       box-shadow: 0 0 0 1px color-mix(in srgb, #6e56cf 45%, transparent);
+    }
+    .clickdz-mode-label {
+      font-size: 11.5px;
     }
 
     .clickdz-image-card {
@@ -846,6 +860,204 @@ export class AIChatInput extends SignalWatcher(
       background: color-mix(in srgb, #6e56cf 20%, transparent);
     }
 
+    .cdz-plan-review {
+      margin: 0 0 8px;
+      padding: 12px;
+      border: 1px solid color-mix(in srgb, #10a37f 42%, transparent);
+      border-radius: 12px;
+      background: color-mix(in srgb, #10a37f 8%, var(--affine-v2-layer-background-primary));
+      animation: clickdz-card-in 0.2s ease-out both;
+    }
+    .cdz-plan-review.busy {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--affine-v2-text-secondary);
+      font-size: 13px;
+    }
+    .cdz-plan-review-title {
+      margin-bottom: 8px;
+      color: var(--affine-v2-text-primary);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .cdz-plan-question {
+      margin-bottom: 8px;
+      color: var(--affine-v2-text-primary);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .cdz-plan-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .cdz-plan-option {
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 999px;
+      padding: 4px 10px;
+      cursor: pointer;
+      color: var(--affine-v2-text-secondary);
+      background: var(--affine-v2-layer-background-primary);
+      font-size: 12px;
+    }
+    .cdz-plan-option.active {
+      border-color: #10a37f;
+      color: #087c62;
+      background: color-mix(in srgb, #10a37f 14%, transparent);
+    }
+    .cdz-plan-answer,
+    .cdz-plan-draft {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      color: var(--affine-v2-text-primary);
+      background: var(--affine-v2-input-background);
+      font: inherit;
+      resize: vertical;
+    }
+    .cdz-plan-answer {
+      min-height: 36px;
+      margin-bottom: 8px;
+    }
+    .cdz-plan-draft {
+      min-height: 82px;
+    }
+    .cdz-plan-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .cdz-plan-action {
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 8px;
+      padding: 6px 12px;
+      cursor: pointer;
+      color: var(--affine-v2-text-primary);
+      background: transparent;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .cdz-plan-action.primary {
+      border-color: #10a37f;
+      color: white;
+      background: #10a37f;
+    }
+
+    .cdz-artifacts-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.48);
+      backdrop-filter: blur(5px);
+    }
+    .cdz-artifacts-panel {
+      width: min(760px, calc(100vw - 32px));
+      max-height: min(640px, calc(100vh - 48px));
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 16px;
+      background: var(--affine-v2-layer-background-primary);
+      box-shadow: 0 22px 70px rgba(0, 0, 0, 0.35);
+    }
+    .cdz-artifacts-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--affine-v2-layer-insideBorder-border);
+    }
+    .cdz-artifacts-title {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--affine-v2-text-primary);
+    }
+    .cdz-artifacts-count {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--affine-v2-text-secondary);
+    }
+    .cdz-artifacts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 12px;
+      padding: 16px;
+      overflow: auto;
+    }
+    .cdz-artifact-card {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 12px;
+      background: var(--affine-v2-layer-background-secondary);
+    }
+    .cdz-artifact-preview {
+      height: 132px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: var(--affine-v2-layer-background-hoverOverlay);
+      cursor: pointer;
+    }
+    .cdz-artifact-preview img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .cdz-artifact-app-preview {
+      padding: 18px;
+      font-size: 34px;
+    }
+    .cdz-artifact-meta {
+      padding: 10px;
+    }
+    .cdz-artifact-name {
+      overflow: hidden;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--affine-v2-text-primary);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .cdz-artifact-kind {
+      margin-top: 2px;
+      font-size: 11px;
+      color: var(--affine-v2-text-secondary);
+    }
+    .cdz-artifact-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .cdz-artifact-actions button {
+      flex: 1;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 7px;
+      padding: 4px 7px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--affine-v2-text-primary);
+      background: transparent;
+    }
+    .cdz-artifacts-empty {
+      padding: 48px 24px;
+      text-align: center;
+      color: var(--affine-v2-text-secondary);
+    }
+
     .chat-mode-toggle {
       display: inline-flex;
       align-items: center;
@@ -881,8 +1093,15 @@ export class AIChatInput extends SignalWatcher(
       color: var(--affine-v2-text-primary);
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
     }
+    .chat-mode-option.council {
+      color: #8a6d1d;
+    }
     .chat-mode-option.council.active {
-      color: #6e56cf;
+      color: #c99700;
+      background: color-mix(in srgb, #d6a700 18%, transparent);
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, #d6a700 45%, transparent),
+        0 1px 4px color-mix(in srgb, #d6a700 22%, transparent);
     }
     .chat-mode-option.plan {
       margin-left: 6px;
@@ -897,7 +1116,8 @@ export class AIChatInput extends SignalWatcher(
 
     .chat-panel-input-actions {
       display: flex;
-      gap: 8px;
+      flex-wrap: wrap;
+      gap: 6px;
       align-items: center;
 
       .chat-input-icon {
@@ -1118,9 +1338,6 @@ export class AIChatInput extends SignalWatcher(
     enhanced?: string;
   } | null = null;
 
-  @state()
-  accessor imageError = '';
-
   // ClickDz Apps mode: the next send builds and deploys a live web app
   @state()
   accessor appMode = false;
@@ -1137,29 +1354,32 @@ export class AIChatInput extends SignalWatcher(
     url?: string;
   } | null = null;
 
-  @state()
-  accessor appError = '';
-
-  // canvas UI state
-  @state()
-  accessor appView: 'preview' | 'code' = 'preview';
-
-  @state()
-  accessor appDevice: 'desktop' | 'tablet' | 'mobile' = 'desktop';
-
-  @state()
-  accessor appExpanded = false;
-
-  @state()
-  accessor appDeploying = false;
-
   // keeping the slug means iterations edit + redeploy the same app/URL
   @state()
   accessor appSlug: string | null = null;
 
-  // Plan mode: the model plans its approach before answering (better results)
+  // Plan mode: run a fast clarification before the selected model executes.
   @state()
   accessor planMode = false;
+
+  @state()
+  accessor planBusy = false;
+
+  @state()
+  accessor planReview: {
+    request: string;
+    question: string;
+    options: string[];
+    answer: string;
+    draftPlan: string;
+  } | null = null;
+
+  // Persistent artifact shelf: generated images/apps survive panel close.
+  @state()
+  accessor artifactShelfOpen = false;
+
+  @state()
+  accessor artifacts: CdzArtifact[] = [];
 
   // ===== Workers: 500+ specialist skills =====
   @state()
@@ -1255,6 +1475,257 @@ export class AIChatInput extends SignalWatcher(
     } catch {
       return '';
     }
+  }
+
+  private _currentUserInfo() {
+    const userInfo = AIAppEvents.userInfo.value;
+    return {
+      userId: userInfo?.id,
+      userName: userInfo?.name,
+      avatarUrl: userInfo?.avatarUrl ?? undefined,
+    };
+  }
+
+  private async _beginPlanReview(request: string) {
+    if (this.planBusy) return;
+    this.planBusy = true;
+    this.planReview = null;
+    try {
+      const response = await fetch('/api/v1/plan/clarify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          data?.error?.message || `Plan clarification failed (${response.status})`
+        );
+      }
+      this.planReview = {
+        request,
+        question: String(data?.question || 'What should I optimize for?'),
+        options: Array.isArray(data?.options)
+          ? data.options.map((option: unknown) => String(option)).slice(0, 4)
+          : [],
+        answer: '',
+        draftPlan: String(
+          data?.draftPlan || 'Clarify the goal, execute, then verify the result.'
+        ),
+      };
+    } catch {
+      this.planReview = {
+        request,
+        question: 'What outcome matters most before I execute this plan?',
+        options: ['Fast first version', 'Highest quality', 'Lowest risk'],
+        answer: '',
+        draftPlan:
+          'Confirm the target outcome, execute the request, and verify the final result.',
+      };
+    } finally {
+      this.planBusy = false;
+    }
+  }
+
+  private async _executePlanReview() {
+    const review = this.planReview;
+    if (!review) return;
+    const approvedRequest =
+      wrapCdzDirective(
+        { kind: 'plan', icon: '🧭', label: 'Approved plan' },
+        [
+          'The user approved this execution plan. Follow it, then deliver the complete result.',
+          `Clarification: ${review.answer || 'Use the best professional judgment.'}`,
+          '',
+          review.draftPlan,
+          '',
+        ].join('\n')
+      ) + review.request;
+    this.planReview = null;
+    this.planMode = false;
+    await this.send(approvedRequest);
+  }
+
+  private _renderPlanReview() {
+    if (this.planBusy) {
+      return html`<div class="cdz-plan-review busy">
+        <span class="clickdz-image-spinner"></span>
+        <span>The fast planner is preparing one decisive question…</span>
+      </div>`;
+    }
+    const review = this.planReview;
+    if (!review) return nothing;
+    return html`<div class="cdz-plan-review" data-testid="clickdz-plan-review">
+      <div class="cdz-plan-review-title">🧭 Plan preflight</div>
+      <div class="cdz-plan-question">${review.question}</div>
+      ${review.options.length
+        ? html`<div class="cdz-plan-options">
+            ${review.options.map(
+              option => html`<button
+                class="cdz-plan-option ${review.answer === option ? 'active' : ''}"
+                @click=${() => {
+                  this.planReview = { ...review, answer: option };
+                }}
+              >
+                ${option}
+              </button>`
+            )}
+          </div>`
+        : nothing}
+      <input
+        class="cdz-plan-answer"
+        placeholder="Or type your answer…"
+        .value=${review.answer}
+        @input=${(event: Event) => {
+          this.planReview = {
+            ...review,
+            answer: (event.target as HTMLInputElement).value,
+          };
+        }}
+      />
+      <textarea
+        class="cdz-plan-draft"
+        aria-label="Editable execution plan"
+        .value=${review.draftPlan}
+        @input=${(event: Event) => {
+          this.planReview = {
+            ...review,
+            draftPlan: (event.target as HTMLTextAreaElement).value,
+          };
+        }}
+      ></textarea>
+      <div class="cdz-plan-actions">
+        <button
+          class="cdz-plan-action"
+          @click=${() => {
+            this.planReview = null;
+            this.planMode = false;
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          class="cdz-plan-action primary"
+          @click=${() => this._executePlanReview()}
+        >
+          Approve and run
+        </button>
+      </div>
+    </div>`;
+  }
+
+  private _persistCurrentApp() {
+    if (!this.appResult?.html) return;
+    const id = `app_${this.appResult.slug}`;
+    const url = this.appResult.url ?? artifactStore.get(id)?.url;
+    if (url && !this.appResult.url) {
+      this.appResult = { ...this.appResult, url };
+    }
+    artifactStore.upsert({
+      id,
+      type: 'app',
+      title: this.appResult.prompt || 'ClickDz app',
+      payload: this.appResult.html,
+      prompt: this.appResult.prompt,
+      sessionId:
+        this.runtime?.getSnapshot().activeSessionId ??
+        this.session?.sessionId ??
+        'draft',
+      slug: this.appResult.slug,
+      url,
+      mimeType: 'text/html',
+    });
+  }
+
+  private _openArtifact(artifact: CdzArtifact) {
+    if (artifact.type === 'image') {
+      this.imageResult = {
+        url: artifact.payload,
+        prompt: artifact.prompt || artifact.title,
+      };
+      this.imageMode = true;
+      this.appMode = false;
+    } else if (artifact.type === 'app') {
+      const slug = artifact.slug || artifact.id.replace(/^app_/, '');
+      this.appResult = {
+        slug,
+        prompt: artifact.prompt || artifact.title,
+        html: artifact.payload,
+        url: artifact.url,
+      };
+      this.appSlug = slug;
+      this.appMode = true;
+      this.imageMode = false;
+    }
+    this.artifactShelfOpen = false;
+  }
+
+  private _removeArtifact(event: Event, artifact: CdzArtifact) {
+    event.stopPropagation();
+    artifactStore.remove(artifact.id);
+  }
+
+  private _renderArtifactShelf() {
+    return html`<div
+      class="cdz-artifacts-overlay"
+      @click=${(event: Event) => {
+        if (event.target === event.currentTarget) this.artifactShelfOpen = false;
+      }}
+    >
+      <div class="cdz-artifacts-panel">
+        <div class="cdz-artifacts-head">
+          <div class="cdz-artifacts-title">Artifacts</div>
+          <div class="cdz-artifacts-count">
+            ${this.artifacts.length} saved locally
+          </div>
+          <button
+            class="cdz-icon-btn"
+            title="Close artifacts"
+            @click=${() => (this.artifactShelfOpen = false)}
+          >
+            ✕
+          </button>
+        </div>
+        ${this.artifacts.length
+          ? html`<div class="cdz-artifacts-grid">
+              ${this.artifacts.map(
+                artifact => html`<article class="cdz-artifact-card">
+                  <div
+                    class="cdz-artifact-preview"
+                    @click=${() => this._openArtifact(artifact)}
+                  >
+                    ${artifact.type === 'image'
+                      ? html`<img src=${artifact.payload} alt=${artifact.title} />`
+                      : html`<div class="cdz-artifact-app-preview">🚀</div>`}
+                  </div>
+                  <div class="cdz-artifact-meta">
+                    <div class="cdz-artifact-name" title=${artifact.title}>
+                      ${artifact.title}
+                    </div>
+                    <div class="cdz-artifact-kind">
+                      ${artifact.type === 'app' ? 'App' : 'Image'} ·
+                      ${new Date(artifact.updatedAt).toLocaleDateString()}
+                    </div>
+                    <div class="cdz-artifact-actions">
+                      <button @click=${() => this._openArtifact(artifact)}>
+                        Open
+                      </button>
+                      <button
+                        @click=${(event: Event) =>
+                          this._removeArtifact(event, artifact)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </article>`
+              )}
+            </div>`
+          : html`<div class="cdz-artifacts-empty">
+              Generated images and apps will appear here and survive panel close.
+            </div>`}
+      </div>
+    </div>`;
   }
 
   private _renderWorkersOverlay() {
@@ -1396,41 +1867,6 @@ export class AIChatInput extends SignalWatcher(
     </button>`;
   }
 
-  // shared generation clock driving the staged loading experience
-  @state()
-  accessor loadingSeconds = 0;
-
-  private _loadingTimer: ReturnType<typeof setInterval> | null = null;
-
-  private _startLoadingClock() {
-    this._stopLoadingClock();
-    this.loadingSeconds = 0;
-    this._loadingTimer = setInterval(() => {
-      this.loadingSeconds += 1;
-    }, 1000);
-  }
-
-  private _stopLoadingClock() {
-    if (this._loadingTimer) {
-      clearInterval(this._loadingTimer);
-      this._loadingTimer = null;
-    }
-  }
-
-  private get appStage() {
-    const s = this.loadingSeconds;
-    if (s < 10) return '🧠 Designing the interface…';
-    if (s < 45) return '✍️ Writing the code — CDZ Architect at work…';
-    if (s < 75) return '✨ Polishing interactions…';
-    return '📦 Finalizing your app…';
-  }
-
-  private get imageStage() {
-    const s = this.loadingSeconds;
-    if (s < 8) return '✨ Enhancing your prompt…';
-    return '🎨 Painting with ClickDz 1.0…';
-  }
-
   @state()
   accessor focused = false;
 
@@ -1515,6 +1951,19 @@ export class AIChatInput extends SignalWatcher(
     super.connectedCallback();
 
     this._disposables.add(
+      artifactStore.subscribe(artifacts => {
+        this.artifacts = artifacts;
+        const current = this.appResult;
+        const saved = current
+          ? artifacts.find(artifact => artifact.id === `app_${current.slug}`)
+          : undefined;
+        if (current && saved?.url && current.url !== saved.url) {
+          this.appResult = { ...current, url: saved.url };
+        }
+      })
+    );
+
+    this._disposables.add(
       AIAppEvents.requestSendWithChat.subscribe(
         (params: AISendParams | null) => {
           if (!params) {
@@ -1544,7 +1993,9 @@ export class AIChatInput extends SignalWatcher(
         if (input) {
           this.textarea.value = input;
           this.isInputEmpty = !this.textarea.value.trim();
+          this.textarea.focus();
         }
+        AIAppEvents.requestOpenWithChat.next(null);
       })
     );
 
@@ -1629,7 +2080,8 @@ export class AIChatInput extends SignalWatcher(
     const { images } = this.chatContextValue;
     const status = this.runtimeSnapshot?.status ?? this.chatContextValue.status;
     const hasImages = images.length > 0;
-    const maxHeight = hasImages ? 272 + 2 : 200 + 2;
+    const hasPlanReview = this.planBusy || !!this.planReview;
+    const maxHeight = hasPlanReview ? 560 : hasImages ? 272 + 2 : 200 + 2;
 
     return html`<div
       class="chat-panel-input"
@@ -1676,219 +2128,7 @@ export class AIChatInput extends SignalWatcher(
             </div>
           </div>`
         : nothing}
-      ${this.appBusy || this.appResult || this.appError
-        ? html`<div
-            class="clickdz-canvas ${this.appExpanded ? 'expanded' : ''} ${this
-              .appBusy
-              ? 'generating'
-              : ''}"
-          >
-            ${this.appBusy
-              ? html`<div class="clickdz-gen-loading">
-                  <div class="clickdz-gen-stage">
-                    <span class="clickdz-gen-orb"></span>
-                    <span class="clickdz-gen-stage-text">${this.appStage}</span>
-                    <span class="clickdz-gen-elapsed">${this.loadingSeconds}s</span>
-                  </div>
-                  <div class="clickdz-gen-bar"><span></span></div>
-                </div>`
-              : this.appError && !this.appResult
-                ? html`<div class="clickdz-image-error">⚠️ ${this.appError}</div>`
-                : this.appResult
-                  ? html`
-                      <div class="clickdz-canvas-toolbar">
-                        <span class="clickdz-builder-brand">🚀 ClickDz Builder</span>
-                        <div class="clickdz-seg">
-                          <button
-                            class="clickdz-seg-btn ${this.appView === 'preview'
-                              ? 'on'
-                              : ''}"
-                            @click=${() => (this.appView = 'preview')}
-                          >
-                            Preview
-                          </button>
-                          <button
-                            class="clickdz-seg-btn ${this.appView === 'code'
-                              ? 'on'
-                              : ''}"
-                            @click=${() => (this.appView = 'code')}
-                          >
-                            Code
-                          </button>
-                        </div>
-                        ${this.appView === 'preview'
-                          ? html`<div class="clickdz-seg devices">
-                              <button
-                                class="clickdz-seg-btn ${this.appDevice ===
-                                'desktop'
-                                  ? 'on'
-                                  : ''}"
-                                title="Desktop"
-                                @click=${() => (this.appDevice = 'desktop')}
-                              >
-                                🖥
-                              </button>
-                              <button
-                                class="clickdz-seg-btn ${this.appDevice ===
-                                'tablet'
-                                  ? 'on'
-                                  : ''}"
-                                title="Tablet"
-                                @click=${() => (this.appDevice = 'tablet')}
-                              >
-                                ▭
-                              </button>
-                              <button
-                                class="clickdz-seg-btn ${this.appDevice ===
-                                'mobile'
-                                  ? 'on'
-                                  : ''}"
-                                title="Mobile"
-                                @click=${() => (this.appDevice = 'mobile')}
-                              >
-                                📱
-                              </button>
-                            </div>`
-                          : nothing}
-                        <span class="clickdz-canvas-spacer"></span>
-                        ${this.appResult.url
-                          ? html`<span class="clickdz-live-dot" title="Published"
-                              >● live</span
-                            >`
-                          : html`<span class="clickdz-draft-dot" title="Not published yet"
-                              >draft</span
-                            >`}
-                        <button
-                          class="clickdz-icon-btn"
-                          title=${this.appExpanded ? 'Shrink' : 'Expand'}
-                          @click=${() => (this.appExpanded = !this.appExpanded)}
-                        >
-                          ${this.appExpanded ? '🗕' : '⛶'}
-                        </button>
-                        <button
-                          class="clickdz-icon-btn"
-                          title="Close"
-                          @click=${() => this._closeApp()}
-                        >
-                          ✕
-                        </button>
-                      </div>
-
-                      ${this.appView === 'preview'
-                        ? html`<div class="clickdz-preview-stage">
-                            <iframe
-                              class="clickdz-app-frame"
-                              style="width:${this._deviceWidth}"
-                              .srcdoc=${this.appResult.html}
-                              sandbox="allow-scripts allow-forms allow-popups allow-modals"
-                              title=${this.appResult.prompt}
-                            ></iframe>
-                          </div>`
-                        : html`<pre class="clickdz-code"><code>${this
-                            .appResult.html}</code></pre>`}
-
-                      <div class="clickdz-canvas-foot">
-                        <button
-                          class="clickdz-cta ${this.appResult.url
-                            ? 'ghost'
-                            : 'primary'}"
-                          ?disabled=${this.appDeploying}
-                          @click=${() => this._publishClickDzApp()}
-                        >
-                          ${this.appDeploying
-                            ? 'Publishing…'
-                            : this.appResult.url
-                              ? 'Republish'
-                              : '🚀 Publish to the web'}
-                        </button>
-                        ${this.appResult.url
-                          ? html`<a
-                                class="clickdz-cta ghost"
-                                href=${this.appResult.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                >Open ↗</a
-                              >
-                              <button
-                                class="clickdz-cta ghost"
-                                @click=${() =>
-                                  navigator.clipboard
-                                    .writeText(this.appResult?.url ?? '')
-                                    .catch(() => {})}
-                              >
-                                Copy URL
-                              </button>`
-                          : nothing}
-                        <span class="clickdz-canvas-spacer"></span>
-                        <span class="clickdz-hint"
-                          >Type a change below to edit this app ✨</span
-                        >
-                      </div>
-                      ${this.appError
-                        ? html`<div class="clickdz-image-error">⚠️ ${this.appError}</div>`
-                        : nothing}`
-                  : nothing}
-          </div>`
-        : nothing}
-      ${this.imageBusy || this.imageResult || this.imageError
-        ? html`<div
-            class="clickdz-image-card ${this.imageBusy ? 'generating' : ''}"
-          >
-            ${this.imageBusy
-              ? html`<div class="clickdz-gen-loading">
-                  <div class="clickdz-gen-stage">
-                    <span class="clickdz-gen-orb"></span>
-                    <span class="clickdz-gen-stage-text">${this.imageStage}</span>
-                    <span class="clickdz-gen-elapsed"
-                      >${this.loadingSeconds}s</span
-                    >
-                  </div>
-                  <div class="clickdz-gen-bar"><span></span></div>
-                </div>`
-              : this.imageError
-                ? html`<div class="clickdz-image-error">
-                    ⚠️ ${this.imageError}
-                  </div>`
-                : this.imageResult
-                  ? html`<img
-                        class="clickdz-image-preview"
-                        src=${this.imageResult.url}
-                        alt=${this.imageResult.prompt}
-                      />
-                      <div class="clickdz-image-caption">
-                        ${this.imageResult.prompt}
-                      </div>
-                      <div class="clickdz-image-actions">
-                        <a
-                          class="clickdz-image-action"
-                          href=${this.imageResult.url}
-                          download="clickdz-image.png"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          >Download</a
-                        >
-                        <button
-                          class="clickdz-image-action"
-                          @click=${() =>
-                            this._generateClickDzImage(
-                              this.imageResult?.prompt ?? ''
-                            )}
-                        >
-                          Regenerate
-                        </button>
-                        <button
-                          class="clickdz-image-action"
-                          @click=${() => {
-                            this.imageResult = null;
-                            this.imageError = '';
-                          }}
-                        >
-                          Close
-                        </button>
-                      </div>`
-                  : nothing}
-          </div>`
-        : nothing}
+      ${this.planBusy || this.planReview ? this._renderPlanReview() : nothing}
       ${this.activeWorker
         ? html`<div class="cdz-worker-chip">
             <span class="cdz-worker-chip-icon">${this.activeWorker.icon}</span>
@@ -1904,6 +2144,7 @@ export class AIChatInput extends SignalWatcher(
           </div>`
         : nothing}
       ${this.workersOpen ? this._renderWorkersOverlay() : nothing}
+      ${this.artifactShelfOpen ? this._renderArtifactShelf() : nothing}
       <textarea
         rows="1"
         placeholder=${this.appMode
@@ -1945,7 +2186,7 @@ export class AIChatInput extends SignalWatcher(
             if (this.imageMode) this.appMode = false;
           }}
         >
-          🎨
+          🎨 <span class="clickdz-mode-label">Image</span>
         </button>
         <button
           class="clickdz-image-mode-btn ${this.appMode ? 'active' : ''}"
@@ -1956,7 +2197,7 @@ export class AIChatInput extends SignalWatcher(
             if (this.appMode) this.imageMode = false;
           }}
         >
-          🚀
+          🚀 <span class="clickdz-mode-label">Builder</span>
         </button>
         <button
           class="clickdz-image-mode-btn ${this.activeWorker ? 'active' : ''}"
@@ -1964,7 +2205,16 @@ export class AIChatInput extends SignalWatcher(
           title="Workers — 500+ specialist skills, pick the best for your task"
           @click=${() => this._openWorkers()}
         >
-          🧰
+          🧰 <span class="clickdz-mode-label">Workers</span>
+        </button>
+        <button
+          class="clickdz-image-mode-btn ${this.artifactShelfOpen ? 'active' : ''}"
+          data-testid="clickdz-artifacts"
+          title="Artifacts — reopen generated images and apps"
+          @click=${() => (this.artifactShelfOpen = true)}
+        >
+          ◫ <span class="clickdz-mode-label">Artifacts</span>
+          ${this.artifacts.length ? html`<span>${this.artifacts.length}</span>` : nothing}
         </button>
         <div class="chat-input-footer-spacer"></div>
         <div class="chat-mode-toggle" data-testid="chat-mode-toggle">
@@ -1992,8 +2242,11 @@ export class AIChatInput extends SignalWatcher(
         <button
           class="chat-mode-option plan ${this.planMode ? 'active' : ''}"
           data-testid="clickdz-plan-mode"
-          title="Plan mode — the model plans its approach, then delivers the best answer"
-          @click=${() => (this.planMode = !this.planMode)}
+          title="Plan mode — get one fast clarification, edit the plan, then approve execution"
+          @click=${() => {
+            this.planMode = !this.planMode;
+            if (!this.planMode) this.planReview = null;
+          }}
         >
           🧭 Plan
         </button>
@@ -2041,11 +2294,21 @@ export class AIChatInput extends SignalWatcher(
       return true;
     }
 
+    if (this.planBusy || this.planReview || this.imageBusy || this.appBusy) {
+      return true;
+    }
+
     return false;
   }
 
   private readonly _handlePointerDown = (e: MouseEvent) => {
-    if (e.target !== this.textarea) {
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest('button, input, textarea, a, [contenteditable="true"]')
+    ) {
+      return;
+    }
+    if (target !== this.textarea) {
       // by default the div will be focused and will blur the textarea
       e.preventDefault();
       this.textarea.focus();
@@ -2191,20 +2454,33 @@ export class AIChatInput extends SignalWatcher(
     await this.send(value);
   };
 
-  /** ClickDz 1.0: generate an image from the prompt typed in the chat box */
+  /** Generate an image through the normal transcript loading/result flow. */
   private readonly _generateClickDzImage = async (prompt: string) => {
-    if (!prompt.trim() || this.imageBusy) return;
+    if (!prompt.trim() || this.imageBusy || !this.runtime) return;
+    const exchangeId = newArtifactId('image-exchange');
+    const previousPrompt =
+      this.imageResult?.enhanced || this.imageResult?.prompt || '';
+    const generationPrompt = previousPrompt
+      ? `Create a refined variation of this previous image prompt:\n${previousPrompt}\n\nRequested change:\n${prompt}`
+      : prompt;
+    const referenceImage = /^https?:\/\//.test(this.imageResult?.url || '')
+      ? this.imageResult?.url
+      : undefined;
     this.imageBusy = true;
-    this.imageError = '';
-    this.imageResult = null;
-    this._startLoadingClock();
+    await this.runtime.dispatch({
+      type: 'beginLocalExchange',
+      exchangeId,
+      input: prompt,
+      userInfo: this._currentUserInfo(),
+    });
     try {
       const res = await fetch('/api/v1/images/generations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'clickdz-image-1.0',
-          prompt,
+          prompt: generationPrompt,
+          image_url: referenceImage,
           n: 1,
           size: '1024x1024',
         }),
@@ -2222,25 +2498,50 @@ export class AIChatInput extends SignalWatcher(
         prompt,
         enhanced: data?.clickdz?.enhanced_prompt,
       };
+      artifactStore.upsert({
+        id: newArtifactId('img'),
+        type: 'image',
+        title: prompt.slice(0, 80) || 'Generated image',
+        payload: url,
+        prompt: data?.clickdz?.enhanced_prompt || generationPrompt,
+        sessionId:
+          this.runtime.getSnapshot().activeSessionId ??
+          this.session?.sessionId ??
+          'draft',
+        mimeType: 'image/png',
+      });
+      await this.runtime.dispatch({
+        type: 'completeLocalExchange',
+        exchangeId,
+        content:
+          '**Image ready.** Describe a change to refine it, or switch back to Chat.',
+        attachments: [url],
+      });
+      this.onChatSuccess?.();
     } catch (error) {
-      this.imageError =
-        error instanceof Error ? error.message : 'Image generation failed';
+      await this.runtime.dispatch({
+        type: 'failLocalExchange',
+        exchangeId,
+        message:
+          error instanceof Error ? error.message : 'Image generation failed',
+      });
     } finally {
       this.imageBusy = false;
-      this._stopLoadingClock();
     }
   };
 
-  /**
-   * ClickDz Apps: generate a single-file app (instant blob preview, no deploy
-   * yet). A follow-up while an app exists edits the CURRENT app (iteration).
-   */
+  /** Build or refine an app through the normal transcript loading/result flow. */
   private readonly _generateClickDzApp = async (prompt: string) => {
-    if (!prompt.trim() || this.appBusy || this.appDeploying) return;
+    if (!prompt.trim() || this.appBusy || !this.runtime) return;
+    const exchangeId = newArtifactId('app-exchange');
     this.appBusy = true;
-    this.appError = '';
     const iterating = !!this.appResult?.html;
-    this._startLoadingClock();
+    await this.runtime.dispatch({
+      type: 'beginLocalExchange',
+      exchangeId,
+      input: prompt,
+      userInfo: this._currentUserInfo(),
+    });
     try {
       const res = await fetch('/api/v1/apps/generate', {
         method: 'POST',
@@ -2255,70 +2556,61 @@ export class AIChatInput extends SignalWatcher(
       if (!res.ok) {
         throw new Error(data?.error?.message || `App build failed (${res.status})`);
       }
-      // preserve a previously-published URL across edits (same slug redeploys)
-      const prevUrl = this.appResult?.url;
+      const previousUrl =
+        this.appResult?.url ?? artifactStore.get(`app_${data.slug}`)?.url;
       this.appResult = {
         slug: data.slug,
         prompt,
         html: data.html,
-        url: prevUrl,
+        url: previousUrl,
       };
       this.appSlug = data.slug;
-      this.appView = 'preview';
+      this._persistCurrentApp();
+      const title = iterating
+        ? `Updated app — ${prompt.slice(0, 64)}`
+        : `ClickDz app — ${prompt.slice(0, 64)}`;
+      await this.runtime.dispatch({
+        type: 'completeLocalExchange',
+        exchangeId,
+        streamObjects: [
+          {
+            type: 'text-delta',
+            textDelta:
+              '**App ready.** Preview it below, then describe a change in the composer to keep iterating.\n\n',
+          },
+          {
+            type: 'tool-result',
+            toolCallId: exchangeId,
+            toolName: 'clickdz_app',
+            args: { title },
+            result: {
+              title,
+              slug: data.slug,
+              html: data.html,
+              size: data.html.length,
+              url: previousUrl,
+            },
+          },
+        ],
+      });
+      this.onChatSuccess?.();
     } catch (error) {
-      this.appError = error instanceof Error ? error.message : 'App build failed';
+      await this.runtime.dispatch({
+        type: 'failLocalExchange',
+        exchangeId,
+        message: error instanceof Error ? error.message : 'App build failed',
+      });
     } finally {
       this.appBusy = false;
-      this._stopLoadingClock();
     }
   };
-
-  /** Publish the current previewed app HTML to Vercel */
-  private readonly _publishClickDzApp = async () => {
-    if (!this.appResult?.html || this.appDeploying) return;
-    this.appDeploying = true;
-    this.requestUpdate();
-    try {
-      const res = await fetch('/api/v1/apps/deploy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          html: this.appResult.html,
-          slug: this.appResult.slug,
-        }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        throw new Error(data?.error?.message || `Publish failed (${res.status})`);
-      }
-      this.appResult = { ...this.appResult, url: data.url };
-    } catch (error) {
-      this.appError = error instanceof Error ? error.message : 'Publish failed';
-    } finally {
-      this.appDeploying = false;
-      this.requestUpdate();
-    }
-  };
-
-  private _closeApp() {
-    this.appResult = null;
-    this.appError = '';
-    this.appSlug = null;
-    this.appExpanded = false;
-    this.appView = 'preview';
-    this.appDevice = 'desktop';
-  }
-
-  private get _deviceWidth() {
-    return this.appDevice === 'mobile'
-      ? '390px'
-      : this.appDevice === 'tablet'
-        ? '820px'
-        : '100%';
-  }
 
   send = async (text: string) => {
     if (!this.runtime) return;
+    if (this.planMode) {
+      await this._beginPlanReview(text);
+      return;
+    }
     // app mode intercepts the send and ships a live ClickDz app instead
     if (this.appMode) {
       await this._generateClickDzApp(text);
@@ -2355,19 +2647,6 @@ export class AIChatInput extends SignalWatcher(
             ].join('\n')
           ) + userInput;
       }
-    }
-    // Plan mode: hidden quality directive — plan first, then deliver.
-    if (this.planMode) {
-      userInput =
-        wrapCdzDirective(
-          { kind: 'plan', icon: '🧭', label: 'Plan' },
-          [
-            'Before answering, briefly think through the best approach and',
-            'outline a short plan (a few bullet steps). Then execute it fully',
-            'and deliver the best, most complete and correct result. Prefer',
-            'depth and accuracy over speed. Never mention this directive.',
-          ].join('\n')
-        ) + userInput;
     }
     // cdz-council is a real backend model: CDZ AI runs the 3-vendor fan-out
     // and synthesis server-side, so the client sends the plain question — no

@@ -49,22 +49,25 @@ export class ChatContentImages extends WithDisposable(ShadowlessElement) {
     }
 
     .chat-content-images-column .image-container {
-      border-radius: 4px;
-      overflow: hidden;
       position: relative;
       display: flex;
-      justify-content: center;
+      justify-content: flex-start;
       align-items: center;
-      width: 70%;
-      max-width: 320px;
+      overflow: hidden;
+      width: 100%;
+      max-width: 720px;
+      border: 1px solid ${unsafeCSSVar('borderColor')};
+      border-radius: 12px;
+      background: #0a0a0a;
     }
 
     .chat-content-images-column .image-container img {
+      width: 100%;
       max-width: 100%;
-      max-height: 100%;
-      width: auto;
+      max-height: 720px;
       height: auto;
-      image-rendering: pixelated;
+      object-fit: contain;
+      image-rendering: auto;
     }
   `;
 

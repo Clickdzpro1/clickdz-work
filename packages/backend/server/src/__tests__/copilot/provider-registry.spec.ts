@@ -30,6 +30,26 @@ test('buildProviderRegistry should keep explicit profile over legacy compatibili
   t.deepEqual(profile?.config, { apiKey: 'new' });
 });
 
+test('buildProviderRegistry should restore the complete ClickDz model catalog', t => {
+  const registry = buildProviderRegistry({
+    profiles: [
+      {
+        id: 'cdz-ai',
+        type: CopilotProviderType.OpenAI,
+        config: { apiKey: 'test', baseURL: 'https://api.clickdz.ai/v1' },
+        models: ['cdz-ultra'],
+      },
+    ],
+  });
+
+  const models = registry.profiles.get('cdz-ai')?.models ?? [];
+  t.is(models.length, 15);
+  t.true(models.includes('cdz-council'));
+  t.true(models.includes('claude-opus-4-8'));
+  t.true(models.includes('gemini-3.5-flash'));
+  t.true(models.includes('gpt-5.4-mini'));
+});
+
 test('buildProviderRegistry should reject duplicated profile ids', t => {
   const error = t.throws(() =>
     buildProviderRegistry({

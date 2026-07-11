@@ -181,6 +181,59 @@ describe('AIChatRuntime', () => {
     expect(runtime.getSnapshot().uiPolicy.canCreateNewSession).toBe(true);
   });
 
+  test('local exchange uses the normal transcript loading and result flow', async () => {
+    const runtime = createRuntime();
+    await runtime.dispatch({ type: 'initialize' });
+
+    await runtime.dispatch({
+      type: 'beginLocalExchange',
+      exchangeId: 'local-1',
+      input: 'Build a dashboard',
+    });
+
+    expect(runtime.getSnapshot()).toMatchObject({
+      status: 'loading',
+      messages: [
+        { id: 'local-1:user', role: 'user', content: 'Build a dashboard' },
+        { id: 'local-1:assistant', role: 'assistant', content: '' },
+      ],
+    });
+
+    await runtime.dispatch({
+      type: 'completeLocalExchange',
+      exchangeId: 'local-1',
+      content: 'Your app is ready.',
+      attachments: ['https://cdn.example.com/image.png'],
+      streamObjects: [
+        {
+          type: 'tool-result',
+          toolCallId: 'local-1',
+          toolName: 'code_artifact',
+          args: { title: 'Dashboard' },
+          result: { title: 'Dashboard', html: '<html></html>', size: 13 },
+        },
+      ],
+    });
+
+    expect(runtime.getSnapshot()).toMatchObject({
+      status: 'success',
+      messages: [
+        { role: 'user', content: 'Build a dashboard' },
+        {
+          role: 'assistant',
+          content: 'Your app is ready.',
+          attachments: ['https://cdn.example.com/image.png'],
+          streamObjects: [
+            expect.objectContaining({
+              type: 'tool-result',
+              toolName: 'code_artifact',
+            }),
+          ],
+        },
+      ],
+    });
+  });
+
   test('send binds an unbound session to the active doc after success', async () => {
     const unboundSession = session({ docId: null });
     const boundSession = session({ docId: 'doc-1' });

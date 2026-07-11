@@ -45,6 +45,30 @@ export interface AIModel {
   isDefault: boolean;
 }
 
+/**
+ * Provider profiles can be shadowed by a stale DB override. Always preserve
+ * models returned by the server, then fill every missing ClickDz model locally
+ * so a partial response never shrinks the picker.
+ */
+export function mergeClickDzModels(serverModels: AIModel[]): AIModel[] {
+  const merged = [...serverModels];
+  for (const fallback of CLICKDZ_FALLBACK_MODELS) {
+    if (!merged.some(model => model.id === fallback.id)) {
+      merged.push({ ...fallback, isDefault: false });
+    }
+  }
+  if (!merged.some(model => model.isDefault)) {
+    const defaultId = merged.some(model => model.id === 'cdz-ultra')
+      ? 'cdz-ultra'
+      : merged[0]?.id;
+    return merged.map(model => ({
+      ...model,
+      isDefault: model.id === defaultId,
+    }));
+  }
+  return merged;
+}
+
 export class AIModelService extends Service {
   modelId: Signal<string | undefined>;
 
@@ -152,11 +176,13 @@ export class AIModelService extends Service {
     }
     if (models) {
       const { defaultModel, optionalModels, proModels } = models;
-      const merged = [...optionalModels];
+      const providerModels = [...optionalModels];
       for (const proModel of proModels) {
-        if (!merged.some(model => model.id === proModel.id)) merged.push(proModel);
+        if (!providerModels.some(model => model.id === proModel.id)) {
+          providerModels.push(proModel);
+        }
       }
-      this.models.value = merged.map(model => {
+      const normalized = providerModels.map(model => {
         const [category] = model.name.split(' ');
         const version = model.name.slice(category.length + 1) || category;
         return {
@@ -168,9 +194,9 @@ export class AIModelService extends Service {
           isDefault: model.id === defaultModel,
         };
       });
-    }
-    if (!this.models.value.length) {
-      this.models.value = CLICKDZ_FALLBACK_MODELS;
+      this.models.value = mergeClickDzModels(normalized);
+    } else {
+      this.models.value = mergeClickDzModels([]);
     }
   };
 
