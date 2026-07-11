@@ -6,6 +6,7 @@ import { ChatContentPureText } from '../components/ai-message-content/pure-text'
 import { ChatContentRichText } from '../components/ai-message-content/rich-text';
 import { ChatContentStreamObjects } from '../components/ai-message-content/stream-objects';
 import { ArtifactPreviewPanel } from '../components/ai-tools/artifacts-preview-panel';
+import { ImageArtifactHost } from '../components/ai-tools/image-artifact';
 import {
   CodeArtifactTool,
   CodeHighlighter,
@@ -58,6 +59,7 @@ const sharedElements = {
   'artifact-preview-panel': ArtifactPreviewPanel,
   'doc-edit-tool': DocEditTool,
   'artifact-skeleton': ArtifactSkeleton,
+  'image-artifact-host': ImageArtifactHost,
 } satisfies Record<SharedEffectElementTag, CustomElementConstructor>;
 
 export function registerAISharedEffects() {
