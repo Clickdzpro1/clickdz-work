@@ -17,6 +17,10 @@ import { repeat } from 'lit/directives/repeat.js';
 
 import type { ChatAction } from '../_common/chat-actions-handle';
 import { copyText } from '../utils/editor-actions';
+import {
+  persistGeneratedImage,
+  type CdzArtifact,
+} from '../../../modules/ai-artifacts/store';
 
 noop(Tooltip);
 
@@ -226,7 +230,8 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
   // ---- Image Generation state ----
   @state()
   private accessor _isGeneratingImage = false;
-  private _imageBlob: string | null = null;
+  @state()
+  private accessor _imageArtifact: CdzArtifact | null = null;
 
   // ClickDz AI prompt enhancer — transforms simple prompts into high-quality image prompts
   private _enhanceImagePrompt(userPrompt: string): string {
@@ -265,8 +270,19 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
       });
       if (!res.ok) throw new Error(`Image ${res.status}`);
       const data = await res.json();
-      this._imageBlob = data.url || data.imageUrl || data.data?.[0]?.url || null;
-      this._notifySuccess('Image generated!');
+      const url = data.url || data.imageUrl || data.data?.[0]?.url || null;
+      if (url) {
+        this._imageArtifact = persistGeneratedImage({
+          url,
+          title: 'Generated image',
+          prompt: this.content,
+          sessionId: this.session?.sessionId,
+          messageId: this.messageId,
+        });
+        this._notifySuccess('Image generated!');
+      } else {
+        this._notifySuccess('Image generation failed');
+      }
     } catch {
       this._notifySuccess('Image generation failed');
     } finally {
@@ -397,10 +413,15 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
                 : nothing}`
           : nothing}
 
-      ${this._imageBlob
-        ? html`<div class="clickdz-image-preview" style="margin-top:8px; border-radius:12px; overflow:hidden; border:1px solid var(--affine-border-color); max-width:400px;">
-             <img src="${this._imageBlob}" alt="AI generated" style="width:100%; display:block;" />
-           </div>`
+      ${this._imageArtifact
+        ? html`<image-artifact-host
+              .artifact=${this._imageArtifact}
+              .onRegenerate=${(prompt: string) => {
+                this.content = prompt;
+                this._generateImage();
+              }}
+              .autoOpenPanel=${true}
+            ></image-artifact-host>`
         : nothing}
         ${showMoreIcon && host
           ? html`<div

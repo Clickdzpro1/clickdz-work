@@ -23,6 +23,7 @@ export const sharedEffectElementTags = [
   'artifact-preview-panel',
   'doc-edit-tool',
   'artifact-skeleton',
+  'image-artifact-host',
 ] as const;
 
 export type SharedEffectElementTag = (typeof sharedEffectElementTags)[number];
