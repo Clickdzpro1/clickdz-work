@@ -244,6 +244,38 @@ async function callHook(url, payload, timeoutMs = ENGINE_TIMEOUT_MS) {
   return trimmed;
 }
 
+/**
+ * Salvage the value from an ALMOST-JSON Make envelope. Make builds its response
+ * body by string interpolation, so any model output containing raw newlines or
+ * quotes yields a body that JSON.parse rejects. Rather than leak the raw
+ * {"ok":true,"result":"..."} envelope into the chat, pull the value out.
+ */
+function salvageEnvelope(raw) {
+  const key = raw.match(/"(?:result|answer|description|text)"\s*:\s*"/);
+  if (!key) return null;
+  const start = key.index + key[0].length;
+  let end = -1;
+  for (const marker of [
+    '","model_label"', '", "model_label"',
+    '","scenario_version"', '", "scenario_version"',
+    '","session_id"', '", "session_id"',
+    '","confidence"', '","page"', '","duration_seconds"',
+  ]) {
+    const i = raw.indexOf(marker, start);
+    if (i !== -1 && (end === -1 || i < end)) end = i;
+  }
+  if (end === -1) {
+    const t = raw.lastIndexOf('"}');
+    end = t > start ? t : -1;
+  }
+  if (end <= start) return null;
+  return raw
+    .slice(start, end)
+    .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+    .replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+    .trim();
+}
+
 /** call the unified v4 Make engine for one feature; returns the result text */
 async function callEngine(feature, fields, timeoutMs = ENGINE_TIMEOUT_MS) {
   usage.engineCalls++;
@@ -261,8 +293,13 @@ async function callEngine(feature, fields, timeoutMs = ENGINE_TIMEOUT_MS) {
   try {
     data = JSON.parse(trimmed);
   } catch {
+    // Make's envelope is string-interpolated, so model output with raw
+    // newlines/quotes breaks JSON.parse. Salvage the value instead of leaking
+    // the raw {"ok":true,"result":...} wrapper into the chat.
+    const salvaged = salvageEnvelope(trimmed);
+    if (salvaged) return salvaged;
     if (!res.ok) throw new Error(`engine error ${res.status}: ${trimmed.slice(0, 160)}`);
-    return trimmed; // tolerate a raw-text response
+    return trimmed; // tolerate a genuine raw-text response
   }
   if (data.ok === false) {
     throw new Error(`engine ${data.error_code || 'error'}: ${data.message || 'failed'}`);
