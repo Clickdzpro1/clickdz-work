@@ -9,6 +9,26 @@ import { CopilotProviderType, ModelOutputType } from './types';
 
 const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9-_]+$/;
 
+// A stale DB profile must never shrink the ClickDz model catalog. The bootstrap
+// remains the source of credentials/base URL; this only restores known model ids.
+const CLICKDZ_PROVIDER_MODELS = [
+  'cdz-ultra',
+  'cdz-council',
+  'cdz-sage',
+  'cdz-architect',
+  'cdz-scholar',
+  'cdz-flash',
+  'cdz-polyglot',
+  'claude-opus-4-8',
+  'claude-sonnet-4-6',
+  'claude-haiku-4-5',
+  'gemini-3.1-pro-preview',
+  'gemini-3.5-flash',
+  'gpt-5.5',
+  'gpt-5.4',
+  'gpt-5.4-mini',
+] as const;
+
 const LEGACY_PROVIDER_ORDER: CopilotProviderType[] = [
   CopilotProviderType.OpenAI,
   CopilotProviderType.CloudflareWorkersAi,
@@ -98,6 +118,10 @@ function normalizeProfile(
 ): NormalizedCopilotProviderProfile {
   return {
     ...profile,
+    models:
+      profile.id === 'cdz-ai'
+        ? unique([...(profile.models ?? []), ...CLICKDZ_PROVIDER_MODELS])
+        : profile.models,
     enabled: profile.enabled !== false,
     priority: profile.priority ?? 0,
     middleware: resolveProviderMiddleware(profile.type, profile.middleware),

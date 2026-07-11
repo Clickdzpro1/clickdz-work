@@ -15,6 +15,9 @@ export type CdzArtifact = {
   sessionId?: string;
   messageId?: string;
   prompt?: string;
+  /** App-specific identity and published URL, when applicable. */
+  slug?: string;
+  url?: string;
   createdAt: number;
   updatedAt: number;
 };
@@ -23,6 +26,8 @@ type Listener = (artifacts: CdzArtifact[]) => void;
 
 const STORAGE_KEY = 'clickdz.artifacts.v1';
 const MAX_ITEMS = 200;
+// Stay below common 5 MB localStorage quotas; newest artifacts win.
+const MAX_STORAGE_CHARS = 4_000_000;
 
 function loadAll(): CdzArtifact[] {
   if (typeof localStorage === 'undefined') return [];
@@ -39,7 +44,15 @@ function loadAll(): CdzArtifact[] {
 function saveAll(items: CdzArtifact[]) {
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items.slice(0, MAX_ITEMS)));
+    const persisted: CdzArtifact[] = [];
+    let size = 2; // []
+    for (const item of items.slice(0, MAX_ITEMS)) {
+      const serialized = JSON.stringify(item);
+      if (size + serialized.length + 1 > MAX_STORAGE_CHARS) break;
+      persisted.push(item);
+      size += serialized.length + 1;
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
   } catch {
     // quota / private mode — keep memory only
   }
@@ -49,8 +62,11 @@ class ArtifactStoreImpl {
   private items: CdzArtifact[] = loadAll();
   private listeners = new Set<Listener>();
 
-  list(): CdzArtifact[] {
-    return [...this.items].sort((a, b) => b.updatedAt - a.updatedAt);
+  list(sessionId?: string): CdzArtifact[] {
+    const items = sessionId
+      ? this.items.filter(item => item.sessionId === sessionId)
+      : this.items;
+    return [...items].sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   get(id: string): CdzArtifact | undefined {
@@ -98,7 +114,9 @@ class ArtifactStoreImpl {
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     listener(this.list());
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   private emit() {

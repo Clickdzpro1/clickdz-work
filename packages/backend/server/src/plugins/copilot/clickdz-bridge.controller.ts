@@ -26,6 +26,10 @@ const MAKE_BUILDER_AGENT_ID = process.env.MAKE_BUILDER_AGENT_ID || '';
 // machine access token for external OpenAI-compatible clients
 // (ClickDz Builder / bolt.diy). Unset = machine access disabled.
 const CLICKDZ_BRIDGE_TOKEN = process.env.CLICKDZ_BRIDGE_TOKEN || '';
+const CDZ_AI_BASE_URL = (
+  process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
+).replace(/\/+$/, '');
+const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
 
@@ -202,6 +206,44 @@ function parseMakeAgentResponse(raw: unknown): string {
   return '';
 }
 
+type PlanClarification = {
+  question: string;
+  options: string[];
+  draftPlan: string;
+};
+
+function parsePlanClarification(raw: string): PlanClarification {
+  const unfenced = raw.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  const start = unfenced.indexOf('{');
+  const end = unfenced.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try {
+      const parsed = JSON.parse(unfenced.slice(start, end + 1)) as Record<
+        string,
+        unknown
+      >;
+      const question = String(parsed.question || '').trim();
+      const options = Array.isArray(parsed.options)
+        ? parsed.options
+            .map(option => String(option).trim())
+            .filter(Boolean)
+            .slice(0, 4)
+        : [];
+      const draftPlan = String(parsed.draftPlan || '').trim();
+      if (question && draftPlan) {
+        return { question, options, draftPlan };
+      }
+    } catch {
+      // fall through to a useful deterministic clarification
+    }
+  }
+  return {
+    question: 'What outcome matters most before I execute this plan?',
+    options: ['Fast first version', 'Highest quality', 'Lowest risk'],
+    draftPlan: raw.trim() || 'Clarify the goal, execute the request, then verify the result.',
+  };
+}
+
 @Controller()
 export class ClickDzBridgeController {
   private readonly logger = new Logger(ClickDzBridgeController.name);
@@ -267,7 +309,8 @@ export class ClickDzBridgeController {
   private async runMakeAgent(
     messages: Array<{ role: string; content: string }>,
     model: string,
-    agentIdOverride?: string
+    agentIdOverride?: string,
+    timeoutMs = 240000
   ) {
     this.assertMakeReady();
     const joined = messages
@@ -297,7 +340,7 @@ export class ClickDzBridgeController {
         }),
         // large code generations can take a couple of minutes — fail
         // controlled instead of hanging forever
-        signal: AbortSignal.timeout(240000),
+        signal: AbortSignal.timeout(timeoutMs),
       }
     );
 
@@ -316,6 +359,49 @@ export class ClickDzBridgeController {
 
     const data = (await response.json()) as Record<string, unknown>;
     return parseMakeAgentResponse(data.response ?? data);
+  }
+
+  private async runFastPlanner(request: string) {
+    const prompt = [
+      'Act as the fast planning preflight for ClickDz Work.',
+      'Read the request and return ONLY valid JSON with this shape:',
+      '{"question":"one decisive clarification in the user language","options":["2 to 4 short choices"],"draftPlan":"a concise editable execution plan"}',
+      'Ask exactly one high-value question. Do not execute the request.',
+      '',
+      `REQUEST:\n${request.slice(0, 12000)}`,
+    ].join('\n');
+
+    if (CDZ_AI_KEY) {
+      try {
+        const response = await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'cdz-flash',
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: 700,
+          }),
+          signal: AbortSignal.timeout(30000),
+        });
+        const data = (await response.json()) as any;
+        const content = data?.choices?.[0]?.message?.content;
+        if (response.ok && typeof content === 'string' && content.trim()) {
+          return content;
+        }
+      } catch {
+        // Fall through to the Make agent so Plan mode stays available.
+      }
+    }
+
+    return this.runMakeAgent(
+      [{ role: 'user', content: prompt }],
+      'clickdz-fast',
+      undefined,
+      30000
+    );
   }
 
   @Public()
@@ -368,6 +454,28 @@ export class ClickDzBridgeController {
     }
 
     res.json(openAIChatResponse(id, model, content));
+  }
+
+  /** Fast Plan-mode preflight: one decisive question before the full model runs. */
+  @Post('/api/v1/plan/clarify')
+  async clarifyPlan(@Body() body: any) {
+    const request = String(body?.request || '').trim();
+    if (!request) {
+      throw new HttpException(
+        {
+          error: {
+            message: 'A request is required',
+            type: 'invalid_request_error',
+            code: 'request_missing',
+          },
+        },
+        HttpStatus.BAD_REQUEST
+      );
+    }
+
+    const raw = await this.runFastPlanner(request);
+
+    return parsePlanClarification(raw);
   }
 
   /** extract text from an attached image via the Make OCR scenario */
@@ -465,7 +573,7 @@ export class ClickDzBridgeController {
       },
       body: JSON.stringify(payload),
     });
-    const data = await response.json();
+    const data = (await response.json()) as any;
     if (!response.ok) {
       throw new HttpException(data, response.status);
     }
@@ -684,7 +792,7 @@ export class ClickDzBridgeController {
       },
       body: JSON.stringify({ ttl: 60 }),
     });
-    const data = await response.json();
+    const data = (await response.json()) as any;
     if (!response.ok) {
       throw new HttpException(data, response.status);
     }
@@ -715,7 +823,7 @@ export class ClickDzBridgeController {
   }
 
   @Post(['/api/voice/transcribe', '/api/copilot/voice/transcribe'])
-  async transcribe(@Req() req: Request) {
+  async transcribe() {
     if (!DEEPGRAM_API_KEY) {
       throw new HttpException({ ok: false, error: 'Deepgram is not configured' }, HttpStatus.SERVICE_UNAVAILABLE);
     }

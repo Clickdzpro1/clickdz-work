@@ -24,6 +24,7 @@ export const sharedEffectElementTags = [
   'doc-edit-tool',
   'artifact-skeleton',
   'image-artifact-host',
+  'clickdz-app-result',
 ] as const;
 
 export type SharedEffectElementTag = (typeof sharedEffectElementTags)[number];

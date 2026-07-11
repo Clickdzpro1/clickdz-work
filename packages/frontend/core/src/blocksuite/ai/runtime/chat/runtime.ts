@@ -52,6 +52,7 @@ const CONTEXT_POLLING_INTERVAL = 10000;
 export class AIChatRuntime {
   private readonly listeners = new Set<() => void>();
   private requestSeq = 0;
+  private activeLocalExchangeId: string | null = null;
   private historyRequestSeq = 0;
   private contextRequestSeq = 0;
   private streamAbortController: AbortController | null = null;
@@ -130,6 +131,15 @@ export class AIChatRuntime {
         return;
       case 'togglePinActiveSession':
         await this.togglePinActiveSession();
+        return;
+      case 'beginLocalExchange':
+        await this.beginLocalExchange(action);
+        return;
+      case 'completeLocalExchange':
+        this.completeLocalExchange(action);
+        return;
+      case 'failLocalExchange':
+        this.failLocalExchange(action);
         return;
       case 'send':
         await this.send(action);
@@ -344,6 +354,85 @@ export class AIChatRuntime {
     return this.snapshot.messages.findLast(message => message.role === 'user');
   }
 
+  private async beginLocalExchange(
+    action: Extract<AIChatAction, { type: 'beginLocalExchange' }>
+  ) {
+    const content = action.input.trim();
+    if (!content || !this.snapshot.uiPolicy.canSend) return;
+    const seq = ++this.requestSeq;
+    this.activeLocalExchangeId = action.exchangeId;
+    this.streamAbortController?.abort();
+    this.commit({
+      status: 'loading',
+      error: null,
+      messages: [
+        ...this.snapshot.messages,
+        this.createMessage('user', content, {
+          id: `${action.exchangeId}:user`,
+          ...action.userInfo,
+        }),
+        this.createMessage('assistant', '', {
+          id: `${action.exchangeId}:assistant`,
+        }),
+      ],
+    });
+
+    try {
+      const session = await this.ensureSession();
+      if (seq !== this.requestSeq) return;
+      if (!session) {
+        this.failLocalExchange({
+          type: 'failLocalExchange',
+          exchangeId: action.exchangeId,
+          message: 'Session not found',
+        });
+        return;
+      }
+      if (!this.snapshot.activeSessionId) {
+        this.openSessionObject(session, true);
+      }
+    } catch (error) {
+      if (seq !== this.requestSeq) return;
+      this.failLocalExchange({
+        type: 'failLocalExchange',
+        exchangeId: action.exchangeId,
+        message: this.toError(error).message,
+      });
+    }
+  }
+
+  private completeLocalExchange(
+    action: Extract<AIChatAction, { type: 'completeLocalExchange' }>
+  ) {
+    if (this.activeLocalExchangeId !== action.exchangeId) return;
+    const id = `${action.exchangeId}:assistant`;
+    this.activeLocalExchangeId = null;
+    this.commit({
+      status: 'success',
+      error: null,
+      tabs: this.markActiveTabHasMessages(this.snapshot.tabs),
+      messages: this.snapshot.messages.map(message =>
+        message.id === id
+          ? {
+              ...message,
+              content: action.content ?? message.content,
+              attachments: action.attachments,
+              streamObjects: action.streamObjects,
+            }
+          : message
+      ),
+    });
+    void this.bindActiveSessionToDoc().catch(console.error);
+  }
+
+  private failLocalExchange(
+    action: Extract<AIChatAction, { type: 'failLocalExchange' }>
+  ) {
+    if (this.activeLocalExchangeId !== action.exchangeId) return;
+    this.activeLocalExchangeId = null;
+    this.commit({ status: 'error', error: new Error(action.message) });
+  }
+
   private async send(options: AIChatSendOptions, retryExisting = false) {
     const content = options.input || this.snapshot.composer.text;
     if (!content.trim() || !this.snapshot.uiPolicy.canSend) return;
@@ -466,6 +555,7 @@ export class AIChatRuntime {
 
   private stop() {
     this.requestSeq++;
+    this.activeLocalExchangeId = null;
     this.streamAbortController?.abort();
     this.streamAbortController = null;
     if (

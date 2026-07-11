@@ -27,7 +27,7 @@ import {
   type StreamObject,
 } from '../../components/ai-chat-messages';
 import { AIChatErrorRenderer } from '../../messages/error';
-import { type AIError } from '../../provider';
+import { AIAppEvents, type AIError } from '../../provider';
 import { mergeStreamContent } from '../../utils/stream-objects';
 
 export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
@@ -36,6 +36,27 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       color: var(--affine-placeholder-color);
       font-size: var(--affine-font-xs);
       font-weight: 400;
+    }
+    .cdz-followups {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 10px 0 2px;
+    }
+    .cdz-followup {
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 999px;
+      padding: 5px 10px;
+      cursor: pointer;
+      color: var(--affine-v2-text-secondary);
+      background: transparent;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .cdz-followup:hover {
+      color: var(--affine-v2-text-primary);
+      background: var(--affine-v2-layer-background-hoverOverlay);
     }
   `;
 
@@ -128,7 +149,7 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
         ? this.renderStreamObjects(streamObjects)
         : this.renderRichText(content)}
       ${shouldRenderError ? AIChatErrorRenderer(error, host) : nothing}
-      ${this.renderEditorActions()}
+      ${this.renderEditorActions()} ${this.renderFollowUps()}
     `;
   }
 
@@ -138,6 +159,7 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
 
     return html`<chat-content-images
       .images=${item.attachments}
+      .layout=${'column'}
     ></chat-content-images>`;
   }
 
@@ -167,6 +189,39 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       .affineFeatureFlagService=${this.affineFeatureFlagService}
       .theme=${this.affineThemeService.appTheme.themeSignal}
     ></chat-content-rich-text>`;
+  }
+
+  private renderFollowUps() {
+    const { item, isLast, status, host } = this;
+    if (!isLast || !host || (status !== 'success' && status !== 'idle')) {
+      return nothing;
+    }
+    const hasApp = item.streamObjects?.some(
+      object =>
+        object.type === 'tool-result' && object.toolName === 'clickdz_app'
+    );
+    const hasImage = !!item.attachments?.length;
+    const suggestions = hasApp
+      ? ['Make it more polished', 'Add one useful feature']
+      : hasImage
+        ? ['Create a refined variation', 'Make it more cinematic']
+        : ['Go deeper with examples', 'Turn this into an action plan'];
+    return html`<div class="cdz-followups" data-testid="clickdz-followups">
+      ${suggestions.map(
+        suggestion =>
+          html`<button
+            class="cdz-followup"
+            @click=${() =>
+              AIAppEvents.requestOpenWithChat.next({
+                host,
+                input: suggestion,
+                fromAnswer: true,
+              })}
+          >
+            ${suggestion}
+          </button>`
+      )}
+    </div>`;
   }
 
   private renderEditorActions() {

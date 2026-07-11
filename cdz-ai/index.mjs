@@ -14,6 +14,7 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 
+import { assertPublicHttpUrl, normalizeMaxTokens, validateEngineFields } from './guards.mjs';
 import { docsPage } from './docs.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -245,10 +246,9 @@ async function callHook(url, payload, timeoutMs = ENGINE_TIMEOUT_MS) {
 }
 
 /**
- * Salvage the value from an ALMOST-JSON Make envelope. Make builds its response
- * body by string interpolation, so any model output containing raw newlines or
- * quotes yields a body that JSON.parse rejects. Rather than leak the raw
- * {"ok":true,"result":"..."} envelope into the chat, pull the value out.
+ * Salvage the value from a legacy ALMOST-JSON Make envelope. The repaired v4
+ * scenario emits typed JSON, but this defensive fallback protects rollbacks or
+ * stale scenario revisions from leaking a raw envelope into chat.
  */
 function salvageEnvelope(raw) {
   const key = raw.match(/"(?:result|answer|description|text)"\s*:\s*"/);
@@ -279,10 +279,15 @@ function salvageEnvelope(raw) {
 /** call the unified v4 Make engine for one feature; returns the result text */
 async function callEngine(feature, fields, timeoutMs = ENGINE_TIMEOUT_MS) {
   usage.engineCalls++;
+  const validatedFields = validateEngineFields(feature, fields);
   const res = await fetch(ENGINE.url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-make-apikey': ENGINE.key },
-    body: JSON.stringify({ feature, session_id: randomUUID(), ...fields }),
+    body: JSON.stringify({
+      feature,
+      session_id: randomUUID(),
+      ...validatedFields,
+    }),
     signal: AbortSignal.timeout(timeoutMs),
   });
   const trimmed = (await res.text()).trim();
@@ -293,9 +298,8 @@ async function callEngine(feature, fields, timeoutMs = ENGINE_TIMEOUT_MS) {
   try {
     data = JSON.parse(trimmed);
   } catch {
-    // Make's envelope is string-interpolated, so model output with raw
-    // newlines/quotes breaks JSON.parse. Salvage the value instead of leaking
-    // the raw {"ok":true,"result":...} wrapper into the chat.
+    // Defensive rollback compatibility: salvage legacy string-interpolated
+    // envelopes instead of leaking the raw wrapper into chat.
     const salvaged = salvageEnvelope(trimmed);
     if (salvaged) return salvaged;
     if (!res.ok) throw new Error(`engine error ${res.status}: ${trimmed.slice(0, 160)}`);
@@ -309,11 +313,12 @@ async function callEngine(feature, fields, timeoutMs = ENGINE_TIMEOUT_MS) {
 }
 
 /** map a cdz vendor target + persona to the v4 engine's feature:chat */
-function engineChat(target, system, prompt) {
+function engineChat(target, system, prompt, maxTokens = 4000) {
   return callEngine('chat', {
     model_provider: VENDOR2PROVIDER[target.vendor] || 'openai',
     model: target.model,
     message: prompt,
+    max_tokens: normalizeMaxTokens(maxTokens),
     skill_enabled: !!system,
     skill_context: system || '',
   });
@@ -321,7 +326,7 @@ function engineChat(target, system, prompt) {
 
 /** call the chat engine for one vendor target (v4 unified, or legacy cdz-llm) */
 function askEngine(target, system, prompt, maxTokens = 4000) {
-  if (V4) return engineChat(target, system, prompt);
+  if (V4) return engineChat(target, system, prompt, maxTokens);
   return callHook(HOOKS.llm, {
     vendor: target.vendor,
     model: target.model,
@@ -412,12 +417,15 @@ async function runCouncil(system, prompt) {
 /** resolve a chat request to final answer text */
 async function completeChat(model, messages, maxTokens) {
   const { system, prompt, imageUrls } = flattenMessages(messages);
+  const safeImageUrls = imageUrls.map(url =>
+    assertPublicHttpUrl(url, 'image_url')
+  );
   let visionContext = '';
-  if (imageUrls.length && (V4 ? ENGINE.url : HOOKS.vision)) {
+  if (safeImageUrls.length && (V4 ? ENGINE.url : HOOKS.vision)) {
     const describe = u => V4
       ? callEngine('ocr_describe', { file_url: u, model_provider: 'gemini' }, 60000)
       : callHook(HOOKS.vision, { image_url: u, prompt: 'Describe this image precisely and completely.' }, 60000);
-    const descriptions = await Promise.allSettled(imageUrls.map(describe));
+    const descriptions = await Promise.allSettled(safeImageUrls.map(describe));
     visionContext = descriptions
       .map((d, i) => (d.status === 'fulfilled' ? `[Attached image ${i + 1}]: ${d.value}` : ''))
       .filter(Boolean)
@@ -519,17 +527,22 @@ async function mcpToolCall(name, args) {
       return completeChat(args.model || 'cdz-ultra', [{ role: 'user', content: args.prompt }], 4000);
     case 'cdz_council':
       return runCouncil('', args.question);
-    case 'cdz_describe_image':
+    case 'cdz_describe_image': {
+      const imageUrl = assertPublicHttpUrl(args.image_url, 'image_url');
       return V4
-        ? callEngine('ocr_describe', { file_url: args.image_url, model_provider: 'gemini' }, 60000)
-        : callHook(HOOKS.vision, { image_url: args.image_url, prompt: args.prompt || 'Describe this image precisely.' }, 60000);
-    case 'cdz_transcribe_audio':
+        ? callEngine('ocr_describe', { file_url: imageUrl, model_provider: 'gemini' }, 60000)
+        : callHook(HOOKS.vision, { image_url: imageUrl, prompt: args.prompt || 'Describe this image precisely.' }, 60000);
+    }
+    case 'cdz_transcribe_audio': {
+      const fileUrl = assertPublicHttpUrl(args.file_url, 'file_url');
       return V4
-        ? callEngine('ocr_audio', { file_url: args.file_url }, 120000)
-        : callHook(HOOKS.audio, { file_url: args.file_url }, 120000);
+        ? callEngine('ocr_audio', { file_url: fileUrl }, 120000)
+        : callHook(HOOKS.audio, { file_url: fileUrl }, 120000);
+    }
     case 'cdz_ocr': {
-      if (V4) return callEngine('ocr_extract_text', { image_url: args.file_url }, 60000);
-      const raw = await callHook(HOOKS.ocr, { file_url: args.file_url }, 60000);
+      const fileUrl = assertPublicHttpUrl(args.file_url, 'file_url');
+      if (V4) return callEngine('ocr_extract_text', { image_url: fileUrl }, 60000);
+      const raw = await callHook(HOOKS.ocr, { file_url: fileUrl }, 60000);
       try { return JSON.parse(raw).text ?? raw; } catch { return raw; }
     }
     case 'cdz_web_search': {
@@ -645,7 +658,7 @@ const server = http.createServer(async (req, res) => {
       const parsed = JSON.parse(body || '{}');
       const model = parsed.model || 'cdz-ultra';
       usage.byModel[model] = (usage.byModel[model] || 0) + 1;
-      const maxTokens = Math.min(Number(parsed.max_tokens) || 4000, 16000);
+      const maxTokens = normalizeMaxTokens(parsed.max_tokens);
       // structured output: enforce the JSON contract + clean the answer
       const contract = jsonContractMessage(parsed.response_format);
       const messages = contract
@@ -666,19 +679,19 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/v1/images/describe' && req.method === 'POST') {
       const { image_url, prompt } = JSON.parse(body || '{}');
-      if (!image_url) return err(res, 400, 'image_url required');
+      const imageUrl = assertPublicHttpUrl(image_url, 'image_url');
       const description = V4
-        ? await callEngine('ocr_describe', { file_url: image_url, model_provider: 'gemini' }, 60000)
-        : await callHook(HOOKS.vision, { image_url, prompt: prompt || 'Describe this image precisely.' }, 60000);
+        ? await callEngine('ocr_describe', { file_url: imageUrl, model_provider: 'gemini' }, 60000)
+        : await callHook(HOOKS.vision, { image_url: imageUrl, prompt: prompt || 'Describe this image precisely.' }, 60000);
       return json(res, 200, { description });
     }
 
     if (path === '/v1/audio/transcriptions' && req.method === 'POST') {
       const { file_url } = JSON.parse(body || '{}');
-      if (!file_url) return err(res, 400, 'file_url required (public URL)');
+      const fileUrl = assertPublicHttpUrl(file_url, 'file_url');
       const text = V4
-        ? await callEngine('ocr_audio', { file_url }, 120000)
-        : await callHook(HOOKS.audio, { file_url }, 120000);
+        ? await callEngine('ocr_audio', { file_url: fileUrl }, 120000)
+        : await callHook(HOOKS.audio, { file_url: fileUrl }, 120000);
       return json(res, 200, { text });
     }
 
