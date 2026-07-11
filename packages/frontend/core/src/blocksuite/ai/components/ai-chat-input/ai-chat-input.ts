@@ -862,30 +862,98 @@ export class AIChatInput extends SignalWatcher(
 
     .cdz-plan-review {
       margin: 0 0 8px;
-      padding: 12px;
-      border: 1px solid color-mix(in srgb, #10a37f 42%, transparent);
-      border-radius: 12px;
-      background: color-mix(in srgb, #10a37f 8%, var(--affine-v2-layer-background-primary));
+      padding: 14px;
+      border: 1px solid color-mix(in srgb, #10a37f 32%, transparent);
+      border-radius: 14px;
+      background: color-mix(in srgb, #10a37f 6%, var(--affine-v2-layer-background-primary));
+      box-shadow: 0 4px 18px color-mix(in srgb, #10a37f 10%, transparent);
       animation: clickdz-card-in 0.2s ease-out both;
+      /* The composer container caps its own height with an inline max-height
+         but never clips overflow — this internal scroll keeps a tall plan
+         from spilling over content rendered below the composer. */
+      max-height: min(420px, 48vh);
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
     .cdz-plan-review.busy {
-      display: flex;
-      align-items: center;
-      gap: 10px;
       color: var(--affine-v2-text-secondary);
       font-size: 13px;
     }
+    .cdz-plan-busy-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .cdz-plan-skeleton {
+      height: 12px;
+      border-radius: 6px;
+      margin: 6px 0;
+      background: linear-gradient(
+        90deg,
+        color-mix(in srgb, #10a37f 10%, transparent) 25%,
+        color-mix(in srgb, #10a37f 22%, transparent) 50%,
+        color-mix(in srgb, #10a37f 10%, transparent) 75%
+      );
+      background-size: 200% 100%;
+      animation: cdz-plan-shimmer 1.4s ease-in-out infinite;
+    }
+    .cdz-plan-skeleton.short {
+      width: 62%;
+    }
+    @keyframes cdz-plan-shimmer {
+      0% {
+        background-position: 200% 0;
+      }
+      100% {
+        background-position: -200% 0;
+      }
+    }
+    .cdz-plan-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
     .cdz-plan-review-title {
-      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
       color: var(--affine-v2-text-primary);
       font-size: 13px;
       font-weight: 700;
+    }
+    .cdz-plan-step-count {
+      padding: 1px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #0d8a6c;
+      background: color-mix(in srgb, #10a37f 14%, transparent);
+    }
+    .cdz-plan-kbd-hint {
+      color: var(--affine-v2-text-secondary);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .cdz-plan-kbd-hint kbd {
+      display: inline-block;
+      padding: 0 4px;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 10px;
+      line-height: 1.5;
+      background: var(--affine-v2-layer-background-primary);
     }
     .cdz-plan-question {
       margin-bottom: 8px;
       color: var(--affine-v2-text-primary);
       font-size: 13px;
-      line-height: 1.4;
+      font-weight: 500;
+      line-height: 1.45;
     }
     .cdz-plan-options {
       display: flex;
@@ -896,56 +964,190 @@ export class AIChatInput extends SignalWatcher(
     .cdz-plan-option {
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
       border-radius: 999px;
-      padding: 4px 10px;
+      padding: 4px 12px;
       cursor: pointer;
       color: var(--affine-v2-text-secondary);
       background: var(--affine-v2-layer-background-primary);
       font-size: 12px;
+      transition:
+        color 0.15s ease,
+        border-color 0.15s ease,
+        background-color 0.15s ease;
+    }
+    .cdz-plan-option:hover {
+      border-color: color-mix(in srgb, #10a37f 45%, transparent);
+      color: var(--affine-v2-text-primary);
     }
     .cdz-plan-option.active {
       border-color: #10a37f;
       color: #087c62;
+      font-weight: 600;
       background: color-mix(in srgb, #10a37f 14%, transparent);
     }
-    .cdz-plan-answer,
-    .cdz-plan-draft {
+    .cdz-plan-answer {
       width: 100%;
       box-sizing: border-box;
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
       border-radius: 8px;
-      padding: 8px 10px;
+      padding: 7px 10px;
+      margin-bottom: 12px;
       color: var(--affine-v2-text-primary);
       background: var(--affine-v2-input-background);
       font: inherit;
-      resize: vertical;
+      font-size: 12px;
     }
-    .cdz-plan-answer {
-      min-height: 36px;
-      margin-bottom: 8px;
+    .cdz-plan-answer:focus {
+      outline: none;
+      border-color: color-mix(in srgb, #10a37f 55%, transparent);
     }
-    .cdz-plan-draft {
-      min-height: 82px;
+    .cdz-plan-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 10px;
+      background: var(--affine-v2-layer-background-primary);
+    }
+    .cdz-plan-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 2px 4px;
+      border-radius: 8px;
+    }
+    .cdz-plan-step:hover {
+      background: color-mix(in srgb, #10a37f 5%, transparent);
+    }
+    .cdz-plan-step-num {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      margin-top: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 700;
+      color: #0d8a6c;
+      background: color-mix(in srgb, #10a37f 14%, transparent);
+    }
+    .cdz-plan-step-text {
+      flex: 1;
+      min-width: 0;
+      min-height: 28px;
+      max-height: 96px;
+      box-sizing: border-box;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 4px 6px;
+      color: var(--affine-v2-text-primary);
+      background: transparent;
+      font: inherit;
+      font-size: 12.5px;
+      line-height: 1.45;
+      resize: none;
+      field-sizing: content;
+    }
+    .cdz-plan-step-text:hover {
+      border-color: var(--affine-v2-layer-insideBorder-border);
+    }
+    .cdz-plan-step-text:focus {
+      outline: none;
+      border-color: color-mix(in srgb, #10a37f 55%, transparent);
+      background: var(--affine-v2-input-background);
+    }
+    .cdz-plan-step-remove {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      margin-top: 4px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      border-radius: 6px;
+      padding: 0;
+      cursor: pointer;
+      color: var(--affine-v2-text-secondary);
+      background: transparent;
+      font-size: 11px;
+      opacity: 0;
+      transition:
+        opacity 0.15s ease,
+        color 0.15s ease,
+        background-color 0.15s ease;
+    }
+    .cdz-plan-step:hover .cdz-plan-step-remove,
+    .cdz-plan-step-remove:focus-visible {
+      opacity: 1;
+    }
+    .cdz-plan-step-remove:hover:not(:disabled) {
+      color: #d33030;
+      background: color-mix(in srgb, #d33030 12%, transparent);
+    }
+    .cdz-plan-step-remove:disabled {
+      cursor: default;
+      opacity: 0;
+    }
+    .cdz-plan-add-step {
+      align-self: flex-start;
+      margin-top: 2px;
+      border: 1px dashed var(--affine-v2-layer-insideBorder-border);
+      border-radius: 999px;
+      padding: 3px 12px;
+      cursor: pointer;
+      color: var(--affine-v2-text-secondary);
+      background: transparent;
+      font-size: 12px;
+      transition:
+        color 0.15s ease,
+        border-color 0.15s ease;
+    }
+    .cdz-plan-add-step:hover:not(:disabled) {
+      color: #0d8a6c;
+      border-color: color-mix(in srgb, #10a37f 50%, transparent);
+    }
+    .cdz-plan-add-step:disabled {
+      cursor: default;
+      opacity: 0.5;
     }
     .cdz-plan-actions {
       display: flex;
       justify-content: flex-end;
       gap: 8px;
-      margin-top: 10px;
+      margin-top: 12px;
     }
     .cdz-plan-action {
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
       border-radius: 8px;
-      padding: 6px 12px;
+      padding: 6px 14px;
       cursor: pointer;
       color: var(--affine-v2-text-primary);
       background: transparent;
       font-size: 12px;
       font-weight: 700;
+      transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+    }
+    .cdz-plan-action:hover {
+      background: color-mix(in srgb, var(--affine-v2-text-primary) 6%, transparent);
     }
     .cdz-plan-action.primary {
       border-color: #10a37f;
       color: white;
       background: #10a37f;
+    }
+    .cdz-plan-action.primary:hover {
+      background: #0d8a6c;
+      box-shadow: 0 2px 10px color-mix(in srgb, #10a37f 40%, transparent);
+    }
+    .cdz-plan-action:focus-visible {
+      outline: 2px solid color-mix(in srgb, #10a37f 60%, transparent);
+      outline-offset: 1px;
     }
 
     .cdz-artifacts-overlay {
@@ -1371,6 +1573,7 @@ export class AIChatInput extends SignalWatcher(
     question: string;
     options: string[];
     answer: string;
+    steps: string[];
     draftPlan: string;
   } | null = null;
 
@@ -1486,6 +1689,43 @@ export class AIChatInput extends SignalWatcher(
     };
   }
 
+  /** Split free-form plan prose into ordered steps (client-side fallback). */
+  private _derivePlanSteps(plan: string): string[] {
+    const text = plan.trim();
+    if (!text) return [];
+    const numbered = text
+      .split(/(?:^|\s)(?:\d{1,2}[).:]|[-•*])\s+/)
+      .map(part => part.trim().replace(/[\s,;]+$/, ''))
+      .filter(part => part.length > 2);
+    if (numbered.length >= 2) return numbered.slice(0, 8);
+    const lines = text
+      .split(/\n+/)
+      .map(line => line.trim().replace(/^(?:\d{1,2}[).:]|[-•*])\s*/, ''))
+      .filter(Boolean);
+    if (lines.length >= 2) return lines.slice(0, 8);
+    const sentences = text
+      .split(/(?<=[.!?])\s+/)
+      .map(sentence => sentence.trim())
+      .filter(sentence => sentence.length > 2);
+    if (sentences.length >= 2) return sentences.slice(0, 8);
+    return [text];
+  }
+
+  private _focusPlanStep(index: number, caretAtEnd = true) {
+    void this.updateComplete.then(() => {
+      const areas = this.renderRoot.querySelectorAll<HTMLTextAreaElement>(
+        '.cdz-plan-step-text'
+      );
+      const target = areas[Math.max(0, Math.min(index, areas.length - 1))];
+      if (!target) return;
+      target.focus();
+      if (caretAtEnd) {
+        const end = target.value.length;
+        target.setSelectionRange(end, end);
+      }
+    });
+  }
+
   private async _beginPlanReview(request: string) {
     if (this.planBusy) return;
     this.planBusy = true;
@@ -1502,6 +1742,15 @@ export class AIChatInput extends SignalWatcher(
           data?.error?.message || `Plan clarification failed (${response.status})`
         );
       }
+      const draftPlan = String(
+        data?.draftPlan || 'Clarify the goal, execute, then verify the result.'
+      );
+      const steps = Array.isArray(data?.steps)
+        ? data.steps
+            .map((step: unknown) => String(step).trim())
+            .filter(Boolean)
+            .slice(0, 8)
+        : [];
       this.planReview = {
         request,
         question: String(data?.question || 'What should I optimize for?'),
@@ -1509,9 +1758,8 @@ export class AIChatInput extends SignalWatcher(
           ? data.options.map((option: unknown) => String(option)).slice(0, 4)
           : [],
         answer: '',
-        draftPlan: String(
-          data?.draftPlan || 'Clarify the goal, execute, then verify the result.'
-        ),
+        steps: steps.length ? steps : this._derivePlanSteps(draftPlan),
+        draftPlan,
       };
     } catch {
       this.planReview = {
@@ -1519,6 +1767,11 @@ export class AIChatInput extends SignalWatcher(
         question: 'What outcome matters most before I execute this plan?',
         options: ['Fast first version', 'Highest quality', 'Lowest risk'],
         answer: '',
+        steps: [
+          'Confirm the target outcome and constraints.',
+          'Execute the request end to end.',
+          'Verify the result and report what was done.',
+        ],
         draftPlan:
           'Confirm the target outcome, execute the request, and verify the final result.',
       };
@@ -1527,17 +1780,26 @@ export class AIChatInput extends SignalWatcher(
     }
   }
 
+  private _cancelPlanReview() {
+    this.planReview = null;
+    this.planMode = false;
+  }
+
   private async _executePlanReview() {
     const review = this.planReview;
     if (!review) return;
+    const steps = review.steps.map(step => step.trim()).filter(Boolean);
+    const planBody = steps.length
+      ? steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
+      : review.draftPlan;
     const approvedRequest =
       wrapCdzDirective(
         { kind: 'plan', icon: '🧭', label: 'Approved plan' },
         [
-          'The user approved this execution plan. Follow it, then deliver the complete result.',
+          'The user approved this execution plan. Follow every step in order, then deliver the complete result.',
           `Clarification: ${review.answer || 'Use the best professional judgment.'}`,
           '',
-          review.draftPlan,
+          planBody,
           '',
         ].join('\n')
       ) + review.request;
@@ -1546,17 +1808,93 @@ export class AIChatInput extends SignalWatcher(
     await this.send(approvedRequest);
   }
 
+  private _setPlanStep(index: number, value: string) {
+    const review = this.planReview;
+    if (!review) return;
+    const steps = review.steps.slice();
+    steps[index] = value;
+    this.planReview = { ...review, steps };
+  }
+
+  private _insertPlanStep(afterIndex: number) {
+    const review = this.planReview;
+    if (!review || review.steps.length >= 12) return;
+    const steps = review.steps.slice();
+    steps.splice(afterIndex + 1, 0, '');
+    this.planReview = { ...review, steps };
+    this._focusPlanStep(afterIndex + 1);
+  }
+
+  private _removePlanStep(index: number) {
+    const review = this.planReview;
+    if (!review || review.steps.length <= 1) return;
+    const steps = review.steps.slice();
+    steps.splice(index, 1);
+    this.planReview = { ...review, steps };
+    this._focusPlanStep(Math.max(0, index - 1));
+  }
+
+  private readonly _planCardKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this._cancelPlanReview();
+      return;
+    }
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      event.stopPropagation();
+      void this._executePlanReview();
+    }
+  };
+
+  private _planStepKeyDown(event: KeyboardEvent, index: number) {
+    if (event.isComposing) return;
+    if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
+      event.preventDefault();
+      this._insertPlanStep(index);
+      return;
+    }
+    if (event.key === 'Backspace') {
+      const target = event.target as HTMLTextAreaElement;
+      if (target.value === '' && (this.planReview?.steps.length ?? 0) > 1) {
+        event.preventDefault();
+        this._removePlanStep(index);
+      }
+    }
+  }
+
   private _renderPlanReview() {
     if (this.planBusy) {
-      return html`<div class="cdz-plan-review busy">
-        <span class="clickdz-image-spinner"></span>
-        <span>The fast planner is preparing one decisive question…</span>
+      return html`<div class="cdz-plan-review busy" data-testid="clickdz-plan-review">
+        <div class="cdz-plan-busy-row">
+          <span class="clickdz-image-spinner"></span>
+          <span>Drafting a plan and one decisive question…</span>
+        </div>
+        <div class="cdz-plan-skeleton"></div>
+        <div class="cdz-plan-skeleton short"></div>
       </div>`;
     }
     const review = this.planReview;
     if (!review) return nothing;
-    return html`<div class="cdz-plan-review" data-testid="clickdz-plan-review">
-      <div class="cdz-plan-review-title">🧭 Plan preflight</div>
+    return html`<div
+      class="cdz-plan-review"
+      data-testid="clickdz-plan-review"
+      @keydown=${this._planCardKeyDown}
+    >
+      <div class="cdz-plan-header">
+        <div class="cdz-plan-review-title">
+          <span class="cdz-plan-title-icon">🧭</span>
+          <span>Plan preflight</span>
+          <span class="cdz-plan-step-count"
+            >${review.steps.length}
+            step${review.steps.length === 1 ? '' : 's'}</span
+          >
+        </div>
+        <div class="cdz-plan-kbd-hint">
+          <kbd>Esc</kbd> cancel · <kbd>Ctrl</kbd>+<kbd>↵</kbd> approve
+        </div>
+      </div>
       <div class="cdz-plan-question">${review.question}</div>
       ${review.options.length
         ? html`<div class="cdz-plan-options">
@@ -1564,7 +1902,10 @@ export class AIChatInput extends SignalWatcher(
               option => html`<button
                 class="cdz-plan-option ${review.answer === option ? 'active' : ''}"
                 @click=${() => {
-                  this.planReview = { ...review, answer: option };
+                  this.planReview = {
+                    ...review,
+                    answer: review.answer === option ? '' : option,
+                  };
                 }}
               >
                 ${option}
@@ -1583,32 +1924,54 @@ export class AIChatInput extends SignalWatcher(
           };
         }}
       />
-      <textarea
-        class="cdz-plan-draft"
-        aria-label="Editable execution plan"
-        .value=${review.draftPlan}
-        @input=${(event: Event) => {
-          this.planReview = {
-            ...review,
-            draftPlan: (event.target as HTMLTextAreaElement).value,
-          };
-        }}
-      ></textarea>
-      <div class="cdz-plan-actions">
+      <div class="cdz-plan-steps" role="list" aria-label="Editable execution plan">
+        ${review.steps.map(
+          (step, index) => html`<div class="cdz-plan-step" role="listitem">
+            <span class="cdz-plan-step-num">${index + 1}</span>
+            <textarea
+              class="cdz-plan-step-text"
+              rows="1"
+              placeholder="Describe this step…"
+              aria-label=${`Plan step ${index + 1}`}
+              .value=${step}
+              @input=${(event: Event) => {
+                this._setPlanStep(
+                  index,
+                  (event.target as HTMLTextAreaElement).value
+                );
+              }}
+              @keydown=${(event: KeyboardEvent) =>
+                this._planStepKeyDown(event, index)}
+            ></textarea>
+            <button
+              class="cdz-plan-step-remove"
+              title="Remove step"
+              aria-label=${`Remove step ${index + 1}`}
+              ?disabled=${review.steps.length <= 1}
+              @click=${() => this._removePlanStep(index)}
+            >
+              ✕
+            </button>
+          </div>`
+        )}
         <button
-          class="cdz-plan-action"
-          @click=${() => {
-            this.planReview = null;
-            this.planMode = false;
-          }}
+          class="cdz-plan-add-step"
+          ?disabled=${review.steps.length >= 12}
+          @click=${() => this._insertPlanStep(review.steps.length - 1)}
         >
+          + Add step
+        </button>
+      </div>
+      <div class="cdz-plan-actions">
+        <button class="cdz-plan-action" @click=${() => this._cancelPlanReview()}>
           Cancel
         </button>
         <button
           class="cdz-plan-action primary"
+          data-testid="clickdz-plan-approve"
           @click=${() => this._executePlanReview()}
         >
-          Approve and run
+          ✓ Approve and run
         </button>
       </div>
     </div>`;
