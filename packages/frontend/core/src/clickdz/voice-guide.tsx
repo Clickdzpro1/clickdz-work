@@ -5,8 +5,12 @@
 // AI bridge). Live captions appear as you talk; pausing auto-sends to ClickDz
 // AI (Make credits) and the answer is spoken back with Deepgram TTS.
 //
-// Self-contained: imports only React. All styling inline + one <style> block.
+// Mostly self-contained: React plus a read-only peek at the workbench sidebar
+// state so the orb shifts left instead of covering the docked AI chat panel.
+// All styling inline + one <style> block.
 
+import { WorkbenchService } from '@affine/core/modules/workbench';
+import { useLiveData, useServiceOptional } from '@toeverything/infra';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 const BRIDGE = '';
@@ -62,6 +66,14 @@ export const VoiceGuide = () => {
   const [answer, setAnswer] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [panelOpen, setPanelOpen] = useState(false);
+
+  // Keep the orb clear of the docked right sidebar (AI chat panel): when the
+  // workbench sidebar is open, shift left by its live width so the orb never
+  // covers the chat composer controls.
+  const workbench = useServiceOptional(WorkbenchService)?.workbench;
+  const sidebarOpen = useLiveData(workbench?.sidebarOpen$) ?? false;
+  const sidebarWidth = useLiveData(workbench?.sidebarWidth$) ?? 320;
+  const rightOffset = sidebarOpen ? sidebarWidth + 24 : 24;
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -394,9 +406,10 @@ export const VoiceGuide = () => {
 
   const containerStyle: React.CSSProperties = {
     position: 'fixed',
-    right: '24px',
+    right: `${rightOffset}px`,
     bottom: '100px',
     zIndex: 40,
+    transition: 'right 0.2s ease',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'flex-end',
