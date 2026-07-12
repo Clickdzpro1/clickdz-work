@@ -5,6 +5,9 @@ import { property, state } from 'lit/decorators.js';
 
 import { artifactStore } from '../../../../modules/ai-artifacts/store';
 import type { StreamObject } from '../ai-chat-messages';
+// Side-effect import: registers the <clickdz-builder-studio> custom element
+// (self-registers via its @customElement decorator) used by the studio overlay.
+import './clickdz-builder-studio';
 
 type ClickDzAppResult = {
   title: string;
@@ -71,6 +74,14 @@ export class ClickDzAppResultCard extends ShadowlessElement {
       background: ${unsafeCSSVarV2('segment/button')};
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
     }
+    button.studio-btn {
+      border-color: #10a37f;
+      color: #0d8a6c;
+      font-weight: 700;
+    }
+    button.studio-btn:hover {
+      background: color-mix(in srgb, #10a37f 12%, transparent);
+    }
     button.primary {
       border-color: #2f7bff;
       color: white;
@@ -128,6 +139,16 @@ export class ClickDzAppResultCard extends ShadowlessElement {
   @state()
   private accessor error = '';
 
+  // Full-screen Lovable-style studio (code editor + live preview + AI dock).
+  @state()
+  private accessor studioOpen = false;
+
+  // Once the studio edits the app, its HTML becomes the live source of truth
+  // for this card's preview / code view / publish (the stream-object result is
+  // immutable, so we keep the working copy here).
+  @state()
+  private accessor liveHtml = '';
+
   private get result(): ClickDzAppResult | null {
     if (
       this.data.type !== 'tool-result' ||
@@ -141,6 +162,32 @@ export class ClickDzAppResultCard extends ShadowlessElement {
     return result as ClickDzAppResult;
   }
 
+  /** The current working HTML: studio edits win over the original result. */
+  private get currentHtml(): string {
+    return this.liveHtml || this.result?.html || '';
+  }
+
+  /** Persist the working HTML (and any URL) so the composer + shelf stay in sync. */
+  private persistApp(url?: string) {
+    const result = this.result;
+    if (!result) return;
+    const id = `app_${result.slug}`;
+    const existing = artifactStore.get(id);
+    artifactStore.upsert({
+      ...(existing ?? {
+        id,
+        type: 'app',
+        title: result.title,
+        prompt: result.title,
+        sessionId: 'draft',
+        slug: result.slug,
+        mimeType: 'text/html',
+      }),
+      payload: this.currentHtml,
+      url: url ?? (this.publishedUrl || existing?.url),
+    });
+  }
+
   private async publish() {
     const result = this.result;
     if (!result || this.publishing) return;
@@ -150,7 +197,7 @@ export class ClickDzAppResultCard extends ShadowlessElement {
       const response = await fetch('/api/v1/apps/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ html: result.html, slug: result.slug }),
+        body: JSON.stringify({ html: this.currentHtml, slug: result.slug }),
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
@@ -159,10 +206,7 @@ export class ClickDzAppResultCard extends ShadowlessElement {
         );
       }
       this.publishedUrl = String(data.url || '');
-      const existing = artifactStore.get(`app_${result.slug}`);
-      if (existing) {
-        artifactStore.upsert({ ...existing, url: this.publishedUrl });
-      }
+      this.persistApp(this.publishedUrl);
     } catch (error) {
       this.error = error instanceof Error ? error.message : 'Publish failed';
     } finally {
@@ -174,6 +218,7 @@ export class ClickDzAppResultCard extends ShadowlessElement {
     const result = this.result;
     if (!result) return nothing;
     const url = this.publishedUrl || result.url;
+    const currentHtml = this.currentHtml;
     return html`<section class="app-card" data-testid="clickdz-app-result">
       <div class="app-toolbar">
         <div class="app-title">🚀 ${result.title}</div>
@@ -192,6 +237,14 @@ export class ClickDzAppResultCard extends ShadowlessElement {
           </button>
         </div>
         <button
+          class="studio-btn"
+          data-testid="clickdz-open-studio"
+          title="Open the visual studio — edit code and preview side by side"
+          @click=${() => (this.studioOpen = true)}
+        >
+          ⤢ Studio
+        </button>
+        <button
           class="primary"
           ?disabled=${this.publishing}
           @click=${() => this.publish()}
@@ -207,13 +260,29 @@ export class ClickDzAppResultCard extends ShadowlessElement {
       <div class="app-preview">
         ${this.mode === 'preview'
           ? html`<iframe
-              .srcdoc=${result.html}
+              .srcdoc=${currentHtml}
               sandbox="allow-scripts allow-forms allow-popups allow-modals"
               title=${result.title}
             ></iframe>`
-          : html`<pre><code>${result.html}</code></pre>`}
+          : html`<pre><code>${currentHtml}</code></pre>`}
       </div>
       ${this.error ? html`<div class="app-error">${this.error}</div>` : nothing}
+      <clickdz-builder-studio
+        .open=${this.studioOpen}
+        .slug=${result.slug}
+        .title=${result.title}
+        .html=${currentHtml}
+        .publishedUrl=${url ?? ''}
+        @studio-close=${() => (this.studioOpen = false)}
+        @studio-html-change=${(event: CustomEvent<{ html: string }>) => {
+          this.liveHtml = event.detail.html;
+          this.persistApp();
+        }}
+        @studio-published=${(event: CustomEvent<{ url: string }>) => {
+          this.publishedUrl = event.detail.url;
+          this.persistApp(event.detail.url);
+        }}
+      ></clickdz-builder-studio>
     </section>`;
   }
 }
