@@ -49,8 +49,33 @@ interface CdzPickMessage {
   text: string;
 }
 
+// Drag-reorder message from the preview bridge (Feature A). `beforeId` is the
+// data-cdz-id of the sibling to insert the dragged node before, or null to
+// append at the end of the (same) parent.
+interface CdzMoveMessage {
+  type: 'cdz-move';
+  id: number;
+  beforeId: number | null;
+}
+
 const PREVIEW_DEBOUNCE_MS = 400;
 const IFRAME_SANDBOX = 'allow-scripts allow-forms allow-popups allow-modals';
+// Max document-history snapshots retained for undo/redo (Feature B).
+const HISTORY_CAP = 30;
+// Preset color swatches offered in the edit panel (Feature C).
+const CDZ_SWATCHES = [
+  '#10a37f',
+  '#2f7bff',
+  '#d33030',
+  '#f59e0b',
+  '#8b5cf6',
+  '#ffffff',
+  '#111111',
+  '#6b7280',
+];
+// Font-size clamp for the stepper (Feature C).
+const CDZ_FONT_MIN = 8;
+const CDZ_FONT_MAX = 96;
 
 @customElement('clickdz-builder-studio')
 export class ClickDzBuilderStudio extends LitElement {
@@ -146,7 +171,7 @@ export class ClickDzBuilderStudio extends LitElement {
       font-weight: 500;
     }
 
-    /* segmented control */
+    /* segmented control — pill container w/ active "thumb" */
     .cdz-seg {
       display: flex;
       gap: 2px;
@@ -160,14 +185,15 @@ export class ClickDzBuilderStudio extends LitElement {
       appearance: none;
       border: 0;
       border-radius: 6px;
-      padding: 5px 13px;
+      padding: 6px 14px;
       cursor: pointer;
       color: var(--cdz-text-2);
       background: transparent;
       font: inherit;
       font-size: 12px;
       font-weight: 600;
-      transition: color 0.12s, background 0.12s;
+      transition: color 0.15s ease, background 0.15s ease,
+        box-shadow 0.15s ease;
     }
 
     .cdz-seg button:hover {
@@ -177,69 +203,139 @@ export class ClickDzBuilderStudio extends LitElement {
     .cdz-seg button.active {
       color: var(--cdz-text);
       background: var(--cdz-bg);
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.04);
     }
 
     .cdz-actions {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       flex: 1;
       justify-content: flex-end;
     }
 
+    /* group wrapper w/ 1px dividers between toolbar clusters */
+    .cdz-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .cdz-group + .cdz-group {
+      margin-left: 6px;
+      padding-left: 8px;
+      border-left: 1px solid var(--cdz-border);
+    }
+
+    /* ── unified button system ───────────────────────────── */
     button.cdz-btn,
     a.cdz-btn {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
+      justify-content: center;
+      gap: 6px;
       appearance: none;
-      border: 1px solid var(--cdz-border);
+      box-sizing: border-box;
+      border: 1px solid transparent;
       border-radius: 8px;
-      padding: 6px 11px;
+      padding: 8px 12px;
       cursor: pointer;
       color: var(--cdz-text);
-      background: var(--cdz-bg-3);
+      background: transparent;
       font: inherit;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 600;
+      line-height: 1;
       text-decoration: none;
-      transition: border-color 0.12s, background 0.12s, color 0.12s;
+      transition: border-color 0.15s ease, background 0.15s ease,
+        color 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
     }
 
-    button.cdz-btn:hover,
-    a.cdz-btn:hover {
-      border-color: #3a4048;
-      background: #2a2f37;
+    button.cdz-btn svg,
+    a.cdz-btn svg {
+      display: block;
+      flex-shrink: 0;
     }
 
     button.cdz-btn:focus-visible,
     a.cdz-btn:focus-visible,
-    .cdz-seg button:focus-visible {
-      outline: 2px solid var(--cdz-accent);
-      outline-offset: 2px;
+    .cdz-seg button:focus-visible,
+    .cdz-swatch:focus-visible,
+    .cdz-step:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--cdz-bg), 0 0 0 4px var(--cdz-accent);
     }
 
-    button.cdz-btn.toggled {
+    /* primary — solid brand green w/ lift + shadow on hover */
+    button.cdz-btn.primary,
+    a.cdz-btn.primary {
       border-color: var(--cdz-accent);
-      color: var(--cdz-accent);
-      background: rgba(16, 163, 127, 0.12);
-    }
-
-    button.cdz-primary {
-      border-color: var(--cdz-accent);
-      color: #06231b;
+      color: #04241b;
       background: var(--cdz-accent);
     }
 
-    button.cdz-primary:hover {
-      border-color: #14b98f;
-      background: #14b98f;
+    button.cdz-btn.primary:hover:not(:disabled),
+    a.cdz-btn.primary:hover {
+      background: #0d8a6c;
+      border-color: #0d8a6c;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(16, 163, 127, 0.32);
+    }
+
+    button.cdz-btn.primary:active:not(:disabled) {
+      transform: translateY(0);
+      box-shadow: 0 2px 8px rgba(16, 163, 127, 0.28);
+    }
+
+    /* secondary — outlined */
+    button.cdz-btn.secondary,
+    a.cdz-btn.secondary {
+      border-color: var(--cdz-border);
+      color: var(--cdz-text);
+      background: var(--cdz-bg-3);
+    }
+
+    button.cdz-btn.secondary:hover:not(:disabled),
+    a.cdz-btn.secondary:hover {
+      border-color: #3a4048;
+      background: #2a2f37;
+    }
+
+    /* ghost — text only, hover bg */
+    button.cdz-btn.ghost,
+    a.cdz-btn.ghost {
+      border-color: transparent;
+      color: var(--cdz-text-2);
+      background: transparent;
+    }
+
+    button.cdz-btn.ghost:hover:not(:disabled),
+    a.cdz-btn.ghost:hover {
+      color: var(--cdz-text);
+      background: var(--cdz-bg-3);
+    }
+
+    /* pressed / toggled state (inspect) */
+    button.cdz-btn.toggled {
+      border-color: var(--cdz-accent);
+      color: var(--cdz-accent);
+      background: rgba(16, 163, 127, 0.14);
+    }
+
+    /* icon-only button (square, holds a 16px svg) */
+    button.cdz-btn.icon,
+    a.cdz-btn.icon {
+      width: 32px;
+      height: 32px;
+      padding: 0;
     }
 
     button.cdz-btn:disabled {
-      cursor: wait;
-      opacity: 0.6;
+      cursor: not-allowed;
+      opacity: 0.5;
+      transform: none;
+      box-shadow: none;
     }
 
     /* ── center ──────────────────────────────────────────── */
@@ -378,36 +474,44 @@ export class ClickDzBuilderStudio extends LitElement {
       right: 16px;
       bottom: 16px;
       z-index: 4;
-      width: min(300px, calc(100% - 32px));
-      padding: 12px;
+      width: min(320px, calc(100% - 32px));
+      padding: 14px;
       border: 1px solid var(--cdz-border);
       border-radius: 12px;
       color: var(--cdz-text);
       background: var(--cdz-bg-2);
-      box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 20px 56px rgba(0, 0, 0, 0.6),
+        0 0 0 1px rgba(255, 255, 255, 0.03);
     }
 
     .cdz-edit-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 9px;
+      margin-bottom: 10px;
     }
 
     .cdz-edit-tag {
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      padding: 3px 8px;
+      border-radius: 6px;
       color: var(--cdz-accent);
+      background: rgba(16, 163, 127, 0.12);
       font-family: var(--cdz-mono);
       font-size: 11px;
       font-weight: 700;
       text-transform: lowercase;
     }
 
+    .cdz-field {
+      margin-top: 10px;
+    }
+
     .cdz-edit-panel label {
       display: block;
-      margin: 8px 0 4px;
+      margin: 0 0 5px;
       color: var(--cdz-text-2);
       font-size: 11px;
       font-weight: 600;
@@ -417,7 +521,7 @@ export class ClickDzBuilderStudio extends LitElement {
     .cdz-edit-panel input[type='number'] {
       box-sizing: border-box;
       width: 100%;
-      padding: 7px 9px;
+      padding: 8px 10px;
       border: 1px solid var(--cdz-border);
       border-radius: 8px;
       color: var(--cdz-text);
@@ -437,57 +541,104 @@ export class ClickDzBuilderStudio extends LitElement {
     .cdz-edit-panel input:focus {
       outline: none;
       border-color: var(--cdz-accent);
+      box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.16);
     }
 
-    .cdz-edit-row {
+    /* color swatch row */
+    .cdz-swatches {
       display: flex;
-      gap: 10px;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
     }
 
-    .cdz-edit-row > div {
-      flex: 1;
+    .cdz-swatch {
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: transform 0.1s ease, box-shadow 0.12s ease;
+    }
+
+    .cdz-swatch:hover {
+      transform: translateY(-1px);
+    }
+
+    .cdz-swatch.active {
+      box-shadow: 0 0 0 2px var(--cdz-bg-2), 0 0 0 4px var(--cdz-accent);
     }
 
     input[type='color'].cdz-color {
       box-sizing: border-box;
-      width: 100%;
-      height: 30px;
+      width: 34px;
+      height: 26px;
       padding: 2px;
       border: 1px solid var(--cdz-border);
-      border-radius: 8px;
+      border-radius: 6px;
       background: var(--cdz-bg);
       cursor: pointer;
+    }
+
+    /* font-size stepper */
+    .cdz-stepper {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .cdz-step {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 1px solid var(--cdz-border);
+      border-radius: 7px;
+      cursor: pointer;
+      color: var(--cdz-text);
+      background: var(--cdz-bg-3);
+      font: inherit;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1;
+      transition: border-color 0.12s ease, background 0.12s ease;
+    }
+
+    .cdz-step:hover {
+      border-color: #3a4048;
+      background: #2a2f37;
+    }
+
+    .cdz-stepper input[type='number'] {
+      width: 58px;
+      text-align: center;
+    }
+
+    /* strip native number spinners for a cleaner stepper */
+    .cdz-stepper input[type='number']::-webkit-outer-spin-button,
+    .cdz-stepper input[type='number']::-webkit-inner-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
     }
 
     .cdz-edit-foot {
       display: flex;
       gap: 8px;
-      margin-top: 12px;
+      margin-top: 14px;
     }
 
     .cdz-edit-foot button {
       flex: 1;
     }
 
-    .cdz-iconbtn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 24px;
-      height: 24px;
-      padding: 0;
-      border: 0;
-      border-radius: 6px;
-      cursor: pointer;
+    .cdz-edit-hint {
+      margin-top: 10px;
       color: var(--cdz-text-2);
-      background: transparent;
-      font-size: 14px;
-      line-height: 1;
-    }
-
-    .cdz-iconbtn:hover {
-      color: var(--cdz-text);
-      background: var(--cdz-bg-3);
+      font-size: 10.5px;
+      line-height: 1.4;
     }
 
     /* ── AI dock ─────────────────────────────────────────── */
@@ -534,7 +685,7 @@ export class ClickDzBuilderStudio extends LitElement {
     .cdz-msg {
       max-width: 92%;
       padding: 8px 11px;
-      border-radius: 11px;
+      border-radius: 10px;
       font-size: 12px;
       line-height: 1.45;
       word-break: break-word;
@@ -543,8 +694,9 @@ export class ClickDzBuilderStudio extends LitElement {
 
     .cdz-msg.user {
       align-self: flex-end;
-      color: #06231b;
-      background: var(--cdz-accent);
+      color: var(--cdz-text);
+      background: rgba(16, 163, 127, 0.18);
+      border: 1px solid rgba(16, 163, 127, 0.34);
       border-bottom-right-radius: 3px;
     }
 
@@ -630,6 +782,54 @@ export class ClickDzBuilderStudio extends LitElement {
       }
     }
 
+    /* typing indicator — 3 bouncing dots (shown while aiBusy) */
+    .cdz-typing {
+      align-self: flex-start;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 10px 12px;
+      border: 1px solid var(--cdz-border);
+      border-radius: 10px;
+      border-bottom-left-radius: 3px;
+      background: var(--cdz-bg-3);
+    }
+
+    .cdz-typing span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--cdz-text-2);
+      animation: cdz-bounce 1.2s ease-in-out infinite;
+    }
+
+    .cdz-typing span:nth-child(2) {
+      animation-delay: 0.15s;
+    }
+
+    .cdz-typing span:nth-child(3) {
+      animation-delay: 0.3s;
+    }
+
+    @keyframes cdz-bounce {
+      0%,
+      60%,
+      100% {
+        transform: translateY(0);
+        opacity: 0.5;
+      }
+      30% {
+        transform: translateY(-4px);
+        opacity: 1;
+      }
+    }
+
+    /* dock send button (icon) sits inline with the hint */
+    .cdz-dock-send .cdz-btn.icon {
+      width: 34px;
+      height: 34px;
+    }
+
     .cdz-topbar-err {
       flex-shrink: 0;
       padding: 7px 16px;
@@ -683,8 +883,11 @@ export class ClickDzBuilderStudio extends LitElement {
   @state()
   private accessor error = '';
 
+  // AI-dock conversation log (user prompts + system status lines). Renamed
+  // from `history` in v1 so the name doesn't collide with the undo/redo
+  // snapshot stack below (Feature B), which is the *document* history.
   @state()
-  private accessor history: CdzHistoryItem[] = [];
+  private accessor chatLog: CdzHistoryItem[] = [];
 
   @state()
   private accessor previewSrc = '';
@@ -699,10 +902,27 @@ export class ClickDzBuilderStudio extends LitElement {
   @state()
   private accessor editFontSize = '';
 
+  /**
+   * Undo/redo cursor (Feature B). Reactive so the toolbar undo/redo buttons
+   * re-evaluate their `?disabled` getters (canUndo/canRedo) whenever we push or
+   * move the cursor. The snapshot array itself (`history`) is a plain field —
+   * only the index gates the buttons, and every push/undo/redo moves the index,
+   * so index reactivity is sufficient to keep the UI in sync.
+   */
+  @state()
+  private accessor historyIndex = -1;
+
   /* ─────────────────── non-reactive fields ─────────────────── */
+
+  // Document undo/redo snapshot stack of workingHtml strings (Feature B).
+  // Capped at HISTORY_CAP (oldest dropped). NOT the AI chatLog.
+  private history: string[] = [];
 
   private previewTimer: ReturnType<typeof setTimeout> | null = null;
   private changeTimer: ReturnType<typeof setTimeout> | null = null;
+  // Debounced boundary for pushing a code-edit history snapshot (Feature B
+  // push-point d) so a burst of keystrokes collapses to a single undo entry.
+  private codeHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   // Bound so add/removeEventListener reference the same function object.
   private readonly onMessage = (event: MessageEvent) =>
     this.handleMessage(event);
@@ -739,6 +959,10 @@ export class ClickDzBuilderStudio extends LitElement {
       clearTimeout(this.changeTimer);
       this.changeTimer = null;
     }
+    if (this.codeHistoryTimer !== null) {
+      clearTimeout(this.codeHistoryTimer);
+      this.codeHistoryTimer = null;
+    }
   }
 
   protected override willUpdate(changed: Map<PropertyKey, unknown>) {
@@ -747,6 +971,10 @@ export class ClickDzBuilderStudio extends LitElement {
       this.initialized = false;
       this.selected = null;
       this.inspect = false;
+      // Drop the document-history stack so the next open starts a fresh
+      // baseline rather than letting undo reach into a prior session.
+      this.history = [];
+      this.historyIndex = -1;
       // Cancel any pending debounced work so a timer can't fire (and dispatch
       // studio-html-change) after the overlay has already closed.
       this.clearTimers();
@@ -760,6 +988,9 @@ export class ClickDzBuilderStudio extends LitElement {
       // canonical working source, then build the preview once.
       this.workingHtml = this.html ?? '';
       this.initialized = true;
+      // Feature B push-point (a): seed the undo baseline with the opening
+      // snapshot so the first structural edit has something to undo back to.
+      this.pushHistory(this.workingHtml);
       this.buildPreviewNow();
       return;
     }
@@ -778,6 +1009,9 @@ export class ClickDzBuilderStudio extends LitElement {
         incoming !== this.lastEmittedHtml
       ) {
         this.workingHtml = incoming;
+        // Keep the history invariant (tip === workingHtml): a genuine external
+        // swap becomes a new checkpoint on the stack (Feature B).
+        this.pushHistory(this.workingHtml);
         this.buildPreviewNow();
       }
     }
@@ -855,6 +1089,21 @@ export class ClickDzBuilderStudio extends LitElement {
   }
 
   /**
+   * Feature B push-point (d): debounced code-edit history boundary. Called on
+   * every code-editor keystroke; only the LAST keystroke of a burst survives
+   * the debounce, at which point we push the settled workingHtml. pushHistory
+   * collapses it against the current top, so a burst that lands identical to
+   * the tip (or a no-op edit) adds nothing.
+   */
+  private scheduleCodeHistory() {
+    if (this.codeHistoryTimer !== null) clearTimeout(this.codeHistoryTimer);
+    this.codeHistoryTimer = setTimeout(() => {
+      this.codeHistoryTimer = null;
+      this.pushHistory(this.workingHtml);
+    }, PREVIEW_DEBOUNCE_MS);
+  }
+
+  /**
    * Build the augmented srcdoc from `workingHtml`: tag every body element with
    * a deterministic data-cdz-id, inject the hover/select stylesheet and the
    * inspect bridge script, then serialize. This augmented doc is PREVIEW-ONLY;
@@ -907,8 +1156,21 @@ export class ClickDzBuilderStudio extends LitElement {
     // Only trust messages coming from our own preview iframe.
     if (!frame || event.source !== frame.contentWindow) return;
 
-    const data = event.data as Partial<CdzPickMessage> | null;
-    if (!data || data.type !== 'cdz-pick') return;
+    const data = event.data as
+      | Partial<CdzPickMessage & CdzMoveMessage>
+      | null;
+    if (!data) return;
+
+    // Drag-reorder (Feature A) — re-parse & relocate the node, then commit.
+    if (data.type === 'cdz-move') {
+      if (typeof data.id !== 'number') return;
+      const beforeId =
+        typeof data.beforeId === 'number' ? data.beforeId : null;
+      this.moveNode(data.id, beforeId);
+      return;
+    }
+
+    if (data.type !== 'cdz-pick') return;
     if (typeof data.id !== 'number') return;
 
     this.selected = {
@@ -918,6 +1180,253 @@ export class ClickDzBuilderStudio extends LitElement {
     };
     // Seed the edit-panel drafts from the current DOM state of that node.
     this.seedEditDrafts(this.selected);
+  }
+
+  /**
+   * Feature A / B — relocate the element with data-cdz-id `id` so it sits
+   * immediately before the sibling with `beforeId` (or at the end of its parent
+   * when `beforeId` is null). v1 scope is SAME-PARENT reorder only: a move whose
+   * target sibling lives under a different parent is ignored.
+   *
+   * Routes through the SAME `walkBody` order used for augmentation/apply so the
+   * ids in the message line up with the nodes here. Pushes an undo snapshot
+   * BEFORE mutating, strips all bookkeeping ids, commits via the shared
+   * replaceBodyInner path, and CLEARS `selected` (ids re-derive after the move,
+   * so a stale selection would point at the wrong node).
+   *
+   * Returns the moved node's NEW id (its index in a fresh walk of the mutated
+   * source) so callers like the arrow-nudge can re-identify and keep it
+   * selected; returns null when the move was rejected/failed.
+   */
+  private moveNode(id: number, beforeId: number | null): number | null {
+    let node: Element | null = null;
+    let before: Element | null = null;
+    const doc = this.walkBody(this.workingHtml, (el, walkId) => {
+      if (walkId === id) node = el;
+      if (beforeId !== null && walkId === beforeId) before = el;
+    });
+    if (!doc || !node) return null;
+    // TS: `node`/`before` are narrowed to never inside the closure; re-assert.
+    const moving = node as Element;
+    const target = before as Element | null;
+
+    const parent = moving.parentElement;
+    if (!parent) return null;
+
+    // v1 guard: same-parent only. A missing/other-parent target is rejected,
+    // EXCEPT the null (append-to-end-of-this-parent) case which is always same
+    // parent by construction.
+    if (beforeId !== null) {
+      if (!target) return null;
+      if (target.parentElement !== parent) return null;
+      if (target === moving) return null; // no-op drop onto itself
+    }
+
+    // (Feature B) The post-move state is pushed by commitBodyMutation below;
+    // the pre-move state is already the current history tip.
+    if (target) {
+      parent.insertBefore(moving, target);
+    } else {
+      // Append at the end of the SAME parent (after its last sibling).
+      parent.appendChild(moving);
+    }
+
+    // Compute the moved node's new id by re-walking the mutated doc BEFORE we
+    // strip bookkeeping ids (walk order is identical either way, but we hold a
+    // live reference so identity — not the attribute — is what we match on).
+    let newId: number | null = null;
+    {
+      const all = doc.body.querySelectorAll('*');
+      for (let i = 0; i < all.length; i++) {
+        if (all[i] === moving) {
+          newId = i;
+          break;
+        }
+      }
+    }
+
+    // Strip bookkeeping ids from EVERY element before serializing back.
+    doc.body.querySelectorAll('[data-cdz-id]').forEach(el => {
+      el.removeAttribute('data-cdz-id');
+    });
+
+    this.commitBodyMutation(doc);
+    // After a structural move the id space is re-derived; drop the stale
+    // selection so the edit panel never lies about which node is active.
+    this.selected = null;
+    return newId;
+  }
+
+  /* ─────────────────── arrow-key nudge (Feature A) ─────────────────── */
+
+  /**
+   * Move the currently-selected element one slot earlier (`-1`) or later
+   * (`+1`) among its ELEMENT siblings. Bound to Alt+ArrowUp / Alt+ArrowDown at
+   * the overlay level (only when inspect is on and something is selected).
+   *
+   * Safety: a selection's id is only valid for the workingHtml snapshot it was
+   * picked from, and workingHtml can change out from under it if the user typed
+   * in the code editor. So before nudging we re-walk and verify the element at
+   * `selected.id` still has the same tagName; on mismatch we drop the nudge and
+   * clear the (now-stale) selection rather than move the wrong node.
+   */
+  private nudgeSelected(direction: -1 | 1) {
+    const sel = this.selected;
+    if (!sel || !this.inspect) return;
+
+    // Single walk of the CURRENT source: record the element at sel.id plus a
+    // map from every element to its walk-id. Doing this in ONE parse is
+    // essential — nodes from separate DOMParser passes are distinct objects, so
+    // cross-parse identity comparison would never match.
+    let current: Element | null = null;
+    const idOf = new Map<Element, number>();
+    this.walkBody(this.workingHtml, (el, id) => {
+      idOf.set(el, id);
+      if (id === sel.id) current = el;
+    });
+    const el = current as Element | null;
+    // Stale-selection guard: id no longer resolves, or now points at a
+    // different tag → the source moved under us. Drop the nudge + selection.
+    if (!el || el.tagName.toLowerCase() !== (sel.tag || '').toLowerCase()) {
+      this.selected = null;
+      return;
+    }
+    const node = el as Element;
+
+    const parent = node.parentElement;
+    if (!parent) return;
+
+    // Element-only sibling list, in order (from the SAME parse).
+    const siblings = Array.from(parent.children);
+    const pos = siblings.indexOf(node);
+    if (pos === -1) return;
+
+    // Determine the reference sibling to insert BEFORE (or null = append).
+    let refSibling: Element | null;
+    if (direction === -1) {
+      if (pos === 0) return; // already first — nothing to do
+      refSibling = siblings[pos - 1]; // hop before the previous sibling
+    } else {
+      if (pos >= siblings.length - 1) return; // already last
+      // Move past the next sibling: insert before the one AFTER next, or
+      // append (null) when next is the final sibling.
+      refSibling = siblings[pos + 2] ?? null;
+    }
+
+    // Translate the reference sibling into its walk-id (from the SAME map) so
+    // we can reuse the shared moveNode routine, which re-parses from an
+    // identical walk order and thus resolves the same ids.
+    let refId: number | null = null;
+    if (refSibling) {
+      const found = idOf.get(refSibling);
+      // Should always resolve (refSibling came from this walk); bail if not.
+      if (found === undefined) return;
+      refId = found;
+    }
+
+    const newId = this.moveNode(sel.id, refId);
+    // Re-identify the moved node in the fresh id space so repeated Alt+Arrow
+    // keeps working fluidly on the same element.
+    if (newId !== null) {
+      this.reselectById(newId);
+    }
+  }
+
+  /**
+   * Re-establish `selected` at a freshly-derived id after a structural move,
+   * re-deriving tag/text from the (now-clean) workingHtml so the edit panel
+   * tracks the same node the user was nudging.
+   */
+  private reselectById(id: number) {
+    let tag = '';
+    let text = '';
+    let found = false;
+    this.walkBody(this.workingHtml, (el, walkId) => {
+      if (walkId !== id) return;
+      found = true;
+      tag = el.tagName.toLowerCase();
+      text = this.directText(el);
+    });
+    if (!found) {
+      this.selected = null;
+      return;
+    }
+    this.selected = { id, tag, text };
+    this.seedEditDrafts(this.selected);
+  }
+
+  /* ─────────────────── undo / redo (Feature B) ─────────────────── */
+
+  private get canUndo(): boolean {
+    return this.historyIndex > 0;
+  }
+
+  private get canRedo(): boolean {
+    return this.historyIndex < this.history.length - 1;
+  }
+
+  /**
+   * Push a snapshot onto the document-history stack. Truncates any redo tail
+   * (standard branch behavior), collapses consecutive duplicates (so we never
+   * store the same string twice in a row), and caps the stack at HISTORY_CAP by
+   * dropping the oldest entry.
+   */
+  private pushHistory(snapshot: string) {
+    // If the pointer isn't at the tip, drop the redo tail before pushing.
+    if (this.historyIndex < this.history.length - 1) {
+      this.history = this.history.slice(0, this.historyIndex + 1);
+    }
+    // Collapse no-op pushes (identical to current top).
+    if (
+      this.history.length > 0 &&
+      this.history[this.history.length - 1] === snapshot
+    ) {
+      return;
+    }
+    this.history.push(snapshot);
+    if (this.history.length > HISTORY_CAP) {
+      this.history.shift(); // drop oldest
+    }
+    this.historyIndex = this.history.length - 1;
+  }
+
+  /**
+   * If a debounced code-edit checkpoint is still pending, commit it now so the
+   * current typed state is on the stack before we navigate history. Otherwise a
+   * mid-burst undo could skip past the unsaved edit with no way to redo to it.
+   */
+  private flushPendingCodeHistory() {
+    if (this.codeHistoryTimer !== null) {
+      clearTimeout(this.codeHistoryTimer);
+      this.codeHistoryTimer = null;
+      this.pushHistory(this.workingHtml);
+    }
+  }
+
+  private undo() {
+    this.flushPendingCodeHistory();
+    if (!this.canUndo) return;
+    this.historyIndex -= 1;
+    this.restoreSnapshot(this.history[this.historyIndex]);
+  }
+
+  private redo() {
+    this.flushPendingCodeHistory();
+    if (!this.canRedo) return;
+    this.historyIndex += 1;
+    this.restoreSnapshot(this.history[this.historyIndex]);
+  }
+
+  /**
+   * Restore a history snapshot into workingHtml, rebuild the preview, schedule
+   * the html-change emit, and clear any selection (its id belongs to a
+   * different source snapshot). Does NOT push — undo/redo only move the cursor.
+   */
+  private restoreSnapshot(snapshot: string) {
+    this.workingHtml = snapshot;
+    this.selected = null;
+    this.buildPreviewNow();
+    this.scheduleHtmlChange();
   }
 
   private seedEditDrafts(sel: CdzSelected) {
@@ -1008,8 +1517,44 @@ export class ClickDzBuilderStudio extends LitElement {
       el.removeAttribute('data-cdz-id');
     });
 
+    // Feature B push-point (b): commitBodyMutation records the post-edit state
+    // as the new history tip (the pre-edit state is already on the stack).
     this.commitBodyMutation(doc);
     this.selected = null;
+  }
+
+  /* ── edit-panel draft controls (Feature C) ────────────────────────── */
+
+  // Pick a preset swatch → sets the color draft (both the swatch row highlight
+  // and the native color input read from editColor).
+  private pickSwatch(hex: string) {
+    this.editColor = normalizeColor(hex) || hex.toLowerCase();
+  }
+
+  // Font-size stepper: nudge by ±1px, clamped to [CDZ_FONT_MIN, CDZ_FONT_MAX].
+  // An empty draft steps relative to a sensible default (16px).
+  private stepFontSize(delta: number) {
+    const current = parseFloat(this.editFontSize);
+    const base = Number.isFinite(current) ? current : 16;
+    const next = Math.max(
+      CDZ_FONT_MIN,
+      Math.min(CDZ_FONT_MAX, Math.round(base) + delta)
+    );
+    this.editFontSize = String(next);
+  }
+
+  // Manual entry into the stepper's number field, clamped on the way in.
+  private onFontSizeInput(raw: string) {
+    const trimmed = raw.trim();
+    if (trimmed === '') {
+      this.editFontSize = '';
+      return;
+    }
+    const value = parseFloat(trimmed);
+    if (!Number.isFinite(value)) return;
+    this.editFontSize = String(
+      Math.max(CDZ_FONT_MIN, Math.min(CDZ_FONT_MAX, value))
+    );
   }
 
   /**
@@ -1027,6 +1572,14 @@ export class ClickDzBuilderStudio extends LitElement {
     this.workingHtml =
       replaced !== null ? replaced : serializeFullDoc(doc);
 
+    // Feature B: record the committed result as the new history tip. Every
+    // structural mutation (visual apply, cdz-move, arrow nudge) funnels through
+    // here, so this is the single push-point for structural edits. The invariant
+    // is history[historyIndex] === workingHtml after any commit; the PRE-edit
+    // state is already on the stack (baseline at open, or the previous tip),
+    // which is the "snapshot before mutating" the spec calls for.
+    this.pushHistory(this.workingHtml);
+
     this.buildPreviewNow();
     this.scheduleHtmlChange();
   }
@@ -1038,6 +1591,7 @@ export class ClickDzBuilderStudio extends LitElement {
     this.workingHtml = target.value;
     this.scheduleRebuild();
     this.scheduleHtmlChange();
+    this.scheduleCodeHistory();
   }
 
   private onCodeKeyDown(event: KeyboardEvent) {
@@ -1053,6 +1607,7 @@ export class ClickDzBuilderStudio extends LitElement {
     this.workingHtml = next;
     this.scheduleRebuild();
     this.scheduleHtmlChange();
+    this.scheduleCodeHistory();
   }
 
   /* ─────────────────── AI dock ─────────────────── */
@@ -1061,7 +1616,7 @@ export class ClickDzBuilderStudio extends LitElement {
     const prompt = this.aiPrompt.trim();
     if (!prompt || this.aiBusy) return;
 
-    this.history = [...this.history, { role: 'user', text: prompt }];
+    this.chatLog = [...this.chatLog, { role: 'user', text: prompt }];
     this.aiPrompt = '';
     this.aiBusy = true;
     this.error = '';
@@ -1083,18 +1638,22 @@ export class ClickDzBuilderStudio extends LitElement {
         );
       }
       if (data && typeof data.html === 'string') {
+        // Feature B push-point (c): record the AI result as the new history tip
+        // so the user can undo an AI edit (the pre-AI state is already on the
+        // stack as the prior tip).
         this.workingHtml = data.html;
+        this.pushHistory(this.workingHtml);
       }
       if (data && typeof data.slug === 'string' && data.slug) {
         this.slug = data.slug;
       }
       this.buildPreviewNow();
       this.scheduleHtmlChange();
-      this.history = [...this.history, { role: 'system', text: 'Updated ✓' }];
+      this.chatLog = [...this.chatLog, { role: 'system', text: 'Updated ✓' }];
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Generation failed';
-      this.history = [...this.history, { role: 'system', text: message }];
+      this.chatLog = [...this.chatLog, { role: 'system', text: message }];
       this.error = message;
     } finally {
       this.aiBusy = false;
@@ -1128,8 +1687,8 @@ export class ClickDzBuilderStudio extends LitElement {
       }
       const url = String(data?.url || data?.deploymentUrl || '');
       this.publishedUrl = url;
-      this.history = [
-        ...this.history,
+      this.chatLog = [
+        ...this.chatLog,
         { role: 'system', text: url ? `Published → ${url}` : 'Published ✓' },
       ];
       this.dispatchEvent(
@@ -1154,18 +1713,65 @@ export class ClickDzBuilderStudio extends LitElement {
     );
   }
 
-  private handleKeyDown(event: KeyboardEvent) {
-    if (!this.open || event.key !== 'Escape') return;
-    // Don't trap typing: ignore Escape when focus is in a text field.
-    const path = event.composedPath();
-    const inField = path.some(node => {
+  /**
+   * True when the event's composed path passes through a TEXTAREA/INPUT — i.e.
+   * focus is in a text field. Shared by the Escape, undo/redo and nudge
+   * handlers so none of them trap or clobber native text editing.
+   */
+  private eventInField(event: KeyboardEvent): boolean {
+    return event.composedPath().some(node => {
       const el = node as HTMLElement;
       const tag = el?.tagName;
       return tag === 'TEXTAREA' || tag === 'INPUT';
     });
-    if (inField) return;
-    event.preventDefault();
-    this.close();
+  }
+
+  private handleKeyDown(event: KeyboardEvent) {
+    if (!this.open) return;
+
+    const inField = this.eventInField(event);
+
+    // Escape-to-close: ignore when focus is in a text field so typing isn't
+    // trapped (unchanged v1 semantics).
+    if (event.key === 'Escape') {
+      if (inField) return;
+      event.preventDefault();
+      this.close();
+      return;
+    }
+
+    // Undo / redo (Feature B). BAIL when focus is inside any input/textarea so
+    // the browser's native text-undo keeps working in the code editor / fields.
+    const meta = event.metaKey || event.ctrlKey;
+    if (meta && !inField) {
+      const key = event.key.toLowerCase();
+      // Ctrl/Cmd+Shift+Z or Ctrl+Y → redo; Ctrl/Cmd+Z → undo.
+      if ((key === 'z' && event.shiftKey) || key === 'y') {
+        event.preventDefault();
+        this.redo();
+        return;
+      }
+      if (key === 'z') {
+        event.preventDefault();
+        this.undo();
+        return;
+      }
+    }
+
+    // Alt+Arrow nudge (Feature A): reorder the selected element among its
+    // siblings. Only when inspect is on, something is selected, and focus is
+    // not in a text field (so Alt+Arrow inside the edit-panel text box is left
+    // to the browser).
+    if (
+      event.altKey &&
+      !inField &&
+      this.inspect &&
+      this.selected &&
+      (event.key === 'ArrowUp' || event.key === 'ArrowDown')
+    ) {
+      event.preventDefault();
+      this.nudgeSelected(event.key === 'ArrowUp' ? -1 : 1);
+    }
   }
 
   private setView(view: 'split' | 'code' | 'preview') {
@@ -1213,37 +1819,74 @@ export class ClickDzBuilderStudio extends LitElement {
       </div>
 
       <div class="cdz-actions">
-        <button
-          class=${classMap({ 'cdz-btn': true, toggled: this.inspect })}
-          title="Click elements in the preview to edit them"
-          aria-pressed=${this.inspect}
-          @click=${() => this.toggleInspect()}
-        >
-          ⌖ Inspect
-        </button>
-        <button
-          class="cdz-btn cdz-primary"
-          ?disabled=${this.publishing}
-          @click=${() => this.publish()}
-        >
-          ${this.publishing
-            ? html`<span class="cdz-spinner"></span>Publishing…`
-            : openUrl
-              ? 'Republish'
-              : 'Publish'}
-        </button>
-        ${openUrl
-          ? html`<a
-              class="cdz-btn"
-              href=${openUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              >Open ↗</a
-            >`
-          : nothing}
-        <button class="cdz-btn" title="Close" @click=${() => this.close()}>
-          Close ✕
-        </button>
+        <div class="cdz-group">
+          <button
+            class="cdz-btn ghost icon"
+            title="Undo (Ctrl/Cmd+Z)"
+            aria-label="Undo"
+            ?disabled=${!this.canUndo}
+            @click=${() => this.undo()}
+          >
+            ${CDZ_ICONS.undo}
+          </button>
+          <button
+            class="cdz-btn ghost icon"
+            title="Redo (Ctrl/Cmd+Shift+Z)"
+            aria-label="Redo"
+            ?disabled=${!this.canRedo}
+            @click=${() => this.redo()}
+          >
+            ${CDZ_ICONS.redo}
+          </button>
+        </div>
+
+        <div class="cdz-group">
+          <button
+            class=${classMap({
+              'cdz-btn': true,
+              secondary: !this.inspect,
+              toggled: this.inspect,
+            })}
+            title="Click elements in the preview to edit them"
+            aria-label="Inspect"
+            aria-pressed=${this.inspect}
+            @click=${() => this.toggleInspect()}
+          >
+            ${CDZ_ICONS.inspect} Inspect
+          </button>
+        </div>
+
+        <div class="cdz-group">
+          ${openUrl
+            ? html`<a
+                class="cdz-btn secondary"
+                href=${openUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open published app"
+                aria-label="Open published app"
+                >${CDZ_ICONS.openExternal} Open</a
+              >`
+            : nothing}
+          <button
+            class="cdz-btn primary"
+            ?disabled=${this.publishing}
+            title=${openUrl ? 'Republish app' : 'Publish app'}
+            @click=${() => this.publish()}
+          >
+            ${this.publishing
+              ? html`<span class="cdz-spinner"></span>Publishing…`
+              : html`${CDZ_ICONS.publish}${openUrl ? 'Republish' : 'Publish'}`}
+          </button>
+          <button
+            class="cdz-btn ghost icon"
+            title="Close"
+            aria-label="Close"
+            @click=${() => this.close()}
+          >
+            ${CDZ_ICONS.close}
+          </button>
+        </div>
       </div>
     </div>`;
   }
@@ -1293,74 +1936,116 @@ export class ClickDzBuilderStudio extends LitElement {
   private renderEditPanel() {
     const sel = this.selected;
     if (!sel) return nothing;
+    const activeColor = normalizeColor(this.editColor);
     return html`<div class="cdz-edit-panel" @keydown=${stopKeydown}>
       <div class="cdz-edit-head">
         <span class="cdz-edit-tag">&lt;${sel.tag || 'node'}&gt;</span>
         <button
-          class="cdz-iconbtn"
+          class="cdz-btn ghost icon"
           title="Dismiss"
+          aria-label="Dismiss"
           @click=${() => (this.selected = null)}
         >
-          ✕
+          ${CDZ_ICONS.close}
         </button>
       </div>
 
-      <label>Text</label>
-      <textarea
-        .value=${this.editText}
-        @input=${(e: Event) =>
-          (this.editText = (e.target as HTMLTextAreaElement).value)}
-      ></textarea>
+      <div class="cdz-field">
+        <label>Text</label>
+        <textarea
+          .value=${this.editText}
+          @input=${(e: Event) =>
+            (this.editText = (e.target as HTMLTextAreaElement).value)}
+        ></textarea>
+      </div>
 
-      <div class="cdz-edit-row">
-        <div>
-          <label>Color</label>
+      <div class="cdz-field">
+        <label>Color</label>
+        <div class="cdz-swatches">
+          ${CDZ_SWATCHES.map(hex => {
+            const isActive = activeColor === hex.toLowerCase();
+            return html`<button
+              class=${classMap({ 'cdz-swatch': true, active: isActive })}
+              style=${`background:${hex}`}
+              title=${hex}
+              aria-label=${`Set color ${hex}`}
+              @click=${() => this.pickSwatch(hex)}
+            ></button>`;
+          })}
           <input
             class="cdz-color"
             type="color"
-            .value=${this.editColor || '#000000'}
+            aria-label="Custom color"
+            .value=${activeColor || '#000000'}
             @input=${(e: Event) =>
               (this.editColor = (e.target as HTMLInputElement).value)}
           />
         </div>
-        <div>
-          <label>Font size (px)</label>
+      </div>
+
+      <div class="cdz-field">
+        <label>Font size (px)</label>
+        <div class="cdz-stepper">
+          <button
+            class="cdz-step"
+            title="Decrease font size"
+            aria-label="Decrease font size"
+            @click=${() => this.stepFontSize(-1)}
+          >
+            −
+          </button>
           <input
             type="number"
-            min="1"
+            min=${CDZ_FONT_MIN}
+            max=${CDZ_FONT_MAX}
             placeholder="—"
             .value=${this.editFontSize}
             @input=${(e: Event) =>
-              (this.editFontSize = (e.target as HTMLInputElement).value)}
+              this.onFontSizeInput((e.target as HTMLInputElement).value)}
           />
+          <button
+            class="cdz-step"
+            title="Increase font size"
+            aria-label="Increase font size"
+            @click=${() => this.stepFontSize(1)}
+          >
+            +
+          </button>
         </div>
       </div>
 
       <div class="cdz-edit-foot">
-        <button class="cdz-btn" @click=${() => (this.selected = null)}>
+        <button
+          class="cdz-btn ghost"
+          @click=${() => (this.selected = null)}
+        >
           Cancel
         </button>
-        <button class="cdz-btn cdz-primary" @click=${() => this.applyEdit()}>
+        <button class="cdz-btn primary" @click=${() => this.applyEdit()}>
           Apply
         </button>
       </div>
+
+      <div class="cdz-edit-hint">Alt+↑/↓ move · drag to reorder</div>
     </div>`;
   }
 
   private renderDock() {
     return html`<aside class="cdz-dock">
       <div class="cdz-dock-head">
-        <div class="cdz-dock-title">✦ AI edits</div>
-        <div class="cdz-dock-sub">The code is the context.</div>
+        <div class="cdz-dock-title">${CDZ_ICONS.sparkle} AI edits</div>
+        <div class="cdz-dock-sub">
+          Describe a change — the current code is the context.
+        </div>
       </div>
 
       <div class="cdz-dock-log">
-        ${this.history.length === 0
+        ${this.chatLog.length === 0
           ? html`<div class="cdz-dock-empty">
               Describe a change and the assistant will edit the app using the
               current code as context.
             </div>`
-          : this.history.map(item => {
+          : this.chatLog.map(item => {
               const isErr =
                 item.role === 'system' &&
                 item.text !== 'Updated ✓' &&
@@ -1376,6 +2061,11 @@ export class ClickDzBuilderStudio extends LitElement {
                 ${item.text}
               </div>`;
             })}
+        ${this.aiBusy
+          ? html`<div class="cdz-typing" aria-label="Assistant is working">
+              <span></span><span></span><span></span>
+            </div>`
+          : nothing}
       </div>
 
       <div class="cdz-dock-input">
@@ -1391,13 +2081,15 @@ export class ClickDzBuilderStudio extends LitElement {
         <div class="cdz-dock-send">
           <span class="cdz-hint">Enter to send · Shift+Enter for newline</span>
           <button
-            class="cdz-btn cdz-primary"
+            class="cdz-btn primary icon"
+            title="Send"
+            aria-label="Send"
             ?disabled=${this.aiBusy || this.aiPrompt.trim().length === 0}
             @click=${() => this.sendAi()}
           >
             ${this.aiBusy
-              ? html`<span class="cdz-spinner"></span>Working…`
-              : 'Send'}
+              ? html`<span class="cdz-spinner"></span>`
+              : CDZ_ICONS.send}
           </button>
         </div>
       </div>
@@ -1444,19 +2136,176 @@ function stopKeydown(event: KeyboardEvent) {
   event.stopPropagation();
 }
 
-// Injected into the preview <head>. Draws hover/selected outlines. Kept as a
-// plain string (no backticks) to avoid nesting template literals.
+/* ── inline SVG icon set (Feature C) ────────────────────────────────
+ * 16px, stroke: currentColor, no fill, rounded caps/joins. Each is a complete
+ * <svg> root so Lit's `html` tag namespaces them correctly. Purely decorative
+ * → aria-hidden; the enclosing button carries the accessible label/title.
+ */
+const CDZ_ICONS = {
+  // close — X
+  close: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <line x1="18" y1="6" x2="6" y2="18"></line>
+    <line x1="6" y1="6" x2="18" y2="18"></line>
+  </svg>`,
+  // open-external — arrow-up-right in a box
+  openExternal: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+    <polyline points="15 3 21 3 21 9"></polyline>
+    <line x1="10" y1="14" x2="21" y2="3"></line>
+  </svg>`,
+  // inspect — crosshair / target
+  inspect: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx="12" cy="12" r="8"></circle>
+    <line x1="12" y1="2" x2="12" y2="6"></line>
+    <line x1="12" y1="18" x2="12" y2="22"></line>
+    <line x1="2" y1="12" x2="6" y2="12"></line>
+    <line x1="18" y1="12" x2="22" y2="12"></line>
+  </svg>`,
+  // publish — upload cloud
+  publish: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M16 16l-4-4-4 4"></path>
+    <path d="M12 12v9"></path>
+    <path
+      d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"
+    ></path>
+    <path d="M16 16l-4-4-4 4"></path>
+  </svg>`,
+  // undo — arrow-counterclockwise
+  undo: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 7v6h6"></path>
+    <path d="M3 13a9 9 0 1 0 3-7.7L3 8"></path>
+  </svg>`,
+  // redo — arrow-clockwise
+  redo: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M21 7v6h-6"></path>
+    <path d="M21 13a9 9 0 1 1-3-7.7L21 8"></path>
+  </svg>`,
+  // send — paper plane
+  send: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <line x1="22" y1="2" x2="11" y2="13"></line>
+    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+  </svg>`,
+  // sparkle — AI dock header accent
+  sparkle: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path
+      d="M12 3l1.9 4.8L18.7 9.7l-4.8 1.9L12 16.4l-1.9-4.8L5.3 9.7l4.8-1.9L12 3z"
+    ></path>
+  </svg>`,
+} as const;
+
+// Injected into the preview <head>. Draws hover/selected outlines plus the
+// drag-reorder affordances (dragging state, drop indicator line, drag handle
+// chip). Kept as a plain string (no backticks) to avoid nesting template
+// literals. All rules are !important so they win over app styles.
 const CDZ_INSPECT_STYLE = [
   '[data-cdz-id].cdz-hover{outline:2px dashed #10a37f !important;',
   'outline-offset:1px !important;cursor:pointer !important;}',
   '[data-cdz-id].cdz-sel{outline:2px solid #10a37f !important;',
   'outline-offset:1px !important;}',
+  // dragged element: dimmed + green outline, grabbing cursor.
+  '[data-cdz-id].cdz-dragging{opacity:0.45 !important;',
+  'outline:2px solid #10a37f !important;outline-offset:1px !important;',
+  'cursor:grabbing !important;}',
+  // drop indicator line (positioned absolutely; reused element).
+  '#cdz-drop-indicator{position:absolute !important;z-index:2147483646 !important;',
+  'background:#10a37f !important;border-radius:2px !important;',
+  'pointer-events:none !important;display:none !important;',
+  'box-shadow:0 0 6px rgba(16,163,127,0.8) !important;}',
+  // drag handle chip (⠿) shown at the hovered element's top-left corner.
+  '#cdz-drag-handle{position:absolute !important;z-index:2147483647 !important;',
+  'display:none !important;align-items:center !important;',
+  'justify-content:center !important;width:18px !important;height:18px !important;',
+  'border-radius:5px !important;background:#10a37f !important;color:#04241b !important;',
+  'font:600 12px/1 ui-monospace,monospace !important;',
+  'pointer-events:none !important;box-shadow:0 2px 6px rgba(0,0,0,0.4) !important;}',
 ].join('');
 
 /**
  * Build the bridge script string injected into the preview <body>.
  * It listens for {type:'cdz-inspect', on} from the parent, manages hover +
- * selection classes, and posts {type:'cdz-pick', id, tag, text} on click.
+ * selection classes, posts {type:'cdz-pick', id, tag, text} on click, and
+ * (Feature A) implements whiteboard-style same-parent drag reorder, posting
+ * {type:'cdz-move', id, beforeId} on a valid drop.
  *
  * NOTE: this runs inside the sandboxed iframe (no allow-same-origin). It only
  * uses postMessage to talk to window.parent. The "direct text" logic here MUST
@@ -1472,22 +2321,147 @@ function buildBridgeScript(initialOn: boolean): string {
     (initialOn ? 'true' : 'false') +
     ';' +
     'var hovered=null;' +
+    // ── drag state ──────────────────────────────────────────────
+    'var DRAG_THRESHOLD=6;' + // px pointer travel before a drag begins
+    'var pressEl=null;' + // element under an active mousedown (candidate)
+    'var pressX=0,pressY=0;' + // mousedown origin
+    'var dragging=null;' + // the element currently being dragged (or null)
+    'var dropBefore=null;' + // sibling to insert before (null = append)
+    'var suppressClick=false;' + // swallow the click that ends a drag gesture
+    'var indicator=null;' + // reused drop-indicator line element
+    'var handle=null;' + // reused drag-handle chip element
+    // Resolve nearest ancestor-or-self carrying a data-cdz-id.
+    'function pickEl(t){' +
+    'if(!t)return null;' +
+    'if(t.closest){return t.closest("[data-cdz-id]");}' +
+    'while(t&&t.getAttribute&&t.getAttribute("data-cdz-id")===null){t=t.parentElement;}' +
+    'return (t&&t.getAttribute&&t.getAttribute("data-cdz-id")!==null)?t:null;}' +
+    'function idOf(el){return el?parseInt(el.getAttribute("data-cdz-id"),10):null;}' +
     'function clearHover(){if(hovered){hovered.classList.remove("cdz-hover");hovered=null;}}' +
     'function directText(el){' +
     'if(!el.firstElementChild){return (el.textContent||"").trim();}' +
     'var out="";var n=el.childNodes;' +
     'for(var i=0;i<n.length;i++){if(n[i].nodeType===3){out+=n[i].textContent||"";}}' +
     'return out.trim();}' +
+    // Lazily create + return the reused drop-indicator element.
+    'function getIndicator(){' +
+    'if(!indicator){indicator=document.createElement("div");' +
+    'indicator.id="cdz-drop-indicator";document.body.appendChild(indicator);}' +
+    'return indicator;}' +
+    'function hideIndicator(){if(indicator){indicator.style.display="none";}}' +
+    // Lazily create + return the reused drag-handle chip element.
+    'function getHandle(){' +
+    'if(!handle){handle=document.createElement("div");' +
+    'handle.id="cdz-drag-handle";handle.textContent="\\u283F";' + // ⠿
+    'document.body.appendChild(handle);}' +
+    'return handle;}' +
+    'function hideHandle(){if(handle){handle.style.display="none";}}' +
+    // Position the handle chip at the hovered element's top-left corner.
+    'function showHandle(el){' +
+    'var h=getHandle();var r=el.getBoundingClientRect();' +
+    'h.style.left=(r.left+window.scrollX)+"px";' +
+    'h.style.top=(r.top+window.scrollY)+"px";' +
+    'h.style.display="flex";}' +
+    // Element siblings (same parent, carrying data-cdz-id), excluding `except`.
+    'function siblingsOf(el,except){' +
+    'var out=[];var p=el.parentElement;if(!p)return out;' +
+    'var kids=p.children;' +
+    'for(var i=0;i<kids.length;i++){var k=kids[i];' +
+    'if(k===except)continue;' +
+    'if(k.getAttribute&&k.getAttribute("data-cdz-id")!==null){out.push(k);}}' +
+    'return out;}' +
+    // Decide the parent's dominant axis from consecutive sibling rect centers.
+    // Returns true for a COLUMN (vertical) layout, false for a ROW.
+    'function isColumn(list){' +
+    'if(list.length<2)return true;' +
+    'var dx=0,dy=0,c=0;var prev=null;' +
+    'for(var i=0;i<list.length;i++){var r=list[i].getBoundingClientRect();' +
+    'var cx=r.left+r.width/2,cy=r.top+r.height/2;' +
+    'if(prev){dx+=Math.abs(cx-prev.x);dy+=Math.abs(cy-prev.y);c++;}' +
+    'prev={x:cx,y:cy};}' +
+    'if(!c)return true;return (dy/c)>=(dx/c);}' +
+    // Given the drag pointer, compute the insertion gap among `list` (siblings
+    // WITHOUT the dragged node). Sets dropBefore + positions the indicator.
+    'function computeDrop(px,py,list){' +
+    'var col=isColumn(list);var before=null;' +
+    'for(var i=0;i<list.length;i++){var r=list[i].getBoundingClientRect();' +
+    'var mid=col?(r.top+r.height/2):(r.left+r.width/2);' +
+    'var p=col?py:px;' +
+    'if(p<mid){before=list[i];break;}}' +
+    'dropBefore=before;' +
+    'var ind=getIndicator();' +
+    'var pr=dragging.parentElement.getBoundingClientRect();' +
+    'if(col){' + // horizontal line spanning the parent's width at the gap
+    'var y;' +
+    'if(before){var rb=before.getBoundingClientRect();y=rb.top;}' +
+    'else if(list.length){var rl=list[list.length-1].getBoundingClientRect();y=rl.bottom;}' +
+    'else{y=pr.top;}' +
+    'ind.style.left=(pr.left+window.scrollX)+"px";' +
+    'ind.style.width=pr.width+"px";' +
+    'ind.style.top=(y+window.scrollY-1)+"px";' +
+    'ind.style.height="2px";' +
+    '}else{' + // vertical line spanning the parent's height at the gap
+    'var x;' +
+    'if(before){var rb2=before.getBoundingClientRect();x=rb2.left;}' +
+    'else if(list.length){var rl2=list[list.length-1].getBoundingClientRect();x=rl2.right;}' +
+    'else{x=pr.left;}' +
+    'ind.style.top=(pr.top+window.scrollY)+"px";' +
+    'ind.style.height=pr.height+"px";' +
+    'ind.style.left=(x+window.scrollX-1)+"px";' +
+    'ind.style.width="2px";}' +
+    'ind.style.display="block";}' +
+    // Tear down an in-progress drag (both on drop and on cancel).
+    'function endDrag(){' +
+    'if(dragging){dragging.classList.remove("cdz-dragging");}' +
+    'dragging=null;dropBefore=null;pressEl=null;hideIndicator();}' +
+    // mousedown: record a drag candidate (do NOT start dragging yet).
+    'document.addEventListener("mousedown",function(e){' +
+    'if(!on||e.button!==0)return;' +
+    'var el=pickEl(e.target);' +
+    'if(!el)return;' +
+    'pressEl=el;pressX=e.clientX;pressY=e.clientY;' +
+    '},true);' +
+    // mousemove: hover chip when idle; promote to drag past threshold; while
+    // dragging, recompute the drop gap.
     'document.addEventListener("mousemove",function(e){' +
     'if(!on)return;' +
-    'var t=e.target;' +
-    'if(!t||!t.getAttribute||t.getAttribute("data-cdz-id")===null){clearHover();return;}' +
+    'if(dragging){' +
+    'e.preventDefault();' +
+    'var list=siblingsOf(dragging,dragging);' +
+    'computeDrop(e.clientX,e.clientY,list);' +
+    'return;}' +
+    'if(pressEl){' + // a button is held on a candidate — check travel
+    'var mdx=e.clientX-pressX,mdy=e.clientY-pressY;' +
+    'if((mdx*mdx+mdy*mdy)>=(DRAG_THRESHOLD*DRAG_THRESHOLD)){' +
+    'dragging=pressEl;suppressClick=true;clearHover();hideHandle();' +
+    'dragging.classList.add("cdz-dragging");' +
+    'var l0=siblingsOf(dragging,dragging);' +
+    'computeDrop(e.clientX,e.clientY,l0);' +
+    'return;}}' +
+    // plain hover (no active gesture): outline + handle chip.
+    'var t=pickEl(e.target);' +
+    'if(!t){clearHover();hideHandle();return;}' +
     'if(t!==hovered){clearHover();hovered=t;t.classList.add("cdz-hover");}' +
+    'showHandle(t);' +
     '},true);' +
+    // mouseup: commit a drag as a cdz-move, else it was just a press.
+    'document.addEventListener("mouseup",function(e){' +
+    'if(!on){pressEl=null;return;}' +
+    'if(dragging){' +
+    'e.preventDefault();e.stopPropagation();' +
+    'var id=idOf(dragging);' +
+    'var beforeId=(dropBefore!==null)?idOf(dropBefore):null;' +
+    'if(id!==null){' +
+    'window.parent.postMessage({type:"cdz-move",id:id,beforeId:beforeId},"*");}' +
+    'endDrag();return;}' +
+    'pressEl=null;' +
+    '},true);' +
+    // click: normal pick, UNLESS this click terminated a drag gesture.
     'document.addEventListener("click",function(e){' +
     'if(!on)return;' +
-    'var t=e.target;' +
-    'if(!t||!t.getAttribute)return;' +
+    'if(suppressClick){suppressClick=false;e.preventDefault();e.stopPropagation();return;}' +
+    'var t=pickEl(e.target);' +
+    'if(!t)return;' +
     'var idAttr=t.getAttribute("data-cdz-id");' +
     'if(idAttr===null)return;' +
     'e.preventDefault();e.stopPropagation();' +
@@ -1497,12 +2471,18 @@ function buildBridgeScript(initialOn: boolean): string {
     'window.parent.postMessage({type:"cdz-pick",id:parseInt(idAttr,10),' +
     'tag:(t.tagName||"").toLowerCase(),text:directText(t)},"*");' +
     '},true);' +
+    // Escape cancels an in-progress drag cleanly (without posting a move).
+    'document.addEventListener("keydown",function(e){' +
+    'if(e.key==="Escape"&&dragging){e.preventDefault();suppressClick=false;endDrag();}' +
+    '},true);' +
+    // Parent → iframe inspect toggle. Turning inspect off also resets any drag
+    // state and hides the affordances.
     'window.addEventListener("message",function(e){' +
     'if(e.source!==window.parent)return;' +
     'var d=e.data;' +
     'if(!d||d.type!=="cdz-inspect")return;' +
     'on=!!d.on;' +
-    'if(!on){clearHover();' +
+    'if(!on){clearHover();hideHandle();endDrag();suppressClick=false;' +
     'var s=document.querySelectorAll(".cdz-sel");' +
     'for(var i=0;i<s.length;i++){s[i].classList.remove("cdz-sel");}}' +
     '});' +
