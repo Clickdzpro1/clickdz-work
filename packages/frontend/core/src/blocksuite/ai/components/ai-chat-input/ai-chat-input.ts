@@ -862,18 +862,34 @@ export class AIChatInput extends SignalWatcher(
 
     .cdz-plan-review {
       margin: 0 0 8px;
-      padding: 14px;
+      padding: 12px 14px;
       border: 1px solid color-mix(in srgb, #10a37f 32%, transparent);
       border-radius: 14px;
       background: color-mix(in srgb, #10a37f 6%, var(--affine-v2-layer-background-primary));
       box-shadow: 0 4px 18px color-mix(in srgb, #10a37f 10%, transparent);
       animation: clickdz-card-in 0.2s ease-out both;
-      /* The composer container caps its own height with an inline max-height
-         but never clips overflow — this internal scroll keeps a tall plan
-         from spilling over content rendered below the composer. */
-      max-height: min(420px, 48vh);
+      /* Flexible sizing: the composer sets --cdz-plan-budget (viewport-aware)
+         while a plan is open; the card claims that budget minus room for the
+         composer textarea + send row. The card itself never scrolls — its
+         BODY does — so the title stays pinned on top and the Cancel/Approve
+         bar stays pinned at the bottom on every surface and viewport. */
+      display: flex;
+      flex-direction: column;
+      max-height: calc(var(--cdz-plan-budget, 560px) - 128px);
+      overflow: hidden;
+    }
+    .cdz-plan-body {
+      flex: 1 1 auto;
+      min-height: 0;
       overflow-y: auto;
       overscroll-behavior: contain;
+      /* breathing room so focus rings and the scrollbar don't kiss the edge */
+      margin: 0 -6px;
+      padding: 0 6px;
+    }
+    .cdz-plan-header,
+    .cdz-plan-actions {
+      flex-shrink: 0;
     }
     .cdz-plan-review.busy {
       color: var(--affine-v2-text-secondary);
@@ -2050,6 +2066,7 @@ export class AIChatInput extends SignalWatcher(
           <kbd>Esc</kbd> cancel · <kbd>Ctrl</kbd>+<kbd>↵</kbd> approve
         </div>
       </div>
+      <div class="cdz-plan-body">
       ${review.goal
         ? html`<div class="cdz-plan-goal">${review.goal}</div>`
         : nothing}
@@ -2147,6 +2164,7 @@ export class AIChatInput extends SignalWatcher(
         >
           + Add step
         </button>
+      </div>
       </div>
       <div class="cdz-plan-actions">
         <span class="cdz-plan-selected-count"
@@ -2635,7 +2653,15 @@ export class AIChatInput extends SignalWatcher(
     const status = this.runtimeSnapshot?.status ?? this.chatContextValue.status;
     const hasImages = images.length > 0;
     const hasPlanReview = this.planBusy || !!this.planReview;
-    const maxHeight = hasPlanReview ? 560 : hasImages ? 272 + 2 : 200 + 2;
+    // When a plan is open the composer grows to a viewport-aware budget
+    // (instead of a fixed pixel cap) and the plan card derives its own
+    // max-height from the same custom property, so the two can flex
+    // together on any screen — docked panel, full page, or short laptop.
+    const maxHeight = hasPlanReview
+      ? 'min(72vh, 680px)'
+      : hasImages
+        ? `${272 + 2}px`
+        : `${200 + 2}px`;
 
     return html`<div
       class="chat-panel-input"
@@ -2643,7 +2669,8 @@ export class AIChatInput extends SignalWatcher(
       data-if-focused=${this.focused}
       data-drag-over=${this.isDragOver}
       style=${styleMap({
-        maxHeight: `${maxHeight}px !important`,
+        maxHeight: `${maxHeight} !important`,
+        '--cdz-plan-budget': hasPlanReview ? maxHeight : null,
       })}
       @pointerdown=${this._handlePointerDown}
       @dragenter=${this._handleDragEnter}
