@@ -924,6 +924,10 @@ export class AIChatInput extends SignalWatcher(
       font-size: 13px;
       font-weight: 700;
     }
+    .cdz-plan-title-icon {
+      font-size: 14px;
+      line-height: 1;
+    }
     .cdz-plan-step-count {
       padding: 1px 8px;
       border-radius: 999px;
@@ -948,10 +952,21 @@ export class AIChatInput extends SignalWatcher(
       line-height: 1.5;
       background: var(--affine-v2-layer-background-primary);
     }
-    .cdz-plan-question {
+    .cdz-plan-goal {
       margin-bottom: 8px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, #10a37f 9%, transparent);
+      border-left: 3px solid #10a37f;
       color: var(--affine-v2-text-primary);
       font-size: 13px;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+    .cdz-plan-question {
+      margin-bottom: 8px;
+      color: var(--affine-v2-text-secondary);
+      font-size: 12.5px;
       font-weight: 500;
       line-height: 1.45;
     }
@@ -1000,6 +1015,32 @@ export class AIChatInput extends SignalWatcher(
       outline: none;
       border-color: color-mix(in srgb, #10a37f 55%, transparent);
     }
+    .cdz-plan-steps-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .cdz-plan-steps-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--affine-v2-text-secondary);
+    }
+    .cdz-plan-selectall {
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: #0d8a6c;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 4px;
+      border-radius: 6px;
+    }
+    .cdz-plan-selectall:hover {
+      background: color-mix(in srgb, #10a37f 12%, transparent);
+    }
     .cdz-plan-steps {
       display: flex;
       flex-direction: column;
@@ -1015,9 +1056,48 @@ export class AIChatInput extends SignalWatcher(
       gap: 8px;
       padding: 2px 4px;
       border-radius: 8px;
+      transition: opacity 0.15s ease;
     }
     .cdz-plan-step:hover {
       background: color-mix(in srgb, #10a37f 5%, transparent);
+    }
+    .cdz-plan-step.unchecked {
+      opacity: 0.55;
+    }
+    .cdz-plan-step.unchecked:hover {
+      opacity: 0.8;
+    }
+    .cdz-plan-check {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      margin-top: 5px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1.5px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 5px;
+      padding: 0;
+      cursor: pointer;
+      background: var(--affine-v2-input-background);
+      color: white;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease;
+    }
+    .cdz-plan-check.on {
+      background: #10a37f;
+      border-color: #10a37f;
+    }
+    .cdz-plan-check:hover {
+      border-color: #10a37f;
+    }
+    .cdz-plan-check:focus-visible {
+      outline: 2px solid color-mix(in srgb, #10a37f 60%, transparent);
+      outline-offset: 1px;
     }
     .cdz-plan-step-num {
       flex-shrink: 0;
@@ -1115,9 +1195,22 @@ export class AIChatInput extends SignalWatcher(
     }
     .cdz-plan-actions {
       display: flex;
-      justify-content: flex-end;
+      align-items: center;
       gap: 8px;
       margin-top: 12px;
+    }
+    .cdz-plan-selected-count {
+      font-size: 11px;
+      color: var(--affine-v2-text-secondary);
+      white-space: nowrap;
+    }
+    .cdz-plan-actions-spacer {
+      flex: 1;
+    }
+    .cdz-plan-action.primary:disabled {
+      opacity: 0.5;
+      cursor: default;
+      box-shadow: none;
     }
     .cdz-plan-action {
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
@@ -1570,12 +1663,18 @@ export class AIChatInput extends SignalWatcher(
   @state()
   accessor planReview: {
     request: string;
+    goal: string;
     question: string;
     options: string[];
     answer: string;
-    steps: string[];
-    draftPlan: string;
+    // v3 checklist: each step can be checked (included) or unchecked
+    // (an optional suggestion). Only checked steps are sent on approve.
+    steps: { id: number; text: string; checked: boolean }[];
   } | null = null;
+
+  // Monotonic id source for plan steps so checkbox/edit state stays stable
+  // across re-renders even as steps are added, removed, or reordered.
+  private _planStepSeq = 0;
 
   // Persistent artifact shelf: generated images/apps survive panel close.
   @state()
@@ -1711,12 +1810,15 @@ export class AIChatInput extends SignalWatcher(
     return [text];
   }
 
-  private _focusPlanStep(index: number, caretAtEnd = true) {
+  private _makePlanStep(text: string, checked: boolean) {
+    return { id: ++this._planStepSeq, text, checked };
+  }
+
+  private _focusPlanStepById(id: number, caretAtEnd = true) {
     void this.updateComplete.then(() => {
-      const areas = this.renderRoot.querySelectorAll<HTMLTextAreaElement>(
-        '.cdz-plan-step-text'
+      const target = this.renderRoot.querySelector<HTMLTextAreaElement>(
+        `.cdz-plan-step-text[data-step-id="${id}"]`
       );
-      const target = areas[Math.max(0, Math.min(index, areas.length - 1))];
       if (!target) return;
       target.focus();
       if (caretAtEnd) {
@@ -1745,35 +1847,56 @@ export class AIChatInput extends SignalWatcher(
       const draftPlan = String(
         data?.draftPlan || 'Clarify the goal, execute, then verify the result.'
       );
-      const steps = Array.isArray(data?.steps)
+      // Accept both the v3 shape ({text, recommended}) and legacy strings.
+      type PlanStepItem = { id: number; text: string; checked: boolean };
+      const rawSteps: PlanStepItem[] = Array.isArray(data?.steps)
         ? data.steps
-            .map((step: unknown) => String(step).trim())
-            .filter(Boolean)
-            .slice(0, 8)
+            .map((step: unknown): PlanStepItem | null => {
+              if (step && typeof step === 'object' && !Array.isArray(step)) {
+                const obj = step as Record<string, unknown>;
+                const text = String(obj.text ?? obj.step ?? '').trim();
+                const checked = obj.recommended === false ? false : true;
+                return text ? this._makePlanStep(text, checked) : null;
+              }
+              const text = String(step).trim();
+              return text ? this._makePlanStep(text, true) : null;
+            })
+            .filter((step: PlanStepItem | null): step is PlanStepItem =>
+              step !== null
+            )
+            .slice(0, 10)
         : [];
+      const steps = rawSteps.length
+        ? rawSteps
+        : this._derivePlanSteps(draftPlan).map(text =>
+            this._makePlanStep(text, true)
+          );
       this.planReview = {
         request,
-        question: String(data?.question || 'What should I optimize for?'),
+        goal: String(data?.goal || draftPlan || 'Execute the request.').trim(),
+        question: String(
+          data?.question || 'What outcome matters most before I run this?'
+        ),
         options: Array.isArray(data?.options)
           ? data.options.map((option: unknown) => String(option)).slice(0, 4)
           : [],
         answer: '',
-        steps: steps.length ? steps : this._derivePlanSteps(draftPlan),
-        draftPlan,
+        steps: steps.length
+          ? steps
+          : [this._makePlanStep('Execute the request end to end.', true)],
       };
     } catch {
       this.planReview = {
         request,
+        goal: 'Execute the request.',
         question: 'What outcome matters most before I execute this plan?',
         options: ['Fast first version', 'Highest quality', 'Lowest risk'],
         answer: '',
         steps: [
-          'Confirm the target outcome and constraints.',
-          'Execute the request end to end.',
-          'Verify the result and report what was done.',
+          this._makePlanStep('Confirm the target outcome and constraints.', true),
+          this._makePlanStep('Execute the request end to end.', true),
+          this._makePlanStep('Verify the result and report what was done.', true),
         ],
-        draftPlan:
-          'Confirm the target outcome, execute the request, and verify the final result.',
       };
     } finally {
       this.planBusy = false;
@@ -1785,18 +1908,29 @@ export class AIChatInput extends SignalWatcher(
     this.planMode = false;
   }
 
+  private get _planCheckedCount() {
+    return this.planReview?.steps.filter(step => step.checked).length ?? 0;
+  }
+
   private async _executePlanReview() {
     const review = this.planReview;
     if (!review) return;
-    const steps = review.steps.map(step => step.trim()).filter(Boolean);
-    const planBody = steps.length
-      ? steps.map((step, index) => `${index + 1}. ${step}`).join('\n')
-      : review.draftPlan;
+    // Only checked steps make the final plan; that is the whole point of the
+    // checklist. Guard against an all-unchecked approve.
+    const chosen = review.steps
+      .filter(step => step.checked)
+      .map(step => step.text.trim())
+      .filter(Boolean);
+    if (!chosen.length) return;
+    const planBody = chosen
+      .map((step, index) => `${index + 1}. ${step}`)
+      .join('\n');
     const approvedRequest =
       wrapCdzDirective(
         { kind: 'plan', icon: '🧭', label: 'Approved plan' },
         [
           'The user approved this execution plan. Follow every step in order, then deliver the complete result.',
+          `Goal: ${review.goal || 'Complete the request.'}`,
           `Clarification: ${review.answer || 'Use the best professional judgment.'}`,
           '',
           planBody,
@@ -1808,30 +1942,52 @@ export class AIChatInput extends SignalWatcher(
     await this.send(approvedRequest);
   }
 
-  private _setPlanStep(index: number, value: string) {
+  private _setPlanStepText(id: number, value: string) {
     const review = this.planReview;
     if (!review) return;
-    const steps = review.steps.slice();
-    steps[index] = value;
+    const steps = review.steps.map(step =>
+      step.id === id ? { ...step, text: value } : step
+    );
     this.planReview = { ...review, steps };
   }
 
-  private _insertPlanStep(afterIndex: number) {
+  private _togglePlanStep(id: number) {
+    const review = this.planReview;
+    if (!review) return;
+    const steps = review.steps.map(step =>
+      step.id === id ? { ...step, checked: !step.checked } : step
+    );
+    this.planReview = { ...review, steps };
+  }
+
+  private _setAllPlanSteps(checked: boolean) {
+    const review = this.planReview;
+    if (!review) return;
+    this.planReview = {
+      ...review,
+      steps: review.steps.map(step => ({ ...step, checked })),
+    };
+  }
+
+  private _insertPlanStepAfter(id: number) {
     const review = this.planReview;
     if (!review || review.steps.length >= 12) return;
+    const index = review.steps.findIndex(step => step.id === id);
+    const fresh = this._makePlanStep('', true);
     const steps = review.steps.slice();
-    steps.splice(afterIndex + 1, 0, '');
+    steps.splice(index < 0 ? steps.length : index + 1, 0, fresh);
     this.planReview = { ...review, steps };
-    this._focusPlanStep(afterIndex + 1);
+    this._focusPlanStepById(fresh.id);
   }
 
-  private _removePlanStep(index: number) {
+  private _removePlanStep(id: number) {
     const review = this.planReview;
     if (!review || review.steps.length <= 1) return;
-    const steps = review.steps.slice();
-    steps.splice(index, 1);
+    const index = review.steps.findIndex(step => step.id === id);
+    const steps = review.steps.filter(step => step.id !== id);
     this.planReview = { ...review, steps };
-    this._focusPlanStep(Math.max(0, index - 1));
+    const focusTarget = steps[Math.max(0, index - 1)];
+    if (focusTarget) this._focusPlanStepById(focusTarget.id);
   }
 
   private readonly _planCardKeyDown = (event: KeyboardEvent) => {
@@ -1848,18 +2004,18 @@ export class AIChatInput extends SignalWatcher(
     }
   };
 
-  private _planStepKeyDown(event: KeyboardEvent, index: number) {
+  private _planStepKeyDown(event: KeyboardEvent, id: number) {
     if (event.isComposing) return;
     if (event.key === 'Enter' && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
-      this._insertPlanStep(index);
+      this._insertPlanStepAfter(id);
       return;
     }
     if (event.key === 'Backspace') {
       const target = event.target as HTMLTextAreaElement;
       if (target.value === '' && (this.planReview?.steps.length ?? 0) > 1) {
         event.preventDefault();
-        this._removePlanStep(index);
+        this._removePlanStep(id);
       }
     }
   }
@@ -1877,6 +2033,9 @@ export class AIChatInput extends SignalWatcher(
     }
     const review = this.planReview;
     if (!review) return nothing;
+    const total = review.steps.length;
+    const checked = this._planCheckedCount;
+    const allChecked = total > 0 && checked === total;
     return html`<div
       class="cdz-plan-review"
       data-testid="clickdz-plan-review"
@@ -1886,16 +2045,17 @@ export class AIChatInput extends SignalWatcher(
         <div class="cdz-plan-review-title">
           <span class="cdz-plan-title-icon">🧭</span>
           <span>Plan preflight</span>
-          <span class="cdz-plan-step-count"
-            >${review.steps.length}
-            step${review.steps.length === 1 ? '' : 's'}</span
-          >
         </div>
         <div class="cdz-plan-kbd-hint">
           <kbd>Esc</kbd> cancel · <kbd>Ctrl</kbd>+<kbd>↵</kbd> approve
         </div>
       </div>
-      <div class="cdz-plan-question">${review.question}</div>
+      ${review.goal
+        ? html`<div class="cdz-plan-goal">${review.goal}</div>`
+        : nothing}
+      ${review.question
+        ? html`<div class="cdz-plan-question">${review.question}</div>`
+        : nothing}
       ${review.options.length
         ? html`<div class="cdz-plan-options">
             ${review.options.map(
@@ -1915,7 +2075,7 @@ export class AIChatInput extends SignalWatcher(
         : nothing}
       <input
         class="cdz-plan-answer"
-        placeholder="Or type your answer…"
+        placeholder="Add a detail or constraint (optional)…"
         .value=${review.answer}
         @input=${(event: Event) => {
           this.planReview = {
@@ -1924,31 +2084,54 @@ export class AIChatInput extends SignalWatcher(
           };
         }}
       />
-      <div class="cdz-plan-steps" role="list" aria-label="Editable execution plan">
-        ${review.steps.map(
-          (step, index) => html`<div class="cdz-plan-step" role="listitem">
+      <div class="cdz-plan-steps-head">
+        <span class="cdz-plan-steps-label">Steps to run</span>
+        <button
+          class="cdz-plan-selectall"
+          @click=${() => this._setAllPlanSteps(!allChecked)}
+        >
+          ${allChecked ? 'Clear all' : 'Select all'}
+        </button>
+      </div>
+      <div class="cdz-plan-steps" role="group" aria-label="Editable plan checklist">
+        ${repeat(
+          review.steps,
+          step => step.id,
+          (step, index) => html`<div
+            class="cdz-plan-step ${step.checked ? '' : 'unchecked'}"
+          >
+            <button
+              class="cdz-plan-check ${step.checked ? 'on' : ''}"
+              role="checkbox"
+              aria-checked=${step.checked ? 'true' : 'false'}
+              title=${step.checked ? 'Included — click to skip' : 'Skipped — click to include'}
+              @click=${() => this._togglePlanStep(step.id)}
+            >
+              ${step.checked ? '✓' : ''}
+            </button>
             <span class="cdz-plan-step-num">${index + 1}</span>
             <textarea
               class="cdz-plan-step-text"
+              data-step-id=${step.id}
               rows="1"
               placeholder="Describe this step…"
               aria-label=${`Plan step ${index + 1}`}
-              .value=${step}
+              .value=${step.text}
               @input=${(event: Event) => {
-                this._setPlanStep(
-                  index,
+                this._setPlanStepText(
+                  step.id,
                   (event.target as HTMLTextAreaElement).value
                 );
               }}
               @keydown=${(event: KeyboardEvent) =>
-                this._planStepKeyDown(event, index)}
+                this._planStepKeyDown(event, step.id)}
             ></textarea>
             <button
               class="cdz-plan-step-remove"
               title="Remove step"
               aria-label=${`Remove step ${index + 1}`}
               ?disabled=${review.steps.length <= 1}
-              @click=${() => this._removePlanStep(index)}
+              @click=${() => this._removePlanStep(step.id)}
             >
               ✕
             </button>
@@ -1957,21 +2140,29 @@ export class AIChatInput extends SignalWatcher(
         <button
           class="cdz-plan-add-step"
           ?disabled=${review.steps.length >= 12}
-          @click=${() => this._insertPlanStep(review.steps.length - 1)}
+          @click=${() =>
+            this._insertPlanStepAfter(
+              review.steps[review.steps.length - 1]?.id ?? 0
+            )}
         >
           + Add step
         </button>
       </div>
       <div class="cdz-plan-actions">
+        <span class="cdz-plan-selected-count"
+          >${checked} of ${total} selected</span
+        >
+        <span class="cdz-plan-actions-spacer"></span>
         <button class="cdz-plan-action" @click=${() => this._cancelPlanReview()}>
           Cancel
         </button>
         <button
           class="cdz-plan-action primary"
           data-testid="clickdz-plan-approve"
+          ?disabled=${checked === 0}
           @click=${() => this._executePlanReview()}
         >
-          ✓ Approve and run
+          ✓ Approve ${checked} step${checked === 1 ? '' : 's'}
         </button>
       </div>
     </div>`;

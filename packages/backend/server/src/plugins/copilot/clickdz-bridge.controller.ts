@@ -206,11 +206,23 @@ function parseMakeAgentResponse(raw: unknown): string {
   return '';
 }
 
+/**
+ * A single proposed plan step. `recommended` steps are checked by default in
+ * the UI (the core plan); non-recommended steps render as unchecked optional
+ * "suggestions" the user can opt into. This powers the v3 checklist UX.
+ */
+type PlanStep = {
+  text: string;
+  recommended: boolean;
+};
+
 type PlanClarification = {
+  /** One-line statement of what the plan will accomplish. */
+  goal: string;
   question: string;
   options: string[];
-  /** Ordered, editable execution steps. Always non-empty. */
-  steps: string[];
+  /** Ordered checklist of proposed steps. Always non-empty. */
+  steps: PlanStep[];
   /** Flat prose form of the plan, kept for backwards compatibility. */
   draftPlan: string;
 };
@@ -241,10 +253,31 @@ function derivePlanSteps(plan: string): string[] {
   return [text];
 }
 
-const FALLBACK_PLAN_STEPS = [
-  'Confirm the target outcome and constraints.',
-  'Execute the request end to end.',
-  'Verify the result and report what was done.',
+/** Coerce whatever the model returned in `steps` into PlanStep objects. */
+function normalizePlanSteps(raw: unknown): PlanStep[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PlanStep[] = [];
+  for (const entry of raw) {
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      const obj = entry as Record<string, unknown>;
+      const text = String(obj.text ?? obj.step ?? obj.title ?? '').trim();
+      if (!text) continue;
+      // Default to recommended unless the model explicitly opts it out.
+      const recommended =
+        obj.recommended === false || obj.optional === true ? false : true;
+      out.push({ text, recommended });
+    } else {
+      const text = String(entry).trim();
+      if (text) out.push({ text, recommended: true });
+    }
+  }
+  return out.slice(0, 10);
+}
+
+const FALLBACK_PLAN_STEPS: PlanStep[] = [
+  { text: 'Confirm the target outcome and constraints.', recommended: true },
+  { text: 'Execute the request end to end.', recommended: true },
+  { text: 'Verify the result and report what was done.', recommended: true },
 ];
 
 function parsePlanClarification(raw: string): PlanClarification {
@@ -257,6 +290,7 @@ function parsePlanClarification(raw: string): PlanClarification {
         string,
         unknown
       >;
+      const goal = String(parsed.goal || parsed.summary || '').trim();
       const question = String(parsed.question || '').trim();
       const options = Array.isArray(parsed.options)
         ? parsed.options
@@ -264,35 +298,43 @@ function parsePlanClarification(raw: string): PlanClarification {
             .filter(Boolean)
             .slice(0, 4)
         : [];
-      const steps = Array.isArray(parsed.steps)
-        ? parsed.steps
-            .map(step => String(step).trim())
-            .filter(Boolean)
-            .slice(0, 8)
-        : [];
+      let steps = normalizePlanSteps(parsed.steps);
+      // Merge any explicit optional "suggestions" the model returned as
+      // unchecked steps the user can opt into.
+      const suggestions = normalizePlanSteps(parsed.suggestions).map(step => ({
+        ...step,
+        recommended: false,
+      }));
+      steps = [...steps, ...suggestions];
       const draftPlan = String(parsed.draftPlan || '').trim();
-      const resolvedSteps = steps.length
-        ? steps
-        : derivePlanSteps(draftPlan);
-      if (question && resolvedSteps.length) {
+      if (!steps.length && draftPlan) {
+        steps = derivePlanSteps(draftPlan).map(text => ({
+          text,
+          recommended: true,
+        }));
+      }
+      if (steps.length) {
         return {
-          question,
+          goal: goal || draftPlan || 'Execute the request.',
+          question: question || 'What outcome matters most before I run this?',
           options,
-          steps: resolvedSteps,
-          draftPlan: draftPlan || resolvedSteps.join('\n'),
+          steps: steps.slice(0, 10),
+          draftPlan:
+            draftPlan || steps.map(step => step.text).join('\n'),
         };
       }
     } catch {
       // fall through to a useful deterministic clarification
     }
   }
-  const fallbackSteps = derivePlanSteps(raw);
-  const steps = fallbackSteps.length ? fallbackSteps : FALLBACK_PLAN_STEPS;
+  const derived = derivePlanSteps(raw).map(text => ({ text, recommended: true }));
+  const steps = derived.length ? derived : FALLBACK_PLAN_STEPS;
   return {
+    goal: raw.trim().slice(0, 160) || 'Execute the request.',
     question: 'What outcome matters most before I execute this plan?',
     options: ['Fast first version', 'Highest quality', 'Lowest risk'],
     steps,
-    draftPlan: raw.trim() || steps.join('\n'),
+    draftPlan: raw.trim() || steps.map(step => step.text).join('\n'),
   };
 }
 
@@ -416,9 +458,9 @@ export class ClickDzBridgeController {
   private async runFastPlanner(request: string) {
     const prompt = [
       'Act as the fast planning preflight for ClickDz Work.',
-      'Read the request and return ONLY valid JSON with this shape:',
-      '{"question":"one decisive clarification in the user language","options":["2 to 4 short choices"],"steps":["3 to 6 short imperative execution steps"],"draftPlan":"one sentence stating the plan goal"}',
-      'Ask exactly one high-value question. Each step must be a single concrete action, ordered. Do not execute the request.',
+      'Read the request and return ONLY valid JSON with this exact shape:',
+      '{"goal":"one short sentence stating what the plan achieves, in the user language","question":"one decisive clarification in the user language","options":["2 to 4 short answer choices"],"steps":[{"text":"a single concrete ordered action","recommended":true}],"suggestions":[{"text":"an optional nice-to-have step the user may want","recommended":false}]}',
+      'Rules: "steps" = 3 to 6 core actions the plan needs, each recommended:true. "suggestions" = 0 to 3 OPTIONAL extra steps (recommended:false) the user can opt into — do not duplicate core steps. Ask exactly one high-value question. Keep every step short and imperative. Do NOT execute the request.',
       '',
       `REQUEST:\n${request.slice(0, 12000)}`,
     ].join('\n');
