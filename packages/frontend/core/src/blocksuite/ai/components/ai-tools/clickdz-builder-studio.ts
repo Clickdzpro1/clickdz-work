@@ -19,6 +19,17 @@ import {
   type CdzProblem,
 } from './cdz-console-bridge';
 import { renderProblems } from './cdz-problems-panel';
+import {
+  CDZ_EDIT_STYLE_PROPS,
+  readStyleValue,
+  type CdzStyleProp,
+} from './cdz-style-editor';
+import {
+  canReparent,
+  duplicateElement,
+  reparentElement,
+  removeElement,
+} from './cdz-element-ops';
 
 /**
  * `<clickdz-builder-studio>` — a Lovable-style "Builder Studio" overlay for the
@@ -67,13 +78,19 @@ interface CdzPickMessage {
   text: string;
 }
 
-// Drag-reorder message from the preview bridge (Feature A). `beforeId` is the
+// Drag-reorder / reparent message from the preview bridge. `beforeId` is the
 // data-cdz-id of the sibling to insert the dragged node before, or null to
-// append at the end of the (same) parent.
+// append at the end of the target container. `parentId` is the data-cdz-id of
+// the container the node is being dropped INTO:
+//   - absent/undefined → same-parent reorder (unchanged legacy path);
+//   - a number → cross-parent reparent. When `beforeId` names a child of
+//     `parentId`, insert before it ('before'); otherwise append into
+//     `parentId` as its last child ('append-into').
 interface CdzMoveMessage {
   type: 'cdz-move';
   id: number;
   beforeId: number | null;
+  parentId?: number;
 }
 
 // Freeform-move message (Studio v3). The dragged element with data-cdz-id `id`
@@ -85,6 +102,16 @@ interface CdzFreeMessage {
   id: number;
   dx: number;
   dy: number;
+}
+
+// Inline text-edit message (S1). Posted after a double-click-to-edit on a
+// text-bearing element commits (blur / Enter). `text` is the element's DIRECT
+// text (own text nodes only, mirroring directText). The parent applies it as
+// the element's direct text and commits an 'edit' snapshot.
+interface CdzTextMessage {
+  type: 'cdz-text';
+  id: number;
+  text: string;
 }
 
 // ── AI dock request/response contract (Studio v3: edit-in-context + multi-turn)
@@ -125,9 +152,7 @@ const CDZ_SWATCHES = [
   '#111111',
   '#6b7280',
 ];
-// Font-size clamp for the stepper (Feature C).
-const CDZ_FONT_MIN = 8;
-const CDZ_FONT_MAX = 96;
+// (Font-size min/max now come from the font-size prop in CDZ_EDIT_STYLE_PROPS.)
 // Edit-in-context bounds for the AI dock request (mirror the backend caps).
 const CDZ_HTML_CAP = 512_000;
 const CDZ_HISTORY_MAX_TURNS = 6;
@@ -729,6 +754,37 @@ export class ClickDzBuilderStudio extends LitElement {
       text-transform: lowercase;
     }
 
+    /* on-canvas element actions (duplicate / move / delete) in the panel head */
+    .cdz-el-toolbar {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      margin-left: auto;
+      margin-right: 4px;
+      padding: 2px;
+      border-radius: 8px;
+      background: var(--cdz-bg-3);
+      border: 1px solid var(--cdz-border);
+    }
+
+    /* compact icon buttons inside the toolbar (smaller than the 32px default) */
+    .cdz-el-toolbar button.cdz-btn.icon {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+    }
+
+    .cdz-el-toolbar button.cdz-btn.icon svg {
+      width: 15px;
+      height: 15px;
+    }
+
+    /* delete button: danger tint on hover only (neutral at rest) */
+    button.cdz-btn.ghost.danger:hover:not(:disabled) {
+      color: var(--cdz-danger);
+      background: rgba(242, 104, 107, 0.12);
+    }
+
     .cdz-field {
       margin-top: 10px;
     }
@@ -742,7 +798,9 @@ export class ClickDzBuilderStudio extends LitElement {
     }
 
     .cdz-edit-panel textarea,
-    .cdz-edit-panel input[type='number'] {
+    .cdz-edit-panel input[type='number'],
+    .cdz-edit-panel input[type='text'].cdz-text-input,
+    .cdz-edit-panel select.cdz-select {
       box-sizing: border-box;
       width: 100%;
       padding: 8px 10px;
@@ -754,6 +812,12 @@ export class ClickDzBuilderStudio extends LitElement {
       font-size: 12px;
     }
 
+    .cdz-edit-panel select.cdz-select {
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+
     .cdz-edit-panel textarea {
       min-height: 58px;
       resize: vertical;
@@ -762,7 +826,8 @@ export class ClickDzBuilderStudio extends LitElement {
     }
 
     .cdz-edit-panel textarea:focus,
-    .cdz-edit-panel input:focus {
+    .cdz-edit-panel input:focus,
+    .cdz-edit-panel select.cdz-select:focus {
       outline: none;
       border-color: var(--cdz-accent);
       box-shadow: 0 0 0 3px rgba(16, 163, 127, 0.16);
@@ -1148,19 +1213,21 @@ export class ClickDzBuilderStudio extends LitElement {
   @state()
   private accessor editText = '';
 
+  // Generic inline-style drafts for the selected element, one entry per
+  // CdzStyleProp.key (e.g. { 'color': '#10a37f', 'font-size': '24' }). Number
+  // kinds hold the BARE number (unit re-applied on Apply); color/select/text
+  // kinds hold the raw string. Reseeded per selection by seedEditDrafts.
   @state()
-  private accessor editColor = '';
+  private accessor editStyles: Record<string, string> = {};
 
+  // The prop keys the user actually touched this selection. Generalizes the old
+  // single `editColorDirty` boolean: many controls (a native <input type=color>
+  // defaulting to #000000, a select showing its first option) are never
+  // "empty", so without per-field dirty tracking Apply would promote
+  // untouched/class-based values to inline. Only keys in this set are written
+  // on Apply. Reset per selection; set by every control handler via markDirty.
   @state()
-  private accessor editFontSize = '';
-
-  // Whether the user actually touched the color control this selection (v3).
-  // The native <input type=color> is never "empty" (defaults #000000), so
-  // without this we'd blacken text on Apply even when color was never changed,
-  // and we'd promote class-based colors to inline. Reset per selection; set by
-  // a swatch pick or a native-picker input; gates writing color in applyEdit.
-  @state()
-  private accessor editColorDirty = false;
+  private accessor editDirty: Set<string> = new Set();
 
   /**
    * Undo/redo cursor (Feature B). Reactive so the toolbar undo/redo buttons
@@ -1446,16 +1513,20 @@ export class ClickDzBuilderStudio extends LitElement {
     if (!frame || event.source !== frame.contentWindow) return;
 
     const data = event.data as
-      | Partial<CdzPickMessage & CdzMoveMessage & CdzFreeMessage>
+      | Partial<
+          CdzPickMessage & CdzMoveMessage & CdzFreeMessage & CdzTextMessage
+        >
       | null;
     if (!data) return;
 
-    // Drag-reorder (Feature A) — re-parse & relocate the node, then commit.
+    // Drag-reorder / reparent — re-parse & relocate the node, then commit.
     if (data.type === 'cdz-move') {
       if (typeof data.id !== 'number') return;
       const beforeId =
         typeof data.beforeId === 'number' ? data.beforeId : null;
-      this.moveNode(data.id, beforeId);
+      const parentId =
+        typeof data.parentId === 'number' ? data.parentId : undefined;
+      this.moveNode(data.id, beforeId, parentId);
       return;
     }
 
@@ -1467,6 +1538,15 @@ export class ClickDzBuilderStudio extends LitElement {
       const dy = typeof data.dy === 'number' ? data.dy : 0;
       if (dx === 0 && dy === 0) return;
       this.applyFreeMove(data.id, dx, dy);
+      return;
+    }
+
+    // Inline text edit (S1) — a double-click-to-edit on a text element
+    // committed in the preview. Apply the new direct text + commit an edit.
+    if (data.type === 'cdz-text') {
+      if (typeof data.id !== 'number') return;
+      const text = typeof data.text === 'string' ? data.text : '';
+      this.applyTextEdit(data.id, text);
       return;
     }
 
@@ -1505,7 +1585,64 @@ export class ClickDzBuilderStudio extends LitElement {
    * source) so callers like the arrow-nudge can re-identify and keep it
    * selected; returns null when the move was rejected/failed.
    */
-  private moveNode(id: number, beforeId: number | null): number | null {
+  private moveNode(
+    id: number,
+    beforeId: number | null,
+    parentId?: number
+  ): number | null {
+    // ── Cross-parent reparent path (cdz-element-ops) ───────────────────────
+    // `parentId` names the container the node is dropped INTO. When `beforeId`
+    // is a child of that container we insert before it; otherwise append into.
+    if (typeof parentId === 'number') {
+      let movingRef: Element | null = null;
+      const doc = this.walkBody(this.workingHtml, (el, walkId) => {
+        if (walkId === id) movingRef = el;
+      });
+      if (!doc || !movingRef) return null;
+      const movingEl = movingRef as Element;
+
+      let target: Element | null = null;
+      if (beforeId !== null) {
+        const all = doc.body.querySelectorAll('*');
+        const cand = beforeId < all.length ? all[beforeId] : null;
+        const parentEl = parentId < all.length ? all[parentId] : null;
+        // Only treat it as a "before" target when it truly lives under
+        // parentId (the bridge nulls beforeId for append-into, but guard).
+        if (cand && parentEl && cand.parentElement === parentEl) {
+          target = cand;
+        }
+      }
+      const targetId = target !== null ? (beforeId as number) : parentId;
+      const mode: 'before' | 'append-into' =
+        target !== null ? 'before' : 'append-into';
+
+      // Cycle / validity guard (self, target-inside-moving, bad ids).
+      if (!canReparent(doc, id, targetId)) return null;
+      if (!reparentElement(doc, id, targetId, mode)) return null;
+
+      // New id via a fresh walk of the mutated doc, matched on live identity
+      // (before stripping ids — walk order is identical either way).
+      let newId: number | null = null;
+      {
+        const all = doc.body.querySelectorAll('*');
+        for (let i = 0; i < all.length; i++) {
+          if (all[i] === movingEl) {
+            newId = i;
+            break;
+          }
+        }
+      }
+
+      doc.body.querySelectorAll('[data-cdz-id]').forEach(el => {
+        el.removeAttribute('data-cdz-id');
+      });
+
+      this.commitBodyMutation(doc, 'move');
+      this.selected = null;
+      return newId;
+    }
+
+    // ── Same-parent reorder path (legacy — unchanged) ──────────────────────
     let node: Element | null = null;
     let before: Element | null = null;
     const doc = this.walkBody(this.workingHtml, (el, walkId) => {
@@ -1692,6 +1829,69 @@ export class ClickDzBuilderStudio extends LitElement {
     this.seedEditDrafts(this.selected);
   }
 
+  /* ─────────────────── element toolbar ops (Studio v3) ─────────────────── */
+
+  /**
+   * Duplicate the currently-selected element: deep-clone it and insert the copy
+   * immediately after the original (via cdz-element-ops.duplicateElement).
+   * Re-selects the ORIGINAL by re-deriving its id in the mutated id space.
+   */
+  private duplicateSelected() {
+    const sel = this.selected;
+    if (!sel) return;
+    let original: Element | null = null;
+    const doc = this.walkBody(this.workingHtml, (el, walkId) => {
+      if (walkId === sel.id) original = el;
+    });
+    if (!doc || !original) return;
+    const originalEl = original as Element;
+
+    if (!duplicateElement(doc, sel.id)) return;
+
+    // New id of the ORIGINAL (identity match, before stripping ids).
+    let newId: number | null = null;
+    {
+      const all = doc.body.querySelectorAll('*');
+      for (let i = 0; i < all.length; i++) {
+        if (all[i] === originalEl) {
+          newId = i;
+          break;
+        }
+      }
+    }
+
+    doc.body
+      .querySelectorAll('[data-cdz-id]')
+      .forEach(el => el.removeAttribute('data-cdz-id'));
+
+    this.commitBodyMutation(doc, 'edit');
+
+    // Re-derive selection onto the original so the panel stays open on it.
+    if (newId !== null) this.reselectById(newId);
+    else this.selected = null;
+  }
+
+  /**
+   * Delete the currently-selected element (via cdz-element-ops.removeElement,
+   * which refuses <body>/missing). Ids re-derive after removal — clear the
+   * selection so the panel never points at the wrong node.
+   */
+  private deleteSelected() {
+    const sel = this.selected;
+    if (!sel) return;
+    const doc = this.walkBody(this.workingHtml, () => {});
+    if (!doc) return;
+
+    if (!removeElement(doc, sel.id)) return;
+
+    doc.body
+      .querySelectorAll('[data-cdz-id]')
+      .forEach(el => el.removeAttribute('data-cdz-id'));
+
+    this.commitBodyMutation(doc, 'edit');
+    this.selected = null;
+  }
+
   /* ─────────────────── undo / redo (Feature B) ─────────────────── */
 
   private get canUndo(): boolean {
@@ -1793,17 +1993,33 @@ export class ClickDzBuilderStudio extends LitElement {
     // the canonical workingHtml (same deterministic walk) so the parent is the
     // source of truth and any iframe/source drift can't desync the editor.
     this.editText = sel.text;
-    this.editColor = '';
-    this.editFontSize = '';
-    this.editColorDirty = false;
+    // Reset the generic style drafts + dirty set for the new selection.
+    this.editStyles = {};
+    this.editDirty = new Set();
     this.walkBody(this.workingHtml, (el, id) => {
       if (id !== sel.id) return;
       this.editText = this.directText(el);
       const style = el.getAttribute('style') ?? '';
-      const colorMatch = /(?:^|;)\s*color\s*:\s*([^;]+)/i.exec(style);
-      const sizeMatch = /(?:^|;)\s*font-size\s*:\s*([0-9.]+)px/i.exec(style);
-      if (colorMatch) this.editColor = normalizeColor(colorMatch[1].trim());
-      if (sizeMatch) this.editFontSize = sizeMatch[1].trim();
+      const next: Record<string, string> = {};
+      for (const prop of CDZ_EDIT_STYLE_PROPS) {
+        // readStyleValue returns '' when the prop is absent from the inline
+        // style (mirrors setInlineStyle's lowercase-key merge semantics).
+        const raw = readStyleValue(style, prop.key).trim();
+        if (!raw) continue;
+        if (prop.kind === 'color') {
+          // Normalize to #rrggbb for the swatch highlight + native picker;
+          // fall back to the raw value if it isn't a recognizable color.
+          next[prop.key] = normalizeColor(raw) || raw.toLowerCase();
+        } else if (prop.kind === 'number') {
+          // Store the bare number (strip the unit) so the number input shows
+          // "24" not "24px"; the unit is re-applied on Apply.
+          const num = parseFloat(raw);
+          next[prop.key] = Number.isFinite(num) ? String(num) : '';
+        } else {
+          next[prop.key] = raw;
+        }
+      }
+      this.editStyles = next;
     });
   }
 
@@ -1849,13 +2065,34 @@ export class ClickDzBuilderStudio extends LitElement {
 
   /* ─────────────────── apply a click-to-edit change ─────────────────── */
 
+  /**
+   * Collect the inline-style declarations to write on Apply: one entry per
+   * DIRTY style prop (a key the user touched this selection), skipping empty
+   * drafts. Number kinds re-append their unit (default 'px'); color/select/text
+   * kinds pass the raw draft through. Keyed by the prop's lowercase css key so
+   * it drops straight into setInlineStyle's merge.
+   */
+  private dirtyStyleDecls(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const prop of CDZ_EDIT_STYLE_PROPS) {
+      if (!this.editDirty.has(prop.key)) continue;
+      const raw = (this.editStyles[prop.key] ?? '').trim();
+      if (!raw) continue;
+      out[prop.key] =
+        prop.kind === 'number' ? `${raw}${prop.unit ?? 'px'}` : raw;
+    }
+    return out;
+  }
+
   private applyEdit() {
     const sel = this.selected;
     if (!sel) return;
 
     const newText = this.editText;
-    const newColor = this.editColor.trim();
-    const newSize = this.editFontSize.trim();
+    // Build the inline-style declarations to merge: every DIRTY style prop,
+    // re-appending the unit for number kinds. Untouched props are omitted so we
+    // never promote a class-based value or a control default to inline.
+    const decls = this.dirtyStyleDecls();
 
     let matched = false;
     const doc = this.walkBody(this.workingHtml, (el, id) => {
@@ -1885,16 +2122,11 @@ export class ClickDzBuilderStudio extends LitElement {
         el.textContent = newText;
       }
 
-      // Merge inline style for color / font-size. Color is written ONLY when
-      // the user actually touched the color control this selection (v3) — an
-      // untouched native picker defaults to #000000, which would otherwise
-      // blacken text or promote a class-based color to inline on Apply.
-      const applyColor = this.editColorDirty && !!newColor;
-      if (applyColor || newSize) {
-        setInlineStyle(el, {
-          ...(applyColor ? { color: newColor } : {}),
-          ...(newSize ? { 'font-size': `${newSize}px` } : {}),
-        });
+      // Merge inline style for every DIRTY prop in one pass. setInlineStyle
+      // preserves any other existing declarations (lowercase-key, '; ' join),
+      // so untouched inline props on the element survive.
+      if (Object.keys(decls).length > 0) {
+        setInlineStyle(el, decls);
       }
     });
 
@@ -1916,39 +2148,93 @@ export class ClickDzBuilderStudio extends LitElement {
     this.selected = null;
   }
 
-  /* ── edit-panel draft controls (Feature C) ────────────────────────── */
-
-  // Pick a preset swatch → sets the color draft (both the swatch row highlight
-  // and the native color input read from editColor).
-  private pickSwatch(hex: string) {
-    this.editColor = normalizeColor(hex) || hex.toLowerCase();
-    this.editColorDirty = true;
+  /**
+   * Inline text edit (S1): set the element at data-cdz-id `id` to have `text`
+   * as its DIRECT text, then commit. Mirrors applyEdit's text branch — for an
+   * element WITH element children we replace the first text node (or prepend
+   * one) so child elements survive; otherwise we set textContent. Routes
+   * through the shared walkBody id order, strips bookkeeping ids, and commits
+   * an 'edit' snapshot. Does NOT touch `selected` — DOM order is unchanged.
+   */
+  private applyTextEdit(id: number, text: string) {
+    let matched = false;
+    const doc = this.walkBody(this.workingHtml, (el, walkId) => {
+      if (walkId !== id) return;
+      matched = true;
+      if (el.firstElementChild) {
+        const children = el.childNodes;
+        let firstText: ChildNode | undefined;
+        for (let k = 0; k < children.length; k++) {
+          const node = children[k];
+          if (node.nodeType === 3 /* Node.TEXT_NODE */) {
+            firstText = node;
+            break;
+          }
+        }
+        if (firstText) {
+          firstText.textContent = text;
+        } else if (text) {
+          const owner = el.ownerDocument;
+          el.insertBefore(owner.createTextNode(text), el.firstChild);
+        }
+      } else {
+        el.textContent = text;
+      }
+    });
+    if (!doc || !matched) return;
+    doc.body
+      .querySelectorAll('[data-cdz-id]')
+      .forEach(el => el.removeAttribute('data-cdz-id'));
+    this.commitBodyMutation(doc, 'edit');
   }
 
-  // Font-size stepper: nudge by ±1px, clamped to [CDZ_FONT_MIN, CDZ_FONT_MAX].
-  // An empty draft steps relative to a sensible default (16px).
-  private stepFontSize(delta: number) {
-    const current = parseFloat(this.editFontSize);
+  /* ── edit-panel draft controls (generic per-prop) ─────────────────── */
+
+  // Mark a style prop dirty (user touched its control this selection) — only
+  // dirty props are written on Apply. Reassigns the Set for Lit reactivity.
+  private markDirty(key: string) {
+    if (this.editDirty.has(key)) return;
+    this.editDirty = new Set(this.editDirty).add(key);
+  }
+
+  // Set a style-draft value for `key` and mark it dirty. Reassigns the record
+  // so Lit's accessor change-detection fires.
+  private setStyleDraft(key: string, value: string) {
+    this.editStyles = { ...this.editStyles, [key]: value };
+    this.markDirty(key);
+  }
+
+  // Pick a preset swatch → sets the color draft for `key` (drives both the
+  // swatch-row highlight and the native color input, which read editStyles).
+  private pickSwatch(key: string, hex: string) {
+    this.setStyleDraft(key, normalizeColor(hex) || hex.toLowerCase());
+  }
+
+  // Number stepper: nudge the draft for `key` by `delta`, clamped to the prop's
+  // [min, max]. An empty draft steps from a sensible default (16).
+  private stepNumber(prop: CdzStyleProp, delta: number) {
+    const lo = prop.min ?? 0;
+    const hi = prop.max ?? Number.MAX_SAFE_INTEGER;
+    const current = parseFloat(this.editStyles[prop.key] ?? '');
     const base = Number.isFinite(current) ? current : 16;
-    const next = Math.max(
-      CDZ_FONT_MIN,
-      Math.min(CDZ_FONT_MAX, Math.round(base) + delta)
-    );
-    this.editFontSize = String(next);
+    const next = Math.max(lo, Math.min(hi, Math.round(base) + delta));
+    this.setStyleDraft(prop.key, String(next));
   }
 
-  // Manual entry into the stepper's number field, clamped on the way in.
-  private onFontSizeInput(raw: string) {
+  // Manual entry into a number field for `prop`, clamped to [min, max] on the
+  // way in. An empty field clears the draft (dirtyStyleDecls skips empties, so
+  // clearing never emits an invalid bare-unit decl).
+  private onNumberInput(prop: CdzStyleProp, raw: string) {
     const trimmed = raw.trim();
     if (trimmed === '') {
-      this.editFontSize = '';
+      this.setStyleDraft(prop.key, '');
       return;
     }
     const value = parseFloat(trimmed);
     if (!Number.isFinite(value)) return;
-    this.editFontSize = String(
-      Math.max(CDZ_FONT_MIN, Math.min(CDZ_FONT_MAX, value))
-    );
+    const lo = prop.min ?? 0;
+    const hi = prop.max ?? Number.MAX_SAFE_INTEGER;
+    this.setStyleDraft(prop.key, String(Math.max(lo, Math.min(hi, value))));
   }
 
   /**
@@ -2529,10 +2815,43 @@ export class ClickDzBuilderStudio extends LitElement {
   private renderEditPanel() {
     const sel = this.selected;
     if (!sel) return nothing;
-    const activeColor = normalizeColor(this.editColor);
     return html`<div class="cdz-edit-panel" @keydown=${stopKeydown}>
       <div class="cdz-edit-head">
         <span class="cdz-edit-tag">&lt;${sel.tag || 'node'}&gt;</span>
+        <div class="cdz-el-toolbar" role="toolbar" aria-label="Element actions">
+          <button
+            class="cdz-btn ghost icon"
+            title="Duplicate element"
+            aria-label="Duplicate element"
+            @click=${() => this.duplicateSelected()}
+          >
+            ${CDZ_ICONS.duplicate}
+          </button>
+          <button
+            class="cdz-btn ghost icon"
+            title="Move up (Alt+↑)"
+            aria-label="Move element up"
+            @click=${() => this.nudgeSelected(-1)}
+          >
+            ${CDZ_ICONS.arrowUp}
+          </button>
+          <button
+            class="cdz-btn ghost icon"
+            title="Move down (Alt+↓)"
+            aria-label="Move element down"
+            @click=${() => this.nudgeSelected(1)}
+          >
+            ${CDZ_ICONS.arrowDown}
+          </button>
+          <button
+            class="cdz-btn ghost icon danger"
+            title="Delete element"
+            aria-label="Delete element"
+            @click=${() => this.deleteSelected()}
+          >
+            ${CDZ_ICONS.trash}
+          </button>
+        </div>
         <button
           class="cdz-btn ghost icon"
           title="Dismiss"
@@ -2552,62 +2871,7 @@ export class ClickDzBuilderStudio extends LitElement {
         ></textarea>
       </div>
 
-      <div class="cdz-field">
-        <label>Color</label>
-        <div class="cdz-swatches">
-          ${CDZ_SWATCHES.map(hex => {
-            const isActive = activeColor === hex.toLowerCase();
-            return html`<button
-              class=${classMap({ 'cdz-swatch': true, active: isActive })}
-              style=${`background:${hex}`}
-              title=${hex}
-              aria-label=${`Set color ${hex}`}
-              @click=${() => this.pickSwatch(hex)}
-            ></button>`;
-          })}
-          <input
-            class="cdz-color"
-            type="color"
-            aria-label="Custom color"
-            .value=${activeColor || '#000000'}
-            @input=${(e: Event) => {
-              this.editColor = (e.target as HTMLInputElement).value;
-              this.editColorDirty = true;
-            }}
-          />
-        </div>
-      </div>
-
-      <div class="cdz-field">
-        <label>Font size (px)</label>
-        <div class="cdz-stepper">
-          <button
-            class="cdz-step"
-            title="Decrease font size"
-            aria-label="Decrease font size"
-            @click=${() => this.stepFontSize(-1)}
-          >
-            −
-          </button>
-          <input
-            type="number"
-            min=${CDZ_FONT_MIN}
-            max=${CDZ_FONT_MAX}
-            placeholder="—"
-            .value=${this.editFontSize}
-            @input=${(e: Event) =>
-              this.onFontSizeInput((e.target as HTMLInputElement).value)}
-          />
-          <button
-            class="cdz-step"
-            title="Increase font size"
-            aria-label="Increase font size"
-            @click=${() => this.stepFontSize(1)}
-          >
-            +
-          </button>
-        </div>
-      </div>
+      ${CDZ_EDIT_STYLE_PROPS.map(prop => this.renderStyleField(prop))}
 
       <div class="cdz-edit-foot">
         <button
@@ -2622,8 +2886,106 @@ export class ClickDzBuilderStudio extends LitElement {
       </div>
 
       <div class="cdz-edit-hint">
-        Alt+↑/↓ move · drag to ${this.freeMove ? 'reposition' : 'reorder'}
+        Alt+↑/↓ move · drag to ${this.freeMove ? 'reposition' : 'reorder'} ·
+        dbl-click text to edit
       </div>
+    </div>`;
+  }
+
+  // Render one edit-panel control for a CdzStyleProp, switching on its kind.
+  // Reads/writes this.editStyles[prop.key]; every handler marks the key dirty.
+  private renderStyleField(prop: CdzStyleProp) {
+    const draft = this.editStyles[prop.key] ?? '';
+    if (prop.kind === 'color') {
+      const active = normalizeColor(draft) || draft.toLowerCase();
+      return html`<div class="cdz-field">
+        <label>${prop.label}</label>
+        <div class="cdz-swatches">
+          ${CDZ_SWATCHES.map(hex => {
+            const isActive = active === hex.toLowerCase();
+            return html`<button
+              class=${classMap({ 'cdz-swatch': true, active: isActive })}
+              style=${`background:${hex}`}
+              title=${hex}
+              aria-label=${`Set ${prop.label} ${hex}`}
+              @click=${() => this.pickSwatch(prop.key, hex)}
+            ></button>`;
+          })}
+          <input
+            class="cdz-color"
+            type="color"
+            aria-label=${`Custom ${prop.label}`}
+            .value=${active || '#000000'}
+            @input=${(e: Event) =>
+              this.pickSwatch(prop.key, (e.target as HTMLInputElement).value)}
+          />
+        </div>
+      </div>`;
+    }
+    if (prop.kind === 'select') {
+      return html`<div class="cdz-field">
+        <label>${prop.label}</label>
+        <select
+          class="cdz-select"
+          .value=${draft}
+          @change=${(e: Event) =>
+            this.setStyleDraft(prop.key, (e.target as HTMLSelectElement).value)}
+        >
+          <option value="" ?selected=${draft === ''}>—</option>
+          ${(prop.options ?? []).map(
+            opt => html`<option
+              value=${opt.value}
+              ?selected=${draft === opt.value}
+            >
+              ${opt.label}
+            </option>`
+          )}
+        </select>
+      </div>`;
+    }
+    if (prop.kind === 'number') {
+      const unit = prop.unit ?? 'px';
+      return html`<div class="cdz-field">
+        <label>${prop.label}${unit ? html` (${unit})` : nothing}</label>
+        <div class="cdz-stepper">
+          <button
+            class="cdz-step"
+            title=${`Decrease ${prop.label}`}
+            aria-label=${`Decrease ${prop.label}`}
+            @click=${() => this.stepNumber(prop, -1)}
+          >
+            −
+          </button>
+          <input
+            type="number"
+            min=${prop.min ?? nothing}
+            max=${prop.max ?? nothing}
+            placeholder="—"
+            .value=${draft}
+            @input=${(e: Event) =>
+              this.onNumberInput(prop, (e.target as HTMLInputElement).value)}
+          />
+          <button
+            class="cdz-step"
+            title=${`Increase ${prop.label}`}
+            aria-label=${`Increase ${prop.label}`}
+            @click=${() => this.stepNumber(prop, 1)}
+          >
+            +
+          </button>
+        </div>
+      </div>`;
+    }
+    // kind === 'text'
+    return html`<div class="cdz-field">
+      <label>${prop.label}</label>
+      <input
+        class="cdz-text-input"
+        type="text"
+        .value=${draft}
+        @input=${(e: Event) =>
+          this.setStyleDraft(prop.key, (e.target as HTMLInputElement).value)}
+      />
     </div>`;
   }
 
@@ -3047,6 +3409,68 @@ const CDZ_ICONS = {
     <line x1="12" y1="9" x2="12" y2="13"></line>
     <line x1="12" y1="17" x2="12.01" y2="17"></line>
   </svg>`,
+  // duplicate — two overlapping squares (copy)
+  duplicate: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="9" y="9" width="12" height="12" rx="2" ry="2"></rect>
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+  </svg>`,
+  // trash — delete bin
+  trash: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <polyline points="3 6 5 6 21 6"></polyline>
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+    <line x1="10" y1="11" x2="10" y2="17"></line>
+    <line x1="14" y1="11" x2="14" y2="17"></line>
+  </svg>`,
+  // arrow-up — move earlier among siblings
+  arrowUp: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <line x1="12" y1="19" x2="12" y2="5"></line>
+    <polyline points="5 12 12 5 19 12"></polyline>
+  </svg>`,
+  // arrow-down — move later among siblings
+  arrowDown: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <line x1="12" y1="5" x2="12" y2="19"></line>
+    <polyline points="19 12 12 19 5 12"></polyline>
+  </svg>`,
 } as const;
 
 // Injected into the preview <head>. Draws hover/selected outlines plus the
@@ -3074,6 +3498,10 @@ const CDZ_INSPECT_STYLE = [
   'background:#10a37f !important;border-radius:2px !important;',
   'pointer-events:none !important;display:none !important;',
   'box-shadow:0 0 6px rgba(16,163,127,0.8) !important;}',
+  // append-into drop zone: outline box variant (empty-container target).
+  '#cdz-drop-indicator.cdz-drop-box{background:rgba(16,163,127,0.10) !important;',
+  'border:2px dashed #10a37f !important;border-radius:6px !important;',
+  'box-shadow:none !important;}',
   // drag handle chip (⠿) shown at the hovered element's top-left corner.
   '#cdz-drag-handle{position:absolute !important;z-index:2147483647 !important;',
   'display:none !important;align-items:center !important;',
@@ -3117,10 +3545,13 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'var pressX=0,pressY=0;' + // pointerdown origin
     'var dragging=null;' + // the element currently being dragged (or null)
     'var dropBefore=null;' + // sibling to insert before (null = append)
+    'var dropParent=null;' + // target container the node will land in
+    'var dropInto=false;' + // true = append INTO dropParent (vs before dropBefore)
     'var suppressClick=false;' + // swallow the click that ends a drag gesture
     'var indicator=null;' + // reused drop-indicator line element
     'var handle=null;' + // reused drag-handle chip element
     'var baseTf="";var baseTx=0;var baseTy=0;' + // free-move base transform
+    'var editingEl=null;' + // element in inline contenteditable edit (or null)
     // Resolve nearest ancestor-or-self carrying a data-cdz-id.
     'function pickEl(t){' +
     'if(!t)return null;' +
@@ -3161,6 +3592,30 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'if(k===except)continue;' +
     'if(k.getAttribute&&k.getAttribute("data-cdz-id")!==null){out.push(k);}}' +
     'return out;}' +
+    // Tagged element children of `p` (carrying data-cdz-id), excluding `except`.
+    // Same shape as siblingsOf but for an ARBITRARY container p.
+    'function childrenOf(p,except){' +
+    'var out=[];if(!p)return out;var kids=p.children;' +
+    'for(var i=0;i<kids.length;i++){var k=kids[i];' +
+    'if(k===except)continue;' +
+    'if(k.getAttribute&&k.getAttribute("data-cdz-id")!==null){out.push(k);}}' +
+    'return out;}' +
+    // True if `node` is `anc` or a descendant of it — used to refuse dropping a
+    // node into its own subtree (mirror of the parent-side canReparent guard,
+    // so the live indicator never advertises an illegal drop).
+    'function isInside(node,anc){' +
+    'var n=node;while(n){if(n===anc)return true;n=n.parentElement;}return false;}' +
+    // Resolve the tagged container under the pointer for a reparent drop: the
+    // nearest tagged ancestor-or-self of the hit element that is NOT the
+    // dragged node and does NOT sit inside it (cycle). elementFromPoint is used
+    // (not e.target) because the dragged node has pointer-capture; hide the
+    // indicator first so it is never itself the hit target.
+    'function containerUnder(px,py){' +
+    'hideIndicator();' +
+    'var hit=document.elementFromPoint(px,py);' +
+    'var c=pickEl(hit);' +
+    'while(c){if(c!==dragging&&!isInside(c,dragging))return c;c=c.parentElement?pickEl(c.parentElement):null;}' +
+    'return null;}' +
     // Decide the parent's dominant axis from consecutive sibling rect centers.
     // Returns true for a COLUMN (vertical) layout, false for a ROW.
     'function isColumn(list){' +
@@ -3171,18 +3626,32 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'if(prev){dx+=Math.abs(cx-prev.x);dy+=Math.abs(cy-prev.y);c++;}' +
     'prev={x:cx,y:cy};}' +
     'if(!c)return true;return (dy/c)>=(dx/c);}' +
-    // Given the drag pointer, compute the insertion gap among `list` (siblings
-    // WITHOUT the dragged node). Sets dropBefore + positions the indicator.
-    'function computeDrop(px,py,list){' +
+    // Given the drag pointer and a target `container`, compute the insertion
+    // gap among its tagged children (excluding the dragged node). Sets
+    // dropBefore, dropParent, dropInto and positions the indicator. When the
+    // container has no eligible child the drop becomes an APPEND-INTO and the
+    // indicator becomes a full-container outline box.
+    'function computeDrop(px,py,container){' +
+    'dropParent=container;' +
+    'var list=childrenOf(container,dragging);' +
     'var col=isColumn(list);var before=null;' +
     'for(var i=0;i<list.length;i++){var r=list[i].getBoundingClientRect();' +
     'var mid=col?(r.top+r.height/2):(r.left+r.width/2);' +
     'var p=col?py:px;' +
     'if(p<mid){before=list[i];break;}}' +
     'dropBefore=before;' +
+    'dropInto=(list.length===0);' +
     'var ind=getIndicator();' +
-    'var pr=dragging.parentElement.getBoundingClientRect();' +
-    'if(col){' + // horizontal line spanning the parent's width at the gap
+    'var pr=container.getBoundingClientRect();' +
+    'if(dropInto){' + // empty container → outline the whole box as the zone
+    'ind.className="cdz-drop-box";' +
+    'ind.style.left=(pr.left+window.scrollX)+"px";' +
+    'ind.style.top=(pr.top+window.scrollY)+"px";' +
+    'ind.style.width=pr.width+"px";' +
+    'ind.style.height=pr.height+"px";' +
+    'ind.style.display="block";return;}' +
+    'ind.className="";' +
+    'if(col){' + // horizontal line spanning the container's width at the gap
     'var y;' +
     'if(before){var rb=before.getBoundingClientRect();y=rb.top;}' +
     'else if(list.length){var rl=list[list.length-1].getBoundingClientRect();y=rl.bottom;}' +
@@ -3191,7 +3660,7 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'ind.style.width=pr.width+"px";' +
     'ind.style.top=(y+window.scrollY-1)+"px";' +
     'ind.style.height="2px";' +
-    '}else{' + // vertical line spanning the parent's height at the gap
+    '}else{' + // vertical line spanning the container's height at the gap
     'var x;' +
     'if(before){var rb2=before.getBoundingClientRect();x=rb2.left;}' +
     'else if(list.length){var rl2=list[list.length-1].getBoundingClientRect();x=rl2.right;}' +
@@ -3205,7 +3674,8 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'function endDrag(){' +
     'if(dragging){dragging.classList.remove("cdz-dragging");' +
     'dragging.classList.remove("cdz-moving");}' +
-    'dragging=null;dropBefore=null;pressEl=null;pressId=null;hideIndicator();}' +
+    'dragging=null;dropBefore=null;dropParent=null;dropInto=false;' +
+    'pressEl=null;pressId=null;hideIndicator();}' +
     // free-move transform helpers (mirror the parent-side withTranslate/read
     // so the live preview and the committed source agree).
     'function readTx(tf){var m=/translate\\(\\s*(-?[0-9.]+)px\\s*,\\s*(-?[0-9.]+)px\\s*\\)/i.exec(tf||"");' +
@@ -3225,11 +3695,12 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'baseTf=dragging.style.transform||"";var b=readTx(baseTf);baseTx=b.x;baseTy=b.y;' +
     'moveFree(px,py);}' +
     'else{dragging.classList.add("cdz-dragging");' +
-    'computeDrop(px,py,siblingsOf(dragging,dragging));}}' +
+    'computeDrop(px,py,containerUnder(px,py)||dragging.parentElement);}}' +
     // pointerdown: record a drag candidate (do NOT start dragging yet).
     'document.addEventListener("pointerdown",function(e){' +
     'if(!on||!e.isPrimary)return;' +
     'if(e.pointerType==="mouse"&&e.button!==0)return;' +
+    'if(editingEl&&editingEl.contains(e.target))return;' +
     'var el=pickEl(e.target);if(!el)return;' +
     'pressEl=el;pressId=e.pointerId;pressX=e.clientX;pressY=e.clientY;' +
     '},true);' +
@@ -3239,7 +3710,7 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'if(!on)return;' +
     'if(dragging){e.preventDefault();' +
     'if(free){moveFree(e.clientX,e.clientY);}' +
-    'else{computeDrop(e.clientX,e.clientY,siblingsOf(dragging,dragging));}' +
+    'else{computeDrop(e.clientX,e.clientY,containerUnder(e.clientX,e.clientY)||dragging.parentElement);}' +
     'return;}' +
     'if(pressEl){var mdx=e.clientX-pressX,mdy=e.clientY-pressY;' +
     'if((mdx*mdx+mdy*mdy)>=(DRAG_THRESHOLD*DRAG_THRESHOLD)){startDrag(e.clientX,e.clientY);return;}}' +
@@ -3260,8 +3731,12 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'window.parent.postMessage({type:"cdz-free",id:id,dx:ddx,dy:ddy},"*");}' +
     'endDrag();return;}' +
     'var beforeId=(dropBefore!==null)?idOf(dropBefore):null;' +
+    'var samePar=(!dropParent||dropParent===dragging.parentElement);' +
+    'var parentId=samePar?null:idOf(dropParent);' +
     'if(id!==null){' +
-    'window.parent.postMessage({type:"cdz-move",id:id,beforeId:beforeId},"*");}' +
+    'var msg={type:"cdz-move",id:id,beforeId:beforeId};' +
+    'if(parentId!==null){msg.parentId=parentId;msg.beforeId=dropInto?null:beforeId;}' +
+    'window.parent.postMessage(msg,"*");}' +
     'endDrag();return;}' +
     'pressEl=null;pressId=null;' +
     '},true);' +
@@ -3273,6 +3748,7 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     // click: normal pick, UNLESS this click terminated a drag gesture.
     'document.addEventListener("click",function(e){' +
     'if(!on)return;' +
+    'if(editingEl&&editingEl.contains(e.target)){return;}' +
     'if(suppressClick){suppressClick=false;e.preventDefault();e.stopPropagation();return;}' +
     'var t=pickEl(e.target);' +
     'if(!t)return;' +
@@ -3285,9 +3761,62 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'window.parent.postMessage({type:"cdz-pick",id:parseInt(idAttr,10),' +
     'tag:(t.tagName||"").toLowerCase(),text:directText(t)},"*");' +
     '},true);' +
-    // Escape cancels an in-progress drag cleanly (without posting a move); in
-    // free mode it snaps the element back to its base transform.
+    // ── inline text edit (dblclick → contenteditable) ─────────────
+    // Commit the in-progress inline edit: read direct text, tear down the
+    // contenteditable state, and post cdz-text to the parent. Idempotent.
+    'function commitInlineEdit(){' +
+    'if(!editingEl)return;' +
+    'var el=editingEl;editingEl=null;' +
+    'el.removeAttribute("contenteditable");' +
+    'el.removeEventListener("blur",onEditBlur,true);' +
+    'el.removeEventListener("keydown",onEditKey,true);' +
+    'var id=idOf(el);' +
+    'var txt=directText(el);' +
+    'if(id!==null){window.parent.postMessage({type:"cdz-text",id:id,text:txt},"*");}' +
+    '}' +
+    // Cancel an inline edit WITHOUT posting (Escape): just tear down.
+    'function cancelInlineEdit(){' +
+    'if(!editingEl)return;' +
+    'var el=editingEl;editingEl=null;' +
+    'el.removeAttribute("contenteditable");' +
+    'el.removeEventListener("blur",onEditBlur,true);' +
+    'el.removeEventListener("keydown",onEditKey,true);' +
+    'el.blur();' +
+    '}' +
+    'function onEditBlur(){commitInlineEdit();}' +
+    // Enter (no Shift) commits; Escape cancels. Shift+Enter inserts a newline.
+    'function onEditKey(e){' +
+    'if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();commitInlineEdit();}' +
+    'else if(e.key==="Escape"){e.preventDefault();cancelInlineEdit();}' +
+    '}' +
+    // dblclick a tagged element (inspect on) → enter inline edit. Suppress the
+    // click paired with the second tap so it can't re-pick / preventDefault.
+    'document.addEventListener("dblclick",function(e){' +
+    'if(!on)return;' +
+    'var t=pickEl(e.target);if(!t)return;' +
+    'if(t.getAttribute("data-cdz-id")===null)return;' +
+    'e.preventDefault();e.stopPropagation();' +
+    'if(dragging){endDrag();}' +
+    'suppressClick=false;' +
+    'if(editingEl&&editingEl!==t){commitInlineEdit();}' +
+    'editingEl=t;' +
+    't.setAttribute("contenteditable","true");' +
+    't.addEventListener("blur",onEditBlur,true);' +
+    't.addEventListener("keydown",onEditKey,true);' +
+    't.focus();' +
+    // Place the caret at the click point (fallback: select all text).
+    'try{' +
+    'var sel=window.getSelection();sel.removeAllRanges();' +
+    'var rng;' +
+    'if(document.caretRangeFromPoint){rng=document.caretRangeFromPoint(e.clientX,e.clientY);}' +
+    'if(!rng){rng=document.createRange();rng.selectNodeContents(t);}' +
+    'sel.addRange(rng);' +
+    '}catch(_e){}' +
+    '},true);' +
+    // Escape cancels an in-progress inline edit or drag cleanly (without
+    // posting); in free mode it snaps the element back to its base transform.
     'document.addEventListener("keydown",function(e){' +
+    'if(e.key==="Escape"&&editingEl){e.preventDefault();cancelInlineEdit();return;}' +
     'if(e.key==="Escape"&&dragging){e.preventDefault();suppressClick=false;' +
     'if(free){dragging.style.transform=baseTf;}endDrag();}' +
     '},true);' +
@@ -3299,7 +3828,7 @@ function buildBridgeScript(initialOn: boolean, initialFree: boolean): string {
     'if(!d||d.type!=="cdz-mode")return;' +
     'on=!!d.on;free=!!d.free;' +
     'document.documentElement.classList.toggle("cdz-active",on);' +
-    'if(!on){clearHover();hideHandle();endDrag();suppressClick=false;' +
+    'if(!on){commitInlineEdit();clearHover();hideHandle();endDrag();suppressClick=false;' +
     'var s=document.querySelectorAll(".cdz-sel");' +
     'for(var i=0;i<s.length;i++){s[i].classList.remove("cdz-sel");}}' +
     '});' +
