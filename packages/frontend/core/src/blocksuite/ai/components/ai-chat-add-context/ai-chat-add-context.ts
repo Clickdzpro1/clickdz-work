@@ -54,6 +54,10 @@ export class AIChatAddContext extends SignalWatcher(
       <div
         class="ai-chat-add-context"
         data-testid="chat-panel-with-button"
+        role="button"
+        tabindex="0"
+        aria-label="Add context or attach files"
+        title="Add context or attach files"
         @click=${this.toggleAddDocMenu}
       >
         ${PlusIcon()}

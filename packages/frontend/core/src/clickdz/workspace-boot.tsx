@@ -11,12 +11,27 @@ import { ensureTemplateLibrary, installPendingTemplates } from './installer';
 import { ONBOARDING_CSS_FIX } from './niches';
 import { VoiceGuide } from './voice-guide';
 
-// Remove only the stock legacy tutorial, never arbitrary user content.
-function isLegacyAffineTutorial(title: string) {
-  return (
-    /\baffine\b/i.test(title) &&
-    /\b(welcome|tutorial|getting started|quick start|guide)\b/i.test(title)
-  );
+// The seeded AFFiNE onboarding docs are imported from
+// `@affine/templates/onboarding.zip` in `utils/first-app-data.ts`. On import,
+// `ZipTransformer.importDocs` runs `replaceIdMiddleware`, which regenerates
+// every page's doc id — so the doc ids in the snapshot are NOT stable in the
+// workspace and cannot be matched. The only stable signal is the title (the
+// `titleMiddleware` preserves it), which is exactly what `first-app-data.ts`
+// itself keys off ("Getting Started" / "How to use folder and Tags").
+//
+// The previous matcher required the word "affine" in the title, but neither
+// seeded doc contains it — so it was a silent no-op and never trashed anything.
+//
+// Match against the exact set of known seeded onboarding titles (normalized —
+// the "Getting Started" snapshot title has a trailing space). Restricting to a
+// known allow-set guards against ever trashing arbitrary user content.
+const LEGACY_ONBOARDING_TITLES = new Set([
+  'getting started',
+  'how to use folder and tags',
+]);
+
+function isSeededOnboardingDoc(title: string) {
+  return LEGACY_ONBOARDING_TITLES.has(title.trim().toLowerCase());
 }
 
 export const ClickDzWorkspaceBoot = () => {
@@ -29,7 +44,7 @@ export const ClickDzWorkspaceBoot = () => {
     for (const record of docs ?? []) {
       if (
         !record.trash$.value &&
-        isLegacyAffineTutorial(record.title$.value || '')
+        isSeededOnboardingDoc(record.title$.value || '')
       ) {
         record.moveToTrash();
       }
