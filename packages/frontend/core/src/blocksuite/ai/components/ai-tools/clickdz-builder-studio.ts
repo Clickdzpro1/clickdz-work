@@ -171,6 +171,31 @@ export class ClickDzBuilderStudio extends LitElement {
       font-weight: 500;
     }
 
+    /* editable app title (v3) — looks like text until hover/focus */
+    .cdz-title-input {
+      min-width: 40px;
+      max-width: 320px;
+      padding: 2px 6px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--cdz-text);
+      font-family: var(--cdz-sans);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.1px;
+      text-overflow: ellipsis;
+      cursor: text;
+    }
+    .cdz-title-input:hover {
+      border-color: var(--cdz-border);
+    }
+    .cdz-title-input:focus {
+      outline: none;
+      border-color: var(--cdz-accent);
+      background: color-mix(in srgb, var(--cdz-accent) 8%, transparent);
+    }
+
     /* segmented control — pill container w/ active "thumb" */
     .cdz-seg {
       display: flex;
@@ -902,6 +927,14 @@ export class ClickDzBuilderStudio extends LitElement {
   @state()
   private accessor editFontSize = '';
 
+  // Whether the user actually touched the color control this selection (v3).
+  // The native <input type=color> is never "empty" (defaults #000000), so
+  // without this we'd blacken text on Apply even when color was never changed,
+  // and we'd promote class-based colors to inline. Reset per selection; set by
+  // a swatch pick or a native-picker input; gates writing color in applyEdit.
+  @state()
+  private accessor editColorDirty = false;
+
   /**
    * Undo/redo cursor (Feature B). Reactive so the toolbar undo/redo buttons
    * re-evaluate their `?disabled` getters (canUndo/canRedo) whenever we push or
@@ -1436,6 +1469,7 @@ export class ClickDzBuilderStudio extends LitElement {
     this.editText = sel.text;
     this.editColor = '';
     this.editFontSize = '';
+    this.editColorDirty = false;
     this.walkBody(this.workingHtml, (el, id) => {
       if (id !== sel.id) return;
       this.editText = this.directText(el);
@@ -1496,10 +1530,14 @@ export class ClickDzBuilderStudio extends LitElement {
         el.textContent = newText;
       }
 
-      // Merge inline style for color / font-size.
-      if (newColor || newSize) {
+      // Merge inline style for color / font-size. Color is written ONLY when
+      // the user actually touched the color control this selection (v3) — an
+      // untouched native picker defaults to #000000, which would otherwise
+      // blacken text or promote a class-based color to inline on Apply.
+      const applyColor = this.editColorDirty && !!newColor;
+      if (applyColor || newSize) {
         setInlineStyle(el, {
-          ...(newColor ? { color: newColor } : {}),
+          ...(applyColor ? { color: newColor } : {}),
           ...(newSize ? { 'font-size': `${newSize}px` } : {}),
         });
       }
@@ -1529,6 +1567,7 @@ export class ClickDzBuilderStudio extends LitElement {
   // and the native color input read from editColor).
   private pickSwatch(hex: string) {
     this.editColor = normalizeColor(hex) || hex.toLowerCase();
+    this.editColorDirty = true;
   }
 
   // Font-size stepper: nudge by ±1px, clamped to [CDZ_FONT_MIN, CDZ_FONT_MAX].
@@ -1780,12 +1819,60 @@ export class ClickDzBuilderStudio extends LitElement {
 
   /* ─────────────────── render helpers ─────────────────── */
 
+  /* ─────────────────── editable app title (v3) ─────────────────── */
+
+  // Enter commits (via blur→change); Escape reverts the draft to the canonical
+  // title. Both stop propagation so the overlay's global shortcuts (Esc closes
+  // the studio) don't fire while renaming.
+  private onTitleKeyDown(event: KeyboardEvent) {
+    const input = event.target as HTMLInputElement;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      event.stopPropagation();
+      input.blur();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      input.value = this.title;
+      input.blur();
+    }
+  }
+
+  // Commit a renamed title: ignore empty/unchanged, else update the local
+  // property and notify the host card so it can override + persist (mirrors the
+  // studio-html-change round-trip).
+  private commitTitle(raw: string) {
+    const next = raw.trim();
+    if (!next || next === this.title) return;
+    this.title = next;
+    this.dispatchEvent(
+      new CustomEvent('studio-title-change', {
+        detail: { title: next },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
   private renderTopBar() {
     const openUrl = this.publishedUrl;
     return html`<div class="cdz-topbar">
       <div class="cdz-brand">
         <span class="cdz-dot"></span>
-        <span class="cdz-title" title=${this.title}>${this.title}</span>
+        <input
+          class="cdz-title-input"
+          .value=${this.title}
+          title="Rename app"
+          aria-label="App title"
+          @keydown=${(e: KeyboardEvent) => this.onTitleKeyDown(e)}
+          @change=${(e: Event) => {
+            const input = e.target as HTMLInputElement;
+            this.commitTitle(input.value);
+            // Normalize the field back to the canonical title (trims blanks,
+            // reverts an empty/unchanged edit).
+            input.value = this.title;
+          }}
+        />
         ${this.slug
           ? html`<span class="cdz-slug">/${this.slug}</span>`
           : nothing}
@@ -1977,8 +2064,10 @@ export class ClickDzBuilderStudio extends LitElement {
             type="color"
             aria-label="Custom color"
             .value=${activeColor || '#000000'}
-            @input=${(e: Event) =>
-              (this.editColor = (e.target as HTMLInputElement).value)}
+            @input=${(e: Event) => {
+              this.editColor = (e.target as HTMLInputElement).value;
+              this.editColorDirty = true;
+            }}
           />
         </div>
       </div>

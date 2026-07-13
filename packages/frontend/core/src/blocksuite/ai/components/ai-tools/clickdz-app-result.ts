@@ -149,6 +149,11 @@ export class ClickDzAppResultCard extends ShadowlessElement {
   @state()
   private accessor liveHtml = '';
 
+  // Renamed title from the studio wins over the immutable stream-object title
+  // (parallels liveHtml). Empty = fall back to the original result title.
+  @state()
+  private accessor liveTitle = '';
+
   private get result(): ClickDzAppResult | null {
     if (
       this.data.type !== 'tool-result' ||
@@ -167,6 +172,11 @@ export class ClickDzAppResultCard extends ShadowlessElement {
     return this.liveHtml || this.result?.html || '';
   }
 
+  /** The current title: a studio rename wins over the original result title. */
+  private get effectiveTitle(): string {
+    return this.liveTitle || this.result?.title || 'App';
+  }
+
   /** Persist the working HTML (and any URL) so the composer + shelf stay in sync. */
   private persistApp(url?: string) {
     const result = this.result;
@@ -183,6 +193,8 @@ export class ClickDzAppResultCard extends ShadowlessElement {
         slug: result.slug,
         mimeType: 'text/html',
       }),
+      // Always reflect the latest (possibly renamed) title.
+      title: this.effectiveTitle,
       payload: this.currentHtml,
       url: url ?? (this.publishedUrl || existing?.url),
     });
@@ -221,7 +233,7 @@ export class ClickDzAppResultCard extends ShadowlessElement {
     const currentHtml = this.currentHtml;
     return html`<section class="app-card" data-testid="clickdz-app-result">
       <div class="app-toolbar">
-        <div class="app-title">🚀 ${result.title}</div>
+        <div class="app-title">🚀 ${this.effectiveTitle}</div>
         <div class="app-toggle">
           <button
             class=${this.mode === 'preview' ? 'active' : ''}
@@ -270,10 +282,14 @@ export class ClickDzAppResultCard extends ShadowlessElement {
       <clickdz-builder-studio
         .open=${this.studioOpen}
         .slug=${result.slug}
-        .title=${result.title}
+        .title=${this.effectiveTitle}
         .html=${currentHtml}
         .publishedUrl=${url ?? ''}
         @studio-close=${() => (this.studioOpen = false)}
+        @studio-title-change=${(event: CustomEvent<{ title: string }>) => {
+          this.liveTitle = event.detail.title;
+          this.persistApp();
+        }}
         @studio-html-change=${(event: CustomEvent<{ html: string }>) => {
           this.liveHtml = event.detail.html;
           this.persistApp();
