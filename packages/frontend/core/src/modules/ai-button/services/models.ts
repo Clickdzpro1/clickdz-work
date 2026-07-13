@@ -3,7 +3,7 @@ import {
   createSignalFromObservable,
   type Signal,
 } from '@blocksuite/affine/shared/utils';
-import { signal } from '@preact/signals-core';
+import { computed, type ReadonlySignal, signal } from '@preact/signals-core';
 import { LiveData, Service } from '@toeverything/infra';
 
 import type { GraphQLService, SubscriptionService } from '../../cloud';
@@ -69,10 +69,33 @@ export function mergeClickDzModels(serverModels: AIModel[]): AIModel[] {
   return merged;
 }
 
+/**
+ * Pick a sensible default model id from the current list: prefer the model
+ * flagged `isDefault`, otherwise fall back to the first model. Returns
+ * undefined only when the list is empty.
+ */
+export function pickDefaultModelId(models: AIModel[]): string | undefined {
+  return models.find(model => model.isDefault)?.id ?? models[0]?.id;
+}
+
 export class AIModelService extends Service {
   modelId: Signal<string | undefined>;
 
   models: Signal<AIModel[]> = signal([]);
+
+  /**
+   * The model id to actually use. A previously-persisted `modelId` can become
+   * stale when the model list changes between releases (a model is renamed or
+   * removed); consumers that look it up in `models` then get `undefined` and
+   * the picker/request ends up in a broken/empty state. Reconcile here: if the
+   * stored id is absent from the current list, fall back to the list default
+   * (or first model) instead of the stale id.
+   *
+   * Inferred as a ReadonlySignal from `computed` (consumers only read `.value`),
+   * matching the `computed(...)` pattern already used elsewhere in the AI UI.
+   * Assigned in the constructor so it is created after `this.modelId` is set.
+   */
+  resolvedModelId!: ReadonlySignal<string | undefined>;
 
   private readonly modelId$ = LiveData.from(
     this.globalStateService.globalState.watch<string>(AI_MODEL_ID_KEY),
@@ -91,6 +114,15 @@ export class AIModelService extends Service {
     >(this.modelId$, undefined);
     this.modelId = modelId;
     this.disposables.push(cleanup);
+
+    this.resolvedModelId = computed<string | undefined>(() => {
+      const stored = this.modelId.value;
+      const models = this.models.value;
+      if (stored && models.some(model => model.id === stored)) {
+        return stored;
+      }
+      return pickDefaultModelId(models);
+    });
 
     this.init().catch(err => {
       console.error(err);

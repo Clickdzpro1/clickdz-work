@@ -2847,6 +2847,8 @@ export class AIChatInput extends SignalWatcher(
               class="chat-panel-stop"
               @click=${this._handleAbort}
               data-testid="chat-panel-stop"
+              aria-label="Stop generating"
+              title="Stop generating"
             >
               ${ChatAbortIcon}
             </button>`
@@ -2855,6 +2857,8 @@ export class AIChatInput extends SignalWatcher(
               class="chat-panel-send"
               aria-disabled=${this.isSendDisabled}
               data-testid="chat-panel-send"
+              aria-label="Send message"
+              title="Send message"
             >
               ${ArrowUpBigIcon()}
             </button>`}
@@ -3274,7 +3278,9 @@ export class AIChatInput extends SignalWatcher(
       control: this.trackOptions?.control,
       reasoning: this._isReasoningActive,
       toolsConfig: this.aiToolsConfigService.config.value,
-      modelId: this.aiModelService.modelId.value,
+      // resolvedModelId falls back to the default when the persisted id is
+      // stale (no longer in the model list), so we never send an unknown id.
+      modelId: this.aiModelService.resolvedModelId.value,
       userInfo: {
         userId: userInfo?.id,
         userName: userInfo?.name,

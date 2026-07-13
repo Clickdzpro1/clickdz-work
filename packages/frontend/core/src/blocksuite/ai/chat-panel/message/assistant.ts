@@ -283,9 +283,14 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       return html`<ai-loading></ai-loading>`;
     }
 
+    // aria-live="polite" lets screen readers announce the streamed assistant
+    // answer as it fills in; aria-atomic="false" announces only the newly
+    // appended text rather than re-reading the whole answer on each token.
     return html`
       ${this.renderHeader()}
-      <div class="item-wrapper">${this.renderContent()}</div>
+      <div class="item-wrapper" aria-live="polite" aria-atomic="false">
+        ${this.renderContent()}
+      </div>
     `;
   }
 }

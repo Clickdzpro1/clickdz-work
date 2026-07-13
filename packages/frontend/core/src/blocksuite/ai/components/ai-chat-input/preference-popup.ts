@@ -393,7 +393,10 @@ export class ChatInputPreference extends SignalWatcher(
   accessor onAISubscribe!: () => Promise<void>;
 
   model = computed(() => {
-    const modelId = this.aiModelService.modelId.value;
+    // Use the service's reconciled id so a stale persisted modelId (one no
+    // longer in the current list) resolves to the default instead of leaving
+    // the picker with no active/selected model.
+    const modelId = this.aiModelService.resolvedModelId.value;
     const activeModel = this.aiModelService.models.value.find(
       model => model.id === modelId
     );
