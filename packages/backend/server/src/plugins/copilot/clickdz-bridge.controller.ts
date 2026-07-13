@@ -16,11 +16,25 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 
 import { Public } from '../../core/auth';
+import {
+  buildEditContent,
+  buildNewAppContent,
+  type AppHistoryTurn,
+  type AppSelectionContext,
+} from './clickdz-app-prompt';
 
 // SECURITY: input caps for cost/side-effecting routes (images, apps, plan).
 // Non-breaking for normal use; reject oversized/abusive payloads early.
 const MAX_PROMPT_CHARS = 8_000;
 const MAX_HTML_CHARS = 512_000;
+// SECURITY: edit-in-context conversation caps for /apps/generate. Match the
+// canonical CdzGenerateRequest bounds; reject (not clamp) oversized inputs so
+// abuse is refused, then the prompt builder's internal clamps are belt-and-braces.
+const MAX_HISTORY_TURNS = 6;
+const MAX_HISTORY_TURN_CHARS = 2_000;
+const MAX_HISTORY_TOTAL_CHARS = 8_000;
+const MAX_SELECTION_TEXT_CHARS = 200;
+const MAX_SELECTION_DESCRIPTOR_CHARS = 500;
 // SECURITY: hard ceiling on max_tokens forwarded to upstream model APIs, to
 // cap per-request cost. Floor of 1 keeps requests valid.
 const MAX_TOKENS_CEILING = 4096;
@@ -136,43 +150,8 @@ const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
 
-// ClickDz Apps — models build single-file web apps, deployed to Vercel
-const APP_BUILDER_GUIDELINES = [
-  'You are ClickDz Apps, an elite front-end engineer. Build ONE complete,',
-  'production-quality single-file web app for the request below.',
-  'Rules:',
-  '- Output ONLY the code, inside a single ```html code block. No commentary.',
-  '- One self-contained index.html: inline <style> and <script>, vanilla JS.',
-  '- No external network calls or CDNs (Google Fonts via <link> is allowed).',
-  '- Beautiful and modern: thoughtful typography, generous spacing, a coherent',
-  '  palette that works on dark screens, subtle motion and hover states.',
-  '- Fully functional interactivity on first load; design empty states.',
-  '- Accessible (semantic HTML, labels, contrast) and responsive mobile-first.',
-  '- If the request is in Arabic, build the interface right-to-left (dir="rtl").',
-  '',
-  'DATA — the ClickDz Data API (shared, persistent, multi-user storage):',
-  '- When the app benefits from data that survives reloads and is shared',
-  '  between users/devices (dashboards, trackers, forms, leaderboards,',
-  '  mini-CRMs, bookings), use the platform Data API with plain fetch —',
-  '  no keys, no auth:',
-  "  const DATA = '__CLICKDZ_DATA_URL__'; // injected by the platform",
-  '  save:   await (await fetch(`${DATA}/items`, { method: "POST",',
-  '            headers: { "Content-Type": "application/json" },',
-  '            body: JSON.stringify(record) })).json()',
-  '  load:   await (await fetch(`${DATA}/items`)).json() // newest first',
-  '  remove: await fetch(`${DATA}/items/${id}`, { method: "DELETE" })',
-  '- Collections are free-form lowercase names (items, sales, entries…).',
-  '  Every saved record gains auto id + createdAt. Limits: 8KB per record,',
-  '  500 records per collection. Handle fetch errors gracefully.',
-  '- Use localStorage only for device-local preferences (theme, filters).',
-  '',
-  'DASHBOARDS:',
-  '- Structure: a KPI stat-card row on top, then charts and a data table.',
-  '- Draw charts with inline SVG or <canvas> (bars, lines, donuts) — no chart',
-  '  libraries; animate values counting up on load.',
-  '- Feed everything from Data API collections; provide an obvious way to add',
-  '  records and a "Seed demo data" button when the collection is empty.',
-].join('\n');
+// ClickDz Apps — the app-builder system prompt + message-content builders now
+// live in ./clickdz-app-prompt (imported above). buildAppHtml delegates to them.
 
 const CLICKDZ_APP_WATERMARK =
   '<div style="position:fixed;bottom:10px;right:12px;font:600 11px system-ui;opacity:.55;z-index:99999"><a href="https://work.clickdz.ai" style="color:inherit;text-decoration:none" target="_blank" rel="noopener">⚡ Built with ClickDz</a></div>';
@@ -904,28 +883,122 @@ export class ClickDzBridgeController {
     };
   }
 
+  /**
+   * SECURITY / validation: parse + bound the optional `history` and `selection`
+   * fields from an /apps/generate body. Rejects malformed shapes with 400 and
+   * oversized inputs with 413 (consistent with this route's existing caps),
+   * then returns normalized values the prompt builder can consume directly.
+   * Absent fields are fine: returns { history: undefined, selection: undefined }.
+   */
+  private parseAppEditContext(body: any): {
+    history: AppHistoryTurn[] | undefined;
+    selection: AppSelectionContext | null | undefined;
+  } {
+    // ----- history -----
+    let history: AppHistoryTurn[] | undefined;
+    if (body?.history != null) {
+      if (!Array.isArray(body.history)) {
+        throw new BadRequestException('"history" must be an array of turns');
+      }
+      if (body.history.length > MAX_HISTORY_TURNS) {
+        throw new PayloadTooLargeException(
+          `Too many history turns (max ${MAX_HISTORY_TURNS})`
+        );
+      }
+      let total = 0;
+      const turns: AppHistoryTurn[] = [];
+      for (const turn of body.history) {
+        if (!turn || typeof turn !== 'object') {
+          throw new BadRequestException('Each history turn must be an object');
+        }
+        const role = (turn as any).role;
+        const text = (turn as any).text;
+        if (role !== 'user' && role !== 'assistant') {
+          throw new BadRequestException(
+            'Each history turn role must be "user" or "assistant"'
+          );
+        }
+        if (typeof text !== 'string') {
+          throw new BadRequestException('Each history turn text must be a string');
+        }
+        if (text.length > MAX_HISTORY_TURN_CHARS) {
+          throw new PayloadTooLargeException(
+            `A history turn is too long (max ${MAX_HISTORY_TURN_CHARS} characters)`
+          );
+        }
+        total += text.length;
+        turns.push({ role, text });
+      }
+      if (total > MAX_HISTORY_TOTAL_CHARS) {
+        throw new PayloadTooLargeException(
+          `History is too long (max ${MAX_HISTORY_TOTAL_CHARS} characters total)`
+        );
+      }
+      history = turns.length ? turns : undefined;
+    }
+
+    // ----- selection -----
+    let selection: AppSelectionContext | null | undefined;
+    if (body?.selection != null) {
+      const sel = body.selection;
+      if (typeof sel !== 'object' || Array.isArray(sel)) {
+        throw new BadRequestException('"selection" must be an object or null');
+      }
+      const tag = (sel as any).tag;
+      const text = (sel as any).text;
+      const descriptor = (sel as any).descriptor;
+      if (typeof tag !== 'string') {
+        throw new BadRequestException('"selection.tag" must be a string');
+      }
+      if (typeof text !== 'string') {
+        throw new BadRequestException('"selection.text" must be a string');
+      }
+      if (text.length > MAX_SELECTION_TEXT_CHARS) {
+        throw new PayloadTooLargeException(
+          `selection.text is too long (max ${MAX_SELECTION_TEXT_CHARS} characters)`
+        );
+      }
+      if (descriptor != null && typeof descriptor !== 'string') {
+        throw new BadRequestException('"selection.descriptor" must be a string');
+      }
+      if (
+        typeof descriptor === 'string' &&
+        descriptor.length > MAX_SELECTION_DESCRIPTOR_CHARS
+      ) {
+        throw new PayloadTooLargeException(
+          `selection.descriptor is too long (max ${MAX_SELECTION_DESCRIPTOR_CHARS} characters)`
+        );
+      }
+      selection = {
+        tag,
+        text,
+        ...(typeof descriptor === 'string' ? { descriptor } : {}),
+      };
+    }
+
+    return { history, selection };
+  }
+
   /** run the code agent to produce a complete single-file app (new or edited) */
   private async buildAppHtml(
     prompt: string,
-    currentHtml?: string
+    currentHtml?: string,
+    history?: AppHistoryTurn[],
+    selection?: AppSelectionContext | null
   ): Promise<string> {
+    // Content construction (system prompt + edit-in-context transcript) now
+    // lives in ./clickdz-app-prompt. The edit branch fires only when there is a
+    // real working document; the builder slices currentHtml internally
+    // (MAX_EDIT_HTML_CHARS), so we do NOT slice it again here.
     const isEdit = !!currentHtml && currentHtml.length > 20;
     const content = isEdit
-      ? [
-          APP_BUILDER_GUIDELINES,
-          '',
-          'You are EDITING an existing app. Apply the requested change and',
-          'return the COMPLETE updated index.html (never a diff or fragment).',
-          'Preserve everything that works; change only what the request asks.',
-          '',
-          'Current app:',
-          '```html',
-          currentHtml.slice(0, 300_000),
-          '```',
-          '',
-          `Change request: ${prompt}`,
-        ].join('\n')
-      : `${APP_BUILDER_GUIDELINES}\n\nRequest: ${prompt}`;
+      ? buildEditContent({
+          prompt,
+          currentHtml: currentHtml as string,
+          history,
+          selection,
+        })
+      : buildNewAppContent(prompt);
     const reply = await this.runMakeAgent(
       [{ role: 'user', content }],
       'clickdz-apps',
@@ -969,6 +1042,9 @@ export class ClickDzBridgeController {
     }
     const currentHtml =
       typeof body?.currentHtml === 'string' ? body.currentHtml : undefined;
+    // Validate + bound the optional edit-in-context fields (rejects malformed
+    // shapes 400 / oversized inputs 413 per the canonical request bounds).
+    const { history, selection } = this.parseAppEditContext(body);
     const slug =
       typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
         ? body.slug
@@ -976,7 +1052,7 @@ export class ClickDzBridgeController {
     this.logger.log(
       `[apps] generate (${currentHtml ? 'edit' : 'new'}) slug=${slug} prompt=${prompt.slice(0, 80)}`
     );
-    let html = await this.buildAppHtml(prompt, currentHtml);
+    let html = await this.buildAppHtml(prompt, currentHtml, history, selection);
     // wire the app to its own Data API namespace so preview + live share state
     const externalBase = (
       process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
