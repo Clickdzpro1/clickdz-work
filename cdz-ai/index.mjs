@@ -588,7 +588,11 @@ async function handleMcp(req, res, body) {
 }
 
 // ---------------------------------------------------------------- server
-const server = http.createServer(async (req, res) => {
+// The request handler is exported (see below) so tests can exercise routing
+// without booting a listening server. The whole body is wrapped in a
+// try/catch so a single throwing request can never crash the process.
+async function requestHandler(req, res) {
+ try {
   const url = new URL(req.url, 'http://x');
   const path = url.pathname;
 
@@ -699,8 +703,58 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     return err(res, e.status || 502, e.message || 'engine failure', 'api_error');
   }
+ } catch (e) {
+  // Last-resort guard: anything thrown outside the route try/catch above
+  // (URL parsing, the pre-auth section, or an unforeseen bug) is contained
+  // here so one bad request can never take the server down.
+  console.error('[cdz-ai] request handler error:', e?.stack || e?.message || e);
+  if (!res.headersSent) {
+   res.writeHead(500, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+   });
+   res.end(JSON.stringify({ error: { message: 'internal server error', type: 'api_error' } }));
+  } else {
+   try { res.end(); } catch { /* socket already gone */ }
+  }
+ }
+}
+
+const server = http.createServer(requestHandler);
+
+// ---------------------------------------------------------------- guards
+// Process-level safety net: without these, a single unhandled rejection or
+// uncaught exception takes the whole server down. Log clearly and stay up —
+// the request handler is itself try/caught, so continuing is safe.
+process.on('unhandledRejection', reason => {
+  console.error(
+    '[cdz-ai] unhandledRejection:',
+    reason?.stack || reason?.message || reason
+  );
 });
 
-server.listen(PORT, () => {
-  console.log(`[cdz-ai] listening on :${PORT} — keys:${API_KEYS.length} engine:${V4 ? 'v4' : 'legacy'} llm:${!!HOOKS.llm} vision:${!!HOOKS.vision} audio:${!!HOOKS.audio}`);
+process.on('uncaughtException', err => {
+  console.error(
+    '[cdz-ai] uncaughtException:',
+    err?.stack || err?.message || err
+  );
 });
+
+// Listen/socket errors (e.g. EADDRINUSE) surface here instead of throwing.
+server.on('error', err => {
+  console.error('[cdz-ai] server error:', err?.stack || err?.message || err);
+});
+
+// ---------------------------------------------------------------- main
+// Start the server only when this file is run directly (`node index.mjs`),
+// so importing it (e.g. from tests) has no side effects — no open port.
+const isMain =
+  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  server.listen(PORT, () => {
+    console.log(`[cdz-ai] listening on :${PORT} — keys:${API_KEYS.length} engine:${V4 ? 'v4' : 'legacy'} llm:${!!HOOKS.llm} vision:${!!HOOKS.vision} audio:${!!HOOKS.audio}`);
+  });
+}
+
+// Exported for tests: exercise routing/guards without booting a server.
+export { requestHandler, server, completeChat, flattenMessages, ultraRoute };
