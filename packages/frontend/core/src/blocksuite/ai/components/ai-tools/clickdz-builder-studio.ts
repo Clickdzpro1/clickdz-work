@@ -12,6 +12,13 @@ import {
   type CdzSnapshotMeta,
 } from './cdz-history-meta';
 import { buildSelectionDescriptor } from './cdz-selection-context';
+import {
+  coalesceProblem,
+  normalizeConsoleMessage,
+  CDZ_CONSOLE_BRIDGE,
+  type CdzProblem,
+} from './cdz-console-bridge';
+import { renderProblems } from './cdz-problems-panel';
 
 /**
  * `<clickdz-builder-studio>` — a Lovable-style "Builder Studio" overlay for the
@@ -361,6 +368,31 @@ export class ClickDzBuilderStudio extends LitElement {
     .cdz-versions-body {
       overflow: auto;
       padding: 6px;
+    }
+    /* Problems panel (Debugging bundle) — reuses .cdz-versions chrome, wider. */
+    .cdz-problems {
+      width: min(360px, calc(100% - 32px));
+    }
+    .cdz-problems .cdz-versions-head span {
+      color: #f59e0b;
+    }
+    /* toolbar error-count badge */
+    .cdz-btn {
+      position: relative;
+    }
+    .cdz-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      min-width: 15px;
+      height: 15px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: var(--cdz-danger);
+      color: #fff;
+      font: 700 10px/15px var(--cdz-sans);
+      text-align: center;
+      box-shadow: 0 0 0 2px var(--cdz-bg-2);
     }
 
     /* segmented control — pill container w/ active "thumb" */
@@ -1102,6 +1134,13 @@ export class ClickDzBuilderStudio extends LitElement {
   @state()
   private accessor showVersions = false;
 
+  // Captured runtime console/errors from the preview + panel visibility (v3).
+  @state()
+  private accessor problems: CdzProblem[] = [];
+
+  @state()
+  private accessor showProblems = false;
+
   @state()
   private accessor previewSrc = '';
 
@@ -1204,6 +1243,8 @@ export class ClickDzBuilderStudio extends LitElement {
       this.pendingHtml = null;
       this.pendingSummary = '';
       this.showVersions = false;
+      this.problems = [];
+      this.showProblems = false;
       // Cancel any pending debounced work so a timer can't fire (and dispatch
       // studio-html-change) after the overlay has already closed.
       this.clearTimers();
@@ -1340,6 +1381,9 @@ export class ClickDzBuilderStudio extends LitElement {
    */
   private buildPreviewNow() {
     const source = this.workingHtml ?? '';
+    // Each rebuild reloads the iframe → clear captured problems; the fresh run
+    // repopulates them via cdz-console messages (Debugging bundle).
+    this.problems = [];
     const doc = this.walkBody(source, (el, id) => {
       el.setAttribute('data-cdz-id', String(id));
     });
@@ -1353,6 +1397,12 @@ export class ClickDzBuilderStudio extends LitElement {
       this.previewSrc = source;
       return;
     }
+
+    // Console/error capture — injected FIRST in <head> so it catches errors
+    // from the app's very first line; posts cdz-console messages to the parent.
+    const consoleScript = doc.createElement('script');
+    consoleScript.textContent = CDZ_CONSOLE_BRIDGE;
+    doc.head.insertBefore(consoleScript, doc.head.firstChild);
 
     // Hover / selection outline styles.
     const style = doc.createElement('style');
@@ -1417,6 +1467,13 @@ export class ClickDzBuilderStudio extends LitElement {
       const dy = typeof data.dy === 'number' ? data.dy : 0;
       if (dx === 0 && dy === 0) return;
       this.applyFreeMove(data.id, dx, dy);
+      return;
+    }
+
+    // Runtime console/errors captured from the preview (Debugging bundle).
+    if ((data as { type?: unknown }).type === 'cdz-console') {
+      const msg = normalizeConsoleMessage(data);
+      if (msg) this.problems = coalesceProblem(this.problems, msg, 50);
       return;
     }
 
@@ -1776,6 +1833,18 @@ export class ClickDzBuilderStudio extends LitElement {
 
   private toggleVersions() {
     this.showVersions = !this.showVersions;
+  }
+
+  private toggleProblems() {
+    this.showProblems = !this.showProblems;
+  }
+
+  // Error-only count for the toolbar Problems badge.
+  private get problemErrorCount(): number {
+    return this.problems.reduce(
+      (n, p) => (p.level === 'error' ? n + p.count : n),
+      0
+    );
   }
 
   /* ─────────────────── apply a click-to-edit change ─────────────────── */
@@ -2160,6 +2229,10 @@ export class ClickDzBuilderStudio extends LitElement {
         this.showVersions = false;
         return;
       }
+      if (this.showProblems) {
+        this.showProblems = false;
+        return;
+      }
       this.close();
       return;
     }
@@ -2323,6 +2396,27 @@ export class ClickDzBuilderStudio extends LitElement {
             @click=${() => this.toggleVersions()}
           >
             ${CDZ_ICONS.history}
+          </button>
+          <button
+            class=${classMap({
+              'cdz-btn': true,
+              ghost: true,
+              icon: true,
+              toggled: this.showProblems,
+            })}
+            title="Problems — runtime console & errors"
+            aria-label="Problems"
+            aria-pressed=${this.showProblems}
+            @click=${() => this.toggleProblems()}
+          >
+            ${CDZ_ICONS.alert}
+            ${this.problemErrorCount > 0
+              ? html`<span class="cdz-badge"
+                  >${this.problemErrorCount > 99
+                    ? '99+'
+                    : this.problemErrorCount}</span
+                >`
+              : nothing}
           </button>
         </div>
 
@@ -2678,6 +2772,54 @@ export class ClickDzBuilderStudio extends LitElement {
     </div>`;
   }
 
+  // Compose a fix prompt from the current problems and run it through the AI
+  // dock — reuses sendAi, so the fix returns as a reviewable diff.
+  private fixWithAi() {
+    if (this.aiBusy) return;
+    const fixable = this.problems.filter(
+      p => p.level === 'error' || p.level === 'warn'
+    );
+    if (!fixable.length) return;
+    const lines = fixable.slice(0, 10).map(p => {
+      const loc = p.source
+        ? ` (${p.source}${p.line ? ':' + p.line : ''})`
+        : '';
+      return `- [${p.level}]${loc} ${p.text.slice(0, 200)}`;
+    });
+    this.aiPrompt =
+      'Fix these runtime errors and warnings in the app, keeping everything ' +
+      'else intact:\n' +
+      lines.join('\n');
+    this.showProblems = false;
+    void this.sendAi();
+  }
+
+  private renderProblemsPanel() {
+    return html`<div
+      class="cdz-versions cdz-problems"
+      role="dialog"
+      aria-label="Problems"
+    >
+      <div class="cdz-versions-head">
+        <span>${CDZ_ICONS.alert} Problems</span>
+        <button
+          class="cdz-btn ghost icon"
+          title="Close"
+          aria-label="Close problems"
+          @click=${() => (this.showProblems = false)}
+        >
+          ${CDZ_ICONS.close}
+        </button>
+      </div>
+      <div class="cdz-versions-body">
+        ${renderProblems(this.problems, {
+          onFix: () => this.fixWithAi(),
+          onClear: () => (this.problems = []),
+        })}
+      </div>
+    </div>`;
+  }
+
   private renderCenter() {
     if (this.view === 'code') {
       return html`<div class="cdz-center single">
@@ -2706,6 +2848,7 @@ export class ClickDzBuilderStudio extends LitElement {
           : nothing}
         <div class="cdz-body">${this.renderCenter()} ${this.renderDock()}</div>
         ${this.showVersions ? this.renderVersionsPanel() : nothing}
+        ${this.showProblems ? this.renderProblemsPanel() : nothing}
       </div>
     </div>`;
   }
@@ -2887,6 +3030,22 @@ const CDZ_ICONS = {
     <path
       d="M12 3l1.9 4.8L18.7 9.7l-4.8 1.9L12 16.4l-1.9-4.8L5.3 9.7l4.8-1.9L12 3z"
     ></path>
+  </svg>`,
+  // alert — warning triangle (Problems panel, Debugging bundle)
+  alert: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+    <line x1="12" y1="9" x2="12" y2="13"></line>
+    <line x1="12" y1="17" x2="12.01" y2="17"></line>
   </svg>`,
 } as const;
 
