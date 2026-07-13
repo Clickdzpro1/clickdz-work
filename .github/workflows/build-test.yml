@@ -16,11 +16,11 @@ on:
 env:
   DEBUG: napi:*
   BUILD_TYPE: canary
-  APP_NAME: ClickDz Work
+  APP_NAME: affine
   AFFINE_ENV: dev
   COVERAGE: true
   MACOSX_DEPLOYMENT_TARGET: '11.6'
-  DEPLOYMENT_TYPE: ClickDz Work
+  DEPLOYMENT_TYPE: affine
   AFFINE_INDEXER_ENABLED: true
 
 concurrency:
@@ -42,7 +42,7 @@ jobs:
       fail-fast: false
       matrix:
         language: ['javascript', 'typescript']
-        project: ['ClickDz Work', 'blocksuite']
+        project: ['affine', 'blocksuite']
 
     steps:
       - name: Checkout repository
@@ -52,10 +52,10 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
-          source-root: ${{ matrix.project == 'ClickDz Work' && '.' || 'blocksuite' }}
+          source-root: ${{ matrix.project == 'affine' && '.' || 'blocksuite' }}
 
       - name: Delete blocksuite before codeql analysis
-        if: ${{ matrix.project == 'ClickDz Work' }}
+        if: ${{ matrix.project == 'affine' }}
         run: rm -rf blocksuite
 
       - name: Autobuild
@@ -177,7 +177,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-tools/cli @affine/android
+          extra-flags: workspaces focus @affine/monorepo @affine-tools/cli @affine/android
           electron-install: false
 
       - uses: actions/setup-java@v5
@@ -204,8 +204,8 @@ jobs:
           {
             "project_info": {
               "project_number": "1",
-              "project_id": "ClickDz Work-ci",
-              "storage_bucket": "ClickDz Work-ci.appspot.com"
+              "project_id": "affine-ci",
+              "storage_bucket": "affine-ci.appspot.com"
             },
             "client": [
               {
@@ -251,7 +251,7 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-tools/cli @affine/ios
+          extra-flags: workspaces focus @affine/monorepo @affine-tools/cli @affine/ios
           electron-install: false
           hard-link-nm: false
 
@@ -319,7 +319,7 @@ jobs:
       - uses: ./.github/actions/build-rust
         with:
           target: x86_64-unknown-linux-gnu
-          package: 'ClickDz Work'
+          package: 'affine'
           no-build: 'true'
       - name: fmt check
         run: |
@@ -526,10 +526,10 @@ jobs:
           playwright-platform: 'chromium,firefox,webkit'
           full-cache: true
 
-      - name: Download ClickDz Work.linux-x64-gnu.node
+      - name: Download affine.linux-x64-gnu.node
         uses: actions/download-artifact@v4
         with:
-          name: ClickDz Work.linux-x64-gnu.node
+          name: affine.linux-x64-gnu.node
           path: ./packages/frontend/native
 
       - name: Unit Test
@@ -541,7 +541,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./.coverage/store/lcov.info
           flags: unittest
-          name: ClickDz Work
+          name: affine
           fail_ci_if_error: false
 
   build-native-linux:
@@ -562,7 +562,7 @@ jobs:
         shell: bash
         run: |
           PLATFORM_ARCH_ABI="$(node -e "console.log(require('@napi-rs/cli').parseTriple('x86_64-unknown-linux-gnu').platformArchABI)")"
-          echo "filename=ClickDz Work.$PLATFORM_ARCH_ABI.node" >> "$GITHUB_OUTPUT"
+          echo "filename=affine.$PLATFORM_ARCH_ABI.node" >> "$GITHUB_OUTPUT"
       - name: Build ClickDz Work native
         uses: ./.github/actions/build-rust
         with:
@@ -601,7 +601,7 @@ jobs:
         shell: bash
         run: |
           PLATFORM_ARCH_ABI="$(node -e "console.log(require('@napi-rs/cli').parseTriple('${{ matrix.spec.target }}').platformArchABI)")"
-          echo "filename=ClickDz Work.$PLATFORM_ARCH_ABI.node" >> "$GITHUB_OUTPUT"
+          echo "filename=affine.$PLATFORM_ARCH_ABI.node" >> "$GITHUB_OUTPUT"
       - name: Build ClickDz Work native
         uses: ./.github/actions/build-rust
         with:
@@ -650,7 +650,7 @@ jobs:
         shell: bash
         run: |
           PLATFORM_ARCH_ABI="$(node -e "console.log(require('@napi-rs/cli').parseTriple('${{ matrix.spec.target }}').platformArchABI)")"
-          echo "filename=ClickDz Work.$PLATFORM_ARCH_ABI.node" >> "$GITHUB_OUTPUT"
+          echo "filename=affine.$PLATFORM_ARCH_ABI.node" >> "$GITHUB_OUTPUT"
       - name: Build ClickDz Work native
         uses: ./.github/actions/build-rust
         with:
@@ -724,12 +724,12 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup-node
         with:
-          extra-flags: workspaces focus @ClickDz Work-tools/cli @affine/monorepo @affine/native
+          extra-flags: workspaces focus @affine-tools/cli @affine/monorepo @affine/native
           electron-install: false
-      - name: Download ClickDz Work.linux-x64-gnu.node
+      - name: Download affine.linux-x64-gnu.node
         uses: actions/download-artifact@v4
         with:
-          name: ClickDz Work.linux-x64-gnu.node
+          name: affine.linux-x64-gnu.node
           path: ./packages/frontend/native
       - name: Unit Test
         run: yarn affine @affine/native test
@@ -746,13 +746,13 @@ jobs:
         total_nodes: [4]
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://ClickDz Work:ClickDz Work@localhost:5432/ClickDz Work
+      DATABASE_URL: postgresql://affine:affine@localhost:5432/affine
       REDIS_SERVER_HOST: localhost
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: ClickDz Work
+          POSTGRES_PASSWORD: affine
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -805,7 +805,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./packages/backend/server/.coverage/lcov.info
           flags: server-test
-          name: ClickDz Work
+          name: affine
           fail_ci_if_error: false
 
   server-test-elasticsearch:
@@ -815,7 +815,7 @@ jobs:
       - build-server-native
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://ClickDz Work:ClickDz Work@localhost:5432/ClickDz Work
+      DATABASE_URL: postgresql://affine:affine@localhost:5432/affine
       REDIS_SERVER_HOST: localhost
       AFFINE_INDEXER_SEARCH_PROVIDER: elasticsearch
       AFFINE_INDEXER_SEARCH_ENDPOINT: http://localhost:9200
@@ -823,7 +823,7 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: ClickDz Work
+          POSTGRES_PASSWORD: affine
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -884,7 +884,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./packages/backend/server/.coverage/lcov.info
           flags: server-test
-          name: ClickDz Work
+          name: affine
           fail_ci_if_error: false
 
   server-e2e-test:
@@ -895,13 +895,13 @@ jobs:
       - build-server-native
     env:
       NODE_ENV: test
-      DATABASE_URL: postgresql://ClickDz Work:ClickDz Work@localhost:5432/ClickDz Work
+      DATABASE_URL: postgresql://affine:affine@localhost:5432/affine
       REDIS_SERVER_HOST: localhost
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: ClickDz Work
+          POSTGRES_PASSWORD: affine
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -945,7 +945,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./packages/backend/server/.coverage/lcov.info
           flags: server-test
-          name: ClickDz Work
+          name: affine
           fail_ci_if_error: false
 
   rust-test:
@@ -962,7 +962,7 @@ jobs:
         uses: ./.github/actions/build-rust
         with:
           target: x86_64-unknown-linux-gnu
-          package: 'ClickDz Work'
+          package: 'affine'
           no-build: 'true'
 
       - name: Install latest nextest release
@@ -994,7 +994,7 @@ jobs:
               - 'packages/backend/server/tests/copilot.*'
               - 'packages/frontend/core/src/blocksuite/ai/**'
               - 'packages/frontend/core/src/modules/workspace-indexer-embedding/**'
-              - 'tests/ClickDz Work-cloud-copilot/**'
+              - 'tests/affine-cloud-copilot/**'
 
       - name: Decide test scope
         id: decision
@@ -1021,13 +1021,13 @@ jobs:
     env:
       NODE_ENV: test
       DISTRIBUTION: web
-      DATABASE_URL: postgresql://ClickDz Work:ClickDz Work@localhost:5432/ClickDz Work
+      DATABASE_URL: postgresql://affine:affine@localhost:5432/affine
       REDIS_SERVER_HOST: localhost
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: ClickDz Work
+          POSTGRES_PASSWORD: affine
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -1080,7 +1080,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./packages/backend/server/.coverage/lcov.info
           flags: server-test
-          name: ClickDz Work
+          name: affine
           fail_ci_if_error: false
 
   copilot-e2e-test:
@@ -1089,10 +1089,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DISTRIBUTION: web
-      DATABASE_URL: postgresql://ClickDz Work:ClickDz Work@localhost:5432/ClickDz Work
+      DATABASE_URL: postgresql://affine:affine@localhost:5432/affine
       IN_CI_TEST: true
       REDIS_SERVER_HOST: localhost
-      DEPLOYMENT_TYPE: ClickDz Work
+      DEPLOYMENT_TYPE: affine
     strategy:
       fail-fast: false
       matrix:
@@ -1105,7 +1105,7 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: ClickDz Work
+          POSTGRES_PASSWORD: affine
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -1157,7 +1157,7 @@ jobs:
       - build-native-linux
     env:
       DISTRIBUTION: web
-      DATABASE_URL: postgresql://ClickDz Work:ClickDz Work@localhost:5432/ClickDz Work
+      DATABASE_URL: postgresql://affine:affine@localhost:5432/affine
       REDIS_SERVER_HOST: localhost
       IN_CI_TEST: true
     strategy:
@@ -1183,7 +1183,7 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: ClickDz Work
+          POSTGRES_PASSWORD: affine
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -1222,10 +1222,10 @@ jobs:
           name: server-native.node
           path: ./packages/backend/native
 
-      - name: Download ClickDz Work.linux-x64-gnu.node
+      - name: Download affine.linux-x64-gnu.node
         uses: actions/download-artifact@v4
         with:
-          name: ClickDz Work.linux-x64-gnu.node
+          name: affine.linux-x64-gnu.node
           path: ./packages/frontend/native
 
       - name: Prepare Server Test Environment
@@ -1302,7 +1302,7 @@ jobs:
         shell: bash
         run: |
           PLATFORM_ARCH_ABI="$(node -e "console.log(require('@napi-rs/cli').parseTriple('${{ matrix.spec.target }}').platformArchABI)")"
-          echo "filename=ClickDz Work.$PLATFORM_ARCH_ABI.node" >> "$GITHUB_OUTPUT"
+          echo "filename=affine.$PLATFORM_ARCH_ABI.node" >> "$GITHUB_OUTPUT"
 
       - name: Download ${{ steps.filename.outputs.filename }}
         uses: actions/download-artifact@v4
@@ -1352,7 +1352,7 @@ jobs:
           SKIP_WEB_BUILD: true
           HOIST_NODE_MODULES: 1
         run: |
-          rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/ClickDz Work/node_modules
+          rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/affine/node_modules
           rm -rf packages/frontend/apps/electron/node_modules/@affine/native/node_modules
           yarn affine @affine/electron package --platform=win32 --arch=x64
 

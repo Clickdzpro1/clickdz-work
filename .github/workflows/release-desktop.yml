@@ -43,8 +43,8 @@ permissions:
 env:
   BUILD_TYPE: ${{ inputs.build-type }}
   RELEASE_VERSION: ${{ inputs.app-version }}
-  DEBUG: 'ClickDz Work:*,napi:*'
-  APP_NAME: ClickDz Work
+  DEBUG: 'affine:*,napi:*'
+  APP_NAME: affine
   MACOSX_DEPLOYMENT_TARGET: '11.6'
 
 jobs:
@@ -66,7 +66,7 @@ jobs:
         run: yarn affine @affine/electron generate-assets
         env:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: 'ClickDz Work'
+          SENTRY_PROJECT: 'affine'
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           SENTRY_RELEASE: ${{ inputs.app-version }}
@@ -166,14 +166,14 @@ jobs:
     env:
       AFFINE_SIGNER_ADDR: ${{ secrets.AFFINE_SIGNER_ADDR }}
       AFFINE_SIGNER_TOKEN: ${{ secrets.AFFINE_SIGNER_TOKEN }}
-      APP_NAME: ClickDz Work
+      APP_NAME: affine
       BUILD_TYPE: ${{ inputs.build-type }}
-      DEBUG: 'ClickDz Work:*,napi:*'
+      DEBUG: 'affine:*,napi:*'
       RELEASE_VERSION: ${{ inputs.app-version }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-      SENTRY_PROJECT: 'ClickDz Work'
+      SENTRY_PROJECT: 'affine'
       SENTRY_RELEASE: ${{ inputs.app-version }}
       SKIP_GENERATE_ASSETS: 1
       TS_RS_EXPERIMENT: this_is_unstable_software
@@ -214,7 +214,7 @@ jobs:
       - name: Remove nbstore node_modules
         shell: bash
         run: |
-          rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/ClickDz Work/node_modules
+          rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/affine/node_modules
           rm -rf packages/frontend/apps/electron/node_modules/@affine/native/node_modules
 
       - name: Package windows app
@@ -228,7 +228,7 @@ jobs:
         uses: tailscale/github-action@v4
         with:
           authkey: ${{ secrets.AFFINE_SIGNER_TS_AUTH_KEY }}
-          hostname: ClickDz Work-signer-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.spec.arch }}
+          hostname: affine-signer-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.spec.arch }}
 
       - name: Check signer connectivity
         shell: pwsh
@@ -249,7 +249,7 @@ jobs:
           if (!$env:AFFINE_SIGN_CLIENT_HASH) {
             throw 'AFFINE_SIGN_CLIENT_HASH is required.'
           }
-          Invoke-WebRequest -Uri "https://cdn.clickdz.ai/sign-client/$env:AFFINE_SIGN_CLIENT_HASH" -OutFile ClickDz Work-sign-client.exe
+          Invoke-WebRequest -Uri "https://cdn.clickdz.ai/sign-client/$env:AFFINE_SIGN_CLIENT_HASH" -OutFile affine-sign-client.exe
         env:
           AFFINE_SIGN_CLIENT_HASH: ${{ secrets.AFFINE_SIGN_CLIENT_HASH }}
 
@@ -299,7 +299,7 @@ jobs:
       - name: Sign packaged files
         shell: pwsh
         run: |
-          ./ClickDz Work-sign-client.exe `
+          ./affine-sign-client.exe `
             --server "$env:AFFINE_SIGNER_ADDR" `
             --token "$env:AFFINE_SIGNER_TOKEN" `
             --workdir packages/frontend/apps/electron/out `
@@ -324,7 +324,7 @@ jobs:
       - name: Sign installer files
         shell: pwsh
         run: |
-          ./ClickDz Work-sign-client.exe `
+          ./affine-sign-client.exe `
             --server "$env:AFFINE_SIGNER_ADDR" `
             --token "$env:AFFINE_SIGNER_TOKEN" `
             --workdir packages/frontend/apps/electron/out/${{ env.BUILD_TYPE }}/make `
@@ -349,7 +349,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClickDz Work-${{ matrix.spec.platform }}-${{ matrix.spec.arch }}-builds
+          name: affine-${{ matrix.spec.platform }}-${{ matrix.spec.arch }}-builds
           path: builds
 
   release:
@@ -381,31 +381,31 @@ jobs:
         if: ${{ inputs.desktop_macos }}
         uses: actions/download-artifact@v4
         with:
-          name: ClickDz Work-darwin-x64-builds
+          name: affine-darwin-x64-builds
           path: ./release
       - name: Download Artifacts (macos-arm64)
         if: ${{ inputs.desktop_macos }}
         uses: actions/download-artifact@v4
         with:
-          name: ClickDz Work-darwin-arm64-builds
+          name: affine-darwin-arm64-builds
           path: ./release
       - name: Download Artifacts (windows-x64)
         if: ${{ inputs.desktop_windows && needs.build-and-sign-windows.result == 'success' }}
         uses: actions/download-artifact@v4
         with:
-          name: ClickDz Work-win32-x64-builds
+          name: affine-win32-x64-builds
           path: ./release
       - name: Download Artifacts (windows-arm64)
         if: ${{ inputs.desktop_windows && needs.build-and-sign-windows.result == 'success' }}
         uses: actions/download-artifact@v4
         with:
-          name: ClickDz Work-win32-arm64-builds
+          name: affine-win32-arm64-builds
           path: ./release
       - name: Download Artifacts (linux-x64)
         if: ${{ inputs.desktop_linux }}
         uses: actions/download-artifact@v4
         with:
-          name: ClickDz Work-linux-x64-builds
+          name: affine-linux-x64-builds
           path: ./release
       - uses: actions/setup-node@v6
         with:

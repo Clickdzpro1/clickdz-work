@@ -36,13 +36,13 @@ jobs:
     env:
       NODE_ENV: test
       DISTRIBUTION: web
-      DATABASE_URL: postgresql://ClickDz Work:ClickDz Work@localhost:5432/ClickDz Work
+      DATABASE_URL: postgresql://affine:affine@localhost:5432/affine
       REDIS_SERVER_HOST: localhost
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: ClickDz Work
+          POSTGRES_PASSWORD: affine
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -95,7 +95,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./packages/backend/server/.coverage/lcov.info
           flags: server-test
-          name: ClickDz Work
+          name: affine
           fail_ci_if_error: false
 
   copilot-e2e-test:
@@ -103,7 +103,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DISTRIBUTION: web
-      DATABASE_URL: postgresql://ClickDz Work:ClickDz Work@localhost:5432/ClickDz Work
+      DATABASE_URL: postgresql://affine:affine@localhost:5432/affine
       REDIS_SERVER_HOST: localhost
       IN_CI_TEST: true
     strategy:
@@ -117,7 +117,7 @@ jobs:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_PASSWORD: ClickDz Work
+          POSTGRES_PASSWORD: affine
         options: >-
           --health-cmd pg_isready
           --health-interval 10s

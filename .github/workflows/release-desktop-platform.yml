@@ -56,15 +56,15 @@ jobs:
     env:
       BUILD_TYPE: ${{ inputs.build_type }}
       RELEASE_VERSION: ${{ inputs.app_version }}
-      DEBUG: 'ClickDz Work:*,napi:*'
-      APP_NAME: ClickDz Work
+      DEBUG: 'affine:*,napi:*'
+      APP_NAME: affine
       MACOSX_DEPLOYMENT_TARGET: '12.0'
       SKIP_GENERATE_ASSETS: 1
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-      SENTRY_PROJECT: 'ClickDz Work'
+      SENTRY_PROJECT: 'affine'
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       SENTRY_RELEASE: ${{ inputs.app_version }}
@@ -137,7 +137,7 @@ jobs:
         if: ${{ inputs.platform == 'win32' }}
         shell: bash
         run: |
-          rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/ClickDz Work/node_modules
+          rm -rf packages/frontend/apps/electron/node_modules/@affine/nbstore/node_modules/@blocksuite/affine/node_modules
           rm -rf packages/frontend/apps/electron/node_modules/@affine/native/node_modules
 
       - name: make
@@ -198,7 +198,7 @@ jobs:
         if: ${{ inputs.platform == 'darwin' || inputs.platform == 'linux' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ClickDz Work-${{ inputs.platform }}-${{ inputs.arch }}-builds
+          name: affine-${{ inputs.platform }}-${{ inputs.arch }}-builds
           path: builds
 
       - name: get all files to be signed
