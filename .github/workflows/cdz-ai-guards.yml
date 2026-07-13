@@ -1,0 +1,41 @@
+name: cdz-ai guards
+
+# Runs the cdz-ai crash-safety guard tests. cdz-ai/** auto-deploys straight to
+# prod from canary on merge (no image build), so these stdlib-only Node tests
+# gate every change to that directory. The suite must both PASS and EXIT
+# cleanly: importing index.mjs during test discovery must not boot the HTTP
+# server (the .listen() call is gated behind a run-as-main check). The
+# --test-timeout plus the outer `timeout` make a hang FAIL fast instead of
+# blocking the runner forever.
+
+on:
+  push:
+    paths:
+      - 'cdz-ai/**'
+      - '.github/workflows/cdz-ai-guards.yml'
+  pull_request:
+    paths:
+      - 'cdz-ai/**'
+      - '.github/workflows/cdz-ai-guards.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: cdz-ai guard tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: '.nvmrc'
+      # No dependency install: cdz-ai is stdlib-only Node (no npm/yarn deps).
+      - name: Run guard tests
+        # Directory mode imports index.mjs during discovery, so a regression
+        # that reintroduces a top-level .listen() would hang and be caught by
+        # the timeouts below. --test-timeout fails any single hung test at 30s;
+        # the outer `timeout 60` is a hard ceiling for the whole run.
+        run: timeout 60 node --test --test-timeout=30000 cdz-ai/
