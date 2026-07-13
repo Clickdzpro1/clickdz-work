@@ -1,17 +1,120 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   HttpException,
   HttpStatus,
   Logger,
+  PayloadTooLargeException,
   Post,
   Req,
   Res,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+// SECURITY: cryptographically strong randomness for unguessable auto-slugs.
+import { randomBytes } from 'node:crypto';
 
 import { Public } from '../../core/auth';
+
+// SECURITY: input caps for cost/side-effecting routes (images, apps, plan).
+// Non-breaking for normal use; reject oversized/abusive payloads early.
+const MAX_PROMPT_CHARS = 8_000;
+const MAX_HTML_CHARS = 512_000;
+// SECURITY: hard ceiling on max_tokens forwarded to upstream model APIs, to
+// cap per-request cost. Floor of 1 keeps requests valid.
+const MAX_TOKENS_CEILING = 4096;
+const DEFAULT_MAX_TOKENS = 700;
+
+/**
+ * SECURITY: clamp a caller/requested max_tokens value to a sane range before
+ * it reaches an upstream (paid) model API. Falls back to `fallback` when the
+ * requested value is missing or not a finite number, then clamps to
+ * [1, MAX_TOKENS_CEILING].
+ */
+function clampMaxTokens(
+  requested: unknown,
+  fallback: number = DEFAULT_MAX_TOKENS
+): number {
+  const n = Number(requested);
+  const base = Number.isFinite(n) && n > 0 ? n : fallback;
+  return Math.max(1, Math.min(Math.floor(base), MAX_TOKENS_CEILING));
+}
+
+/**
+ * SECURITY (SSRF mitigation): decide whether a user-supplied URL is safe to
+ * fetch server-side. Requires http/https and rejects loopback, private,
+ * link-local and cloud-metadata targets. This is the pragmatic P1 mitigation:
+ * it blocks literal-IP and known-bad hostnames WITHOUT resolving DNS, so a
+ * hostname that resolves to a private IP is not caught here (documented
+ * residual risk). Prefer https.
+ */
+function isSafePublicUrl(u: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(u);
+  } catch {
+    return false;
+  }
+  // only http/https (prefer https); block file:, gopher:, data:, etc.
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  // known-bad / metadata hostnames
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === 'metadata.google.internal' ||
+    host.endsWith('.local')
+  ) {
+    return false;
+  }
+  // shared IPv4 range check: true = private/loopback/link-local/reserved.
+  const isPrivateV4 = (a: number, b: number): boolean =>
+    a === 127 || // 127.0.0.0/8 loopback
+    a === 10 || // 10.0.0.0/8 private
+    (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12 private
+    (a === 192 && b === 168) || // 192.168.0.0/16 private
+    (a === 169 && b === 254) || // 169.254.0.0/16 link-local (incl. 169.254.169.254)
+    a === 0; // 0.0.0.0/8 "this host"
+  // IPv6 literals: loopback (::1), unique-local (fc00::/7 => fc/fd prefix),
+  // link-local (fe80::/10 => fe8/fe9/fea/feb prefix).
+  if (host.includes(':')) {
+    if (host === '::1' || host === '::') return false;
+    if (/^f[cd]/i.test(host)) return false; // fc00::/7
+    if (/^fe[89ab]/i.test(host)) return false; // fe80::/10
+    // IPv4-mapped IPv6. Node's URL normalizes ::ffff:169.254.169.254 to the
+    // compressed hex form ::ffff:a9fe:a9fe, so match BOTH the dotted-quad and
+    // the trailing two hex groups and range-check the embedded IPv4. This
+    // closes the metadata-endpoint bypass via mapped addresses.
+    const dotted = host.match(/::ffff:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/);
+    if (dotted && isPrivateV4(Number(dotted[1]), Number(dotted[2]))) return false;
+    const hex = host.match(/::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hex) {
+      const hi = parseInt(hex[1], 16);
+      const lo = parseInt(hex[2], 16);
+      const a = (hi >> 8) & 0xff;
+      const b = hi & 0xff;
+      const c = (lo >> 8) & 0xff;
+      const d = lo & 0xff;
+      // reconstruct a.b.c.d; reject if it decodes to a private/reserved range
+      if (isPrivateV4(a, b) || (a === 169 && b === 254 && c === 169 && d === 254)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  // IPv4 literal? if it looks like a dotted quad, range-check it.
+  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    if (isPrivateV4(Number(m[1]), Number(m[2]))) return false;
+    return true;
+  }
+  // a regular DNS hostname we can't classify without resolution — allow it
+  // (documented residual SSRF risk: no DNS resolution is performed).
+  return true;
+}
 
 const MAKE_API_BASE = process.env.MAKE_API_BASE || 'https://eu1.make.com/api/v2';
 const MAKE_API_KEY = process.env.MAKE_API_KEY || '';
@@ -87,7 +190,13 @@ function slugifyAppName(input: string): string {
     .replace(/-+/g, '-')
     .slice(0, 18)
     .replace(/^-|-$/g, '');
-  const rand = Math.random().toString(36).slice(2, 6);
+  // SECURITY: auto-generated slugs gate access to the PUBLIC per-slug
+  // datastore, so they must not be guessable. Use crypto-strong randomness
+  // (randomBytes) instead of Math.random(). 4 bytes -> 8 lowercase hex chars,
+  // which stay inside the SLUG_RE /^[a-z0-9-]{3,50}$/ used for lookups.
+  // base (<=18) + '-' (1) + 8 hex = <=27 chars, well within the 50-char slug
+  // cap and the 52-char Vercel project cap (see deployAppToVercel).
+  const rand = randomBytes(4).toString('hex');
   return base ? `${base}-${rand}` : `app-${rand}`;
 }
 
@@ -476,7 +585,9 @@ export class ClickDzBridgeController {
           body: JSON.stringify({
             model: 'cdz-flash',
             messages: [{ role: 'user', content: prompt }],
-            max_tokens: 700,
+            // SECURITY: clamp to a sane ceiling (<=4096, floor 1) to cap
+            // upstream cost. Keeps the existing 700 default.
+            max_tokens: clampMaxTokens(700, DEFAULT_MAX_TOKENS),
           }),
           signal: AbortSignal.timeout(30000),
         });
@@ -566,6 +677,12 @@ export class ClickDzBridgeController {
         HttpStatus.BAD_REQUEST
       );
     }
+    // SECURITY: cap request size on this cost-triggering route (413).
+    if (request.length > MAX_PROMPT_CHARS) {
+      throw new PayloadTooLargeException(
+        `Request is too long (max ${MAX_PROMPT_CHARS} characters)`
+      );
+    }
 
     const raw = await this.runFastPlanner(request);
 
@@ -575,6 +692,16 @@ export class ClickDzBridgeController {
   /** extract text from an attached image via the Make OCR scenario */
   private async ocrImageContext(fileUrl: string): Promise<string> {
     if (!MAKE_OCR_WEBHOOK_URL || !fileUrl) return '';
+    // SECURITY (SSRF): fileUrl is user-supplied and gets fetched (server-side,
+    // via the OCR scenario). Reject loopback/private/link-local/metadata
+    // targets before use. On rejection, return empty OCR context so image
+    // generation still proceeds (non-breaking) and log a warning.
+    if (!isSafePublicUrl(fileUrl)) {
+      this.logger.warn(
+        `[ocr] rejected unsafe image URL (SSRF guard): ${String(fileUrl).slice(0, 120)}`
+      );
+      return '';
+    }
     try {
       const response = await fetch(MAKE_OCR_WEBHOOK_URL, {
         method: 'POST',
@@ -625,6 +752,19 @@ export class ClickDzBridgeController {
         HttpStatus.SERVICE_UNAVAILABLE
       );
     }
+    // SECURITY: this route hits the paid OpenAI images API. Validate input
+    // defensively before doing any upstream work.
+    if (typeof body?.prompt !== 'string' || !body.prompt.trim()) {
+      throw new BadRequestException(
+        'A non-empty "prompt" string is required'
+      );
+    }
+    if (body.prompt.length > MAX_PROMPT_CHARS) {
+      throw new PayloadTooLargeException(
+        `Prompt is too long (max ${MAX_PROMPT_CHARS} characters)`
+      );
+    }
+
     const requestedModel = String(body?.model || '');
     const isClickDzImage = CLICKDZ_IMAGE_MODEL_IDS.has(requestedModel);
 
@@ -813,6 +953,20 @@ export class ClickDzBridgeController {
         HttpStatus.BAD_REQUEST
       );
     }
+    // SECURITY: this route runs the (paid) code agent. Cap input sizes.
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      throw new PayloadTooLargeException(
+        `Prompt is too long (max ${MAX_PROMPT_CHARS} characters)`
+      );
+    }
+    if (
+      typeof body?.currentHtml === 'string' &&
+      body.currentHtml.length > MAX_HTML_CHARS
+    ) {
+      throw new PayloadTooLargeException(
+        `currentHtml is too large (max ${MAX_HTML_CHARS} characters)`
+      );
+    }
     const currentHtml =
       typeof body?.currentHtml === 'string' ? body.currentHtml : undefined;
     const slug =
@@ -852,11 +1006,24 @@ export class ClickDzBridgeController {
         HttpStatus.SERVICE_UNAVAILABLE
       );
     }
+    // SECURITY: reject wrong-typed html before coercion (a non-string that
+    // stringifies to garbage should not reach the deploy pipeline).
+    if (body?.html != null && typeof body.html !== 'string') {
+      throw new BadRequestException('"html" must be a string');
+    }
     let html = String(body?.html || '');
     if (html.length < 20) {
       throw new HttpException(
         { error: { message: 'No app HTML to deploy', type: 'invalid_request_error', code: 'html_missing' } },
         HttpStatus.BAD_REQUEST
+      );
+    }
+    // SECURITY: reject clearly-abusive oversize payloads (413) on this
+    // Vercel-deploying route. The existing 400_000 truncation below still
+    // trims normal-but-large apps (non-breaking).
+    if (html.length > MAX_HTML_CHARS) {
+      throw new PayloadTooLargeException(
+        `App HTML is too large (max ${MAX_HTML_CHARS} characters)`
       );
     }
     if (html.length > 400_000) html = html.slice(0, 400_000);
