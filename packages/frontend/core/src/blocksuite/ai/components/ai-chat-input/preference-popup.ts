@@ -16,6 +16,7 @@ import {
 } from '@affine/graphql';
 import {
   menu,
+  type MenuConfig,
   popMenu,
   popupTargetFromElement,
 } from '@blocksuite/affine/components/context-menu';
@@ -58,7 +59,8 @@ export class ChatInputPreference extends SignalWatcher(
       animation: clickdz-menu-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
     affine-menu:has(.ai-model-item) .affine-menu-body {
-      max-height: 348px;
+      /* taller so all ~16 models are browsable at once (was 348px) */
+      max-height: min(560px, 68vh);
       overflow-y: auto;
       overscroll-behavior: contain;
       scroll-behavior: smooth;
@@ -116,6 +118,17 @@ export class ChatInputPreference extends SignalWatcher(
     }
     .ai-model-item:hover {
       transform: translateX(2px);
+    }
+    /* ===== vendor group header (non-interactive) ===== */
+    .ai-model-group-header {
+      padding: 6px 8px 2px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: ${unsafeCSSVarV2('text/secondary')};
+      pointer-events: none;
+      user-select: none;
     }
     .ai-model-selected {
       background-color: var(--affine-v2-layer-background-hoverOverlay);
@@ -437,12 +450,10 @@ export class ChatInputPreference extends SignalWatcher(
     // model switch — restyled rows with real vendor icons, a gold flagship
     // tier, animated selection and a genuinely scrollable list
     const allModels = this.aiModelService.models.value;
-    // flagships surface first (stable within each tier)
-    const orderedModels = [
-      ...allModels.filter(model => CDZ_FLAGSHIP_MODELS.has(model.id)),
-      ...allModels.filter(model => !CDZ_FLAGSHIP_MODELS.has(model.id)),
-    ];
-    const modelActionItems = orderedModels.map(model => {
+
+    // one model row — identical markup/behavior to before, just factored out
+    // so it can be reused inside per-vendor groups
+    const renderModelAction = (model: (typeof allModels)[number]) => {
       const isSelected = model.id === this.model.value?.id;
       const isSelfHosted =
         this.serverService.server.config$.value?.type ===
@@ -512,6 +523,38 @@ export class ChatInputPreference extends SignalWatcher(
           this.aiModelService.setModel(model.id);
         },
       });
+    };
+
+    // a small non-interactive vendor header (hidden while searching).
+    const renderGroupHeader =
+      (label: string): MenuConfig =>
+      menu =>
+        menu.searchName$.value.length > 0
+          ? undefined
+          : html`<div class="ai-model-group-header">${label}</div>`;
+
+    // group the roster by vendor; keep flagship-first order WITHIN each group.
+    const VENDOR_ORDER = ['CDZ', 'Claude', 'Gemini', 'GPT'];
+    const vendorRank = (category: string) => {
+      const i = VENDOR_ORDER.indexOf(category);
+      return i === -1 ? VENDOR_ORDER.length : i;
+    };
+    const flagshipFirst = (list: typeof allModels) => [
+      ...list.filter(model => CDZ_FLAGSHIP_MODELS.has(model.id)),
+      ...list.filter(model => !CDZ_FLAGSHIP_MODELS.has(model.id)),
+    ];
+    const vendorsPresent = [
+      ...new Set(allModels.map(model => model.category)),
+    ].sort((a, b) => vendorRank(a) - vendorRank(b) || a.localeCompare(b));
+
+    const modelGroups = vendorsPresent.map(vendor => {
+      const rows = flagshipFirst(
+        allModels.filter(model => model.category === vendor)
+      ).map(renderModelAction);
+      return menu.group({
+        name: vendor,
+        items: [renderGroupHeader(vendor), ...rows],
+      });
     });
 
     modelItems.push(
@@ -523,7 +566,7 @@ export class ChatInputPreference extends SignalWatcher(
           <span class="ai-active-model-name"> ${this.model.value?.name} </span>
         `,
         options: {
-          items: modelActionItems,
+          items: modelGroups,
         },
       })
     );

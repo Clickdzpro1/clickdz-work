@@ -42,6 +42,9 @@ import { addFilesToChat } from '../ai-chat-chips/attachment-utils';
 import type { ChatChip, DocDisplayConfig } from '../ai-chat-chips/type';
 import { isDocChip } from '../ai-chat-chips/utils';
 import type { AIChatInputContext, AIReasoningConfig } from './type';
+// Side-effect import: registers the <clickdz-builder-studio> custom element so
+// the composer can host the full studio overlay when a saved app is opened.
+import '../ai-tools/clickdz-builder-studio';
 
 function getFirstTwoLines(text: string) {
   const lines = text.split('\n');
@@ -1669,6 +1672,20 @@ export class AIChatInput extends SignalWatcher(
   @state()
   accessor appSlug: string | null = null;
 
+  // ClickDz Studio (composer-hosted): opening a saved app from the artifact
+  // shelf mounts the full <clickdz-builder-studio> overlay so edits happen in a
+  // REAL editor (mirrors clickdz-app-result.ts). Distinct from appMode.
+  @state()
+  accessor composerStudioOpen = false;
+
+  @state()
+  accessor composerStudioApp: {
+    slug: string;
+    title: string;
+    html: string;
+    url?: string;
+  } | null = null;
+
   // Plan mode: run a fast clarification before the selected model executes.
   @state()
   accessor planMode = false;
@@ -2209,6 +2226,36 @@ export class AIChatInput extends SignalWatcher(
     });
   }
 
+  // Persist the composer-hosted studio's working app, keyed app_<slug>, using
+  // the same upsert shape as _persistCurrentApp so the shelf stays in sync when
+  // a saved app is edited from the composer studio.
+  private _persistComposerStudioApp() {
+    const app = this.composerStudioApp;
+    if (!app?.html) return;
+    const id = `app_${app.slug}`;
+    const existing = artifactStore.get(id);
+    const url = app.url ?? existing?.url;
+    artifactStore.upsert({
+      ...(existing ?? {
+        id,
+        type: 'app',
+        sessionId:
+          this.runtime?.getSnapshot().activeSessionId ??
+          this.session?.sessionId ??
+          'draft',
+        slug: app.slug,
+        mimeType: 'text/html',
+      }),
+      id,
+      type: 'app',
+      title: app.title || 'ClickDz app',
+      payload: app.html,
+      prompt: app.title,
+      slug: app.slug,
+      url,
+    });
+  }
+
   private _openArtifact(artifact: CdzArtifact) {
     if (artifact.type === 'image') {
       this.imageResult = {
@@ -2219,15 +2266,26 @@ export class AIChatInput extends SignalWatcher(
       this.appMode = false;
     } else if (artifact.type === 'app') {
       const slug = artifact.slug || artifact.id.replace(/^app_/, '');
+      const title = artifact.prompt || artifact.title || 'ClickDz app';
+      // Keep the composer iteration path seeded (describe-a-change), so closing
+      // the studio drops the user back onto a live app in appMode.
       this.appResult = {
         slug,
-        prompt: artifact.prompt || artifact.title,
+        prompt: title,
         html: artifact.payload,
         url: artifact.url,
       };
       this.appSlug = slug;
       this.appMode = true;
       this.imageMode = false;
+      // …but Open visibly launches the REAL editor (the full studio overlay).
+      this.composerStudioApp = {
+        slug,
+        title,
+        html: artifact.payload,
+        url: artifact.url,
+      };
+      this.composerStudioOpen = true;
     }
     this.artifactShelfOpen = false;
   }
@@ -2726,6 +2784,48 @@ export class AIChatInput extends SignalWatcher(
         : nothing}
       ${this.workersOpen ? this._renderWorkersOverlay() : nothing}
       ${this.artifactShelfOpen ? this._renderArtifactShelf() : nothing}
+      ${this.composerStudioApp
+        ? html`<clickdz-builder-studio
+            .open=${this.composerStudioOpen}
+            .slug=${this.composerStudioApp.slug}
+            .title=${this.composerStudioApp.title}
+            .html=${this.composerStudioApp.html}
+            .publishedUrl=${this.composerStudioApp.url ?? ''}
+            @studio-close=${() => {
+              this.composerStudioOpen = false;
+            }}
+            @studio-html-change=${(event: CustomEvent<{ html: string }>) => {
+              const app = this.composerStudioApp;
+              if (!app) return;
+              const html = event.detail.html;
+              this.composerStudioApp = { ...app, html };
+              if (this.appResult?.slug === app.slug) {
+                this.appResult = { ...this.appResult, html };
+              }
+              this._persistComposerStudioApp();
+            }}
+            @studio-title-change=${(event: CustomEvent<{ title: string }>) => {
+              const app = this.composerStudioApp;
+              if (!app) return;
+              const title = event.detail.title;
+              this.composerStudioApp = { ...app, title };
+              if (this.appResult?.slug === app.slug) {
+                this.appResult = { ...this.appResult, prompt: title };
+              }
+              this._persistComposerStudioApp();
+            }}
+            @studio-published=${(event: CustomEvent<{ url: string }>) => {
+              const app = this.composerStudioApp;
+              if (!app) return;
+              const url = event.detail.url;
+              this.composerStudioApp = { ...app, url };
+              if (this.appResult?.slug === app.slug) {
+                this.appResult = { ...this.appResult, url };
+              }
+              this._persistComposerStudioApp();
+            }}
+          ></clickdz-builder-studio>`
+        : nothing}
       <textarea
         rows="1"
         placeholder=${this.appMode
