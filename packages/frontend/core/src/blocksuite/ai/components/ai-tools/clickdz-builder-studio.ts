@@ -30,6 +30,13 @@ import {
   reparentElement,
   removeElement,
 } from './cdz-element-ops';
+import {
+  CDZ_DEVICE_PRESETS,
+  copyToClipboard,
+  downloadHtml,
+  htmlFilename,
+} from './cdz-export';
+import { applyTokens, parseTokens, type CdzToken } from './cdz-tokens';
 
 /**
  * `<clickdz-builder-studio>` — a Lovable-style "Builder Studio" overlay for the
@@ -155,6 +162,8 @@ const CDZ_SWATCHES = [
 // (Font-size min/max now come from the font-size prop in CDZ_EDIT_STYLE_PROPS.)
 // Edit-in-context bounds for the AI dock request (mirror the backend caps).
 const CDZ_HTML_CAP = 512_000;
+// Default preview device = the full-width preset (first entry).
+const CDZ_DEFAULT_DEVICE = CDZ_DEVICE_PRESETS[0]?.id ?? 'desktop';
 const CDZ_HISTORY_MAX_TURNS = 6;
 const CDZ_TURN_TEXT_CAP = 2_000;
 const CDZ_HISTORY_TOTAL_CAP = 8_000;
@@ -400,6 +409,91 @@ export class ClickDzBuilderStudio extends LitElement {
     }
     .cdz-problems .cdz-versions-head span {
       color: #f59e0b;
+    }
+
+    /* preview device bar + centered frame wrapper (Preview & export bundle) */
+    .cdz-preview-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px;
+      border-bottom: 1px solid var(--cdz-border);
+      background: var(--cdz-bg-2);
+      flex-shrink: 0;
+    }
+    .cdz-frame-wrap {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      margin: 0 auto;
+      transition: max-width 0.2s ease;
+    }
+
+    /* image generator + token editor panel bodies */
+    .cdz-imagegen .cdz-versions-body,
+    .cdz-tokens .cdz-versions-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .cdz-imagegen-hint,
+    .cdz-tokens-empty {
+      color: var(--cdz-text-2);
+      font-size: 12px;
+    }
+    .cdz-imagegen .cdz-ai-prompt {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 64px;
+      resize: vertical;
+      padding: 8px 10px;
+      border: 1px solid var(--cdz-border);
+      border-radius: 8px;
+      color: var(--cdz-text);
+      background: var(--cdz-bg);
+      font: inherit;
+      font-size: 12px;
+    }
+
+    /* design-token rows */
+    .cdz-token-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .cdz-token-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--cdz-text-2);
+      font-family: var(--cdz-mono);
+      font-size: 11px;
+    }
+    .cdz-token-color {
+      width: 34px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid var(--cdz-border);
+      border-radius: 6px;
+      background: none;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .cdz-token-text.cdz-text-input {
+      box-sizing: border-box;
+      width: 140px;
+      flex-shrink: 0;
+      padding: 6px 8px;
+      border: 1px solid var(--cdz-border);
+      border-radius: 6px;
+      color: var(--cdz-text);
+      background: var(--cdz-bg);
+      font: inherit;
+      font-size: 12px;
     }
     /* toolbar error-count badge */
     .cdz-btn {
@@ -1206,8 +1300,28 @@ export class ClickDzBuilderStudio extends LitElement {
   @state()
   private accessor showProblems = false;
 
+  // Preview & export bundle (v3): device width, export affordance, image
+  // generator panel, and design-token editor.
+  @state()
+  private accessor previewDevice = CDZ_DEFAULT_DEVICE;
+  @state()
+  private accessor copied = false;
+  @state()
+  private accessor showImageGen = false;
+  @state()
+  private accessor imagePrompt = '';
+  @state()
+  private accessor imageBusy = false;
+  @state()
+  private accessor showTokens = false;
+
   @state()
   private accessor previewSrc = '';
+
+  // Non-reactive timers/draft for the export "copied" flash + token editor.
+  private copiedTimer: ReturnType<typeof setTimeout> | null = null;
+  private tokenTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingTokenEdits: Record<string, string> = {};
 
   /* draft values for the floating edit panel */
   @state()
@@ -1293,6 +1407,14 @@ export class ClickDzBuilderStudio extends LitElement {
       clearTimeout(this.codeHistoryTimer);
       this.codeHistoryTimer = null;
     }
+    if (this.copiedTimer !== null) {
+      clearTimeout(this.copiedTimer);
+      this.copiedTimer = null;
+    }
+    if (this.tokenTimer !== null) {
+      clearTimeout(this.tokenTimer);
+      this.tokenTimer = null;
+    }
   }
 
   protected override willUpdate(changed: Map<PropertyKey, unknown>) {
@@ -1312,6 +1434,13 @@ export class ClickDzBuilderStudio extends LitElement {
       this.showVersions = false;
       this.problems = [];
       this.showProblems = false;
+      this.showImageGen = false;
+      this.imagePrompt = '';
+      this.imageBusy = false;
+      this.showTokens = false;
+      this.pendingTokenEdits = {};
+      this.previewDevice = CDZ_DEFAULT_DEVICE;
+      this.copied = false;
       // Cancel any pending debounced work so a timer can't fire (and dispatch
       // studio-html-change) after the overlay has already closed.
       this.clearTimers();
@@ -2055,6 +2184,134 @@ export class ClickDzBuilderStudio extends LitElement {
     this.showProblems = !this.showProblems;
   }
 
+  private toggleImageGen() {
+    this.showImageGen = !this.showImageGen;
+  }
+
+  private toggleTokens() {
+    this.showTokens = !this.showTokens;
+  }
+
+  private setPreviewDevice(id: string) {
+    this.previewDevice = id;
+  }
+
+  // Max-width for the preview frame wrapper per the chosen device (null = full).
+  private get previewMaxWidth(): string {
+    const preset = CDZ_DEVICE_PRESETS.find(p => p.id === this.previewDevice);
+    return preset && preset.width ? `${preset.width}px` : '100%';
+  }
+
+  /* ── export (download / copy) ── */
+
+  private onDownload() {
+    downloadHtml(this.workingHtml ?? '', htmlFilename(this.slug));
+  }
+
+  private async onCopy() {
+    const ok = await copyToClipboard(this.workingHtml ?? '');
+    if (!ok) return;
+    this.copied = true;
+    if (this.copiedTimer !== null) clearTimeout(this.copiedTimer);
+    this.copiedTimer = setTimeout(() => {
+      this.copiedTimer = null;
+      this.copied = false;
+    }, 1600);
+  }
+
+  /* ── generate + insert image ── */
+
+  private onImageKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void this.generateImage();
+    }
+  }
+
+  private async generateImage() {
+    const prompt = this.imagePrompt.trim();
+    if (!prompt || this.imageBusy) return;
+    this.imageBusy = true;
+    this.error = '';
+    try {
+      const response = await fetch('/api/v1/images/generations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+      const data = (await response.json().catch(() => null)) as {
+        data?: Array<{ url?: string }>;
+        error?: { message?: string };
+        message?: string;
+      } | null;
+      if (!response.ok) {
+        throw new Error(
+          data?.error?.message ||
+            data?.message ||
+            `Image generation failed (${response.status})`
+        );
+      }
+      const url = data?.data?.[0]?.url;
+      if (typeof url !== 'string' || !url) {
+        throw new Error('The model did not return an image. Try rephrasing.');
+      }
+      this.insertImage(url, prompt);
+      this.imagePrompt = '';
+      this.showImageGen = false;
+    } catch (err) {
+      this.error = err instanceof Error ? err.message : 'Image generation failed';
+    } finally {
+      this.imageBusy = false;
+    }
+  }
+
+  // Insert <img src=url> into the selected element (append) or the end of body,
+  // then commit an 'edit' snapshot. Mirrors applyTextEdit's walk/strip/commit.
+  private insertImage(url: string, alt: string) {
+    let host: Element | null = null;
+    const selId = this.selected?.id;
+    const doc = this.walkBody(this.workingHtml, (el, walkId) => {
+      if (selId != null && walkId === selId) host = el;
+    });
+    if (!doc) return;
+    const img = doc.createElement('img');
+    img.setAttribute('src', url);
+    img.setAttribute('alt', alt.slice(0, 120));
+    img.setAttribute('style', 'max-width:100%;height:auto;');
+    (host ?? doc.body).appendChild(img);
+    doc.body
+      .querySelectorAll('[data-cdz-id]')
+      .forEach(el => el.removeAttribute('data-cdz-id'));
+    this.commitBodyMutation(doc, 'edit');
+  }
+
+  /* ── design-token quick editor ── */
+
+  // Debounced token edit → coalesce into pendingTokenEdits, then apply.
+  private onTokenInput(name: string, value: string) {
+    this.pendingTokenEdits = { ...this.pendingTokenEdits, [name]: value };
+    if (this.tokenTimer !== null) clearTimeout(this.tokenTimer);
+    this.tokenTimer = setTimeout(() => {
+      this.tokenTimer = null;
+      this.applyTokensNow();
+    }, PREVIEW_DEBOUNCE_MS);
+  }
+
+  // Bake pending token edits into workingHtml. applyTokens returns an HTML
+  // STRING (not a Document), so this uses the raw-string commit path (mirroring
+  // the code editor) rather than commitBodyMutation(doc, …).
+  private applyTokensNow() {
+    const edits = this.pendingTokenEdits;
+    this.pendingTokenEdits = {};
+    if (!Object.keys(edits).length) return;
+    const next = applyTokens(this.workingHtml ?? '', edits);
+    if (next === this.workingHtml) return;
+    this.workingHtml = next;
+    this.pushHistory(this.workingHtml, makeMeta('edit'));
+    this.buildPreviewNow();
+    this.scheduleHtmlChange();
+  }
+
   // Error-only count for the toolbar Problems badge.
   private get problemErrorCount(): number {
     return this.problems.reduce(
@@ -2519,6 +2776,14 @@ export class ClickDzBuilderStudio extends LitElement {
         this.showProblems = false;
         return;
       }
+      if (this.showImageGen) {
+        this.showImageGen = false;
+        return;
+      }
+      if (this.showTokens) {
+        this.showTokens = false;
+        return;
+      }
       this.close();
       return;
     }
@@ -2704,6 +2969,34 @@ export class ClickDzBuilderStudio extends LitElement {
                 >`
               : nothing}
           </button>
+          <button
+            class=${classMap({
+              'cdz-btn': true,
+              ghost: true,
+              icon: true,
+              toggled: this.showImageGen,
+            })}
+            title="Generate an image"
+            aria-label="Generate an image"
+            aria-pressed=${this.showImageGen}
+            @click=${() => this.toggleImageGen()}
+          >
+            ${CDZ_ICONS.image}
+          </button>
+          <button
+            class=${classMap({
+              'cdz-btn': true,
+              ghost: true,
+              icon: true,
+              toggled: this.showTokens,
+            })}
+            title="Design tokens"
+            aria-label="Design tokens"
+            aria-pressed=${this.showTokens}
+            @click=${() => this.toggleTokens()}
+          >
+            ${CDZ_ICONS.palette}
+          </button>
         </div>
 
         <div class="cdz-group">
@@ -2747,6 +3040,22 @@ export class ClickDzBuilderStudio extends LitElement {
                 >${CDZ_ICONS.openExternal} Open</a
               >`
             : nothing}
+          <button
+            class="cdz-btn ghost icon"
+            title="Download index.html"
+            aria-label="Download index.html"
+            @click=${() => this.onDownload()}
+          >
+            ${CDZ_ICONS.download}
+          </button>
+          <button
+            class="cdz-btn ghost icon"
+            title="Copy HTML"
+            aria-label="Copy HTML"
+            @click=${() => this.onCopy()}
+          >
+            ${this.copied ? CDZ_ICONS.check : CDZ_ICONS.copy}
+          </button>
           <button
             class="cdz-btn primary"
             ?disabled=${this.publishing}
@@ -2795,18 +3104,39 @@ export class ClickDzBuilderStudio extends LitElement {
 
   private renderPreviewPane() {
     return html`<div class="cdz-pane preview">
+      <div class="cdz-preview-bar">
+        <div
+          class="cdz-seg cdz-device-seg"
+          role="tablist"
+          aria-label="Preview width"
+        >
+          ${CDZ_DEVICE_PRESETS.map(
+            preset => html`<button
+              class=${classMap({ active: this.previewDevice === preset.id })}
+              role="tab"
+              aria-selected=${this.previewDevice === preset.id}
+              title=${preset.label}
+              @click=${() => this.setPreviewDevice(preset.id)}
+            >
+              ${preset.label}
+            </button>`
+          )}
+        </div>
+      </div>
       <div class="cdz-preview-wrap">
         ${this.inspect
           ? html`<div class="cdz-inspect-banner">
               Inspect mode — click any element to edit
             </div>`
           : nothing}
-        <iframe
-          class="cdz-studio-frame"
-          .srcdoc=${this.previewSrc}
-          sandbox=${IFRAME_SANDBOX}
-          title=${`${this.title} preview`}
-        ></iframe>
+        <div class="cdz-frame-wrap" style=${`max-width:${this.previewMaxWidth}`}>
+          <iframe
+            class="cdz-studio-frame"
+            .srcdoc=${this.previewSrc}
+            sandbox=${IFRAME_SANDBOX}
+            title=${`${this.title} preview`}
+          ></iframe>
+        </div>
         ${this.renderEditPanel()}
       </div>
     </div>`;
@@ -3182,6 +3512,110 @@ export class ClickDzBuilderStudio extends LitElement {
     </div>`;
   }
 
+  private renderImageGenPanel() {
+    return html`<div
+      class="cdz-versions cdz-imagegen"
+      role="dialog"
+      aria-label="Generate image"
+    >
+      <div class="cdz-versions-head">
+        <span>${CDZ_ICONS.image} Generate image</span>
+        <button
+          class="cdz-btn ghost icon"
+          title="Close"
+          aria-label="Close image generator"
+          @click=${() => (this.showImageGen = false)}
+        >
+          ${CDZ_ICONS.close}
+        </button>
+      </div>
+      <div class="cdz-versions-body">
+        <div class="cdz-imagegen-hint">
+          ${this.selected
+            ? html`Inserts into the selected &lt;${this.selected.tag ||
+              'node'}&gt;.`
+            : html`Inserts at the end of the page.`}
+        </div>
+        <textarea
+          class="cdz-ai-prompt"
+          placeholder="Describe the image — e.g. a minimal teal hero background"
+          .value=${this.imagePrompt}
+          ?disabled=${this.imageBusy}
+          @input=${(e: Event) =>
+            (this.imagePrompt = (e.target as HTMLTextAreaElement).value)}
+          @keydown=${(e: KeyboardEvent) => this.onImageKeyDown(e)}
+        ></textarea>
+        <button
+          class="cdz-btn primary"
+          ?disabled=${this.imageBusy || this.imagePrompt.trim().length === 0}
+          @click=${() => this.generateImage()}
+        >
+          ${this.imageBusy
+            ? html`<span class="cdz-spinner"></span>Generating…`
+            : html`${CDZ_ICONS.image} Generate &amp; insert`}
+        </button>
+      </div>
+    </div>`;
+  }
+
+  private renderTokensPanel() {
+    const tokens = parseTokens(this.workingHtml ?? '');
+    return html`<div
+      class="cdz-versions cdz-tokens"
+      role="dialog"
+      aria-label="Design tokens"
+    >
+      <div class="cdz-versions-head">
+        <span>${CDZ_ICONS.palette} Design tokens</span>
+        <button
+          class="cdz-btn ghost icon"
+          title="Close"
+          aria-label="Close design tokens"
+          @click=${() => (this.showTokens = false)}
+        >
+          ${CDZ_ICONS.close}
+        </button>
+      </div>
+      <div class="cdz-versions-body">
+        ${tokens.length === 0
+          ? html`<div class="cdz-tokens-empty">
+              This app declares no :root design tokens.
+            </div>`
+          : tokens.map(t => this.renderTokenRow(t))}
+      </div>
+    </div>`;
+  }
+
+  private renderTokenRow(token: CdzToken) {
+    // A pending edit (if any) wins over the parsed value for the live control.
+    const value = this.pendingTokenEdits[token.name] ?? token.value;
+    const asColor = normalizeColor(value);
+    return html`<div class="cdz-token-row">
+      <label class="cdz-token-name" title=${token.name}>${token.name}</label>
+      ${asColor
+        ? html`<input
+            type="color"
+            class="cdz-token-color"
+            .value=${asColor}
+            @input=${(e: Event) =>
+              this.onTokenInput(
+                token.name,
+                (e.target as HTMLInputElement).value
+              )}
+          />`
+        : html`<input
+            type="text"
+            class="cdz-text-input cdz-token-text"
+            .value=${value}
+            @input=${(e: Event) =>
+              this.onTokenInput(
+                token.name,
+                (e.target as HTMLInputElement).value
+              )}
+          />`}
+    </div>`;
+  }
+
   private renderCenter() {
     if (this.view === 'code') {
       return html`<div class="cdz-center single">
@@ -3211,6 +3645,8 @@ export class ClickDzBuilderStudio extends LitElement {
         <div class="cdz-body">${this.renderCenter()} ${this.renderDock()}</div>
         ${this.showVersions ? this.renderVersionsPanel() : nothing}
         ${this.showProblems ? this.renderProblemsPanel() : nothing}
+        ${this.showImageGen ? this.renderImageGenPanel() : nothing}
+        ${this.showTokens ? this.renderTokensPanel() : nothing}
       </div>
     </div>`;
   }
@@ -3470,6 +3906,85 @@ const CDZ_ICONS = {
   >
     <line x1="12" y1="5" x2="12" y2="19"></line>
     <polyline points="19 12 12 19 5 12"></polyline>
+  </svg>`,
+  // image — picture (generate + insert image)
+  image: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+    <polyline points="21 15 16 10 5 21"></polyline>
+  </svg>`,
+  // palette — design tokens
+  palette: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx="13.5" cy="6.5" r="1.5"></circle>
+    <circle cx="17.5" cy="10.5" r="1.5"></circle>
+    <circle cx="8.5" cy="7.5" r="1.5"></circle>
+    <circle cx="6.5" cy="12.5" r="1.5"></circle>
+    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.563-2.512 5.563-5.563C22 6.012 17.5 2 12 2z"></path>
+  </svg>`,
+  // download — tray with down arrow
+  download: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="7 10 12 15 17 10"></polyline>
+    <line x1="12" y1="15" x2="12" y2="3"></line>
+  </svg>`,
+  // copy — two sheets
+  copy: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+  </svg>`,
+  // check — success (copied confirmation)
+  check: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <polyline points="20 6 9 17 4 12"></polyline>
   </svg>`,
 } as const;
 
