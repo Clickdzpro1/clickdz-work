@@ -40,7 +40,7 @@ jobs:
         env:
           PUBLIC_PATH: '/'
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: 'ClickDz Work'
+          SENTRY_PROJECT: 'affine'
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           SENTRY_RELEASE: ${{ inputs.app-version }}
@@ -68,7 +68,7 @@ jobs:
         env:
           PUBLIC_PATH: '/'
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
-          SENTRY_PROJECT: 'ClickDz Work'
+          SENTRY_PROJECT: 'affine'
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           SENTRY_RELEASE: ${{ inputs.app-version }}
@@ -172,7 +172,7 @@ jobs:
         uses: ./.github/actions/setup-node
         timeout-minutes: 10
         with:
-          extra-flags: workspaces focus @affine/monorepo @ClickDz Work-tools/cli @affine/android @affine/playstore-auto-bump
+          extra-flags: workspaces focus @affine/monorepo @affine-tools/cli @affine/android @affine/playstore-auto-bump
           playwright-install: false
           electron-install: false
           hard-link-nm: false
@@ -209,7 +209,7 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
       - name: Build
         run: |
-          echo -n "${{ env.AFFINE_ANDROID_SIGN_KEYSTORE }}" | base64 --decode > packages/frontend/apps/android/ClickDz Work.keystore
+          echo -n "${{ env.AFFINE_ANDROID_SIGN_KEYSTORE }}" | base64 --decode > packages/frontend/apps/android/affine.keystore
           yarn workspace @affine/android cap build android --flavor ${{ env.BUILD_TYPE }} --androidreleasetype AAB
         env:
           AFFINE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.AFFINE_ANDROID_KEYSTORE_PASSWORD }}

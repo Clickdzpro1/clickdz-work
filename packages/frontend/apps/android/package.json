@@ -4,8 +4,8 @@
   "description": "ClickDz Work Desktop Web application",
   "private": true,
   "scripts": {
-    "build": "ClickDz Work bundle",
-    "dev": "ClickDz Work bundle --dev",
+    "build": "affine bundle",
+    "dev": "affine bundle --dev",
     "sync": "cap sync",
     "sync:dev": "CAP_SERVER_URL=http://10.0.2.2:8080 cap sync",
     "studio": "cap open android"

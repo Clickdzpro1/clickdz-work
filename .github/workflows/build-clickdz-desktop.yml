@@ -25,8 +25,8 @@ permissions:
 
 env:
   BUILD_TYPE: stable
-  DEBUG: 'ClickDz Work:*,napi:*'
-  APP_NAME: ClickDz Work
+  DEBUG: 'affine:*,napi:*'
+  APP_NAME: affine
   MACOSX_DEPLOYMENT_TARGET: '11.6'
 
 jobs:
