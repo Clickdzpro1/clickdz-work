@@ -16,12 +16,16 @@ import type { Request, Response } from 'express';
 import { randomBytes } from 'node:crypto';
 
 import { Public } from '../../core/auth';
+// SECURITY: hard per-IP rate cap for cost/side-effecting routes (strict = 20/min).
+import { Throttle } from '../../base';
 import {
   buildEditContent,
   buildNewAppContent,
   type AppHistoryTurn,
   type AppSelectionContext,
 } from './clickdz-app-prompt';
+// SECURITY: constant-time token compare + per-slug Data API write tokens.
+import { dataWriteToken, safeEqual } from './cdz-data-token';
 
 // SECURITY: input caps for cost/side-effecting routes (images, apps, plan).
 // Non-breaking for normal use; reject oversized/abusive payloads early.
@@ -439,7 +443,8 @@ export class ClickDzBridgeController {
       );
     }
     const auth = String(req.headers.authorization || '');
-    if (auth !== `Bearer ${CLICKDZ_BRIDGE_TOKEN}`) {
+    // Constant-time compare so the bridge token can't be recovered by timing.
+    if (!safeEqual(auth, `Bearer ${CLICKDZ_BRIDGE_TOKEN}`)) {
       throw new HttpException(
         { error: { message: 'Invalid bridge token', type: 'authentication_error', code: 'invalid_bridge_token' } },
         HttpStatus.UNAUTHORIZED
@@ -604,6 +609,7 @@ export class ClickDzBridgeController {
   }
 
   @Public()
+  @Throttle('strict')
   @Post(['/api/v1/chat/completions', '/v1/chat/completions'])
   async chatCompletions(
     @Req() req: Request,
@@ -641,6 +647,7 @@ export class ClickDzBridgeController {
   }
 
   /** Fast Plan-mode preflight: one decisive question before the full model runs. */
+  @Throttle('strict')
   @Post('/api/v1/plan/clarify')
   async clarifyPlan(@Body() body: any) {
     const request = String(body?.request || '').trim();
@@ -723,6 +730,7 @@ export class ClickDzBridgeController {
     }
   }
 
+  @Throttle('strict')
   @Post(['/api/v1/images/generations', '/v1/images/generations'])
   async imageGenerations(@Body() body: any) {
     if (!OPENAI_IMAGE_API_KEY) {
@@ -1016,6 +1024,7 @@ export class ClickDzBridgeController {
   }
 
   /** GENERATE ONLY — returns full HTML for instant preview; does NOT deploy */
+  @Throttle('strict')
   @Post('/api/v1/apps/generate')
   async generateApp(@Body() body: any) {
     const startedAt = Date.now();
@@ -1057,10 +1066,14 @@ export class ClickDzBridgeController {
     const externalBase = (
       process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
     ).replace(/\/+$/, '');
-    html = html.replaceAll(
-      '__CLICKDZ_DATA_URL__',
-      `${externalBase}/api/apps-data/${slug}`
-    );
+    // Point new apps at the token-gated /v2 Data API and inject the per-slug
+    // write token (P0 safety). Existing deployed apps keep using /v1.
+    html = html
+      .replaceAll(
+        '__CLICKDZ_DATA_URL__',
+        `${externalBase}/api/v2/apps-data/${slug}`
+      )
+      .replaceAll('__CLICKDZ_DATA_TOKEN__', dataWriteToken(slug));
     this.logger.log(
       `[apps] generated ${html.length} chars in ${Math.round((Date.now() - startedAt) / 1000)}s`
     );
@@ -1074,6 +1087,7 @@ export class ClickDzBridgeController {
   }
 
   /** DEPLOY — takes reviewed HTML + slug, publishes to Vercel, returns URL */
+  @Throttle('strict')
   @Post('/api/v1/apps/deploy')
   async deployApp(@Body() body: any) {
     if (!VERCEL_TOKEN) {
@@ -1116,6 +1130,7 @@ export class ClickDzBridgeController {
     return { ...deployed, bytes: html.length };
   }
 
+  @Throttle('strict')
   @Post('/api/voice/token')
   async deepgramToken() {
     if (!DEEPGRAM_API_KEY) {
@@ -1136,6 +1151,7 @@ export class ClickDzBridgeController {
     return data;
   }
 
+  @Throttle('strict')
   @Post(['/api/voice/tts', '/api/copilot/voice/tts'])
   async tts(@Body() body: any, @Res() res: Response) {
     if (!DEEPGRAM_API_KEY) {
@@ -1159,6 +1175,7 @@ export class ClickDzBridgeController {
     res.send(buffer);
   }
 
+  @Throttle('strict')
   @Post(['/api/voice/transcribe', '/api/copilot/voice/transcribe'])
   async transcribe() {
     if (!DEEPGRAM_API_KEY) {
