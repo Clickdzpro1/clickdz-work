@@ -148,6 +148,30 @@ jobs:
           HOIST_NODE_MODULES: 1
           NODE_OPTIONS: --max-old-space-size=14384
 
+      - name: Prepare Squirrel prerequisites (windows)
+        if: ${{ inputs.platform == 'win32' }}
+        shell: pwsh
+        run: |
+          # Squirrel's Update.exe --releasify shells out to 7z.exe; hosted
+          # runners have 7-Zip installed but NOT on PATH, and electron-winstaller
+          # runs Update.exe from a temp dir away from its vendored 7z. Expose
+          # 7-Zip on PATH and mirror it into the vendor dirs for good measure.
+          $sevenZipDir = 'C:\Program Files\7-Zip'
+          if (-not (Test-Path (Join-Path $sevenZipDir '7z.exe'))) {
+            choco install 7zip -y --no-progress
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $sevenZipDir
+          foreach ($vendor in @(
+            'node_modules\electron-winstaller\vendor',
+            'packages\frontend\apps\electron\node_modules\electron-winstaller\vendor'
+          )) {
+            if (Test-Path $vendor) {
+              Copy-Item (Join-Path $sevenZipDir '7z.exe') $vendor -Force
+              Copy-Item (Join-Path $sevenZipDir '7z.dll') $vendor -Force
+              Write-Host "copied 7z into $vendor"
+            }
+          }
+
       - name: make
         if: ${{ inputs.platform == 'win32' }}
         run: |
