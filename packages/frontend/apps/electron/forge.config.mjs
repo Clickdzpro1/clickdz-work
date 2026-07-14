@@ -170,7 +170,8 @@ const makers = [
       config: {
         format: 'ULMO',
         icon: icnsPath,
-        name: 'ClickDz Work',
+        // no spaces: keeps CI artifact paths shell-safe (out/*/make/ClickDzWork.dmg)
+        name: 'ClickDzWork',
         'icon-size': 128,
         background: path.join(
           __dirname,
@@ -349,7 +350,11 @@ export default {
     protocols: [
       {
         name: productName,
-        schemes: [productName.toLowerCase()],
+        // MUST match the runtime protocol in src/main/deep-link.ts:
+        //   stable -> clickdzwork, others -> clickdzwork-<buildType>
+        schemes: [
+          buildType === 'stable' ? 'clickdzwork' : `clickdzwork-${buildType}`,
+        ],
       },
     ],
     executableName: productName,
@@ -377,7 +382,7 @@ export default {
     asar: true,
     extendInfo: {
       NSAudioCaptureUsageDescription:
-        'Please allow access in order to capture audio from other apps by AFFiNE.',
+        'Please allow access in order to capture audio from other apps by ClickDz Work.',
     },
   },
   makers,

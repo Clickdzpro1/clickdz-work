@@ -5,7 +5,7 @@
   "main": "./dist/main.js",
   "author": "toeverything",
   "repository": {
-    "url": "https://github.com/toeverything/ClickDz Work",
+    "url": "https://github.com/Clickdzpro1/clickdz-work",
     "type": "git"
   },
   "description": "ClickDz Work Desktop App",
@@ -86,7 +86,7 @@
       {
         "name": "ClickDz Work",
         "schemes": [
-          "ClickDz Work"
+          "clickdzwork"
         ]
       }
     ]

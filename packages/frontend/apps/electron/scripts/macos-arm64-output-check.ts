@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const outputRoot = fileURLToPath(
   new URL(
-    '../out/canary/ClickDz Work-canary-darwin-arm64/ClickDz Work-canary.app/Contents/Resources',
+    '../out/canary/ClickDzWorkCanary-darwin-arm64/ClickDzWorkCanary.app/Contents/Resources',
     import.meta.url
   )
 );

@@ -17,7 +17,10 @@ const ROOT = path.resolve(__dirname, '..');
 const envBuildType = (process.env.BUILD_TYPE || 'canary').trim().toLowerCase();
 const buildType = ReleaseTypeSchema.parse(envBuildType);
 const stableBuild = buildType === 'stable';
-const productName = !stableBuild ? `ClickDz Work ${buildType}` : 'ClickDz Work';
+// No spaces or hyphens: spaces break shell artifact steps + Squirrel package
+// ids, and hyphens would break the updater's filename parser (splits on '-').
+const channelSuffix = buildType.charAt(0).toUpperCase() + buildType.slice(1);
+const productName = !stableBuild ? `ClickDzWork${channelSuffix}` : 'ClickDzWork';
 const icoPath = path.join(
   ROOT,
   !stableBuild

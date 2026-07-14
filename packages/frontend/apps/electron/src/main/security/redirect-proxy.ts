@@ -2,11 +2,14 @@ import { isAllowedRedirectTarget } from '@toeverything/infra/utils';
 
 import { buildType, isDev } from '../config';
 
+// ClickDz Work runs a single production cloud — every desktop channel talks
+// to it. (The upstream AFFiNE fork had per-channel domains; the spaced
+// "ClickDz Work.pro" strings left by the rebrand were unresolvable.)
 const API_BASE_BY_BUILD_TYPE: Record<typeof buildType, string> = {
-  stable: 'https://app.ClickDz Work.pro',
-  beta: 'https://insider.ClickDz Work.pro',
-  internal: 'https://insider.ClickDz Work.pro',
-  canary: 'https://ClickDz Work.fail',
+  stable: 'https://work.clickdz.ai',
+  beta: 'https://work.clickdz.ai',
+  internal: 'https://work.clickdz.ai',
+  canary: 'https://work.clickdz.ai',
 };
 
 function resolveCurrentHostnameForRedirectAllowlist() {
