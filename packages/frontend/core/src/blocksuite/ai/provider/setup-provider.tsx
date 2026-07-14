@@ -1,11 +1,15 @@
 import { toggleGeneralAIOnboarding } from '@affine/core/components/affine/ai-onboarding/apis';
-import type { AuthAccountInfo, AuthService } from '@affine/core/modules/cloud';
+import type {
+  AuthAccountInfo,
+  AuthService,
+  ServerService,
+} from '@affine/core/modules/cloud';
 import type { GlobalDialogService } from '@affine/core/modules/dialogs';
 
 import type { AIRequestService } from '../runtime/request';
 import { setAIRequestService } from '../runtime/request';
 import { AIAppEvents } from './ai-app-events';
-import { AIProvider } from './ai-provider';
+import { AIProvider, cdzApiUrl } from './ai-provider';
 import { setupTracker } from './tracker';
 
 function toAIUserInfo(account: AuthAccountInfo | null) {
@@ -21,9 +25,15 @@ function toAIUserInfo(account: AuthAccountInfo | null) {
 export function setupAIProvider(
   requestService: AIRequestService,
   globalDialogService: GlobalDialogService,
-  authService: AuthService
+  authService: AuthService,
+  serverService: ServerService
 ) {
   setAIRequestService(requestService);
+
+  // Expose the connected server's base URL so ClickDz bridge calls (image
+  // generation, app builder) can be made absolute on desktop, where the
+  // renderer origin (assets://.) is not the cloud server. No-op on web.
+  AIProvider.provide('serverBaseUrl', () => serverService.server.baseUrl);
 
   AIProvider.provide('userInfo', () => {
     return toAIUserInfo(authService.session.account$.value);
@@ -47,7 +57,7 @@ export function setupAIProvider(
             regular: string;
           };
         }[];
-      } = await fetch(url.toString()).then((res: Response) => res.json());
+      } = await fetch(cdzApiUrl(url)).then((res: Response) => res.json());
       if (!result.results) return [];
       return result.results.map(r => {
         const url = new URL(r.urls.regular);

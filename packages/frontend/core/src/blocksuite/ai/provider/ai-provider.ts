@@ -69,11 +69,23 @@ export class AIProvider {
     return AIProvider.instance.toggleGeneralAIOnboarding;
   }
 
+  /**
+   * Base URL of the currently-connected server (the same one GraphQL/SSE use).
+   * Empty on web builds where the app is same-origin with the server; set on
+   * desktop/native builds whose renderer origin (assets://.) differs from the
+   * cloud server, so relative `/api/...` paths must be made absolute.
+   */
+  static get serverBaseUrl() {
+    return AIProvider.instance.serverBaseUrlFn();
+  }
+
   private static readonly instance = new AIProvider();
 
   private photoEngine: BlockSuitePresets.AIPhotoEngineService | null = null;
 
   private toggleGeneralAIOnboarding: ((value: boolean) => void) | null = null;
+
+  private serverBaseUrlFn: () => string = () => '';
 
   private userInfoFn: () => AIUserInfo | Promise<AIUserInfo> | null = () =>
     null;
@@ -90,6 +102,8 @@ export class AIProvider {
 
   static provide(id: 'onboarding', fn: (value: boolean) => void): void;
 
+  static provide(id: 'serverBaseUrl', fn: () => string): void;
+
   static provide(id: unknown, action: unknown) {
     if (id === 'userInfo') {
       AIProvider.instance.userInfoFn = action as () => AIUserInfo;
@@ -100,6 +114,27 @@ export class AIProvider {
       AIProvider.instance.toggleGeneralAIOnboarding = action as (
         value: boolean
       ) => void;
+    } else if (id === 'serverBaseUrl') {
+      AIProvider.instance.serverBaseUrlFn = action as () => string;
     }
+  }
+}
+
+/**
+ * Resolve a ClickDz backend API path to a fetchable URL.
+ *
+ * On web the app is same-origin with the server, so the relative path is
+ * returned unchanged. On desktop/native the renderer origin is `assets://.`
+ * (or `file://`), where a relative `/api/...` would resolve against the app
+ * bundle and fail — so we prefix the connected server's base URL, mirroring how
+ * FetchService/GraphQL/SSE already resolve their requests.
+ */
+export function cdzApiUrl(path: string): string {
+  const base = AIProvider.serverBaseUrl;
+  if (!base) return path;
+  try {
+    return new URL(path, base).toString();
+  } catch {
+    return path;
   }
 }

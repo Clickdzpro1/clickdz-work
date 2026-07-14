@@ -33,7 +33,7 @@ import { styleMap } from 'lit/directives/style-map.js';
 
 import { wrapCdzDirective } from '../../_common/cdz-directives';
 import { ChatAbortIcon } from '../../_common/icons';
-import { AIAppEvents, type AISendParams } from '../../provider';
+import { AIAppEvents, type AISendParams, cdzApiUrl } from '../../provider';
 import type { AIChatRuntime, AIChatSnapshot } from '../../runtime/chat';
 import { reportResponse } from '../../utils/action-reporter';
 import { readBlobAsURL } from '../../utils/image';
@@ -1866,7 +1866,7 @@ export class AIChatInput extends SignalWatcher(
     this.planBusy = true;
     this.planReview = null;
     try {
-      const response = await fetch('/api/v1/plan/clarify', {
+      const response = await fetch(cdzApiUrl('/api/v1/plan/clarify'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ request }),
@@ -3159,7 +3159,7 @@ export class AIChatInput extends SignalWatcher(
       userInfo: this._currentUserInfo(),
     });
     try {
-      const res = await fetch('/api/v1/images/generations', {
+      const res = await fetch(cdzApiUrl('/api/v1/images/generations'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3228,7 +3228,7 @@ export class AIChatInput extends SignalWatcher(
       userInfo: this._currentUserInfo(),
     });
     try {
-      const res = await fetch('/api/v1/apps/generate', {
+      const res = await fetch(cdzApiUrl('/api/v1/apps/generate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
