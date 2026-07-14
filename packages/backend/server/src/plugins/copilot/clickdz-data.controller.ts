@@ -9,13 +9,15 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 
 import { CacheRedis } from '../../base/redis';
 import { Public } from '../../core/auth';
+import { verifyDataToken } from './cdz-data-token';
 
 /**
  * ClickDz Data API — a tiny shared collections store that gives every
@@ -40,7 +42,7 @@ const dataKey = (slug: string, collection: string) =>
 function setCors(res: Response) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
 
@@ -61,16 +63,45 @@ export class ClickDzDataController {
     if (!COLLECTION_RE.test(collection)) badRequest('Invalid collection name');
   }
 
+  // v2 requests are token-gated for writes/deletes; v1 stays open for
+  // back-compat with already-deployed apps (EXCEPT the destructive clear,
+  // which is gated on both versions — see clear()).
+  private isV2(req: Request): boolean {
+    return (req.path || '').startsWith('/api/v2/');
+  }
+
+  private requireWriteToken(req: Request, slug: string) {
+    const auth = String(req.headers['authorization'] || '');
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    const token = bearer || String((req.query?.t as string) || '');
+    if (!verifyDataToken(slug, token)) {
+      throw new HttpException(
+        {
+          error: {
+            message: 'A valid write token is required',
+            type: 'authentication_error',
+          },
+        },
+        HttpStatus.UNAUTHORIZED
+      );
+    }
+  }
+
   @Options([
     '/api/apps-data/:slug/:collection',
     '/api/apps-data/:slug/:collection/:id',
+    '/api/v2/apps-data/:slug/:collection',
+    '/api/v2/apps-data/:slug/:collection/:id',
   ])
   preflight(@Res() res: Response) {
     setCors(res);
     res.status(204).end();
   }
 
-  @Get('/api/apps-data/:slug/:collection')
+  @Get([
+    '/api/apps-data/:slug/:collection',
+    '/api/v2/apps-data/:slug/:collection',
+  ])
   async list(
     @Param('slug') slug: string,
     @Param('collection') collection: string,
@@ -99,15 +130,20 @@ export class ClickDzDataController {
     return records.slice(0, max);
   }
 
-  @Post('/api/apps-data/:slug/:collection')
+  @Post([
+    '/api/apps-data/:slug/:collection',
+    '/api/v2/apps-data/:slug/:collection',
+  ])
   async create(
     @Param('slug') slug: string,
     @Param('collection') collection: string,
     @Body() body: unknown,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response
   ) {
     setCors(res);
     this.assertNames(slug, collection);
+    if (this.isV2(req)) this.requireWriteToken(req, slug);
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       badRequest('Record must be a JSON object');
     }
@@ -139,27 +175,40 @@ export class ClickDzDataController {
     return record;
   }
 
-  @Delete('/api/apps-data/:slug/:collection/:id')
+  @Delete([
+    '/api/apps-data/:slug/:collection/:id',
+    '/api/v2/apps-data/:slug/:collection/:id',
+  ])
   async remove(
     @Param('slug') slug: string,
     @Param('collection') collection: string,
     @Param('id') id: string,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response
   ) {
     setCors(res);
     this.assertNames(slug, collection);
+    if (this.isV2(req)) this.requireWriteToken(req, slug);
     const removed = await this.redis.hdel(dataKey(slug, collection), id);
     return { deleted: removed > 0 };
   }
 
-  @Delete('/api/apps-data/:slug/:collection')
+  @Delete([
+    '/api/apps-data/:slug/:collection',
+    '/api/v2/apps-data/:slug/:collection',
+  ])
   async clear(
     @Param('slug') slug: string,
     @Param('collection') collection: string,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response
   ) {
     setCors(res);
     this.assertNames(slug, collection);
+    // Destructive collection-wide wipe is gated on BOTH v1 and v2 — generated
+    // apps never call it, so this closes the "wipe any app by slug" vector at
+    // no back-compat cost.
+    this.requireWriteToken(req, slug);
     await this.redis.del(dataKey(slug, collection));
     return { cleared: true };
   }
