@@ -3,8 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  HttpException,
-  HttpStatus,
   Options,
   Param,
   Post,
@@ -15,6 +13,9 @@ import {
 import type { Request, Response } from 'express';
 import { randomUUID } from 'node:crypto';
 
+// Typed AFFiNE errors so the global exception filter emits proper 4xx
+// (a raw @nestjs/common HttpException is turned into a generic 500 here).
+import { AuthenticationRequired, BadRequest } from '../../base';
 import { CacheRedis } from '../../base/redis';
 import { Public } from '../../core/auth';
 import { verifyDataToken } from './cdz-data-token';
@@ -47,10 +48,7 @@ function setCors(res: Response) {
 }
 
 function badRequest(message: string): never {
-  throw new HttpException(
-    { error: { message, type: 'invalid_request_error' } },
-    HttpStatus.BAD_REQUEST
-  );
+  throw new BadRequest(message);
 }
 
 @Public()
@@ -75,15 +73,7 @@ export class ClickDzDataController {
     const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
     const token = bearer || String((req.query?.t as string) || '');
     if (!verifyDataToken(slug, token)) {
-      throw new HttpException(
-        {
-          error: {
-            message: 'A valid write token is required',
-            type: 'authentication_error',
-          },
-        },
-        HttpStatus.UNAUTHORIZED
-      );
+      throw new AuthenticationRequired('A valid write token is required');
     }
   }
 
@@ -150,14 +140,8 @@ export class ClickDzDataController {
     const key = dataKey(slug, collection);
     const count = await this.redis.hlen(key);
     if (count >= MAX_RECORDS_PER_COLLECTION) {
-      throw new HttpException(
-        {
-          error: {
-            message: `Collection is full (${MAX_RECORDS_PER_COLLECTION} records max)`,
-            type: 'limit_exceeded',
-          },
-        },
-        HttpStatus.PAYLOAD_TOO_LARGE
+      throw new BadRequest(
+        `Collection is full (${MAX_RECORDS_PER_COLLECTION} records max)`
       );
     }
     const id = randomUUID().slice(0, 8);
