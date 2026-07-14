@@ -15,14 +15,14 @@ interface AppConfig {
 }
 
 const config: CapacitorConfig & AppConfig = {
-  appId: 'app.ClickDz Work.pro',
+  appId: 'app.affine.pro',
   appName: 'ClickDz Work',
   webDir: 'dist',
   affineVersion: packageJson.version,
   android: {
     path: 'App',
     buildOptions: {
-      keystorePath: join(__dirname, 'ClickDz Work.keystore'),
+      keystorePath: join(__dirname, 'affine.keystore'),
       keystorePassword: process.env.AFFINE_ANDROID_KEYSTORE_PASSWORD,
       keystoreAlias: 'key0',
       keystoreAliasPassword: process.env.AFFINE_ANDROID_KEYSTORE_ALIAS_PASSWORD,

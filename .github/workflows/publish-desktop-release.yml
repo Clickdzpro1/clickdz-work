@@ -2,8 +2,11 @@ name: Publish ClickDz Work desktop release
 
 # Publishes the artifacts of the most recent SUCCESSFUL desktop build as a
 # GitHub Release, which automatically lights up the download buttons on the
-# ClickDz Work hub (it reads releases/latest client-side).
-# Trigger: push a tag like `publish-0.27.0-clickdz.1` (or run manually).
+# ClickDz Work hub (it reads releases/latest client-side) AND feeds the
+# desktop auto-updater (the server proxies these releases at /api/releases;
+# the updater needs the versioned artifact names + the latest.yml manifest
+# generated below).
+# Trigger: push a tag like `publish-0.27.1-clickdz.1` (or run manually).
 
 on:
   push:
@@ -13,6 +16,10 @@ on:
     inputs:
       run-id:
         description: 'Desktop build run id (blank = latest successful)'
+        default: ''
+        type: string
+      release-tag:
+        description: 'Release tag to create (blank = current ref name)'
         default: ''
         type: string
 
@@ -56,33 +63,71 @@ jobs:
           mkdir -p out
           # real installers are >20MB; small zips are onboarding fragments
           find dist -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \
-            -o -name '*.AppImage' -o -name '*.deb' -o -name '*.flatpak' \
-            -o -name '*.nupkg' \) -size +20M -exec cp -n {} out/ \;
+            -o -name '*.AppImage' -o -name '*.appimage' -o -name '*.deb' \
+            -o -name '*.flatpak' -o -name '*.nupkg' \) -size +20M -exec cp -n {} out/ \;
+          # Squirrel update index (tiny, required by the Windows updater)
+          find dist -type f -name 'RELEASES' -exec cp -n {} out/ \;
           cd out
-          for f in *; do
-            n="$f"
-            case "$f" in
-              archive.zip) n="ClickDzWork-windows-x64-portable.zip" ;;
-              ClickDz Work-*-stable-*) n="ClickDzWork-$(echo "$f" | sed 's/^ClickDz Work-.*-stable-//')" ;;
-              ClickDz Work-*) n="ClickDzWork-$(echo "$f" | sed 's/^ClickDz Work-//')" ;;
-            esac
-            [ "$f" != "$n" ] && mv "$f" "$n" || true
+          if [ -f archive.zip ]; then
+            mv archive.zip ClickDzWork-windows-x64-portable.zip
+          fi
+          # Versionless copies give the hub stable permalinks; the versioned
+          # originals stay for the auto-updater (its parser reads
+          # ClickDzWork-<ver>[-<suffix>]-<channel>-<platform>-<arch>.<ext>).
+          for f in ClickDzWork-*; do
+            n=$(echo "$f" | sed -E 's/^ClickDzWork-[0-9][^-]*(-(canary|beta)\.[0-9]+)?-(stable|beta|canary|internal)-/ClickDzWork-/')
+            if [ "$f" != "$n" ]; then cp -n "$f" "$n" || true; fi
           done
-          echo "--- release payload (versionless, hub permalinks stay valid) ---"
+          echo "--- release payload ---"
           ls -la
+
+      - name: Generate updater manifest (latest.yml)
+        run: |
+          cd out
+          # updatable artifacts, versioned names only (parser needs them)
+          mapfile -t files < <(ls ClickDzWork-[0-9]*-windows-*.exe \
+            ClickDzWork-[0-9]*-macos-*.zip \
+            ClickDzWork-[0-9]*-linux-*.appimage 2>/dev/null || true)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "no updatable artifacts found — skipping latest.yml"
+            exit 0
+          fi
+          # prefer the windows installer as the primary path
+          primary=""
+          for f in "${files[@]}"; do
+            case "$f" in *.exe) primary="$f"; break;; esac
+          done
+          [ -z "$primary" ] && primary="${files[0]}"
+          version=$(echo "$primary" | cut -d- -f2)
+          {
+            echo "version: $version"
+            echo "files:"
+            for f in "${files[@]}"; do
+              sha=$(openssl dgst -sha512 -binary "$f" | base64 -w0)
+              size=$(stat -c%s "$f")
+              echo "  - url: $f"
+              echo "    sha512: $sha"
+              echo "    size: $size"
+            done
+            echo "path: $primary"
+            echo "sha512: $(openssl dgst -sha512 -binary "$primary" | base64 -w0)"
+            echo "releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
+          } > latest.yml
+          echo "--- latest.yml ---"
+          cat latest.yml
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ClickDz Work ${{ github.ref_name }}
+          tag_name: ${{ inputs.release-tag || github.ref_name }}
+          name: ClickDz Work ${{ inputs.release-tag || github.ref_name }}
           files: out/*
           prerelease: false
           body: |
             ClickDz Work — the all-in-one AI workspace by clickdz.ai.
 
             Unsigned first-generation builds:
-            - **Windows**: unzip / run installer; SmartScreen may warn — choose "Run anyway".
+            - **Windows**: run `ClickDzWork-windows-x64.exe` (Squirrel installer) or unzip the portable build; SmartScreen may warn — choose "Run anyway".
             - **macOS**: open the DMG; on first launch right-click the app → Open.
             - **Linux**: AppImage (`chmod +x`) or deb.
 

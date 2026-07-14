@@ -12,6 +12,7 @@ import { WorkspaceModule } from '../../core/workspaces';
 import { IndexerModule } from '../indexer';
 import { ClickDzBridgeController } from './clickdz-bridge.controller';
 import { ClickDzDataController } from './clickdz-data.controller';
+import { ClickDzReleasesController } from './clickdz-releases.controller';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import {
@@ -76,6 +77,7 @@ export class CopilotApiModule {}
     CopilotController,
     ClickDzBridgeController,
     ClickDzDataController,
+    ClickDzReleasesController,
     WorkspaceMcpController,
   ],
 })

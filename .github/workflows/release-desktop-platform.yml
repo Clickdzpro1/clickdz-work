@@ -148,51 +148,76 @@ jobs:
           HOIST_NODE_MODULES: 1
           NODE_OPTIONS: --max-old-space-size=14384
 
-      - name: package
+      - name: make
         if: ${{ inputs.platform == 'win32' }}
         run: |
-          yarn affine @affine/electron package --platform=${{ inputs.platform }} --arch=${{ inputs.arch }}
+          yarn affine @affine/electron make --platform=${{ inputs.platform }} --arch=${{ inputs.arch }}
         env:
           SKIP_WEB_BUILD: 1
           HOIST_NODE_MODULES: 1
           NODE_OPTIONS: --max-old-space-size=14384
 
+      - name: Save artifacts (windows)
+        if: ${{ inputs.platform == 'win32' }}
+        shell: bash
+        run: |
+          mkdir -p builds
+          mv packages/frontend/apps/electron/out/*/make/squirrel.windows/${{ inputs.arch }}/*.exe ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-windows-${{ inputs.arch }}.exe
+          mv packages/frontend/apps/electron/out/*/make/zip/win32/${{ inputs.arch }}/*.zip ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-windows-${{ inputs.arch }}.zip
+          cp packages/frontend/apps/electron/out/*/make/squirrel.windows/${{ inputs.arch }}/*.nupkg ./builds/ 2>/dev/null || true
+          cp packages/frontend/apps/electron/out/*/make/squirrel.windows/${{ inputs.arch }}/RELEASES ./builds/RELEASES 2>/dev/null || true
+          ls -la builds
+
+      - uses: actions/attest-build-provenance@v4
+        if: ${{ inputs.platform == 'win32' }}
+        with:
+          subject-path: |
+            ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-windows-${{ inputs.arch }}.exe
+            ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-windows-${{ inputs.arch }}.zip
+
+      - name: Upload Artifact (windows builds)
+        if: ${{ inputs.platform == 'win32' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: affine-win32-${{ inputs.arch }}-builds
+          path: builds
+
       - name: signing DMG
         if: ${{ inputs.platform == 'darwin' && inputs.apple_codesign }}
         run: |
-          codesign --force --sign "Developer ID Application: TOEVERYTHING PTE. LTD." packages/frontend/apps/electron/out/${{ env.BUILD_TYPE }}/make/ClickDz Work.dmg
+          codesign --force --sign "Developer ID Application: TOEVERYTHING PTE. LTD." packages/frontend/apps/electron/out/${{ env.BUILD_TYPE }}/make/ClickDzWork.dmg
 
       - name: Save artifacts (mac)
         if: ${{ inputs.platform == 'darwin' }}
         run: |
           mkdir -p builds
-          mv packages/frontend/apps/electron/out/*/make/*.dmg ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-macos-${{ inputs.arch }}.dmg
-          mv packages/frontend/apps/electron/out/*/make/zip/darwin/${{ inputs.arch }}/*.zip ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-macos-${{ inputs.arch }}.zip
+          mv packages/frontend/apps/electron/out/*/make/*.dmg ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-macos-${{ inputs.arch }}.dmg
+          mv packages/frontend/apps/electron/out/*/make/zip/darwin/${{ inputs.arch }}/*.zip ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-macos-${{ inputs.arch }}.zip
 
       - name: Save artifacts (linux)
         if: ${{ inputs.platform == 'linux' }}
         run: |
           mkdir -p builds
-          mv packages/frontend/apps/electron/out/*/make/zip/linux/${{ inputs.arch }}/*.zip ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.zip
-          mv packages/frontend/apps/electron/out/*/make/AppImage/${{ inputs.arch }}/*.AppImage ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.appimage
-          mv packages/frontend/apps/electron/out/*/make/deb/${{ inputs.arch }}/*.deb ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.deb
-          mv packages/frontend/apps/electron/out/*/make/flatpak/*/*.flatpak ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.flatpak
+          mv packages/frontend/apps/electron/out/*/make/zip/linux/${{ inputs.arch }}/*.zip ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.zip
+          mv packages/frontend/apps/electron/out/*/make/AppImage/${{ inputs.arch }}/*.AppImage ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.appimage
+          mv packages/frontend/apps/electron/out/*/make/deb/${{ inputs.arch }}/*.deb ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.deb
+          mv packages/frontend/apps/electron/out/*/make/flatpak/*/*.flatpak ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.flatpak
 
       - uses: actions/attest-build-provenance@v4
         if: ${{ inputs.platform == 'darwin' }}
         with:
           subject-path: |
-            ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-macos-${{ inputs.arch }}.zip
-            ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-macos-${{ inputs.arch }}.dmg
+            ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-macos-${{ inputs.arch }}.zip
+            ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-macos-${{ inputs.arch }}.dmg
 
       - uses: actions/attest-build-provenance@v4
         if: ${{ inputs.platform == 'linux' }}
         with:
           subject-path: |
-            ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.zip
-            ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.appimage
-            ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.deb
-            ./builds/ClickDz Work-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.flatpak
+            ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.zip
+            ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.appimage
+            ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.deb
+            ./builds/ClickDzWork-${{ env.RELEASE_VERSION }}-${{ env.BUILD_TYPE }}-linux-${{ inputs.arch }}.flatpak
 
       - name: Upload Artifact
         if: ${{ inputs.platform == 'darwin' || inputs.platform == 'linux' }}
@@ -213,7 +238,7 @@ jobs:
       - name: Zip artifacts for faster upload
         if: ${{ inputs.platform == 'win32' }}
         shell: pwsh
-        run: Compress-Archive -CompressionLevel Fastest -Path packages/frontend/apps/electron/out/* -DestinationPath archive.zip
+        run: Compress-Archive -CompressionLevel Fastest -Path packages/frontend/apps/electron/out/${{ inputs.build_type }}/*-win32-* -DestinationPath archive.zip
 
       - name: Save packaged artifacts for signing
         if: ${{ inputs.platform == 'win32' }}

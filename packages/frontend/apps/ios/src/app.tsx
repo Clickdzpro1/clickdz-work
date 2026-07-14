@@ -437,7 +437,7 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 const notifyAuthenticationError = (error: unknown, fallback: string) => {
   console.error(fallback, error);
   notify.error({
-    title: I18n['com.ClickDz Work.auth.toast.title.failed'](),
+    title: I18n['com.affine.auth.toast.title.failed'](),
     message: getErrorMessage(error, fallback),
   });
 };
