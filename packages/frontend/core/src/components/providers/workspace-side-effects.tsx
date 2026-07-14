@@ -15,6 +15,7 @@ import {
   AuthService,
   EventSourceService,
   GraphQLService,
+  ServerService,
 } from '@affine/core/modules/cloud';
 import {
   GlobalDialogService,
@@ -141,6 +142,7 @@ export const WorkspaceSideEffects = () => {
   const graphqlService = useService(GraphQLService);
   const eventSourceService = useService(EventSourceService);
   const authService = useService(AuthService);
+  const serverService = useService(ServerService);
   const nbstoreService = useService(NbstoreService);
 
   useEffect(() => {
@@ -151,7 +153,8 @@ export const WorkspaceSideEffects = () => {
         nbstoreService.realtime
       ),
       globalDialogService,
-      authService
+      authService,
+      serverService
     );
     return () => {
       dispose();
@@ -163,6 +166,7 @@ export const WorkspaceSideEffects = () => {
     graphqlService,
     globalDialogService,
     authService,
+    serverService,
   ]);
 
   useRegisterWorkspaceCommands();

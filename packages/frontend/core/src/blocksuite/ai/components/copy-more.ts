@@ -19,6 +19,7 @@ import type { ChatAction } from '../_common/chat-actions-handle';
 import { copyText } from '../utils/editor-actions';
 import { persistGeneratedImage } from './ai-tools/image-artifact';
 import { type CdzArtifact } from '../../../modules/ai-artifacts/store';
+import { cdzApiUrl } from '../provider';
 
 noop(Tooltip);
 
@@ -185,7 +186,7 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
     this._isSpeaking = true;
     this.requestUpdate();
     try {
-      const res = await fetch('/api/voice/tts', {
+      const res = await fetch(cdzApiUrl('/api/voice/tts'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -261,7 +262,7 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
     this.requestUpdate();
     try {
       // ClickDz 1.0: Make-enhanced super prompt -> gpt-image-1
-      const res = await fetch('/api/v1/images/generations', {
+      const res = await fetch(cdzApiUrl('/api/v1/images/generations'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: 'clickdz-image-1.0', prompt, n: 1, size: '1024x1024' }),

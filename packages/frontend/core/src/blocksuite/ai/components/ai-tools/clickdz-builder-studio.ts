@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { classMap } from 'lit/directives/class-map.js';
 
 // Studio v3 AI-editor modules (new sibling files).
+import { cdzApiUrl } from '../../provider';
 import './cdz-diff-view'; // side-effect: registers <cdz-diff-view>
 import { diffLines } from './cdz-html-diff';
 import {
@@ -2234,7 +2235,7 @@ export class ClickDzBuilderStudio extends LitElement {
     this.imageBusy = true;
     this.error = '';
     try {
-      const response = await fetch('/api/v1/images/generations', {
+      const response = await fetch(cdzApiUrl('/api/v1/images/generations'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt }),
@@ -2571,7 +2572,7 @@ export class ClickDzBuilderStudio extends LitElement {
     };
 
     try {
-      const response = await fetch('/api/v1/apps/generate', {
+      const response = await fetch(cdzApiUrl('/api/v1/apps/generate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
@@ -2700,7 +2701,7 @@ export class ClickDzBuilderStudio extends LitElement {
     this.publishing = true;
     this.error = '';
     try {
-      const response = await fetch('/api/v1/apps/deploy', {
+      const response = await fetch(cdzApiUrl('/api/v1/apps/deploy'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ html: this.workingHtml, slug: this.slug }),

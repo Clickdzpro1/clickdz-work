@@ -4,6 +4,7 @@ import { css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
 import { artifactStore } from '../../../../modules/ai-artifacts/store';
+import { cdzApiUrl } from '../../provider';
 import type { StreamObject } from '../ai-chat-messages';
 // Side-effect import: registers the <clickdz-builder-studio> custom element
 // (self-registers via its @customElement decorator) used by the studio overlay.
@@ -206,7 +207,7 @@ export class ClickDzAppResultCard extends ShadowlessElement {
     this.publishing = true;
     this.error = '';
     try {
-      const response = await fetch('/api/v1/apps/deploy', {
+      const response = await fetch(cdzApiUrl('/api/v1/apps/deploy'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ html: this.currentHtml, slug: result.slug }),
