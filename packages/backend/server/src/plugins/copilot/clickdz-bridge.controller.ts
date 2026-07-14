@@ -17,7 +17,8 @@ import { randomBytes } from 'node:crypto';
 
 import { Public } from '../../core/auth';
 // SECURITY: hard per-IP rate cap for cost/side-effecting routes (strict = 20/min).
-import { Throttle } from '../../base';
+// AuthenticationRequired -> typed 401 (raw HttpException becomes a generic 500 here).
+import { AuthenticationRequired, Throttle } from '../../base';
 import {
   buildEditContent,
   buildNewAppContent,
@@ -445,10 +446,7 @@ export class ClickDzBridgeController {
     const auth = String(req.headers.authorization || '');
     // Constant-time compare so the bridge token can't be recovered by timing.
     if (!safeEqual(auth, `Bearer ${CLICKDZ_BRIDGE_TOKEN}`)) {
-      throw new HttpException(
-        { error: { message: 'Invalid bridge token', type: 'authentication_error', code: 'invalid_bridge_token' } },
-        HttpStatus.UNAUTHORIZED
-      );
+      throw new AuthenticationRequired('Invalid bridge token');
     }
   }
 
