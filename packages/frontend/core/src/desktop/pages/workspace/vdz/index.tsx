@@ -13,17 +13,22 @@ import {
   type VdzClip,
   type VdzOp,
 } from '../../../../modules/vdz';
+import { VdzAiDock } from './ai-dock';
 import {
   clampZoom,
   DEFAULT_PX_PER_SEC,
   findClip,
   isClipActive,
 } from './constants';
+import { VdzGeneratePanel } from './generate-panel';
 import * as styles from './index.css';
 import { PreviewCanvas } from './preview-canvas';
 import { TimelineLanes } from './timeline-lanes';
 import { Toolbar } from './toolbar';
 import { useVdzHistory } from './use-vdz-history';
+
+/** Which top-level surface the page is showing. */
+type VdzMode = 'edit' | 'generate';
 
 /** Tags whose focus should swallow editor keyboard shortcuts. */
 function isEditableTarget(node: EventTarget | null): boolean {
@@ -48,7 +53,23 @@ const VdzStudioPage = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [pxPerSec, setPxPerSec] = useState(DEFAULT_PX_PER_SEC);
 
+  // Top-level surface: the timeline editor ('edit') or the AI video generator
+  // ('generate'). The generator fully replaces the editor body when active.
+  const [mode, setMode] = useState<VdzMode>('edit');
+
+  // A staged, not-yet-applied AI proposal from the dock. null when nothing is
+  // pending. The dock never mutates the timeline; the host reviews here and
+  // applies through the SAME history path the toolbar uses (runBatch).
+  const [pendingProposal, setPendingProposal] = useState<{
+    ops: VdzOp[];
+    summary: string;
+  } | null>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Ids of currently-selected clips, for the AI dock's context. The selection
+  // is a Set after the pro refactor; the dock wants a plain array.
+  const selectedClipIds = useMemo(() => [...selectedIds], [selectedIds]);
 
   const duration = useMemo(() => computeTimelineDuration(timeline), [timeline]);
   // Pad the ruler/lane span a little past the end so there's room to drag.
@@ -248,6 +269,34 @@ const VdzStudioPage = () => {
     });
   }, [selected, run]);
 
+  // ---- AI dock: stage → review → apply -----------------------------------
+  // The dock hands us client-validated ops; we STAGE them (do not apply) so the
+  // user can review a diff bar and Accept / Revert.
+  const onApplyOps = useCallback((ops: VdzOp[], summary: string) => {
+    setPendingProposal({ ops, summary });
+  }, []);
+
+  // Accept: push the whole batch through the one validated apply path
+  // (runBatch = a single undo entry). If it fails, runBatch records the error
+  // in history.error (shown in the footer) and returns false — keep the
+  // proposal staged so the user can revert or retry rather than lose it.
+  const acceptPendingOps = useCallback(() => {
+    if (!pendingProposal) return;
+    const committed = runBatch(pendingProposal.ops);
+    if (committed) setPendingProposal(null);
+  }, [pendingProposal, runBatch]);
+
+  // Revert: discard the staged proposal untouched.
+  const revertPendingOps = useCallback(() => setPendingProposal(null), []);
+
+  // ---- Mode switch -------------------------------------------------------
+  // Leaving the editor must not leave playback running (the rAF loop keeps
+  // ticking even though the timeline is unmounted); stop it on any switch.
+  const switchMode = useCallback((next: VdzMode) => {
+    setIsPlaying(false);
+    setMode(next);
+  }, []);
+
   // ---- Keyboard (bound to the page container, with cleanup) --------------
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -328,124 +377,190 @@ const VdzStudioPage = () => {
         <div className={styles.header}>
           <span className={styles.headerTitle}>Vdz Studio</span>
           <span className={styles.pill}>preview build</span>
+          <div className={styles.modeTabs} role="tablist" aria-label="Vdz mode">
+            <button
+              type="button"
+              role="tab"
+              className={styles.modeTab}
+              data-active={mode === 'edit'}
+              aria-selected={mode === 'edit'}
+              onClick={() => switchMode('edit')}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className={styles.modeTab}
+              data-active={mode === 'generate'}
+              aria-selected={mode === 'generate'}
+              onClick={() => switchMode('generate')}
+            >
+              Generate
+            </button>
+          </div>
           <span className={styles.timelineName}>{timeline.name}</span>
         </div>
       </ViewHeader>
       <ViewBody>
-        <div className={styles.root} ref={containerRef} tabIndex={-1}>
-          <div className={styles.main}>
-            {/* Preview + timeline stage */}
-            <div className={styles.stage}>
-              <PreviewCanvas
-                layers={visibleLayers}
-                playheadSeconds={playheadSeconds}
-              />
-
-              {/* Timeline */}
-              <div className={styles.timeline}>
-                <Toolbar
-                  isPlaying={isPlaying}
-                  onTogglePlay={togglePlay}
+        {mode === 'generate' ? (
+          <div className={styles.generateHost}>
+            <VdzGeneratePanel />
+          </div>
+        ) : (
+          <div className={styles.root} ref={containerRef} tabIndex={-1}>
+            <div className={styles.main}>
+              {/* Preview + timeline stage */}
+              <div className={styles.stage}>
+                <PreviewCanvas
+                  layers={visibleLayers}
                   playheadSeconds={playheadSeconds}
-                  duration={duration}
-                  pxPerSec={pxPerSec}
-                  onZoomOut={zoomOut}
-                  onZoomIn={zoomIn}
-                  canSplit={canSplit}
-                  onSplit={splitSelectedAtPlayhead}
-                  canDelete={selectedIds.size > 0}
-                  onDelete={deleteSelected}
-                  onRippleDelete={rippleDeleteSelected}
-                  canUndo={history.canUndo}
-                  onUndo={undo}
-                  canRedo={history.canRedo}
-                  onRedo={redo}
-                  selectionCount={selectedIds.size}
                 />
 
-                <div className={styles.scrubberRow}>
-                  <input
-                    className={styles.scrubber}
-                    type="range"
-                    min={0}
-                    max={Math.max(duration, 0.1)}
-                    step={0.1}
-                    value={Math.min(playheadSeconds, Math.max(duration, 0.1))}
-                    onChange={onScrub}
-                    aria-label="Playhead"
+                {/* Timeline */}
+                <div className={styles.timeline}>
+                  <Toolbar
+                    isPlaying={isPlaying}
+                    onTogglePlay={togglePlay}
+                    playheadSeconds={playheadSeconds}
+                    duration={duration}
+                    pxPerSec={pxPerSec}
+                    onZoomOut={zoomOut}
+                    onZoomIn={zoomIn}
+                    canSplit={canSplit}
+                    onSplit={splitSelectedAtPlayhead}
+                    canDelete={selectedIds.size > 0}
+                    onDelete={deleteSelected}
+                    onRippleDelete={rippleDeleteSelected}
+                    canUndo={history.canUndo}
+                    onUndo={undo}
+                    canRedo={history.canRedo}
+                    onRedo={redo}
+                    selectionCount={selectedIds.size}
+                  />
+
+                  <div className={styles.scrubberRow}>
+                    <input
+                      className={styles.scrubber}
+                      type="range"
+                      min={0}
+                      max={Math.max(duration, 0.1)}
+                      step={0.1}
+                      value={Math.min(playheadSeconds, Math.max(duration, 0.1))}
+                      onChange={onScrub}
+                      aria-label="Playhead"
+                    />
+                  </div>
+
+                  <TimelineLanes
+                    timeline={timeline}
+                    pxPerSec={pxPerSec}
+                    playheadSeconds={playheadSeconds}
+                    selectedIds={selectedIds}
+                    spanSeconds={spanSeconds}
+                    onSelectClip={selectClip}
+                    onScrubToSeconds={scrubTo}
+                    onZoomWheel={onZoomWheel}
+                    onCommitOp={commitLaneOp}
                   />
                 </div>
-
-                <TimelineLanes
-                  timeline={timeline}
-                  pxPerSec={pxPerSec}
-                  playheadSeconds={playheadSeconds}
-                  selectedIds={selectedIds}
-                  spanSeconds={spanSeconds}
-                  onSelectClip={selectClip}
-                  onScrubToSeconds={scrubTo}
-                  onZoomWheel={onZoomWheel}
-                  onCommitOp={commitLaneOp}
-                />
               </div>
-            </div>
 
-            {/* Inspector */}
-            <div className={styles.inspector}>
-              <div className={styles.inspectorTitle}>Inspector</div>
-              <div className={styles.inspectorBody}>
-                {selected ? (
-                  <>
-                    <pre className={styles.jsonBlock}>
-                      {JSON.stringify(selected.clip, null, 2)}
-                    </pre>
-                    <div className={styles.inspectorMeta}>
-                      track: {selected.trackId}
+              {/* Inspector */}
+              <div className={styles.inspector}>
+                <div className={styles.inspectorTitle}>Inspector</div>
+                <div className={styles.inspectorBody}>
+                  {selected ? (
+                    <>
+                      <pre className={styles.jsonBlock}>
+                        {JSON.stringify(selected.clip, null, 2)}
+                      </pre>
+                      <div className={styles.inspectorMeta}>
+                        track: {selected.trackId}
+                      </div>
+                    </>
+                  ) : selectedIds.size > 1 ? (
+                    <div className={styles.inspectorHint}>
+                      {selectedIds.size} clips selected. Delete / ripple-delete
+                      act on the whole selection; click a single clip to inspect
+                      its JSON.
                     </div>
-                  </>
-                ) : selectedIds.size > 1 ? (
-                  <div className={styles.inspectorHint}>
-                    {selectedIds.size} clips selected. Delete / ripple-delete
-                    act on the whole selection; click a single clip to inspect
-                    its JSON.
-                  </div>
-                ) : (
-                  <div className={styles.inspectorHint}>
-                    Select a clip in the timeline below to inspect its JSON.
-                    Everything here is a validated <code>VdzTimeline</code> —
-                    the same document the AI will edit via <code>VdzOp</code>s.
-                  </div>
-                )}
+                  ) : (
+                    <div className={styles.inspectorHint}>
+                      Select a clip in the timeline below to inspect its JSON.
+                      Everything here is a validated <code>VdzTimeline</code> —
+                      the same document the AI will edit via <code>VdzOp</code>
+                      s.
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Footer / AI dock */}
-          <div className={styles.footer}>
-            <span className={styles.footerLabel}>
-              <span className={styles.footerDot} />
-              AI dock — arrives in P1
-            </span>
-            {history.error ? (
-              <span className={styles.errorText}>{history.error}</span>
-            ) : null}
-            <span className={styles.footerSpacer} />
-            <button
-              type="button"
-              className={styles.button}
-              onClick={onAddTextClip}
-            >
-              Add text clip
-            </button>
-            <button
-              type="button"
-              className={styles.button}
-              onClick={onMoveSelected}
-            >
-              Move selected +1s
-            </button>
+              {/* AI dock — right-side panel, sibling of the inspector. It
+                proposes edits; onApplyOps stages them for review below. */}
+              <VdzAiDock
+                timeline={timeline}
+                selectedClipIds={selectedClipIds}
+                onApplyOps={onApplyOps}
+              />
+            </div>
+
+            {/* Footer: pending AI proposal (Accept/Revert) or dock status. */}
+            {pendingProposal ? (
+              <div className={styles.footer}>
+                <span className={styles.footerLabel}>
+                  <span className={styles.footerDot} />
+                  AI proposes {pendingProposal.ops.length} edit
+                  {pendingProposal.ops.length === 1 ? '' : 's'} —{' '}
+                  {pendingProposal.summary}
+                </span>
+                {history.error ? (
+                  <span className={styles.errorText}>{history.error}</span>
+                ) : null}
+                <span className={styles.footerSpacer} />
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={revertPendingOps}
+                >
+                  Revert
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={acceptPendingOps}
+                >
+                  Accept
+                </button>
+              </div>
+            ) : (
+              <div className={styles.footer}>
+                <span className={styles.footerLabel}>
+                  <span className={styles.footerDot} />
+                  AI dock ready
+                </span>
+                {history.error ? (
+                  <span className={styles.errorText}>{history.error}</span>
+                ) : null}
+                <span className={styles.footerSpacer} />
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={onAddTextClip}
+                >
+                  Add text clip
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={onMoveSelected}
+                >
+                  Move selected +1s
+                </button>
+              </div>
+            )}
           </div>
-        </div>
+        )}
       </ViewBody>
     </>
   );
