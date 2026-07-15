@@ -16,6 +16,16 @@ a later PR). The workbench shell that consumes this lives at
   edit. `computeTimelineDuration(timeline)` returns the total length (max clip
   end across tracks), in seconds. All time values are seconds; clip
   positions/sizes (`x`/`y`/`w`/`h`) are canvas fractions (0..1).
+  - Every clip may also carry two OPTIONAL, backward-compatible fields:
+    - `animation` — `{ in?: {kind, duration}, out?: {kind, duration} }` where
+      `kind ∈ fade | slide-up | slide-down | slide-left | slide-right |
+      zoom-in | zoom-out | pop` and `duration` is seconds (default `0.5`). The
+      preview plays `in` from the clip's start and `out` ending at its end.
+    - `effects` — an ordered `{ kind, amount }[]` visual-filter stack where
+      `kind ∈ blur | brightness | contrast | saturate | grayscale | sepia |
+      glow` and `amount` is a normalized `0..1` knob (0.5 is neutral for
+      brightness/contrast). Rendered as a CSS `filter`.
+    Timelines authored before these existed parse unchanged (both optional).
 - **`ops.ts`** — the edit contract. Every mutation is a `VdzOp` (a discriminated
   union on `op`) applied through `applyOp(timeline, op)` or
   `applyOps(timeline, ops)`. Both are **pure** (never mutate the input) and
@@ -30,7 +40,7 @@ a later PR). The workbench shell that consumes this lives at
 
 Ops: `addClip`, `removeClip`, `moveClip`, `trimClip`, `splitClip`,
 `rippleDelete`, `nudgeClip`, `setText`, `applyTransition`, `removeTransition`,
-`renameTimeline`.
+`setAnimation`, `setEffects`, `updateClip`, `renameTimeline`.
 
 - `splitClip` `{trackId, clipId, atSeconds}` — cut a clip in two at `atSeconds`
   (which must fall strictly inside it). The second part gets id `<id>-b`
@@ -40,6 +50,15 @@ Ops: `addClip`, `removeClip`, `moveClip`, `trimClip`, `splitClip`,
   clip on that track left by the removed clip's duration, closing the gap.
 - `nudgeClip` `{trackId, clipId, deltaSeconds}` — shift `start` by a signed
   delta, clamped so it never goes below 0.
+- `setAnimation` `{trackId, clipId, animation}` — set a clip's entrance/exit
+  `animation` (the `{in?, out?}` object above), or pass `null` to clear it.
+- `setEffects` `{trackId, clipId, effects}` — replace a clip's whole `effects`
+  stack; an empty array clears it.
+- `updateClip` `{trackId, clipId, patch}` — patch a clip's presentational
+  style fields (`text`, `fontSize`, `color`, `x`, `y`, `w`, `h`, `align`,
+  `fit`, `volume`). Patch keys are validated against the clip's `type`
+  (e.g. `fontSize` is rejected on a shape), and structural/time fields have
+  their own dedicated ops.
 
 **AI edits arrive as `VdzOp[]`** — the model proposes a batch of ops, they run
 through `applyOps`, and only a fully valid result is committed. See

@@ -2,6 +2,10 @@ import { formatTimecode } from './constants';
 import * as styles from './index.css';
 
 interface ToolbarProps {
+  /** Whether the media bin panel is open (drives the toggle button state). */
+  showMedia: boolean;
+  /** Toggle the left-side media bin panel. */
+  onToggleMedia: () => void;
   isPlaying: boolean;
   onTogglePlay: () => void;
   playheadSeconds: number;
@@ -23,6 +27,8 @@ interface ToolbarProps {
 
 /** Editor action bar. Sits ABOVE the lanes (never in the AI-dock footer). */
 export function Toolbar({
+  showMedia,
+  onToggleMedia,
   isPlaying,
   onTogglePlay,
   playheadSeconds,
@@ -43,6 +49,18 @@ export function Toolbar({
 }: ToolbarProps) {
   return (
     <div className={styles.toolbar}>
+      <button
+        type="button"
+        className={styles.toolButton}
+        onClick={onToggleMedia}
+        aria-pressed={showMedia}
+        title="Toggle the media bin (upload / AI images / stock)"
+      >
+        {showMedia ? '◧ Media' : '▤ Media'}
+      </button>
+
+      <span className={styles.toolDivider} />
+
       <button
         type="button"
         className={styles.toolButton}

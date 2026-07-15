@@ -2,11 +2,51 @@ import { nanoid } from 'nanoid';
 import { z } from 'zod';
 
 import {
+  vdzAnimationSchema,
   vdzClipSchema,
+  vdzEffectSchema,
   type VdzTimeline,
   vdzTimelineSchema,
   vdzTransitionSchema,
 } from './schema';
+
+/**
+ * Style fields an `updateClip` patch may set. This is a plain string→Zod map
+ * so both the op schema (as an all-optional object) and the per-clip-type
+ * validation (below) derive from the SAME source of truth. Positional/size and
+ * time-independent presentational fields only — structural fields (id, type,
+ * start, duration, animation, effects, transitions) have dedicated ops.
+ */
+const clipStylePatchShape = {
+  // text
+  text: z.string(),
+  fontSize: z.number().positive(),
+  align: z.enum(['left', 'center', 'right']),
+  // text + shape
+  color: z.string(),
+  x: z.number(),
+  y: z.number(),
+  // shape
+  w: z.number(),
+  h: z.number(),
+  // video + audio
+  volume: z.number().min(0).max(1),
+  // image
+  fit: z.enum(['cover', 'contain']),
+} as const;
+
+/**
+ * Which patch keys are legal per clip `type`. Guards `updateClip` so, e.g.,
+ * `fontSize` can't be written onto a shape clip (which would then fail the
+ * whole-timeline re-validation anyway, but this yields a precise error).
+ */
+const patchKeysByType: Record<string, ReadonlySet<string>> = {
+  text: new Set(['text', 'fontSize', 'align', 'color', 'x', 'y']),
+  shape: new Set(['color', 'x', 'y', 'w', 'h']),
+  video: new Set(['volume']),
+  audio: new Set(['volume']),
+  image: new Set(['fit']),
+};
 
 /**
  * The Vdz edit contract.
@@ -78,6 +118,27 @@ export const vdzOpSchema = z.discriminatedUnion('op', [
     op: z.literal('removeTransition'),
     trackId: z.string(),
     transitionId: z.string(),
+  }),
+  z.object({
+    op: z.literal('setAnimation'),
+    trackId: z.string(),
+    clipId: z.string(),
+    /** New entrance/exit animation, or null to clear it entirely. */
+    animation: vdzAnimationSchema.nullable(),
+  }),
+  z.object({
+    op: z.literal('setEffects'),
+    trackId: z.string(),
+    clipId: z.string(),
+    /** The full replacement effect stack (empty array clears effects). */
+    effects: z.array(vdzEffectSchema),
+  }),
+  z.object({
+    op: z.literal('updateClip'),
+    trackId: z.string(),
+    clipId: z.string(),
+    /** Partial patch of style fields; keys are validated against clip type. */
+    patch: z.object(clipStylePatchShape).partial(),
   }),
   z.object({
     op: z.literal('renameTimeline'),
@@ -329,6 +390,63 @@ export function applyOp(timeline: VdzTimeline, op: VdzOp): VdzApplyResult {
       }
       transitions.splice(index, 1);
       track.transitions = transitions;
+      break;
+    }
+    case 'setAnimation': {
+      const track = findTrack(validOp.trackId);
+      if (!track) {
+        return { timeline, error: `track not found: ${validOp.trackId}` };
+      }
+      const clip = track.clips.find(c => c.id === validOp.clipId);
+      if (!clip) {
+        return { timeline, error: `clip not found: ${validOp.clipId}` };
+      }
+      if (validOp.animation === null) {
+        delete clip.animation;
+      } else {
+        clip.animation = validOp.animation;
+      }
+      break;
+    }
+    case 'setEffects': {
+      const track = findTrack(validOp.trackId);
+      if (!track) {
+        return { timeline, error: `track not found: ${validOp.trackId}` };
+      }
+      const clip = track.clips.find(c => c.id === validOp.clipId);
+      if (!clip) {
+        return { timeline, error: `clip not found: ${validOp.clipId}` };
+      }
+      // An empty stack clears the field rather than persisting `[]`.
+      if (validOp.effects.length === 0) {
+        delete clip.effects;
+      } else {
+        clip.effects = validOp.effects;
+      }
+      break;
+    }
+    case 'updateClip': {
+      const track = findTrack(validOp.trackId);
+      if (!track) {
+        return { timeline, error: `track not found: ${validOp.trackId}` };
+      }
+      const clip = track.clips.find(c => c.id === validOp.clipId);
+      if (!clip) {
+        return { timeline, error: `clip not found: ${validOp.clipId}` };
+      }
+      const allowed = patchKeysByType[clip.type];
+      const patchKeys = Object.keys(validOp.patch);
+      for (const key of patchKeys) {
+        if (!allowed || !allowed.has(key)) {
+          return {
+            timeline,
+            error: `field "${key}" is not valid on a ${clip.type} clip`,
+          };
+        }
+      }
+      // Assign only the provided keys; the discriminated-union clip keeps its
+      // type. Cast through a record since keys are already type-validated.
+      Object.assign(clip as Record<string, unknown>, validOp.patch);
       break;
     }
     case 'renameTimeline': {
