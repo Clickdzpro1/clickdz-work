@@ -18,6 +18,8 @@ interface MediaBinProps {
    * clip and routes it through the single history apply path.
    */
   onAddToTimeline: (item: VdzMediaItem) => void;
+  /** Hide this panel (× in the header strip). */
+  onCollapse?: () => void;
 }
 
 /** Format a seconds duration as m:ss (empty for 0/unknown). */
@@ -46,7 +48,11 @@ function toDragPayload(item: VdzMediaItem): VdzMediaDragPayload {
  * (see {@link useVdzMedia}); items are both draggable to the timeline and
  * clickable ("+" adds them at the playhead).
  */
-export function MediaBin({ media, onAddToTimeline }: MediaBinProps) {
+export function MediaBin({
+  media,
+  onAddToTimeline,
+  onCollapse,
+}: MediaBinProps) {
   const [tab, setTab] = useState<MediaTab>('upload');
 
   return (
@@ -56,6 +62,17 @@ export function MediaBin({ media, onAddToTimeline }: MediaBinProps) {
         <span className={styles.headerTitle}>Media</span>
         <span className={styles.headerSpacer} />
         <span className={styles.headerCount}>{media.items.length}</span>
+        {onCollapse ? (
+          <button
+            type="button"
+            className={styles.collapseButton}
+            onClick={onCollapse}
+            title="Hide Media"
+            aria-label="Hide Media"
+          >
+            ×
+          </button>
+        ) : null}
       </div>
 
       <div className={styles.tabs} role="tablist" aria-label="Media source">

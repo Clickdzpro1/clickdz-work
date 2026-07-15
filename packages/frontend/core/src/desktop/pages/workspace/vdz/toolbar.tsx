@@ -23,6 +23,8 @@ interface ToolbarProps {
   canRedo: boolean;
   onRedo: () => void;
   selectionCount: number;
+  /** Hide the timeline panel (collapse × at the end of the toolbar). */
+  onCollapse?: () => void;
 }
 
 /** Editor action bar. Sits ABOVE the lanes (never in the AI-dock footer). */
@@ -46,6 +48,7 @@ export function Toolbar({
   canRedo,
   onRedo,
   selectionCount,
+  onCollapse,
 }: ToolbarProps) {
   return (
     <div className={styles.toolbar}>
@@ -150,6 +153,21 @@ export function Toolbar({
       >
         +
       </button>
+
+      {onCollapse ? (
+        <>
+          <span className={styles.toolDivider} />
+          <button
+            type="button"
+            className={styles.toolButton}
+            onClick={onCollapse}
+            title="Hide the timeline (Cmd/Ctrl+4)"
+            aria-label="Hide timeline"
+          >
+            ×
+          </button>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -13,8 +13,10 @@ const accent = '#5b8cff';
 const accent2 = '#a06bff';
 
 export const bin = style({
-  width: 300,
-  flexShrink: 0,
+  // Width is owned by the layout slot wrapper; the bin fills it.
+  width: '100%',
+  flex: 1,
+  minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
   height: '100%',
@@ -58,6 +60,30 @@ export const headerCount = style({
   fontSize: 11,
   fontWeight: 600,
   color: textDim,
+});
+
+// Header collapse (×) — hides the panel to a reopen tab.
+export const collapseButton = style({
+  appearance: 'none',
+  flexShrink: 0,
+  border: `1px solid transparent`,
+  background: 'transparent',
+  color: textDim,
+  fontSize: 15,
+  lineHeight: 1,
+  width: 22,
+  height: 22,
+  borderRadius: 6,
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
+  ':hover': {
+    color: text,
+    background: raised,
+    borderColor: border,
+  },
 });
 
 // ---- Tabs ---------------------------------------------------------------
