@@ -1,52 +1,69 @@
 import { keyframes, style } from '@vanilla-extract/css';
 
-// Self-contained dark palette for the Vdz Studio preview shell. These values
-// intentionally do not use theme vars — the editor surface stays dark
-// regardless of the app theme (mirrors pro video tools).
-const bg = '#0b0d12';
-const panel = '#12151d';
-const raised = '#232838';
-const border = '#232838';
-const text = '#e6e9f2';
-const textDim = '#8b93a7';
-const accent = '#5b8cff';
-const accent2 = '#a06bff';
+import { accentAlpha, v, vdzTheme } from './theme.css';
 
-export const root = style({
-  display: 'flex',
-  flexDirection: 'column',
-  flex: 1,
-  height: '100%',
-  width: '100%',
-  minHeight: 0,
-  background: bg,
-  color: text,
-  fontSize: 13,
-  overflow: 'hidden',
-});
+// Theme-aware palette for the Vdz Studio shell. Each token is an `--affine-*`
+// theme var with the original "Midnight" hex as a fallback (see theme.css.ts),
+// so cdz themes + light mode flow into the studio while the default look is
+// byte-for-byte the old dark surface. rgba() glows use color-mix on the themed
+// accent via accentAlpha()/accent2Alpha().
+const bg = v.bg;
+const panel = v.panel;
+const raised = v.raised;
+const border = v.border;
+const text = v.text;
+const textDim = v.muted;
+const accent = v.accent;
+const accent2 = v.accent2;
 
-// The studio header is a strict 3-zone bar: LEFT (title + preview pill),
-// CENTER (Edit/Generate segmented control, kept visually centred by giving the
-// side zones equal flex weight), RIGHT (project name + divider + panel View
-// menu). Zones share a 12px inner gap and a fixed 28px control height so
-// everything sits on one aligned baseline and never wraps at ≥1100px.
+// The studio shell: a strict flex COLUMN — [header] (outside, in ViewHeader)
+// then this root holding [main flex row] + [footer]. `minHeight:0` lets the
+// main row shrink instead of pushing the footer off; `overflow:hidden` clips
+// any residual. The footer is a fixed-height, flex-shrink:0 sibling BELOW the
+// row, so the row (and everything in it — the AI dock's scroller + composer)
+// can never overlap it. Carries the vdzTheme marker so the --vdz-* tokens
+// resolve on this portaled island.
+export const root = style([
+  vdzTheme,
+  {
+    display: 'flex',
+    flexDirection: 'column',
+    flex: 1,
+    height: '100%',
+    width: '100%',
+    minHeight: 0,
+    background: bg,
+    color: text,
+    fontSize: 13,
+    overflow: 'hidden',
+  },
+]);
+
+// The studio header is a single, fixed 40px bar with three zones: LEFT (product
+// title), CENTER (Edit/Generate segmented control, kept in the true middle by
+// giving the side zones equal flex weight), RIGHT (project name + divider +
+// panel View menu). EVERY interactive control is 28px tall so they sit on one
+// aligned baseline; a 40px row with 28px controls centres them perfectly. The
+// row never wraps and clips overflow rather than growing.
 const HEADER_CONTROL_H = 28;
+const HEADER_H = 40;
 
 export const header = style({
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-  padding: '8px 16px',
+  padding: '0 16px',
+  height: HEADER_H,
   borderBottom: `1px solid ${border}`,
   background: panel,
   flexShrink: 0,
   flexWrap: 'nowrap',
-  minHeight: 48,
+  overflow: 'hidden',
   boxSizing: 'border-box',
 });
 
-// LEFT zone: title + preview pill. Takes an equal share of the free space so
-// the centre zone lands in the true middle; content is left-aligned.
+// LEFT zone: the product title. Takes an equal share of the free space so the
+// centre zone lands in the true middle; content is left-aligned.
 export const headerLeft = style({
   display: 'flex',
   alignItems: 'center',
@@ -78,20 +95,6 @@ export const headerTitle = style({
   fontSize: 15,
   fontWeight: 600,
   letterSpacing: 0.2,
-  whiteSpace: 'nowrap',
-  flexShrink: 0,
-});
-
-export const pill = style({
-  fontSize: 10,
-  fontWeight: 700,
-  lineHeight: 1,
-  padding: '4px 8px',
-  borderRadius: 999,
-  color: '#fff',
-  background: `linear-gradient(90deg, ${accent}, ${accent2})`,
-  textTransform: 'uppercase',
-  letterSpacing: 0.5,
   whiteSpace: 'nowrap',
   flexShrink: 0,
 });
@@ -168,11 +171,17 @@ export const modeTab = style({
   },
 });
 
+// The main flex ROW (media | center | right stack). `flex:1` + `minHeight:0`
+// makes it the column's flexible remainder that SHRINKS above the fixed footer
+// (never grows past its share), and `minWidth:0` lets its flex children shrink
+// horizontally. `overflow:hidden` clips the row's own content so nothing
+// escapes downward onto the footer.
 export const main = style({
   position: 'relative',
   display: 'flex',
   flex: 1,
   minHeight: 0,
+  minWidth: 0,
   overflow: 'hidden',
 });
 
@@ -551,7 +560,7 @@ export const laneRow = style({
     // Highlighted while a media/file drag hovers this lane (see TimelineLanes).
     '&[data-drop-target="true"]': {
       borderColor: accent,
-      background: 'rgba(91,140,255,0.1)',
+      background: accentAlpha(10),
     },
   },
 });
@@ -648,15 +657,24 @@ const blink = keyframes({
   '50%': { opacity: 0.4 },
 });
 
-// Footer / AI dock strip.
+// Footer: a slim, FIXED-HEIGHT status strip that is the column's last sibling,
+// below the main row. `flexShrink:0` + a definite `height` pin it so the row
+// above yields to it (never the other way round) — it is structurally
+// impossible for the main row's content (incl. the AI dock composer) to overlap
+// it. `position:relative` + `zIndex` keep it painting above any 1px bleed.
 export const footer = style({
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-  padding: '8px 16px',
+  padding: '0 16px',
+  height: 44,
+  flexShrink: 0,
+  boxSizing: 'border-box',
+  position: 'relative',
+  zIndex: 1,
   borderTop: `1px solid ${border}`,
   background: raised,
-  flexShrink: 0,
+  overflow: 'hidden',
 });
 
 export const footerLabel = style({
@@ -1015,12 +1033,17 @@ export const center = style({
   overflow: 'hidden',
 });
 
-// The right-hand stack that holds inspector + AI dock, each its own slot.
+// The right-hand stack that holds inspector + AI dock, each its own slot. A
+// full-height, flex-shrink:0 column-neighbour in the main ROW; `minHeight:0`
+// propagates the bounded height down so each panel (and the dock's inner
+// scroller + composer) stays inside the row and scrolls its own body rather
+// than spilling onto the footer.
 export const rightStack = style({
   display: 'flex',
   flexShrink: 0,
   minHeight: 0,
   height: '100%',
+  alignItems: 'stretch',
 });
 
 // ---- Slim reusable panel chrome (<VdzPanel>) ----------------------------
@@ -1110,7 +1133,7 @@ const resizeHandleBase = style({
       background: accent,
     },
     '&[data-dragging="true"]': {
-      background: 'rgba(91,140,255,0.12)',
+      background: accentAlpha(12),
     },
   },
 });

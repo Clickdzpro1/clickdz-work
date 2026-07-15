@@ -590,10 +590,9 @@ const VdzStudioPage = () => {
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div className={styles.header}>
-          {/* LEFT: product title + preview-build pill. */}
+          {/* LEFT: product title. */}
           <div className={styles.headerLeft}>
             <span className={styles.headerTitle}>Vdz Studio</span>
-            <span className={styles.pill}>preview build</span>
           </div>
 
           {/* CENTER: Edit / Generate as one segmented control, kept centred. */}

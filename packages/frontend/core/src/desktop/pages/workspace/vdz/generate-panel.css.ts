@@ -1,42 +1,49 @@
 import { globalStyle, keyframes, style } from '@vanilla-extract/css';
 
+import { accentAlpha, accent2Alpha, v, vdzTheme } from './theme.css';
+
 /**
  * Vdz Studio — AI Video Generator panel styles.
  *
- * Self-contained dark palette (literal hex, no theme tokens) so the panel reads
- * identically regardless of the app theme wiring owned by parallel workers:
- *   surface   #0b0d12   panel bg
- *   raised    #12151d   inputs / control bar / cards
- *   border    #232838   hairline separators
- *   accent    #5b8cff → #a06bff  (brand gradient)
+ * Theme-aware palette (see theme.css.ts): each token is an `--affine-*` theme
+ * var with the original hex as a fallback, so the panel follows cdz themes +
+ * light mode while defaulting to the old dark look. The panel root carries the
+ * vdzTheme marker (composed into `root` below).
+ *   surface   --vdz-bg      panel bg
+ *   raised    --vdz-panel   inputs / control bar / cards
+ *   border    --vdz-border  hairline separators
+ *   accent    --vdz-accent → --vdz-accent-2  (brand gradient)
  */
-const SURFACE = '#0b0d12';
-const RAISED = '#12151d';
-const BORDER = '#232838';
-const ACCENT_FROM = '#5b8cff';
-const ACCENT_TO = '#a06bff';
-const TEXT = '#e7eaf3';
-const MUTED = '#8b93a7';
+const SURFACE = v.bg;
+const RAISED = v.panel;
+const BORDER = v.border;
+const ACCENT_FROM = v.accent;
+const ACCENT_TO = v.accent2;
+const TEXT = v.text;
+const MUTED = v.muted;
 const DANGER = '#ff6b81';
 
 const spin = keyframes({
   to: { transform: 'rotate(360deg)' },
 });
 
-export const root = style({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 16,
-  width: '100%',
-  height: '100%',
-  minHeight: 0,
-  padding: 20,
-  boxSizing: 'border-box',
-  background: SURFACE,
-  color: TEXT,
-  fontFamily:
-    'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-});
+export const root = style([
+  vdzTheme,
+  {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 16,
+    width: '100%',
+    height: '100%',
+    minHeight: 0,
+    padding: 20,
+    boxSizing: 'border-box',
+    background: SURFACE,
+    color: TEXT,
+    fontFamily:
+      'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+  },
+]);
 
 export const header = style({
   display: 'flex',
@@ -84,8 +91,7 @@ export const modeOption = style({
     // Active option: accent border + a faint accent wash.
     '&[data-active="true"]': {
       borderColor: ACCENT_FROM,
-      background:
-        'linear-gradient(135deg, rgba(91,140,255,0.16), rgba(160,107,255,0.12))',
+      background: `linear-gradient(135deg, ${accentAlpha(16)}, ${accent2Alpha(12)})`,
     },
   },
 });

@@ -1,16 +1,24 @@
 import { keyframes, style } from '@vanilla-extract/css';
 
-// Self-contained dark palette — matches the Vdz Studio shell (index.css.ts).
-// Intentionally not theme-var driven: the editor surface stays dark regardless
-// of app theme, mirroring pro video tools.
-const bg = '#0b0d12';
-const panel = '#12151d';
-const raised = '#232838';
-const border = '#232838';
-const text = '#e6e9f2';
-const textDim = '#8b93a7';
-const accent = '#5b8cff';
-const accent2 = '#a06bff';
+import { accentAlpha, accent2Alpha, v, vdzTheme } from './theme.css';
+
+// Theme-aware palette — matches the Vdz Studio shell (index.css.ts). Tokens are
+// `--affine-*` theme vars with the original hexes as fallbacks (see
+// theme.css.ts) so the dock follows cdz themes + light mode. The dock's root
+// carries the vdzTheme marker (composed into `dock` below) so the vars resolve
+// on its portaled island.
+const bg = v.bg;
+const panel = v.panel;
+const raised = v.raised;
+const border = v.border;
+const text = v.text;
+const textDim = v.muted;
+const accent = v.accent;
+const accent2 = v.accent2;
+
+// A slightly-brighter "raised" used only on chip hover; derived from the themed
+// accent so it tracks the palette instead of being a fixed slate.
+const raisedHover = `color-mix(in srgb, ${accent} 14%, ${raised})`;
 
 // Recording-mic pulse (defined up here so styles below can reference it).
 const pulseGlow = keyframes({
@@ -18,21 +26,27 @@ const pulseGlow = keyframes({
   '50%': { boxShadow: '0 0 0 4px rgba(238,90,111,0)' },
 });
 
-export const dock = style({
-  // Width is owned by the layout slot wrapper; the dock fills it.
-  width: '100%',
-  flex: 1,
-  minWidth: 0,
-  display: 'flex',
-  flexDirection: 'column',
-  height: '100%',
-  minHeight: 0,
-  borderLeft: `1px solid ${border}`,
-  background: panel,
-  color: text,
-  fontSize: 13,
-  overflow: 'hidden',
-});
+export const dock = style([
+  vdzTheme,
+  {
+    // Width is owned by the layout slot wrapper; the dock fills it. A strict
+    // flex column — [header] / [thread scroller] / [error] / [composer] — where
+    // `minHeight:0` + the thread's own `overflow:auto` keep the message list AND
+    // the composer inside the panel; they never overlap the studio footer.
+    width: '100%',
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    minHeight: 0,
+    borderLeft: `1px solid ${border}`,
+    background: panel,
+    color: text,
+    fontSize: 13,
+    overflow: 'hidden',
+  },
+]);
 
 export const header = style({
   display: 'flex',
@@ -434,7 +448,7 @@ export const suggestionChip = style({
   transition: 'border-color 120ms ease, background 120ms ease',
   ':hover': {
     borderColor: accent,
-    background: '#2a3145',
+    background: raisedHover,
   },
   ':disabled': {
     opacity: 0.5,
@@ -450,8 +464,7 @@ export const proposalCard = style({
   maxWidth: '100%',
   borderRadius: 12,
   border: `1px solid ${accent}`,
-  background:
-    'linear-gradient(180deg, rgba(91,140,255,0.10), rgba(160,107,255,0.06))',
+  background: `linear-gradient(180deg, ${accentAlpha(10)}, ${accent2Alpha(6)})`,
   padding: 12,
   display: 'flex',
   flexDirection: 'column',
@@ -594,8 +607,7 @@ export const planCard = style([
   proposalCard,
   {
     borderColor: accent2,
-    background:
-      'linear-gradient(180deg, rgba(160,107,255,0.12), rgba(91,140,255,0.05))',
+    background: `linear-gradient(180deg, ${accent2Alpha(12)}, ${accentAlpha(5)})`,
   },
 ]);
 
@@ -670,7 +682,7 @@ export const planDoButton = style({
   transition: 'border-color 120ms ease, background 120ms ease',
   ':hover': {
     borderColor: accent,
-    background: '#2a3145',
+    background: raisedHover,
   },
   ':disabled': {
     opacity: 0.5,
