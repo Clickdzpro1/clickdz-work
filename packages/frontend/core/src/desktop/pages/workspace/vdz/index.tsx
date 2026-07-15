@@ -16,6 +16,7 @@ import {
   useVdzMedia,
   type VdzMediaItem,
 } from '../../../../modules/vdz/use-vdz-media';
+import { useVdzTimelineExport } from '../../../../modules/vdz/use-vdz-timeline-export';
 import { VdzAiDock } from './ai-dock';
 import {
   clampZoom,
@@ -99,6 +100,41 @@ const VdzStudioPage = () => {
   // images / stock). Owned here so the bin's blob object URLs survive tab
   // switches and re-renders; shown as a flexible left-side workspace panel.
   const media = useVdzMedia();
+
+  // ---- MP4 export: compile the timeline → cdz-render kind:'html' ----------
+  // Owns the compile+media-inline step and the shared render transport; the
+  // toolbar's Export button drives it and shows progress / a download link.
+  const timelineExport = useVdzTimelineExport();
+  const exportState = timelineExport.export;
+  const exportBusy =
+    timelineExport.preparing ||
+    exportState.status === 'starting' ||
+    exportState.status === 'rendering';
+  // A single short status line for the toolbar: render errors first, then the
+  // honest media/video caveats from the last compile, else nothing.
+  const exportNote = useMemo(() => {
+    if (exportState.status === 'error') {
+      return exportState.error || 'Export failed';
+    }
+    if (timelineExport.preparing) return 'Preparing media…';
+    const notes: string[] = [];
+    if (timelineExport.skippedMedia.length > 0) {
+      notes.push(
+        `${timelineExport.skippedMedia.length} media file(s) not embedded`
+      );
+    }
+    const posters = timelineExport.lastCompile?.posterOnlyVideoClips.length ?? 0;
+    if (posters > 0) {
+      notes.push(`${posters} video clip(s) exported as still poster`);
+    }
+    return notes.length > 0 ? notes.join(' · ') : null;
+  }, [
+    exportState.status,
+    exportState.error,
+    timelineExport.preparing,
+    timelineExport.skippedMedia,
+    timelineExport.lastCompile,
+  ]);
 
   // ---- Workspace layout: flexible, hideable, resizable panels ------------
   // Every editor surface is a panel the user can resize / hide / re-show; the
@@ -289,6 +325,12 @@ const VdzStudioPage = () => {
 
   // A single move/trim op emitted by the lanes on pointerup.
   const commitLaneOp = useCallback((op: VdzOp) => run(op), [run]);
+
+  // Export the CURRENT timeline to MP4 (compile → inline media → render).
+  const onExportMp4 = useCallback(() => {
+    setIsPlaying(false);
+    void timelineExport.start(timeline);
+  }, [timelineExport, timeline]);
 
   // ---- Media → timeline (all through the one history apply path) --------
   // Resolve a concrete track id for a media payload: prefer the caller's
@@ -764,6 +806,16 @@ const VdzStudioPage = () => {
                         canRedo={history.canRedo}
                         onRedo={redo}
                         selectionCount={selectedIds.size}
+                        onExport={onExportMp4}
+                        exportBusy={exportBusy}
+                        exportProgress={exportState.progress}
+                        exportFileUrl={
+                          exportState.status === 'done'
+                            ? exportState.fileUrl
+                            : null
+                        }
+                        exportUnavailable={exportState.unavailable}
+                        exportNote={exportNote}
                         onCollapse={() => setPanelVisible('timeline', false)}
                       />
 
