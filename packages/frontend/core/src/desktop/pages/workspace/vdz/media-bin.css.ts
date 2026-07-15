@@ -1,32 +1,38 @@
 import { keyframes, style } from '@vanilla-extract/css';
 
-// Self-contained dark palette — matches the Vdz Studio shell (index.css.ts,
-// ai-dock.css.ts). Intentionally not theme-var driven: the editor surface
-// stays dark regardless of app theme, mirroring pro video tools.
-const bg = '#0b0d12';
-const panel = '#12151d';
-const raised = '#232838';
-const border = '#232838';
-const text = '#e6e9f2';
-const textDim = '#8b93a7';
-const accent = '#5b8cff';
-const accent2 = '#a06bff';
+import { accentAlpha, v, vdzTheme } from './theme.css';
 
-export const bin = style({
-  // Width is owned by the layout slot wrapper; the bin fills it.
-  width: '100%',
-  flex: 1,
-  minWidth: 0,
-  display: 'flex',
-  flexDirection: 'column',
-  height: '100%',
-  minHeight: 0,
-  borderRight: `1px solid ${border}`,
-  background: panel,
-  color: text,
-  fontSize: 13,
-  overflow: 'hidden',
-});
+// Theme-aware palette — matches the Vdz Studio shell (index.css.ts,
+// ai-dock.css.ts). Tokens are `--affine-*` theme vars with the original hexes
+// as fallbacks (see theme.css.ts) so the bin follows cdz themes + light mode.
+// The bin root carries the vdzTheme marker (composed into `bin` below).
+const bg = v.bg;
+const panel = v.panel;
+const raised = v.raised;
+const border = v.border;
+const text = v.text;
+const textDim = v.muted;
+const accent = v.accent;
+const accent2 = v.accent2;
+
+export const bin = style([
+  vdzTheme,
+  {
+    // Width is owned by the layout slot wrapper; the bin fills it.
+    width: '100%',
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    height: '100%',
+    minHeight: 0,
+    borderRight: `1px solid ${border}`,
+    background: panel,
+    color: text,
+    fontSize: 13,
+    overflow: 'hidden',
+  },
+]);
 
 export const header = style({
   display: 'flex',
@@ -153,7 +159,7 @@ export const dropZone = style({
   selectors: {
     '&[data-dragover="true"]': {
       borderColor: accent,
-      background: 'rgba(91,140,255,0.08)',
+      background: accentAlpha(8),
       color: text,
     },
   },
