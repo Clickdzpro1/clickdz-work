@@ -17,6 +17,7 @@ import { CacheRedis } from '../../base/redis';
 import { CurrentUser } from '../../core/auth';
 import {
   buildVdzContextTurn,
+  buildVdzModeInstruction,
   normalizeVdzHistory,
   VDZ_SYSTEM_PROMPT,
   type VdzHistoryTurn,
@@ -67,6 +68,10 @@ const MAX_HISTORY_TURN_CHARS = 4_000;
 // well under the bridge's 240s so the dock fails fast.
 const VDZ_MODEL_TIMEOUT_MS = 90_000;
 const VDZ_MODEL_MAX_TOKENS = 2_000;
+// Caps for the non-default modes' response arrays (defensive; the prompt asks
+// for far fewer). Bounds a pathological model reply, mirroring MAX_OPS caps.
+const MAX_PLAN_STEPS = 12;
+const MAX_SUGGESTIONS = 8;
 
 // ---------------------------------------------------------------------------
 // Project store caps (mirror the apps-data controller conventions).
@@ -127,22 +132,37 @@ function parseMakeAgentResponse(raw: unknown): string {
   return '';
 }
 
+/** The fields we pull out of a raw model reply (all opaque until validated). */
+interface ExtractedVdzResponse {
+  summary: unknown;
+  ops: unknown;
+  /** Only present for a plan-mode reply (parsed leniently downstream). */
+  plan?: unknown;
+  /** Only present for a suggestions-mode reply. */
+  suggestions?: unknown;
+}
+
 /**
- * Best-effort extraction of the strict `{summary, ops}` JSON object from a raw
- * model reply. Prefers a clean `JSON.parse`; if the model wrapped it in prose
- * or fences, strips fences and slices the outermost `{...}`. Returns the parsed
- * object on success, or null when nothing parseable is present.
+ * Best-effort extraction of the strict response JSON object from a raw model
+ * reply. Prefers a clean `JSON.parse`; if the model wrapped it in prose or
+ * fences, strips fences and slices the outermost `{...}`. Returns the parsed
+ * object on success (carrying `summary`, `ops`, and — when present — `plan` /
+ * `suggestions` for the non-default modes), or null when nothing parseable is
+ * present. Extra fields are harmless: a mode that doesn't use them ignores them.
  */
-function extractVdzResponse(
-  raw: string
-): { summary: unknown; ops: unknown } | null {
+function extractVdzResponse(raw: string): ExtractedVdzResponse | null {
   const text = (raw ?? '').trim();
   if (!text) return null;
-  const tryParse = (s: string): { summary: unknown; ops: unknown } | null => {
+  const tryParse = (s: string): ExtractedVdzResponse | null => {
     try {
       const parsed = JSON.parse(s) as Record<string, unknown>;
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return { summary: parsed.summary, ops: parsed.ops };
+        return {
+          summary: parsed.summary,
+          ops: parsed.ops,
+          plan: parsed.plan,
+          suggestions: parsed.suggestions,
+        };
       }
       return null;
     } catch {
@@ -167,6 +187,62 @@ function extractVdzResponse(
     if (sliced) return sliced;
   }
   return null;
+}
+
+/** A normalized plan step returned to the client. */
+interface VdzPlanStep {
+  step: string;
+  action: string;
+}
+
+/**
+ * Coerce an unknown `plan` value into a clean `VdzPlanStep[]`, defensively.
+ * Tolerates `{step, action}`, `{title, action}`, and bare strings so a slightly
+ * off model reply still yields a usable checklist. Returns [] when nothing
+ * plan-shaped is present (the controller then treats the turn as normal).
+ */
+function coercePlan(value: unknown): VdzPlanStep[] {
+  if (!Array.isArray(value)) return [];
+  const steps: VdzPlanStep[] = [];
+  for (const entry of value) {
+    if (typeof entry === 'string') {
+      const step = entry.trim();
+      if (step) steps.push({ step, action: step });
+      continue;
+    }
+    if (entry && typeof entry === 'object') {
+      const obj = entry as Record<string, unknown>;
+      const step =
+        typeof obj.step === 'string'
+          ? obj.step.trim()
+          : typeof obj.title === 'string'
+            ? obj.title.trim()
+            : '';
+      const action =
+        typeof obj.action === 'string' && obj.action.trim()
+          ? obj.action.trim()
+          : step;
+      if (step) steps.push({ step, action });
+    }
+    if (steps.length >= MAX_PLAN_STEPS) break;
+  }
+  return steps;
+}
+
+/** Coerce an unknown `suggestions` value into a clean, capped `string[]`. */
+function coerceSuggestions(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const v of value) {
+    if (typeof v === 'string' && v.trim()) out.push(v.trim());
+    if (out.length >= MAX_SUGGESTIONS) break;
+  }
+  return out;
+}
+
+/** Read a request `mode`, defaulting anything unknown to 'edit'. */
+function parseMode(raw: unknown): 'edit' | 'plan' | 'suggestions' {
+  return raw === 'plan' || raw === 'suggestions' ? raw : 'edit';
 }
 
 @Controller()
@@ -326,7 +402,13 @@ export class ClickDzVdzController {
   async chat(
     @CurrentUser() user: CurrentUser,
     @Body() body: unknown
-  ): Promise<{ summary: string; ops: unknown[]; raw?: string }> {
+  ): Promise<{
+    summary: string;
+    ops: unknown[];
+    plan?: VdzPlanStep[];
+    suggestions?: string[];
+    raw?: string;
+  }> {
     const payload = (body ?? {}) as Record<string, unknown>;
 
     const message =
@@ -343,11 +425,19 @@ export class ClickDzVdzController {
     this.validateTimelineSize(payload.timeline);
     const selectedClipIds = this.parseSelectedClipIds(payload.selectedClipIds);
     const history = this.parseHistory(payload.history);
+    // Unknown/absent mode → 'edit' (the default contract). Never rejects, so an
+    // old client that omits `mode` keeps working unchanged.
+    const mode = parseMode(payload.mode);
 
-    // Build the conversation: system prompt, a compact context turn (timeline
-    // JSON + selection), the prior chat history, then the new user message.
+    // Build the conversation: system prompt, then (for a non-default mode) the
+    // mode instruction, a compact context turn (timeline JSON + selection), the
+    // prior chat history, then the new user message.
+    const modeInstruction = buildVdzModeInstruction(mode);
     const messages: Array<{ role: string; content: string }> = [
       { role: 'system', content: VDZ_SYSTEM_PROMPT },
+      ...(modeInstruction
+        ? [{ role: 'system', content: modeInstruction }]
+        : []),
       {
         role: 'user',
         content: buildVdzContextTurn({
@@ -363,14 +453,14 @@ export class ClickDzVdzController {
     ];
 
     this.logger.log(
-      `[vdz] chat user=${user.id} selected=${selectedClipIds.length} history=${history?.length ?? 0} msg=${message.slice(0, 80)}`
+      `[vdz] chat user=${user.id} mode=${mode} selected=${selectedClipIds.length} history=${history?.length ?? 0} msg=${message.slice(0, 80)}`
     );
 
     const rawReply = await this.runVdzModel(messages);
 
     // Server-side sanity parse. The client re-validates each op with the Zod
     // schema before applying, so we only need to guarantee a well-formed
-    // {summary, ops[]} envelope here and degrade gracefully otherwise (200).
+    // envelope here and degrade gracefully otherwise (200).
     const parsed = extractVdzResponse(rawReply);
     if (!parsed) {
       return {
@@ -384,6 +474,19 @@ export class ClickDzVdzController {
         ? parsed.summary.trim()
         : 'Proposed timeline edit';
     const ops = Array.isArray(parsed.ops) ? parsed.ops : [];
+
+    // Mode-specific fields, parsed leniently. We attach them only when the
+    // matching mode asked for them AND the model actually returned them, so an
+    // edit-mode turn is byte-identical to before. Falling back is automatic: if
+    // plan/suggestions come back empty, the client sees a normal {summary, ops}
+    // turn and treats it as such.
+    if (mode === 'plan') {
+      const plan = coercePlan(parsed.plan);
+      if (plan.length) return { summary, ops, plan };
+    } else if (mode === 'suggestions') {
+      const suggestions = coerceSuggestions(parsed.suggestions);
+      if (suggestions.length) return { summary, ops, suggestions };
+    }
     return { summary, ops };
   }
 
