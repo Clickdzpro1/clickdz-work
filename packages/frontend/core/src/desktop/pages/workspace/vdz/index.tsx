@@ -841,6 +841,10 @@ const VdzStudioPage = () => {
                           timeline={timeline}
                           selectedClipIds={selectedClipIds}
                           onApplyOps={onApplyOps}
+                          pendingProposal={pendingProposal}
+                          onAcceptProposal={acceptPendingOps}
+                          onRevertProposal={revertPendingOps}
+                          proposalError={history.error}
                           initialPrompt={pendingEditorPrompt}
                           onInitialPromptConsumed={onEditorPromptConsumed}
                           onCollapse={() => setPanelVisible('aiDock', false)}
@@ -871,60 +875,38 @@ const VdzStudioPage = () => {
               ) : null}
             </div>
 
-            {/* Footer: pending AI proposal (Accept/Revert) or dock status. */}
-            {pendingProposal ? (
-              <div className={styles.footer}>
-                <span className={styles.footerLabel}>
-                  <span className={styles.footerDot} />
-                  AI proposes {pendingProposal.ops.length} edit
-                  {pendingProposal.ops.length === 1 ? '' : 's'} —{' '}
-                  {pendingProposal.summary}
-                </span>
-                {history.error ? (
-                  <span className={styles.errorText}>{history.error}</span>
-                ) : null}
-                <span className={styles.footerSpacer} />
-                <button
-                  type="button"
-                  className={styles.button}
-                  onClick={revertPendingOps}
-                >
-                  Revert
-                </button>
-                <button
-                  type="button"
-                  className={styles.button}
-                  onClick={acceptPendingOps}
-                >
-                  Accept
-                </button>
-              </div>
-            ) : (
-              <div className={styles.footer}>
-                <span className={styles.footerLabel}>
-                  <span className={styles.footerDot} />
-                  AI dock ready
-                </span>
-                {history.error ? (
-                  <span className={styles.errorText}>{history.error}</span>
-                ) : null}
-                <span className={styles.footerSpacer} />
-                <button
-                  type="button"
-                  className={styles.button}
-                  onClick={onAddTextClip}
-                >
-                  Add text clip
-                </button>
-                <button
-                  type="button"
-                  className={styles.button}
-                  onClick={onMoveSelected}
-                >
-                  Move selected +1s
-                </button>
-              </div>
-            )}
+            {/* Footer: a SLIM status line only. The AI proposal's Accept /
+                Revert now live in an in-thread card inside the dock (where the
+                user is already looking); the footer just reflects state. The
+                two demo buttons remain as quick manual-edit shortcuts. */}
+            <div className={styles.footer}>
+              <span className={styles.footerLabel}>
+                <span className={styles.footerDot} />
+                {pendingProposal
+                  ? `AI proposed ${pendingProposal.ops.length} edit${
+                      pendingProposal.ops.length === 1 ? '' : 's'
+                    } — review in the AI panel →`
+                  : 'AI dock ready'}
+              </span>
+              {history.error ? (
+                <span className={styles.errorText}>{history.error}</span>
+              ) : null}
+              <span className={styles.footerSpacer} />
+              <button
+                type="button"
+                className={styles.button}
+                onClick={onAddTextClip}
+              >
+                Add text clip
+              </button>
+              <button
+                type="button"
+                className={styles.button}
+                onClick={onMoveSelected}
+              >
+                Move selected +1s
+              </button>
+            </div>
           </div>
         )}
       </ViewBody>

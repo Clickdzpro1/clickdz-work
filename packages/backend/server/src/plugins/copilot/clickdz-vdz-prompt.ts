@@ -312,6 +312,93 @@ export const VDZ_SYSTEM_PROMPT = [
 ].join('\n');
 
 // ---------------------------------------------------------------------------
+// MODE INSTRUCTIONS — optional, additive overrides the controller appends as an
+// EXTRA system message for non-default modes. The base VDZ_SYSTEM_PROMPT (the
+// edit contract) is always sent first; these NARROW the response contract for
+// Plan mode and Suggestions mode. Both contracts are SUPERSETS of the edit
+// envelope — they still include `summary` and `ops` — so a client (or an older
+// server that ignored the mode) always receives a well-formed `{summary, ops}`.
+// ---------------------------------------------------------------------------
+
+/** The dock modes the prompt understands. Anything else is treated as 'edit'. */
+export type VdzMode = 'edit' | 'plan' | 'suggestions';
+
+/**
+ * PLAN MODE — the user describes a GOAL, and you return a numbered, step-by-step
+ * plan that teaches them how to reach it using Vdz Studio's real features. You
+ * do NOT edit the timeline in this mode; you return a plan the user runs step by
+ * step (each step later becomes its own edit request).
+ */
+const VDZ_PLAN_INSTRUCTION = [
+  '════════════════════════════════════════════════════════════════════',
+  'PLAN MODE (this turn only — OVERRIDES the response contract above)',
+  '════════════════════════════════════════════════════════════════════',
+  'The user is in PLAN mode: they will describe a GOAL for their video (e.g.',
+  '"a 30s product promo with captions and music"). Do NOT edit the timeline.',
+  'Instead, return a short, ordered PLAN of concrete steps that accomplish the',
+  'goal using Vdz Studio\'s real features. Reference actual capabilities:',
+  '  • upload media into the Media bin (video / images / audio),',
+  '  • generate scenes / images with the Generate panel,',
+  '  • add clips to the video/overlay/audio tracks,',
+  '  • add title & caption text overlays, apply transitions (fade/slide/wipe),',
+  '  • add entrance/exit animations and visual effects,',
+  '  • trim / split / arrange clips on the timeline, then export.',
+  'Keep it to 3–7 steps. Each step is one clear action the user (or the AI in',
+  'Edit mode) can perform next. Make each step\'s "action" a ready-to-run',
+  'edit-mode instruction (imperative, specific), because the UI lets the user',
+  'run any step with one click.',
+  '',
+  'RESPONSE CONTRACT for PLAN mode — reply with ONLY this JSON object:',
+  '  {"summary":"<one sentence naming the plan>","plan":[{"step":"<short title>","action":"<the edit-mode instruction to run this step>"}, ...],"ops":[]}',
+  '',
+  '• Include BOTH "plan" (the array of steps) AND "ops" (keep it []). The first',
+  '  character must be "{" and the last "}"; no markdown, no prose, no fences.',
+  '• "step" is a short human title; "action" is the concrete instruction that,',
+  '  sent in Edit mode, performs that step. 3–7 steps. If the request is not a',
+  '  plannable video goal, return {"summary":"<why>","plan":[],"ops":[]}.',
+  '',
+  'Example — User: "I want a 15s promo for a coffee brand with captions"',
+  '{"summary":"A 5-step plan to build a 15-second captioned coffee promo.","ops":[],"plan":[{"step":"Add a background scene","action":"Add a warm brown full-frame background shape for the first 15 seconds."},{"step":"Add the brand title","action":"Add a bold centered title \'Fresh Coffee\' over the first 4 seconds."},{"step":"Add captions","action":"Add three short caption text clips across the timeline describing the coffee."},{"step":"Add a transition","action":"Add a fade transition between the intro scene and the next."},{"step":"Add an outro CTA","action":"Add an outro card at the end reading \'Order today\'."}]}',
+].join('\n');
+
+/**
+ * SUGGESTIONS MODE — return a few concrete edit ideas for the CURRENT timeline
+ * as short prompts the user can click to run. No ops are applied this turn.
+ */
+const VDZ_SUGGESTIONS_INSTRUCTION = [
+  '════════════════════════════════════════════════════════════════════',
+  'SUGGESTIONS MODE (this turn only — OVERRIDES the response contract above)',
+  '════════════════════════════════════════════════════════════════════',
+  'The user wants IDEAS for improving the CURRENT timeline. Do NOT edit it.',
+  'Study the provided timeline and return 3–5 concrete, specific suggestions,',
+  'each phrased as a short imperative instruction the user could run next in',
+  'Edit mode (e.g. "Add a title over the opening clip", "Add a fade between the',
+  'two scenes", "Add background music across the whole video"). Base them on',
+  'what the timeline actually contains (empty overlay → suggest a title; silent',
+  'audio → suggest music; abrupt ending → suggest an outro). Avoid generic',
+  'advice that ignores the current project.',
+  '',
+  'RESPONSE CONTRACT for SUGGESTIONS mode — reply with ONLY this JSON object:',
+  '  {"summary":"<one sentence>","suggestions":["<short instruction>", ...],"ops":[]}',
+  '',
+  '• Include BOTH "suggestions" (3–5 short strings) AND "ops" (keep it []).',
+  '• First char "{", last char "}"; no markdown, prose, or fences.',
+].join('\n');
+
+/**
+ * Return the extra mode-instruction system message for a non-default mode, or
+ * null for the default edit mode (where the base prompt already suffices). The
+ * controller appends this right AFTER {@link VDZ_SYSTEM_PROMPT}. Any unknown
+ * value degrades to edit mode (null), so the contract is never accidentally
+ * narrowed by a bad `mode` string.
+ */
+export function buildVdzModeInstruction(mode: unknown): string | null {
+  if (mode === 'plan') return VDZ_PLAN_INSTRUCTION;
+  if (mode === 'suggestions') return VDZ_SUGGESTIONS_INSTRUCTION;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Context builder — the compact per-turn "context turn" the controller inserts
 // AFTER the system prompt and BEFORE the chat history + latest user message.
 // ---------------------------------------------------------------------------

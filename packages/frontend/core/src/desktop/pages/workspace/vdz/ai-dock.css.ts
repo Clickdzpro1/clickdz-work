@@ -12,6 +12,12 @@ const textDim = '#8b93a7';
 const accent = '#5b8cff';
 const accent2 = '#a06bff';
 
+// Recording-mic pulse (defined up here so styles below can reference it).
+const pulseGlow = keyframes({
+  '0%, 100%': { boxShadow: '0 0 0 0 rgba(238,90,111,0.5)' },
+  '50%': { boxShadow: '0 0 0 4px rgba(238,90,111,0)' },
+});
+
 export const dock = style({
   // Width is owned by the layout slot wrapper; the dock fills it.
   width: '100%',
@@ -75,6 +81,77 @@ export const resetButton = style({
     cursor: 'default',
   },
 });
+
+// ---- Header: Edit | Plan mode toggle -----------------------------------
+export const modeTabs = style({
+  display: 'inline-flex',
+  padding: 2,
+  borderRadius: 8,
+  background: bg,
+  border: `1px solid ${border}`,
+  gap: 2,
+});
+
+export const modeTab = style({
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  color: textDim,
+  fontSize: 11,
+  fontWeight: 600,
+  cursor: 'pointer',
+  padding: '3px 10px',
+  borderRadius: 6,
+  transition: 'background 120ms ease, color 120ms ease',
+  ':hover': {
+    color: text,
+  },
+  selectors: {
+    '&[data-active="true"]': {
+      background: raised,
+      color: text,
+    },
+  },
+});
+
+// ---- Header: mic (dictation) button — right-aligned next to Clear ------
+export const micButton = style({
+  appearance: 'none',
+  flexShrink: 0,
+  border: `1px solid ${border}`,
+  background: bg,
+  color: textDim,
+  width: 26,
+  height: 26,
+  borderRadius: 8,
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
+  ':hover': {
+    color: text,
+    borderColor: accent,
+  },
+  ':disabled': {
+    opacity: 0.4,
+    cursor: 'default',
+  },
+});
+
+// Recording state — the mic glows and pulses so it's unmistakable.
+export const micButtonActive = style([
+  micButton,
+  {
+    color: '#fff',
+    background: 'linear-gradient(135deg, #ff6b6b, #ee5a6f)',
+    borderColor: 'transparent',
+    animation: `${pulseGlow} 1.4s ease-in-out infinite`,
+    ':hover': {
+      color: '#fff',
+    },
+  },
+]);
 
 // Header collapse (×) — hides the dock to a reopen tab.
 export const collapseButton = style({
@@ -320,4 +397,290 @@ export const sendButton = style({
     cursor: 'default',
     filter: 'none',
   },
+});
+
+// ---- Proactive suggestion chips ----------------------------------------
+// Rendered in the idle/empty thread; clicking a chip sends it as a message.
+export const suggestions = style({
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  marginTop: 12,
+  justifyContent: 'center',
+});
+
+export const suggestionsLabel = style({
+  width: '100%',
+  fontSize: 10,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: 0.6,
+  color: textDim,
+  marginBottom: 2,
+  textAlign: 'center',
+});
+
+export const suggestionChip = style({
+  appearance: 'none',
+  border: `1px solid ${border}`,
+  background: raised,
+  color: text,
+  fontSize: 11.5,
+  lineHeight: 1.3,
+  textAlign: 'left',
+  padding: '6px 10px',
+  borderRadius: 999,
+  cursor: 'pointer',
+  transition: 'border-color 120ms ease, background 120ms ease',
+  ':hover': {
+    borderColor: accent,
+    background: '#2a3145',
+  },
+  ':disabled': {
+    opacity: 0.5,
+    cursor: 'default',
+  },
+});
+
+// ---- In-thread proposal card (Accept / Revert) -------------------------
+// The pending AI proposal renders as a bubble at the END of the thread so the
+// user reviews + applies it right where they're already looking.
+export const proposalCard = style({
+  alignSelf: 'stretch',
+  maxWidth: '100%',
+  borderRadius: 12,
+  border: `1px solid ${accent}`,
+  background:
+    'linear-gradient(180deg, rgba(91,140,255,0.10), rgba(160,107,255,0.06))',
+  padding: 12,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+});
+
+export const proposalHead = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 7,
+  fontSize: 11,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  color: accent,
+});
+
+export const proposalCount = style({
+  marginLeft: 'auto',
+  padding: '1px 8px',
+  borderRadius: 999,
+  background: raised,
+  border: `1px solid ${border}`,
+  color: text,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0,
+  textTransform: 'none',
+});
+
+export const proposalSummary = style({
+  fontSize: 13,
+  lineHeight: 1.5,
+  color: text,
+});
+
+export const proposalOps = style({
+  fontSize: 11,
+});
+
+export const proposalOpsSummary = style({
+  color: textDim,
+  cursor: 'pointer',
+  userSelect: 'none',
+  fontWeight: 600,
+  ':hover': {
+    color: text,
+  },
+});
+
+export const proposalOpList = style({
+  listStyle: 'none',
+  margin: '8px 0 0',
+  padding: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  maxHeight: 180,
+  overflow: 'auto',
+});
+
+export const proposalOpItem = style({
+  display: 'flex',
+  gap: 7,
+  alignItems: 'baseline',
+  padding: '5px 8px',
+  borderRadius: 6,
+  background: bg,
+  border: `1px solid ${border}`,
+  fontSize: 11,
+  color: text,
+});
+
+export const proposalOpKind = style({
+  fontFamily:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  fontWeight: 700,
+  color: accent,
+  flexShrink: 0,
+});
+
+export const proposalOpDetail = style({
+  color: textDim,
+  wordBreak: 'break-word',
+});
+
+export const proposalActions = style({
+  display: 'flex',
+  gap: 8,
+});
+
+export const proposalAccept = style({
+  appearance: 'none',
+  flex: 1,
+  border: 'none',
+  borderRadius: 8,
+  padding: '9px 12px',
+  fontSize: 13,
+  fontWeight: 700,
+  color: '#fff',
+  cursor: 'pointer',
+  background: `linear-gradient(135deg, ${accent}, ${accent2})`,
+  transition: 'filter 120ms ease',
+  ':hover': {
+    filter: 'brightness(1.1)',
+  },
+  ':disabled': {
+    opacity: 0.5,
+    cursor: 'default',
+    filter: 'none',
+  },
+});
+
+export const proposalRevert = style({
+  appearance: 'none',
+  flex: 1,
+  borderRadius: 8,
+  padding: '9px 12px',
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: 'pointer',
+  color: text,
+  background: 'transparent',
+  border: `1px solid ${border}`,
+  transition: 'background 120ms ease, border-color 120ms ease',
+  ':hover': {
+    background: raised,
+    borderColor: textDim,
+  },
+});
+
+export const proposalError = style({
+  fontSize: 11,
+  color: '#ff8f8f',
+  lineHeight: 1.4,
+});
+
+// ---- In-thread plan checklist card (Plan mode) -------------------------
+export const planCard = style([
+  proposalCard,
+  {
+    borderColor: accent2,
+    background:
+      'linear-gradient(180deg, rgba(160,107,255,0.12), rgba(91,140,255,0.05))',
+  },
+]);
+
+export const planHead = style([
+  proposalHead,
+  {
+    color: accent2,
+  },
+]);
+
+export const planList = style({
+  listStyle: 'none',
+  margin: 0,
+  padding: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  counterReset: 'vdz-plan',
+});
+
+export const planItem = style({
+  display: 'flex',
+  gap: 10,
+  alignItems: 'flex-start',
+});
+
+export const planStepNum = style({
+  flexShrink: 0,
+  width: 20,
+  height: 20,
+  borderRadius: '50%',
+  background: raised,
+  border: `1px solid ${border}`,
+  color: text,
+  fontSize: 11,
+  fontWeight: 700,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+});
+
+export const planStepBody = style({
+  flex: 1,
+  minWidth: 0,
+});
+
+export const planStepTitle = style({
+  fontSize: 12.5,
+  lineHeight: 1.4,
+  color: text,
+  fontWeight: 600,
+});
+
+export const planStepAction = style({
+  fontSize: 11,
+  lineHeight: 1.4,
+  color: textDim,
+  marginTop: 2,
+});
+
+export const planDoButton = style({
+  appearance: 'none',
+  marginTop: 6,
+  border: `1px solid ${border}`,
+  background: raised,
+  color: text,
+  fontSize: 11,
+  fontWeight: 700,
+  padding: '4px 12px',
+  borderRadius: 7,
+  cursor: 'pointer',
+  transition: 'border-color 120ms ease, background 120ms ease',
+  ':hover': {
+    borderColor: accent,
+    background: '#2a3145',
+  },
+  ':disabled': {
+    opacity: 0.5,
+    cursor: 'default',
+  },
+});
+
+// The composer's placeholder differs by mode; a small hint above the input.
+export const modeHint = style({
+  fontSize: 11,
+  color: textDim,
+  lineHeight: 1.4,
 });
