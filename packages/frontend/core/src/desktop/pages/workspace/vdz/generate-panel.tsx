@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { useAiPulse } from '../../../../modules/vdz/use-ai-pulse';
 import { useVdzCompose } from '../../../../modules/vdz/use-vdz-compose';
 import { useVdzExport } from '../../../../modules/vdz/use-vdz-export';
+import { AiPulseTicker } from './ai-pulse-ticker';
 import * as styles from './generate-panel.css';
 
 /**
@@ -58,6 +60,10 @@ export const VdzGeneratePanel = ({
   onGenerateInEditor,
 }: VdzGeneratePanelProps = {}) => {
   const { busy, error, compose, refine, clearError } = useVdzCompose();
+  // Reasoning animation: while the (slow) Motion-HTML compose/refine runs, a
+  // FAST model streams request-tailored "thinking" lines into the ticker below
+  // so the busy state feels alive instead of a bare spinner.
+  const pulse = useAiPulse();
   // MP4 export (real render) — runs on the standalone cdz-render service via the
   // session-authed /api/v1/vdz/render proxy. Degrades gracefully when the render
   // service is not configured on this deployment.
@@ -249,25 +255,34 @@ export const VdzGeneratePanel = ({
       onGenerateInEditor(trimmed);
       return;
     }
+    // Motion-HTML compose is the slow path — kick off the reasoning animation
+    // tailored to this brief, and always stop it once the request settles.
+    pulse.start(trimmed, 'video');
     try {
       const next = await compose(trimmed);
       setHtml(next);
     } catch {
       // error surfaced via hook state
+    } finally {
+      pulse.stop();
     }
-  }, [prompt, busy, genMode, onGenerateInEditor, compose]);
+  }, [prompt, busy, genMode, onGenerateInEditor, compose, pulse]);
 
   const onRefine = useCallback(async () => {
     const trimmed = instruction.trim();
     if (!trimmed || busy || !html) return;
+    // Refine is also a slow model turn — animate a "reasoning" ticker for it.
+    pulse.start(`Refine the video: ${trimmed}`, 'video');
     try {
       const next = await refine(html, trimmed);
       setHtml(next);
       setInstruction('');
     } catch {
       // error surfaced via hook state
+    } finally {
+      pulse.stop();
     }
-  }, [instruction, busy, html, refine]);
+  }, [instruction, busy, html, refine, pulse]);
 
   const onDownload = useCallback(() => {
     if (!html) return;
@@ -495,6 +510,16 @@ export const VdzGeneratePanel = ({
               srcDoc={html ?? ''}
               onLoad={onIframeLoad}
             />
+          ) : busy ? (
+            // Compose in flight, no preview yet → play the reasoning animation
+            // in the empty stage instead of a static placeholder.
+            <div className={styles.empty}>
+              <AiPulseTicker
+                line={pulse.currentLine}
+                active={pulse.active}
+                done={pulse.done}
+              />
+            </div>
           ) : (
             <div className={styles.empty}>
               <span>Your generated video will play here.</span>
@@ -559,6 +584,15 @@ export const VdzGeneratePanel = ({
                 )}
               </button>
             </div>
+
+            {/* Reasoning animation while a refine turn is in flight. */}
+            {busy ? (
+              <AiPulseTicker
+                line={pulse.currentLine}
+                active={pulse.active}
+                done={pulse.done}
+              />
+            ) : null}
           </>
         ) : null}
       </div>
