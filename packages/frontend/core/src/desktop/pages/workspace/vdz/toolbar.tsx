@@ -25,6 +25,19 @@ interface ToolbarProps {
   selectionCount: number;
   /** Hide the timeline panel (collapse × at the end of the toolbar). */
   onCollapse?: () => void;
+  // ---- MP4 export (compile timeline → cdz-render kind:'html') -------------
+  /** Kick off an MP4 export of the current timeline. */
+  onExport?: () => void;
+  /** True while compiling/inlining or while the render is in flight. */
+  exportBusy?: boolean;
+  /** 0..1 render progress (meaningful while rendering). */
+  exportProgress?: number;
+  /** A ready-to-download MP4 URL once the render is done, else null. */
+  exportFileUrl?: string | null;
+  /** True when the render service is not configured on this deployment. */
+  exportUnavailable?: boolean;
+  /** A short human status/error line for the export, or null. */
+  exportNote?: string | null;
 }
 
 /** Editor action bar. Sits ABOVE the lanes (never in the AI-dock footer). */
@@ -49,7 +62,14 @@ export function Toolbar({
   onRedo,
   selectionCount,
   onCollapse,
+  onExport,
+  exportBusy,
+  exportProgress,
+  exportFileUrl,
+  exportUnavailable,
+  exportNote,
 }: ToolbarProps) {
+  const exportPct = Math.round((exportProgress ?? 0) * 100);
   return (
     <div className={styles.toolbar}>
       <button
@@ -153,6 +173,45 @@ export function Toolbar({
       >
         +
       </button>
+
+      {onExport ? (
+        <>
+          <span className={styles.toolDivider} />
+          {exportFileUrl ? (
+            <a
+              className={styles.toolButton}
+              href={exportFileUrl}
+              download
+              title="Download the rendered MP4"
+            >
+              ⬇ MP4
+            </a>
+          ) : (
+            <button
+              type="button"
+              className={styles.toolButton}
+              onClick={onExport}
+              disabled={exportBusy || exportUnavailable}
+              title={
+                exportUnavailable
+                  ? 'Render service coming online soon'
+                  : 'Compile this timeline and render it to an MP4'
+              }
+            >
+              {exportBusy ? `⤓ Exporting ${exportPct}%` : '⬇ Export MP4'}
+            </button>
+          )}
+          {exportNote ? (
+            <span
+              className={styles.toolZoomLabel}
+              title={exportNote}
+              style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {exportNote}
+            </span>
+          ) : null}
+        </>
+      ) : null}
 
       {onCollapse ? (
         <>
