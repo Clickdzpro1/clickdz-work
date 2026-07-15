@@ -15,6 +15,7 @@ import { ClickDzDataController } from './clickdz-data.controller';
 import { ClickDzReleasesController } from './clickdz-releases.controller';
 import { ClickDzVdzController } from './clickdz-vdz.controller';
 import { ClickDzVdzComposeController } from './clickdz-vdz-compose.controller';
+import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import {
@@ -82,6 +83,7 @@ export class CopilotApiModule {}
     ClickDzReleasesController,
     ClickDzVdzController,
     ClickDzVdzComposeController,
+    ClickDzVdzRenderController,
     WorkspaceMcpController,
   ],
 })

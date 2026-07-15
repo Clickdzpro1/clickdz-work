@@ -1,0 +1,17 @@
+{
+  "name": "cdz-render",
+  "version": "1.0.0",
+  "description": "CDZ Render — ClickDz Vdz Studio MP4 export service: headless-Chrome rendering of HeyGen HyperFrames HTML compositions to MP4 via the hyperframes CLI + FFmpeg.",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "hyperframes": "0.4.37"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

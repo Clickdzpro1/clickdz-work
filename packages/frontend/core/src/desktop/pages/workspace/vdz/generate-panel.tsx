@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useVdzCompose } from '../../../../modules/vdz/use-vdz-compose';
+import { useVdzExport } from '../../../../modules/vdz/use-vdz-export';
 import * as styles from './generate-panel.css';
 
 /**
@@ -33,6 +34,18 @@ function fmt(t: number): string {
 
 export const VdzGeneratePanel = () => {
   const { busy, error, compose, refine, clearError } = useVdzCompose();
+  // MP4 export (real render) — runs on the standalone cdz-render service via the
+  // session-authed /api/v1/vdz/render proxy. Degrades gracefully when the render
+  // service is not configured on this deployment.
+  const {
+    status: exportStatus,
+    progress: exportProgress,
+    error: exportError,
+    fileUrl: exportFileUrl,
+    unavailable: exportUnavailable,
+    start: startExport,
+    reset: resetExport,
+  } = useVdzExport();
 
   const [prompt, setPrompt] = useState('');
   const [instruction, setInstruction] = useState('');
@@ -153,12 +166,15 @@ export const VdzGeneratePanel = () => {
   useEffect(() => stopRaf, [stopRaf]);
 
   // When new HTML loads, reset transport; the frame re-mounts (keyed on html).
+  // Also discard any prior export state — a stale MP4 must not attach to a fresh
+  // composition (regenerate / refine both produce a new document).
   useEffect(() => {
     setDuration(0);
     setCurrent(0);
     setPlaying(false);
     stopRaf();
-  }, [html, stopRaf]);
+    resetExport();
+  }, [html, stopRaf, resetExport]);
 
   // Once the fresh frame has loaded, explicitly ask for its duration (belt-and-
   // braces alongside the unprompted announce, in case we mounted after it).
@@ -206,9 +222,17 @@ export const VdzGeneratePanel = () => {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }, [html]);
 
+  const onExport = useCallback(() => {
+    if (!html) return;
+    void startExport(html);
+  }, [html, startExport]);
+
   const canGenerate = prompt.trim().length > 0 && !busy;
   const canRefine = instruction.trim().length > 0 && !busy && !!html;
   const hasVideo = !!html;
+  const exporting =
+    exportStatus === 'starting' || exportStatus === 'rendering';
+  const exportPct = Math.round(exportProgress * 100);
 
   const timecodeText = useMemo(
     () => `${fmt(current)} / ${fmt(duration)}`,
@@ -263,7 +287,66 @@ export const VdzGeneratePanel = () => {
               Download .html
             </button>
           ) : null}
+          {hasVideo ? (
+            <button
+              className={styles.ghostButton}
+              onClick={onExport}
+              disabled={busy || exporting || exportUnavailable}
+              type="button"
+              title={
+                exportUnavailable
+                  ? 'Render service coming online soon'
+                  : 'Render this composition to an MP4 video'
+              }
+            >
+              {exporting ? (
+                <>
+                  <span className={styles.spinner} aria-hidden="true" />
+                  Rendering…
+                </>
+              ) : (
+                'Export MP4'
+              )}
+            </button>
+          ) : null}
         </div>
+
+        {/* Export progress / result — only while exporting or once resolved. */}
+        {hasVideo &&
+        (exporting ||
+          exportStatus === 'done' ||
+          exportStatus === 'error' ||
+          exportUnavailable) ? (
+          <div className={styles.exportRow}>
+            {exporting ? (
+              <>
+                <div className={styles.progressTrack}>
+                  <div
+                    className={styles.progressFill}
+                    style={{ width: `${Math.max(4, exportPct)}%` }}
+                  />
+                </div>
+                <span className={styles.exportHint}>{exportPct}%</span>
+              </>
+            ) : exportStatus === 'done' && exportFileUrl ? (
+              <a
+                className={styles.downloadLink}
+                href={exportFileUrl}
+                download
+              >
+                ⬇ Download MP4
+              </a>
+            ) : exportUnavailable ? (
+              <span className={styles.exportHint}>
+                MP4 export is coming online soon.
+              </span>
+            ) : exportStatus === 'error' ? (
+              <span className={styles.exportHint}>
+                {exportError || 'Export failed. Please try again.'}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {error ? (

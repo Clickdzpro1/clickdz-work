@@ -268,6 +268,61 @@ export const refineInput = style({
   },
 });
 
+// ── export (MP4) progress + ready link ────────────────────────────
+// A thin row that appears under the action buttons while an MP4 render is in
+// flight and once it is done (a green download link).
+export const exportRow = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  minHeight: 24,
+});
+
+export const progressTrack = style({
+  position: 'relative',
+  flex: 1,
+  height: 6,
+  borderRadius: 999,
+  overflow: 'hidden',
+  background: RAISED,
+  border: `1px solid ${BORDER}`,
+});
+
+export const progressFill = style({
+  position: 'absolute',
+  insetBlock: 0,
+  left: 0,
+  borderRadius: 999,
+  backgroundImage: `linear-gradient(135deg, ${ACCENT_FROM}, ${ACCENT_TO})`,
+  transition: 'width 240ms ease',
+});
+
+export const exportHint = style({
+  fontSize: 12,
+  color: MUTED,
+  fontVariantNumeric: 'tabular-nums',
+  whiteSpace: 'nowrap',
+});
+
+export const downloadLink = style({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  height: 36,
+  padding: '0 14px',
+  borderRadius: 10,
+  border: '1px solid #2f8f5b',
+  background: 'rgba(47,143,91,0.12)',
+  color: '#5be0a0',
+  fontSize: 13,
+  fontWeight: 600,
+  textDecoration: 'none',
+  cursor: 'pointer',
+  selectors: {
+    '&:hover': { background: 'rgba(47,143,91,0.2)' },
+  },
+});
+
 // Keep the sandboxed preview iframe from ever leaking pointer styles etc.
 globalStyle(`${iframe}`, {
   colorScheme: 'dark',
