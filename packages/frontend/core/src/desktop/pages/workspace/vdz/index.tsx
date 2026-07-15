@@ -5,128 +5,67 @@ import {
   ViewTitle,
 } from '@affine/core/modules/workbench';
 import { nanoid } from 'nanoid';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
-  applyOp,
   computeTimelineDuration,
   createSampleTimeline,
   type VdzClip,
-  type VdzTimeline,
+  type VdzOp,
 } from '../../../../modules/vdz';
+import {
+  clampZoom,
+  DEFAULT_PX_PER_SEC,
+  findClip,
+  isClipActive,
+} from './constants';
 import * as styles from './index.css';
+import { PreviewCanvas } from './preview-canvas';
+import { TimelineLanes } from './timeline-lanes';
+import { Toolbar } from './toolbar';
+import { useVdzHistory } from './use-vdz-history';
 
-/** Lane accent colors keyed by track kind. */
-const TRACK_COLORS: Record<VdzTimeline['tracks'][number]['kind'], string> = {
-  video: '#5b8cff',
-  overlay: '#a06bff',
-  audio: '#3fb7a6',
-};
-
-function formatTimecode(seconds: number): string {
-  const clamped = Math.max(0, seconds);
-  const mins = Math.floor(clamped / 60);
-  const secs = Math.floor(clamped % 60);
-  const frac = Math.floor((clamped - Math.floor(clamped)) * 10);
-  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${frac}`;
-}
-
-/** Is a clip active (visible) at the given playhead time, in seconds? */
-function isClipActive(clip: VdzClip, seconds: number): boolean {
-  return seconds >= clip.start && seconds < clip.start + clip.duration;
-}
-
-/** Find a clip anywhere in the timeline by id. */
-function findClip(
-  timeline: VdzTimeline,
-  clipId: string | null
-): { clip: VdzClip; trackId: string } | null {
-  if (!clipId) return null;
-  for (const track of timeline.tracks) {
-    const clip = track.clips.find(c => c.id === clipId);
-    if (clip) return { clip, trackId: track.id };
-  }
-  return null;
-}
-
-/** Render a single clip inside the 16:9 preview at the current playhead. */
-function PreviewClip({ clip }: { clip: VdzClip }) {
-  switch (clip.type) {
-    case 'text':
-      return (
-        <div
-          className={styles.previewText}
-          style={{
-            left: `${(clip.x ?? 0.5) * 100}%`,
-            top: `${(clip.y ?? 0.5) * 100}%`,
-            fontSize: `${(clip.fontSize ?? 0.08) * 100}cqh`,
-            color: clip.color ?? '#fff',
-            textAlign: clip.align ?? 'center',
-          }}
-        >
-          {clip.text}
-        </div>
-      );
-    case 'shape':
-      return (
-        <div
-          className={styles.previewLayer}
-          style={{
-            left: `${(clip.x ?? 0) * 100}%`,
-            top: `${(clip.y ?? 0) * 100}%`,
-            width: `${(clip.w ?? 1) * 100}%`,
-            height: `${(clip.h ?? 1) * 100}%`,
-            background: clip.color ?? '#5b8cff',
-            borderRadius: clip.shape === 'circle' ? '50%' : 4,
-          }}
-        />
-      );
-    case 'image':
-      return clip.src ? (
-        <img
-          className={styles.previewImage}
-          src={clip.src}
-          alt={clip.name ?? 'image clip'}
-          style={{ objectFit: clip.fit ?? 'cover' }}
-        />
-      ) : (
-        <div className={styles.previewImagePlaceholder}>
-          image · empty src
-        </div>
-      );
-    case 'video': {
-      const label = clip.name ?? 'video';
-      return (
-        <div className={styles.previewVideoBlock}>
-          {clip.src ? `▶ ${label}` : `video · ${label}`}
-        </div>
-      );
-    }
-    case 'audio':
-      // Audio is not visible in the preview.
-      return null;
-    default:
-      return null;
-  }
+/** Tags whose focus should swallow editor keyboard shortcuts. */
+function isEditableTarget(node: EventTarget | null): boolean {
+  if (!(node instanceof HTMLElement)) return false;
+  const tag = node.tagName;
+  return (
+    tag === 'INPUT' ||
+    tag === 'TEXTAREA' ||
+    tag === 'SELECT' ||
+    node.isContentEditable
+  );
 }
 
 const VdzStudioPage = () => {
-  const [timeline, setTimeline] = useState<VdzTimeline>(() =>
-    createSampleTimeline()
+  const history = useVdzHistory(createSampleTimeline);
+  const { timeline, run, runBatch, undo, redo } = history;
+
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
+    () => new Set()
   );
-  const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
-  const [opError, setOpError] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [pxPerSec, setPxPerSec] = useState(DEFAULT_PX_PER_SEC);
+
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const duration = useMemo(() => computeTimelineDuration(timeline), [timeline]);
+  // Pad the ruler/lane span a little past the end so there's room to drag.
+  const spanSeconds = useMemo(() => Math.max(duration + 2, 4), [duration]);
 
+  // The single selected clip, if exactly one is selected (drives inspector +
+  // split/nudge which are single-clip operations).
+  const soleSelectedId = useMemo(
+    () => (selectedIds.size === 1 ? [...selectedIds][0] : null),
+    [selectedIds]
+  );
   const selected = useMemo(
-    () => findClip(timeline, selectedClipId),
-    [timeline, selectedClipId]
+    () => findClip(timeline, soleSelectedId),
+    [timeline, soleSelectedId]
   );
 
   // Layers visible at the current playhead, back-to-front (video → overlay).
-  // Audio tracks contribute nothing to the preview.
   const visibleLayers = useMemo(() => {
     const layers: VdzClip[] = [];
     for (const track of timeline.tracks) {
@@ -140,29 +79,147 @@ const VdzStudioPage = () => {
     return layers;
   }, [timeline, playheadSeconds]);
 
-  const runOp = useCallback(
-    (op: Parameters<typeof applyOp>[1]) => {
-      setTimeline(prev => {
-        const result = applyOp(prev, op);
-        setOpError(result.error ?? null);
-        return result.timeline;
+  // ---- Selection ---------------------------------------------------------
+  const selectClip = useCallback((clipId: string, shiftKey: boolean) => {
+    setSelectedIds(prev => {
+      if (!shiftKey) return new Set([clipId]);
+      const next = new Set(prev);
+      if (next.has(clipId)) next.delete(clipId);
+      else next.add(clipId);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  // Drop selection entries whose clips no longer exist (e.g. after delete).
+  useEffect(() => {
+    setSelectedIds(prev => {
+      const live = new Set<string>();
+      for (const track of timeline.tracks) {
+        for (const clip of track.clips) {
+          if (prev.has(clip.id)) live.add(clip.id);
+        }
+      }
+      return live.size === prev.size ? prev : live;
+    });
+  }, [timeline]);
+
+  // ---- Playback (rAF) ----------------------------------------------------
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = (now - last) / 1000;
+      last = now;
+      setPlayheadSeconds(prev => {
+        const next = prev + dt;
+        if (next >= durationRef.current) {
+          setIsPlaying(false);
+          return durationRef.current;
+        }
+        return next;
       });
-    },
-    []
-  );
+      if (isPlayingRef.current) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying]);
+
+  const togglePlay = useCallback(() => {
+    setIsPlaying(prev => {
+      // Restart from the top if we're parked at the very end.
+      if (!prev && playheadSeconds >= durationRef.current) {
+        setPlayheadSeconds(0);
+      }
+      return !prev;
+    });
+  }, [playheadSeconds]);
+
+  const scrubTo = useCallback((seconds: number) => {
+    setIsPlaying(false);
+    setPlayheadSeconds(Math.max(0, seconds));
+  }, []);
 
   const onScrub = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    setIsPlaying(false);
     setPlayheadSeconds(Number(event.target.value));
   }, []);
 
+  // ---- Zoom --------------------------------------------------------------
+  const zoomIn = useCallback(() => setPxPerSec(z => clampZoom(z * 1.25)), []);
+  const zoomOut = useCallback(() => setPxPerSec(z => clampZoom(z / 1.25)), []);
+  const onZoomWheel = useCallback((deltaY: number) => {
+    setPxPerSec(z => clampZoom(z * (deltaY < 0 ? 1.1 : 1 / 1.1)));
+  }, []);
+
+  // ---- Editing ops (all through the history apply path) ------------------
+  const splitSelectedAtPlayhead = useCallback(() => {
+    if (!selected) return;
+    const { clip, trackId } = selected;
+    if (!isClipActive(clip, playheadSeconds)) return;
+    run({
+      op: 'splitClip',
+      trackId,
+      clipId: clip.id,
+      atSeconds: playheadSeconds,
+    });
+  }, [selected, playheadSeconds, run]);
+
+  const deleteSelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const ops: VdzOp[] = [];
+    for (const track of timeline.tracks) {
+      for (const clip of track.clips) {
+        if (selectedIds.has(clip.id)) {
+          ops.push({ op: 'removeClip', trackId: track.id, clipId: clip.id });
+        }
+      }
+    }
+    runBatch(ops);
+  }, [selectedIds, timeline, runBatch]);
+
+  const rippleDeleteSelected = useCallback(() => {
+    if (selectedIds.size === 0) return;
+    const ops: VdzOp[] = [];
+    for (const track of timeline.tracks) {
+      for (const clip of track.clips) {
+        if (selectedIds.has(clip.id)) {
+          ops.push({ op: 'rippleDelete', trackId: track.id, clipId: clip.id });
+        }
+      }
+    }
+    runBatch(ops);
+  }, [selectedIds, timeline, runBatch]);
+
+  const nudgeSelected = useCallback(
+    (deltaSeconds: number) => {
+      if (!selected) return;
+      run({
+        op: 'nudgeClip',
+        trackId: selected.trackId,
+        clipId: selected.clip.id,
+        deltaSeconds,
+      });
+    },
+    [selected, run]
+  );
+
+  // A single move/trim op emitted by the lanes on pointerup.
+  const commitLaneOp = useCallback((op: VdzOp) => run(op), [run]);
+
+  // ---- Demo buttons (rewired through the history apply path) -------------
   const onAddTextClip = useCallback(() => {
     const overlay = timeline.tracks.find(track => track.kind === 'overlay');
-    if (!overlay) {
-      setOpError('no overlay track to add a text clip to');
-      return;
-    }
+    if (!overlay) return;
     const start = Math.min(playheadSeconds, Math.max(0, duration - 2));
-    runOp({
+    run({
       op: 'addClip',
       trackId: overlay.id,
       clip: {
@@ -179,22 +236,89 @@ const VdzStudioPage = () => {
         align: 'center',
       },
     });
-  }, [timeline, playheadSeconds, duration, runOp]);
+  }, [timeline, playheadSeconds, duration, run]);
 
   const onMoveSelected = useCallback(() => {
-    if (!selected) {
-      setOpError('select a clip first');
-      return;
-    }
-    runOp({
+    if (!selected) return;
+    run({
       op: 'moveClip',
       trackId: selected.trackId,
       clipId: selected.clip.id,
       start: selected.clip.start + 1,
     });
-  }, [selected, runOp]);
+  }, [selected, run]);
 
-  const playheadPercent = duration > 0 ? (playheadSeconds / duration) * 100 : 0;
+  // ---- Keyboard (bound to the page container, with cleanup) --------------
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent) => {
+      if (isEditableTarget(event.target)) return;
+      const meta = event.metaKey || event.ctrlKey;
+
+      if (meta && (event.key === 'z' || event.key === 'Z')) {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (meta && (event.key === 'y' || event.key === 'Y')) {
+        event.preventDefault();
+        redo();
+        return;
+      }
+
+      switch (event.key) {
+        case ' ':
+          event.preventDefault();
+          togglePlay();
+          break;
+        case 's':
+        case 'S':
+          event.preventDefault();
+          splitSelectedAtPlayhead();
+          break;
+        case 'Delete':
+        case 'Backspace':
+          event.preventDefault();
+          if (event.shiftKey) rippleDeleteSelected();
+          else deleteSelected();
+          break;
+        case 'Escape':
+          clearSelection();
+          break;
+        case 'ArrowLeft':
+          event.preventDefault();
+          nudgeSelected(event.shiftKey ? -1 : -0.1);
+          break;
+        case 'ArrowRight':
+          event.preventDefault();
+          nudgeSelected(event.shiftKey ? 1 : 0.1);
+          break;
+        default:
+          break;
+      }
+    },
+    [
+      redo,
+      undo,
+      togglePlay,
+      splitSelectedAtPlayhead,
+      rippleDeleteSelected,
+      deleteSelected,
+      clearSelection,
+      nudgeSelected,
+    ]
+  );
+
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return;
+    node.addEventListener('keydown', handleKeyDown);
+    return () => node.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
+
+  const canSplit = Boolean(
+    selected && isClipActive(selected.clip, playheadSeconds)
+  );
 
   return (
     <>
@@ -208,26 +332,37 @@ const VdzStudioPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
-        <div className={styles.root}>
+        <div className={styles.root} ref={containerRef} tabIndex={-1}>
           <div className={styles.main}>
             {/* Preview + timeline stage */}
             <div className={styles.stage}>
-              <div className={styles.previewWrapper}>
-                <div className={styles.preview}>
-                  {visibleLayers.length === 0 ? (
-                    <div className={styles.previewEmpty}>
-                      no clips at {formatTimecode(playheadSeconds)}
-                    </div>
-                  ) : (
-                    visibleLayers.map(clip => (
-                      <PreviewClip key={clip.id} clip={clip} />
-                    ))
-                  )}
-                </div>
-              </div>
+              <PreviewCanvas
+                layers={visibleLayers}
+                playheadSeconds={playheadSeconds}
+              />
 
               {/* Timeline */}
               <div className={styles.timeline}>
+                <Toolbar
+                  isPlaying={isPlaying}
+                  onTogglePlay={togglePlay}
+                  playheadSeconds={playheadSeconds}
+                  duration={duration}
+                  pxPerSec={pxPerSec}
+                  onZoomOut={zoomOut}
+                  onZoomIn={zoomIn}
+                  canSplit={canSplit}
+                  onSplit={splitSelectedAtPlayhead}
+                  canDelete={selectedIds.size > 0}
+                  onDelete={deleteSelected}
+                  onRippleDelete={rippleDeleteSelected}
+                  canUndo={history.canUndo}
+                  onUndo={undo}
+                  canRedo={history.canRedo}
+                  onRedo={redo}
+                  selectionCount={selectedIds.size}
+                />
+
                 <div className={styles.scrubberRow}>
                   <input
                     className={styles.scrubber}
@@ -235,63 +370,23 @@ const VdzStudioPage = () => {
                     min={0}
                     max={Math.max(duration, 0.1)}
                     step={0.1}
-                    value={playheadSeconds}
+                    value={Math.min(playheadSeconds, Math.max(duration, 0.1))}
                     onChange={onScrub}
                     aria-label="Playhead"
                   />
-                  <span className={styles.timecode}>
-                    {formatTimecode(playheadSeconds)} /{' '}
-                    {formatTimecode(duration)}
-                  </span>
                 </div>
 
-                <div className={styles.lanes}>
-                  {timeline.tracks.map(track => (
-                    <div key={track.id} className={styles.lane}>
-                      <span className={styles.laneLabel}>
-                        {track.name ?? track.kind}
-                      </span>
-                      <div className={styles.laneTrack}>
-                        {track.clips.map(clip => {
-                          const left =
-                            duration > 0 ? (clip.start / duration) * 100 : 0;
-                          const width =
-                            duration > 0
-                              ? (clip.duration / duration) * 100
-                              : 0;
-                          const isSelected = clip.id === selectedClipId;
-                          return (
-                            <div
-                              key={clip.id}
-                              className={
-                                isSelected
-                                  ? `${styles.clipBlock} ${styles.clipBlockSelected}`
-                                  : styles.clipBlock
-                              }
-                              style={{
-                                left: `${left}%`,
-                                width: `${width}%`,
-                                background: TRACK_COLORS[track.kind],
-                              }}
-                              onClick={() => setSelectedClipId(clip.id)}
-                              title={clip.name ?? clip.id}
-                            >
-                              {clip.name ?? clip.type}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                  {/* Playhead spans the lane stack. Offset accounts for the
-                      fixed-width lane labels + gap (64px + 10px). */}
-                  <div
-                    className={styles.playhead}
-                    style={{
-                      left: `calc(74px + (100% - 74px) * ${playheadPercent / 100})`,
-                    }}
-                  />
-                </div>
+                <TimelineLanes
+                  timeline={timeline}
+                  pxPerSec={pxPerSec}
+                  playheadSeconds={playheadSeconds}
+                  selectedIds={selectedIds}
+                  spanSeconds={spanSeconds}
+                  onSelectClip={selectClip}
+                  onScrubToSeconds={scrubTo}
+                  onZoomWheel={onZoomWheel}
+                  onCommitOp={commitLaneOp}
+                />
               </div>
             </div>
 
@@ -308,6 +403,12 @@ const VdzStudioPage = () => {
                       track: {selected.trackId}
                     </div>
                   </>
+                ) : selectedIds.size > 1 ? (
+                  <div className={styles.inspectorHint}>
+                    {selectedIds.size} clips selected. Delete / ripple-delete
+                    act on the whole selection; click a single clip to inspect
+                    its JSON.
+                  </div>
                 ) : (
                   <div className={styles.inspectorHint}>
                     Select a clip in the timeline below to inspect its JSON.
@@ -325,8 +426,8 @@ const VdzStudioPage = () => {
               <span className={styles.footerDot} />
               AI dock — arrives in P1
             </span>
-            {opError ? (
-              <span className={styles.errorText}>{opError}</span>
+            {history.error ? (
+              <span className={styles.errorText}>{history.error}</span>
             ) : null}
             <span className={styles.footerSpacer} />
             <button

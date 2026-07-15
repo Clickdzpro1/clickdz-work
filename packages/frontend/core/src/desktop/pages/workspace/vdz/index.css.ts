@@ -233,68 +233,196 @@ export const scrubber = style({
   cursor: 'pointer',
 });
 
-export const timecode = style({
+// ---- Toolbar (sits above the lanes) -------------------------------------
+export const toolbar = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+});
+
+export const toolButton = style({
+  appearance: 'none',
+  border: `1px solid ${border}`,
+  background: bg,
+  color: text,
+  fontSize: 12,
+  fontWeight: 600,
+  padding: '5px 10px',
+  borderRadius: 6,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  transition: 'background 120ms ease, border-color 120ms ease, opacity 120ms',
+  ':hover': {
+    background: raised,
+    borderColor: accent,
+  },
+  selectors: {
+    '&:disabled': {
+      opacity: 0.4,
+      cursor: 'default',
+      borderColor: border,
+      background: bg,
+    },
+  },
+});
+
+export const toolTimecode = style({
   fontFamily:
     'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   fontSize: 12,
   color: textDim,
-  minWidth: 96,
-  textAlign: 'right',
+  minWidth: 120,
 });
 
-export const lanes = style({
-  position: 'relative',
+export const toolDivider = style({
+  width: 1,
+  alignSelf: 'stretch',
+  background: border,
+  margin: '2px 2px',
+});
+
+export const toolSpacer = style({
+  flex: 1,
+});
+
+export const toolBadge = style({
+  fontSize: 11,
+  fontWeight: 600,
+  color: '#fff',
+  background: accent2,
+  borderRadius: 999,
+  padding: '2px 8px',
+});
+
+export const toolZoomLabel = style({
+  fontFamily:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  fontSize: 11,
+  color: textDim,
+  minWidth: 56,
+  textAlign: 'center',
+});
+
+// ---- Lanes: fixed label column + shared horizontal scroll container -----
+export const lanesViewport = style({
+  display: 'flex',
+  alignItems: 'stretch',
+  gap: 10,
+  minHeight: 0,
+});
+
+export const laneLabelColumn = style({
+  flexShrink: 0,
   display: 'flex',
   flexDirection: 'column',
-  gap: 6,
-  paddingTop: 4,
 });
 
-export const lane = style({
+// Spacer that vertically aligns the label cells with the lane rows, leaving
+// room for the ruler that sits atop the scroll container.
+export const laneLabelRulerSpacer = style({
+  height: 22,
+  flexShrink: 0,
+});
+
+export const laneLabelCell = style({
+  height: 40,
+  marginTop: 6,
   display: 'flex',
   alignItems: 'center',
-  gap: 10,
-  height: 40,
-});
-
-export const laneLabel = style({
-  width: 64,
-  flexShrink: 0,
+  justifyContent: 'flex-end',
   fontSize: 11,
   color: textDim,
   textTransform: 'uppercase',
   letterSpacing: 0.5,
-  textAlign: 'right',
+  selectors: {
+    '&:first-of-type': {
+      marginTop: 0,
+    },
+  },
 });
 
-export const laneTrack = style({
+export const lanesScroll = style({
   position: 'relative',
   flex: 1,
-  height: '100%',
+  minWidth: 0,
+  overflowX: 'auto',
+  overflowY: 'hidden',
+  overscrollBehaviorX: 'contain',
+});
+
+// The scrolling content; width set inline to spanSeconds * pxPerSec.
+export const lanesContent = style({
+  position: 'relative',
+});
+
+// ---- Time ruler ---------------------------------------------------------
+export const ruler = style({
+  position: 'relative',
+  height: 22,
+  borderBottom: `1px solid ${border}`,
+});
+
+export const rulerTick = style({
+  position: 'absolute',
+  bottom: 0,
+  width: 1,
+  height: 5,
+  background: border,
+});
+
+export const rulerTickMajor = style({
+  position: 'absolute',
+  bottom: 0,
+  width: 1,
+  height: 10,
+  background: textDim,
+});
+
+export const rulerLabel = style({
+  position: 'absolute',
+  bottom: 11,
+  left: 3,
+  fontFamily:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  fontSize: 10,
+  color: textDim,
+  whiteSpace: 'nowrap',
+});
+
+export const laneStack = style({
+  position: 'relative',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  paddingTop: 6,
+});
+
+// One lane row: full-width strip a clip is positioned within (px-based).
+export const laneRow = style({
+  position: 'relative',
+  height: 40,
   background: bg,
   borderRadius: 6,
   border: `1px solid ${border}`,
-  overflow: 'hidden',
 });
 
 // A clip block on a lane. left/width set inline (dynamic).
 export const clipBlock = style({
   position: 'absolute',
-  top: 4,
-  bottom: 4,
+  top: 3,
+  bottom: 3,
   borderRadius: 4,
-  padding: '0 8px',
   display: 'flex',
   alignItems: 'center',
   fontSize: 11,
   fontWeight: 600,
   color: '#fff',
-  cursor: 'pointer',
+  cursor: 'grab',
   overflow: 'hidden',
-  whiteSpace: 'nowrap',
-  textOverflow: 'ellipsis',
   border: '1px solid transparent',
   boxSizing: 'border-box',
+  touchAction: 'none',
   transition: 'filter 120ms ease, border-color 120ms ease',
   ':hover': {
     filter: 'brightness(1.12)',
@@ -306,8 +434,57 @@ export const clipBlockSelected = style({
   boxShadow: `0 0 0 1px ${accent}`,
 });
 
-// Playhead vertical line. left set inline (dynamic).
-export const playhead = style({
+export const clipBlockDragging = style({
+  opacity: 0.85,
+  cursor: 'grabbing',
+  filter: 'brightness(1.15)',
+  zIndex: 6,
+});
+
+export const clipLabel = style({
+  flex: 1,
+  padding: '0 8px',
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+  textOverflow: 'ellipsis',
+  pointerEvents: 'none',
+});
+
+// 6px edge hot-zones for trimming. Width kept in sync with TRIM_HANDLE_PX.
+export const clipTrimHandleLeft = style({
+  position: 'absolute',
+  left: 0,
+  top: 0,
+  bottom: 0,
+  width: 6,
+  cursor: 'ew-resize',
+  background: 'rgba(0,0,0,0.25)',
+});
+
+export const clipTrimHandleRight = style({
+  position: 'absolute',
+  right: 0,
+  top: 0,
+  bottom: 0,
+  width: 6,
+  cursor: 'ew-resize',
+  background: 'rgba(0,0,0,0.25)',
+});
+
+// Snap guide line, shown while a drag/trim is snapping. left set inline.
+export const snapGuide = style({
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+  width: 1,
+  background: accent2,
+  pointerEvents: 'none',
+  zIndex: 7,
+  boxShadow: `0 0 4px ${accent2}`,
+});
+
+// Playhead vertical line spanning the lane stack. left set inline (dynamic).
+export const lanePlayhead = style({
   position: 'absolute',
   top: 0,
   bottom: 0,
