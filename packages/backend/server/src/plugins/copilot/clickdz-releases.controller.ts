@@ -3,6 +3,7 @@ import type { Response } from 'express';
 
 import { CacheRedis } from '../../base/redis';
 import { Public } from '../../core/auth';
+import { DOWNLOAD_PAGE_HTML } from './clickdz-download-page';
 
 /**
  * ClickDz Work release feed — backs the desktop auto-updater.
@@ -20,6 +21,11 @@ import { Public } from '../../core/auth';
  */
 const RELEASES_API =
   'https://api.github.com/repos/Clickdzpro1/clickdz-work/releases?per_page=20';
+// Optional fine-grained read-only PAT. Without it the feed shares the
+// anonymous 60 req/h GitHub quota with everything on the Railway egress IP,
+// and quota exhaustion silently pins the feed to its stale cache for up to
+// ~1 h. With it, the quota is 5000 req/h and effectively never binds.
+const CDZ_GITHUB_TOKEN = process.env.CDZ_GITHUB_TOKEN || '';
 const CACHE_KEY = 'clickdz:releases:v1';
 const FRESH_MS = 5 * 60 * 1000;
 const STALE_TTL_SECONDS = 24 * 60 * 60;
@@ -62,13 +68,15 @@ export class ClickDzReleasesController {
   }
 
   private async fetchFromGithub(): Promise<Release[]> {
-    const res = await fetch(RELEASES_API, {
-      headers: {
-        accept: 'application/vnd.github+json',
-        'user-agent': 'clickdz-work-server',
-        'x-github-api-version': '2022-11-28',
-      },
-    });
+    const headers: Record<string, string> = {
+      accept: 'application/vnd.github+json',
+      'user-agent': 'clickdz-work-server',
+      'x-github-api-version': '2022-11-28',
+    };
+    if (CDZ_GITHUB_TOKEN) {
+      headers.authorization = `Bearer ${CDZ_GITHUB_TOKEN}`;
+    }
+    const res = await fetch(RELEASES_API, { headers });
     if (!res.ok) {
       throw new Error(`GitHub releases API returned ${res.status}`);
     }
@@ -149,5 +157,19 @@ export class ClickDzReleasesController {
       return filtered.map(release => ({ ...release, body: '' }));
     }
     return filtered;
+  }
+
+  /**
+   * Branded desktop download page. Nest controller routes are registered
+   * before the selfhost SPA catch-all (which mounts in onModuleInit), so this
+   * wins over the static fallback exactly like /api/releases does. The page's
+   * client script reads /api/releases same-origin and wires the buttons to
+   * the current release's versionless permalink assets.
+   */
+  @Get('/download')
+  downloadPage(@Res() res: Response) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=600');
+    res.send(DOWNLOAD_PAGE_HTML);
   }
 }
