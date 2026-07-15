@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 
 import type { VdzClip, VdzTimeline } from '../../../../modules/vdz';
+import { useBlobUrl } from '../../../../modules/vdz/use-vdz-media';
 import {
   computePreviewFrame,
   type VdzPreviewItem,
@@ -16,7 +17,7 @@ import * as styles from './index.css';
  * — we deliberately do not attempt synced audio playback in this PR (the video
  * is muted and never `.play()`ed; each playhead change re-seeks the element).
  */
-function PreviewVideo({
+const PreviewVideo = memo(function PreviewVideo({
   clip,
   playheadSeconds,
 }: {
@@ -24,6 +25,9 @@ function PreviewVideo({
   playheadSeconds: number;
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  // Resolve a durable `vdz-blob:` handle (or pass a remote URL through) to a
+  // live media URL; undefined while a workspace blob is still being fetched.
+  const resolvedSrc = useBlobUrl(clip.src);
   // Source time = elapsed within the clip, plus whatever head was trimmed.
   const sourceTime = Math.max(
     0,
@@ -45,13 +49,17 @@ function PreviewVideo({
         // the onLoadedMetadata handler re-applies the seek below.
       }
     }
-  }, [sourceTime]);
+  }, [sourceTime, resolvedSrc]);
+
+  if (!resolvedSrc) {
+    return <div className={styles.previewVideoBlock}>video · loading…</div>;
+  }
 
   return (
     <video
       ref={ref}
       className={styles.previewImage}
-      src={clip.src}
+      src={resolvedSrc}
       muted
       playsInline
       preload="auto"
@@ -69,10 +77,41 @@ function PreviewVideo({
       style={{ objectFit: 'cover' }}
     />
   );
-}
+});
 
-/** The inner content of a clip (text/shape/image/video/audio). */
-function PreviewClipContent({
+/**
+ * An <img> for an image clip whose `src` is resolved through {@link useBlobUrl}
+ * (durable `vdz-blob:` → live object URL, remote URLs pass through). Shows the
+ * placeholder while a workspace blob is still resolving.
+ */
+const ResolvedImg = memo(function ResolvedImg({
+  clip,
+}: {
+  clip: Extract<VdzClip, { type: 'image' }>;
+}) {
+  const resolvedSrc = useBlobUrl(clip.src);
+  if (!resolvedSrc) {
+    return <div className={styles.previewImagePlaceholder}>image · loading…</div>;
+  }
+  return (
+    <img
+      className={styles.previewImage}
+      src={resolvedSrc}
+      alt={clip.name ?? 'image clip'}
+      style={{ objectFit: clip.fit ?? 'cover' }}
+    />
+  );
+});
+
+/**
+ * The inner content of a clip (text/shape/image/video/audio). Memoized on the
+ * clip REFERENCE (which `computePreviewFrame` preserves across playhead ticks —
+ * it recomputes `visual`/`transition` but reuses the clip object) plus the
+ * playhead. Text/shape re-render only on a real clip edit; video re-renders per
+ * tick to re-seek but its `<video>`/`<img>` `src` stays referentially stable so
+ * the element (and its decoder) is never torn down mid-scrub.
+ */
+const PreviewClipContent = memo(function PreviewClipContent({
   clip,
   playheadSeconds,
 }: {
@@ -107,12 +146,7 @@ function PreviewClipContent({
       );
     case 'image':
       return clip.src ? (
-        <img
-          className={styles.previewImage}
-          src={clip.src}
-          alt={clip.name ?? 'image clip'}
-          style={{ objectFit: clip.fit ?? 'cover' }}
-        />
+        <ResolvedImg clip={clip} />
       ) : (
         <div className={styles.previewImagePlaceholder}>image · empty src</div>
       );
@@ -132,7 +166,7 @@ function PreviewClipContent({
     default:
       return null;
   }
-}
+});
 
 /**
  * Position + animate one preview item. Text is positioned by its anchor
@@ -143,7 +177,7 @@ function PreviewClipContent({
  * `playheadSeconds` is threaded through so a video clip's inner <video> can seek
  * to the right source frame (the pure preview item carries no clock).
  */
-function PreviewItem({
+const PreviewItem = memo(function PreviewItem({
   item,
   playheadSeconds,
 }: {
@@ -207,7 +241,7 @@ function PreviewItem({
       <PreviewClipContent clip={clip} playheadSeconds={playheadSeconds} />
     </div>
   );
-}
+});
 
 interface PreviewCanvasProps {
   timeline: VdzTimeline;

@@ -120,6 +120,15 @@ export function TimelineLanes({
   const laneRectsRef = useRef<Map<string, DOMRect>>(new Map());
   const contentWidth = spanSeconds * pxPerSec;
 
+  // Mirror the playhead into a ref so drag-time helpers (snap / pointer-move)
+  // can read it WITHOUT taking it as a dep. During playback the playhead churns
+  // every rAF frame; keeping those callbacks referentially stable means the
+  // memoized lane content (clips + boundaries) does NOT re-render each tick —
+  // only the playhead line moves. Snapping still uses the live value (there is
+  // never a drag in flight during playback, so the ref is always current then).
+  const playheadRef = useRef(playheadSeconds);
+  playheadRef.current = playheadSeconds;
+
   const kindOfTrack = useCallback(
     (trackId: string): TrackKind | undefined =>
       timeline.tracks.find(t => t.id === trackId)?.kind,
@@ -136,7 +145,7 @@ export function TimelineLanes({
       excludeClipId: string
     ): { value: number; guide: number | null } => {
       const thresholdSec = SNAP_PX / pxPerSec;
-      const candidates: number[] = [playheadSeconds, Math.round(seconds)];
+      const candidates: number[] = [playheadRef.current, Math.round(seconds)];
       const destTrack = timeline.tracks.find(t => t.id === destTrackId);
       if (destTrack) {
         for (const clip of destTrack.clips) {
@@ -157,7 +166,7 @@ export function TimelineLanes({
         ? { value: seconds, guide: null }
         : { value: best, guide: best };
     },
-    [pxPerSec, playheadSeconds, timeline]
+    [pxPerSec, timeline]
   );
 
   const onClipPointerDown = useCallback(
@@ -490,39 +499,27 @@ export function TimelineLanes({
     return map;
   }, [timeline]);
 
-  return (
-    <div className={styles.lanesViewport}>
-      {/* Fixed label column (does not scroll horizontally). */}
-      <div
-        className={styles.laneLabelColumn}
-        style={{ width: LANE_LABEL_WIDTH }}
-      >
-        <div className={styles.laneLabelRulerSpacer} />
-        {timeline.tracks.map(track => (
-          <div key={track.id} className={styles.laneLabelCell}>
-            {track.name ?? track.kind}
-          </div>
-        ))}
-      </div>
-
-      {/* Scroll container: ruler + lanes + playhead share one width & scroll. */}
-      <div className={styles.lanesScroll} onWheel={onWheel}>
-        <div className={styles.lanesContent} style={{ width: contentWidth }}>
-          <TimeRuler spanSeconds={spanSeconds} pxPerSec={pxPerSec} />
-
-          <div className={styles.laneStack}>
-            {timeline.tracks.map(track => (
-              <div
-                key={track.id}
-                className={styles.laneRow}
-                data-drop-target={dropTrackId === track.id}
-                ref={el => registerLaneRect(track.id, el)}
-                onPointerDown={onTrackBackgroundPointerDown}
-                onDragOver={e => onLaneDragOver(e, track.id)}
-                onDragLeave={() => setDropTrackId(null)}
-                onDrop={e => onLaneDrop(e, track.id)}
-              >
-                {track.clips.map(clip => {
+  // The whole lane stack (clip blocks + transition affordances) — memoized so
+  // it is NOT rebuilt on a playhead tick. It depends only on the timeline, the
+  // interaction state (drag / drop hover / open picker / selection) and zoom;
+  // the playhead is threaded separately (the moving line below). Under playback
+  // this array keeps a stable reference, so React reconciles the lanes to a
+  // no-op each frame and only the playhead line updates. All handlers used here
+  // are referentially stable across ticks (none depend on `playheadSeconds`).
+  const laneRows = useMemo(
+    () =>
+      timeline.tracks.map(track => (
+        <div
+          key={track.id}
+          className={styles.laneRow}
+          data-drop-target={dropTrackId === track.id}
+          ref={el => registerLaneRect(track.id, el)}
+          onPointerDown={onTrackBackgroundPointerDown}
+          onDragOver={e => onLaneDragOver(e, track.id)}
+          onDragLeave={() => setDropTrackId(null)}
+          onDrop={e => onLaneDrop(e, track.id)}
+        >
+          {track.clips.map(clip => {
                   // Non-null only while THIS clip is the one being dragged.
                   const dragThis =
                     drag && drag.clipId === clip.id ? drag : null;
@@ -652,8 +649,51 @@ export function TimelineLanes({
                       </div>
                     );
                   })}
-              </div>
-            ))}
+        </div>
+      )),
+    [
+      timeline,
+      dropTrackId,
+      drag,
+      selectedIds,
+      pxPerSec,
+      boundariesByTrack,
+      openPicker,
+      registerLaneRect,
+      onTrackBackgroundPointerDown,
+      onLaneDragOver,
+      onLaneDrop,
+      onClipPointerDown,
+      onPointerMove,
+      finishDrag,
+      onSelectClip,
+      addTransition,
+      removeTransition,
+    ]
+  );
+
+  return (
+    <div className={styles.lanesViewport}>
+      {/* Fixed label column (does not scroll horizontally). */}
+      <div
+        className={styles.laneLabelColumn}
+        style={{ width: LANE_LABEL_WIDTH }}
+      >
+        <div className={styles.laneLabelRulerSpacer} />
+        {timeline.tracks.map(track => (
+          <div key={track.id} className={styles.laneLabelCell}>
+            {track.name ?? track.kind}
+          </div>
+        ))}
+      </div>
+
+      {/* Scroll container: ruler + lanes + playhead share one width & scroll. */}
+      <div className={styles.lanesScroll} onWheel={onWheel}>
+        <div className={styles.lanesContent} style={{ width: contentWidth }}>
+          <TimeRuler spanSeconds={spanSeconds} pxPerSec={pxPerSec} />
+
+          <div className={styles.laneStack}>
+            {laneRows}
 
             {/* Snap guide, drawn only while a snap is active. */}
             {snapGuideLeft !== null ? (

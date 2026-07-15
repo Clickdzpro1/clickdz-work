@@ -28,6 +28,31 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
  * resolve against the connected server (web is a no-op — same origin).
  */
 
+/**
+ * Durable clip-src scheme. A clip persists `vdz-blob:<blobId>` instead of a
+ * session-scoped `blob:` object URL, so a saved/reloaded timeline still points
+ * at real bytes (the object URL a reload would have inherited is dead — its
+ * backing Blob died with the previous page). The {@link useBlobUrl} hook /
+ * {@link resolveBlobSrc} resolver turn `vdz-blob:` back into a live object URL
+ * on demand; every other src (http(s)/blob:/data:) passes through untouched.
+ */
+export const VDZ_BLOB_SCHEME = 'vdz-blob:';
+
+/** Wrap a workspace blobId into a durable, serializable clip src. */
+export function vdzBlobSrc(blobId: string): string {
+  return `${VDZ_BLOB_SCHEME}${blobId}`;
+}
+
+/** True iff `src` is one of our durable `vdz-blob:` handles. */
+export function isVdzBlobSrc(src: string): boolean {
+  return src.startsWith(VDZ_BLOB_SCHEME);
+}
+
+/** Extract the blobId from a `vdz-blob:` src, or null if it isn't one. */
+export function blobIdFromSrc(src: string): string | null {
+  return isVdzBlobSrc(src) ? src.slice(VDZ_BLOB_SCHEME.length) : null;
+}
+
 /** Media kind, aligned with the clip `type`s that carry a `src`. */
 export type VdzMediaKind = 'video' | 'audio' | 'image';
 
@@ -174,6 +199,118 @@ interface UnsplashResponse {
   results?: Array<{ urls?: { regular?: string } }>;
 }
 
+// ---- Durable blob-src resolver -------------------------------------------
+
+/**
+ * The tiny slice of the workspace blob store we need to resolve a blobId back
+ * to bytes. `workspace.docCollection.blobSync` (a blocksuite `BlobEngine`)
+ * satisfies this: `get(blobId)` resolves to the stored `Blob` (or null).
+ */
+interface BlobGetter {
+  get: (blobId: string) => Promise<Blob | null>;
+}
+
+/**
+ * Module-level, session-scoped cache of blobId → object URL. Content-addressed
+ * blobIds (sha of the bytes) are globally unique, so caching by blobId alone is
+ * safe across timelines/workspaces. We retain object URLs for the whole session
+ * (never revoke): a clip can be added/removed/re-added freely and the same URL
+ * stays valid, which is far simpler — and cheaper — than refcounting, and the
+ * page teardown reclaims everything anyway. `inflight` de-dupes concurrent
+ * resolves of the same blob (e.g. a video + its many rAF re-renders).
+ */
+const blobUrlCache = new Map<string, string>();
+const blobUrlInflight = new Map<string, Promise<string | undefined>>();
+
+/**
+ * Resolve a clip `src` to a directly-usable media URL.
+ *
+ * · `vdz-blob:<id>` → fetch the blob via `getter.get(id)`, wrap in an object
+ *   URL, and cache it (subsequent calls are synchronous cache hits).
+ * · anything else (http(s)/blob:/data:) is returned unchanged.
+ *
+ * Resolves `undefined` only when a `vdz-blob:` handle can't be fetched (missing
+ * blob / not yet synced) so callers can show a placeholder.
+ */
+export async function resolveBlobSrc(
+  src: string,
+  getter: BlobGetter
+): Promise<string | undefined> {
+  const blobId = blobIdFromSrc(src);
+  if (blobId === null) return src; // pass-through for remote/data/blob URLs
+
+  const cached = blobUrlCache.get(blobId);
+  if (cached) return cached;
+
+  const existing = blobUrlInflight.get(blobId);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    try {
+      const blob = await getter.get(blobId);
+      if (!blob) return undefined;
+      const url = URL.createObjectURL(blob);
+      blobUrlCache.set(blobId, url);
+      return url;
+    } catch {
+      return undefined;
+    } finally {
+      blobUrlInflight.delete(blobId);
+    }
+  })();
+  blobUrlInflight.set(blobId, promise);
+  return promise;
+}
+
+/** Synchronous cache peek — a resolved object URL for `src`, if we have one. */
+function peekResolvedSrc(src: string): string | undefined {
+  const blobId = blobIdFromSrc(src);
+  if (blobId === null) return src; // non-blob srcs are already usable
+  return blobUrlCache.get(blobId);
+}
+
+/**
+ * Resolve a (possibly `vdz-blob:`) clip `src` to a URL usable directly as an
+ * <img>/<video>/<audio> `src`, fetching + caching the workspace blob on first
+ * use. Returns `undefined` while a blob is still resolving (show a placeholder)
+ * and the URL thereafter. Plain http(s)/blob:/data: srcs resolve synchronously.
+ *
+ * The empty string yields `undefined` (an empty clip src, i.e. "no media yet").
+ */
+export function useBlobUrl(src: string): string | undefined {
+  const workspaceService = useService(WorkspaceService);
+  // Seed synchronously from the cache so already-resolved blobs (and every
+  // pass-through src) render on the FIRST paint — no placeholder flash.
+  const [resolved, setResolved] = useState<string | undefined>(() =>
+    src ? peekResolvedSrc(src) : undefined
+  );
+
+  useEffect(() => {
+    if (!src) {
+      setResolved(undefined);
+      return;
+    }
+    const hit = peekResolvedSrc(src);
+    if (hit) {
+      setResolved(hit);
+      return;
+    }
+    // Miss: a vdz-blob: src not yet in cache. Resolve async, guard against
+    // setting state after unmount / a src change mid-flight.
+    setResolved(undefined);
+    let alive = true;
+    const blobSync = workspaceService.workspace.docCollection.blobSync;
+    void resolveBlobSrc(src, blobSync).then(url => {
+      if (alive) setResolved(url);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [src, workspaceService]);
+
+  return resolved;
+}
+
 export interface UseVdzMedia {
   items: VdzMediaItem[];
   /** Non-fatal status message for the current op (upload/search), or null. */
@@ -255,6 +392,10 @@ export function useVdzMedia(): UseVdzMedia {
           const stored = await blobSync.get(blobId);
           const url = URL.createObjectURL(stored ?? file);
           ownedUrlsRef.current.add(url);
+          // Seed the durable-src resolver cache with THIS object URL so a clip
+          // carrying `vdz-blob:<blobId>` (see clipFromMedia) renders instantly
+          // — no re-fetch, no placeholder flash — for the rest of the session.
+          if (!blobUrlCache.has(blobId)) blobUrlCache.set(blobId, url);
 
           const [duration, thumbnail] = await Promise.all([
             probeDuration(url, kind),

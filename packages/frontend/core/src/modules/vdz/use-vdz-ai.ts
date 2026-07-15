@@ -4,6 +4,98 @@ import { useCallback, useRef, useState } from 'react';
 import type { VdzTimeline } from './schema';
 
 /**
+ * Schema defaults — a field equal to its default carries no information for the
+ * model, so we omit it from the wire payload (see {@link compactTimeline}). Kept
+ * in sync with `vdzTimelineSchema` (fps 30 / 1920×1080).
+ */
+const TIMELINE_DEFAULTS = { fps: 30, width: 1920, height: 1080 } as const;
+
+/**
+ * Soft cap on the serialized timeline we send (~256 KB of JSON). Well beyond any
+ * realistic hand-built project, but a guard against a pathological doc blowing
+ * up the request / model context. We never silently truncate to invalid JSON —
+ * past the cap we drop each clip's optional `effects`/`animation` (the heaviest,
+ * most repetitive fields) and, if still over, omit `transitions`.
+ */
+const MAX_TIMELINE_JSON_BYTES = 256 * 1024;
+
+/**
+ * Produce a wire-minimal copy of a timeline for the chat payload: strip fields
+ * that equal their schema default or are empty/undefined so the model sees only
+ * signal. Smaller payload → less to serialize, upload and tokenize → faster
+ * turnaround. The result is a plain JSON-safe object (NOT a `VdzTimeline` — it
+ * is intentionally lossy on defaults) and the SERVER re-hydrates defaults via
+ * the same Zod schema, so the contract is unchanged.
+ *
+ * Omissions: `fps`/`width`/`height` when default; `name` when empty on a
+ * track/clip (timeline `name` is kept — it is meaningful context); empty
+ * `transitions: []`; and any `undefined` optional (via JSON round-trip).
+ */
+export function compactTimeline(timeline: VdzTimeline): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    version: timeline.version,
+    id: timeline.id,
+    name: timeline.name,
+  };
+  if (timeline.fps !== TIMELINE_DEFAULTS.fps) out.fps = timeline.fps;
+  if (timeline.width !== TIMELINE_DEFAULTS.width) out.width = timeline.width;
+  if (timeline.height !== TIMELINE_DEFAULTS.height) {
+    out.height = timeline.height;
+  }
+
+  out.tracks = timeline.tracks.map(track => {
+    const t: Record<string, unknown> = {
+      id: track.id,
+      kind: track.kind,
+      // Drop a name that just echoes the kind (e.g. "Video") — no signal.
+      clips: track.clips.map(clip => compactValue(clip)),
+    };
+    if (track.name && track.name !== track.kind) t.name = track.name;
+    if (track.transitions && track.transitions.length > 0) {
+      t.transitions = track.transitions;
+    }
+    return t;
+  });
+
+  return out;
+}
+
+/** JSON round-trip drops `undefined` keys; also trims empty `name` on clips. */
+function compactValue(clip: Record<string, unknown>): Record<string, unknown> {
+  const copy = JSON.parse(JSON.stringify(clip)) as Record<string, unknown>;
+  if (copy.name === '' || copy.name == null) delete copy.name;
+  return copy;
+}
+
+/**
+ * Serialize the compacted timeline, shedding the heaviest optional fields if it
+ * exceeds {@link MAX_TIMELINE_JSON_BYTES}. Always returns valid JSON.
+ */
+function serializeTimelineForWire(timeline: VdzTimeline): Record<
+  string,
+  unknown
+> {
+  const compact = compactTimeline(timeline);
+  if (JSON.stringify(compact).length <= MAX_TIMELINE_JSON_BYTES) {
+    return compact;
+  }
+  // Over cap: strip per-clip effects/animation (heavy, repetitive).
+  const tracks = compact.tracks as Array<Record<string, unknown>>;
+  for (const t of tracks) {
+    for (const c of t.clips as Array<Record<string, unknown>>) {
+      delete c.effects;
+      delete c.animation;
+    }
+  }
+  if (JSON.stringify(compact).length <= MAX_TIMELINE_JSON_BYTES) {
+    return compact;
+  }
+  // Still over: drop transitions too.
+  for (const t of tracks) delete t.transitions;
+  return compact;
+}
+
+/**
  * React hook powering the Vdz Studio "AI Dock".
  *
  * Owns the transport + conversation state for the dock; it deliberately does
@@ -109,7 +201,10 @@ export function useVdzAi(): UseVdzAi {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message: trimmed,
-            timeline,
+            // Compacted: default fps/size, empty names and empty transition
+            // arrays are stripped (the server re-hydrates via the same Zod
+            // schema, so the contract is unchanged) — smaller, faster payload.
+            timeline: serializeTimelineForWire(timeline),
             selectedClipIds: selectedClipIds ?? [],
             history: priorHistory,
           }),

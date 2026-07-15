@@ -1,9 +1,14 @@
 import { nanoid } from 'nanoid';
 
-import type { VdzClip, VdzTimeline } from '../../../../modules/vdz';
 import type {
-  VdzMediaItem,
-  VdzMediaKind,
+  VdzClip,
+  VdzOp,
+  VdzTimeline,
+} from '../../../../modules/vdz';
+import {
+  type VdzMediaItem,
+  type VdzMediaKind,
+  vdzBlobSrc,
 } from '../../../../modules/vdz/use-vdz-media';
 
 /** Lane accent colors keyed by track kind. */
@@ -103,10 +108,74 @@ export function trackKindForMedia(
   return 'video';
 }
 
+/** A friendly default lane label for a freshly-created track of a kind. */
+const TRACK_DEFAULT_NAME: Record<
+  VdzTimeline['tracks'][number]['kind'],
+  string
+> = { video: 'Video', overlay: 'Overlay', audio: 'Audio' };
+
+/**
+ * Resolve where a media payload should land, CREATING its lane if none exists.
+ *
+ * Returns the target `trackId` and, when the timeline has no track of the media
+ * kind (e.g. dropping audio into a timeline whose audio lane was removed / an
+ * AI-authored composition that never had one), a ready-to-run `addTrack` op for
+ * a fresh empty lane. Callers run `[...ops, addClip]` through the ONE validated
+ * apply path (a single history entry), so an `addTrack` that fails validation
+ * takes the whole drop down cleanly rather than half-applying.
+ *
+ * This is the primitive the drop wiring needs so a drop of ANY of the three
+ * media kinds always has a home — see the shell's WIRING-NOTE. Pure: derives a
+ * new id/op but never mutates `timeline`.
+ */
+export function ensureTrackForMedia(
+  timeline: VdzTimeline,
+  media: VdzMediaDragPayload | VdzMediaItem
+): { trackId: string; addTrackOp?: Extract<VdzOp, { op: 'addTrack' }> } {
+  const wantKind = trackKindForMedia(media.kind);
+  const existing = timeline.tracks.find(t => t.kind === wantKind);
+  if (existing) return { trackId: existing.id };
+  const id = `track-${wantKind}-${nanoid(4)}`;
+  return {
+    trackId: id,
+    addTrackOp: {
+      op: 'addTrack',
+      track: {
+        id,
+        kind: wantKind,
+        name: TRACK_DEFAULT_NAME[wantKind],
+        clips: [],
+      },
+    },
+  };
+}
+
+/**
+ * The DURABLE, serializable src a clip should persist for a piece of media.
+ *
+ * Uploads carry a workspace `blobId` → we store `vdz-blob:<blobId>`, which
+ * survives a save/reload (the bytes live in the workspace blob store; the
+ * preview resolves the handle back to a live object URL via `useBlobUrl`).
+ * Remote media (AI / stock) has no blobId → its https `url` is already durable
+ * and is used verbatim.
+ *
+ * This is the single fix for the "dead blob: URL on reload" bug: a clip must
+ * NEVER persist a session-scoped `blob:` object URL (`media.url`), only a
+ * durable handle.
+ */
+export function durableSrcForMedia(
+  media: VdzMediaDragPayload | VdzMediaItem
+): string {
+  return media.blobId ? vdzBlobSrc(media.blobId) : media.url;
+}
+
 /**
  * Build a validated-shape {@link VdzClip} from a media payload at a given start.
  * The caller still routes it through the single `applyOp` path (which
  * re-validates), so this only needs to produce the right discriminated shape.
+ *
+ * The clip's `src` is the DURABLE handle from {@link durableSrcForMedia} — not
+ * the session object URL — so a saved timeline reloads with live media.
  */
 export function clipFromMedia(
   media: VdzMediaDragPayload | VdzMediaItem,
@@ -115,6 +184,7 @@ export function clipFromMedia(
   const id = `clip-${nanoid(6)}`;
   const start = Math.max(0, Math.round(startSeconds * 1000) / 1000);
   const name = media.name || media.kind;
+  const src = durableSrcForMedia(media);
   if (media.kind === 'audio') {
     return {
       id,
@@ -122,7 +192,7 @@ export function clipFromMedia(
       name,
       start,
       duration: media.duration > 0 ? media.duration : DEFAULT_AV_CLIP_DURATION,
-      src: media.url,
+      src,
       volume: 1,
     };
   }
@@ -133,7 +203,7 @@ export function clipFromMedia(
       name,
       start,
       duration: media.duration > 0 ? media.duration : DEFAULT_AV_CLIP_DURATION,
-      src: media.url,
+      src,
       trimStart: 0,
       volume: 1,
     };
@@ -145,7 +215,7 @@ export function clipFromMedia(
     name,
     start,
     duration: DEFAULT_IMAGE_CLIP_DURATION,
-    src: media.url,
+    src,
     fit: 'cover',
   };
 }
