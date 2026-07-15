@@ -10,6 +10,22 @@ export const operationMenu = style({
   gap: 0,
 });
 
+// subtle accent ring on the sidebar user avatar on hover / focus
+export const avatarButton = style({
+  borderRadius: '50%',
+  transition: 'box-shadow 0.12s ease, transform 0.12s ease',
+  selectors: {
+    '&:hover': {
+      transform: 'scale(1.05)',
+      boxShadow: `0 0 0 2px color-mix(in srgb, ${cssVar('primaryColor')} 45%, transparent)`,
+    },
+    '&:focus-visible': {
+      outline: 'none',
+      boxShadow: `0 0 0 2px color-mix(in srgb, ${cssVar('primaryColor')} 60%, transparent)`,
+    },
+  },
+});
+
 export const account = style({
   padding: '4px 12px',
   userSelect: 'none',

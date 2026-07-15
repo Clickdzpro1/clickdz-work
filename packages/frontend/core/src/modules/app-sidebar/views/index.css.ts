@@ -9,14 +9,31 @@ export const navWrapperStyle = style({
     },
   },
   paddingBottom: 8,
-  // very soft vertical surface treatment: a hair of the secondary layer at the
-  // top fading into the primary background — reads as gentle depth, not flashy.
-  backgroundImage: `linear-gradient(180deg, color-mix(in srgb, ${cssVarV2('layer/background/secondary')} 55%, transparent) 0%, transparent 140px)`,
+  position: 'relative',
+  // Distinct, slightly-elevated rail surface: the secondary layer reads as a
+  // panel sitting just above the canvas, with a soft top-to-bottom lift so the
+  // top (workspace card) feels raised. Token-driven so it tracks every theme.
+  backgroundColor: cssVarV2('layer/background/secondary'),
+  backgroundImage: `linear-gradient(180deg, color-mix(in srgb, ${cssVarV2('layer/background/primary')} 22%, transparent) 0%, transparent 160px)`,
   selectors: {
+    // Refined 1px inner-right hairline that sits inside the panel edge, above
+    // the surface — crisper than a plain border and visible in light + dark.
     '&[data-has-border=true]': {
-      borderRight: `0.5px solid ${cssVarV2('layer/insideBorder/border')}`,
+      borderRight: `1px solid ${cssVarV2('layer/insideBorder/border')}`,
     },
-    '&[data-is-floating="true"], &[data-is-electron="false"]': {
+    '&[data-has-border=true]::after': {
+      content: '""',
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: 0,
+      width: '1px',
+      pointerEvents: 'none',
+      background: `color-mix(in srgb, ${cssVarV2('layer/background/primary')} 60%, transparent)`,
+    },
+    // The floating (hover-to-reveal) overlay needs a solid opaque tone so
+    // content behind it never bleeds through.
+    '&[data-is-floating="true"]': {
       backgroundColor: cssVarV2('layer/background/primary'),
     },
   },

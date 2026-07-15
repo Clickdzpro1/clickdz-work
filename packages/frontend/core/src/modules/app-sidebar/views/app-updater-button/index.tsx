@@ -199,9 +199,10 @@ export function AppUpdaterButton({
           onDownloadUpdate();
         }
       } else {
-        urlService.openPopupWindow(
-          `https://github.com/Clickdzpro1/clickdz-work/releases/tag/v${updateAvailable.version}`
-        );
+        // Manual-update path (no in-app auto update for this release): send the
+        // user to the branded download page, which UA-detects their OS and
+        // links the direct installer for the current release.
+        urlService.openPopupWindow('https://work.clickdz.ai/download');
       }
     } else if (changelogUnread) {
       onOpenChangelog();

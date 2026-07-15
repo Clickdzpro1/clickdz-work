@@ -43,6 +43,7 @@ const AuthorizedUserInfo = ({ account }: { account: AuthAccountInfo }) => {
         variant="plain"
         size="20"
         style={{ padding: 0 }}
+        className={styles.avatarButton}
         withoutHover
       >
         <Avatar size={20} name={account.label} url={account.avatar} />
@@ -64,6 +65,7 @@ const UnauthorizedUserInfo = () => {
       data-testid="sidebar-user-avatar"
       variant="plain"
       size="20"
+      className={styles.avatarButton}
     >
       <UnknownUserIcon />
     </IconButton>

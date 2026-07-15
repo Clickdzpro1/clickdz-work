@@ -10,16 +10,16 @@ const baseAction = style({
 
 export const root = style({
   fontSize: cssVar('fontXs'),
-  height: 22,
+  height: 24,
   width: 'calc(100%)',
   userSelect: 'none',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
   padding: '0 8px',
-  borderRadius: 6,
-  marginTop: 4,
-  transition: 'background-color 0.15s ease',
+  borderRadius: 8,
+  marginTop: 8,
+  transition: 'background-color 0.12s ease',
   selectors: {
     [`&[data-collapsible="true"]`]: {
       cursor: 'pointer',
@@ -45,10 +45,11 @@ export const actions = style([
 ]);
 export const label = style({
   color: cssVarV2('text/tertiary'),
-  fontSize: '11px',
+  // tiny, tightly-tracked caps — a refined section eyebrow
+  fontSize: '10.5px',
   fontWeight: 600,
   lineHeight: '20px',
-  letterSpacing: '0.06em',
+  letterSpacing: '0.08em',
   textTransform: 'uppercase',
   flexGrow: '0',
   display: 'flex',
@@ -56,6 +57,7 @@ export const label = style({
   alignItems: 'center',
   justifyContent: 'start',
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
 });
 
 export const collapseIcon = style({
