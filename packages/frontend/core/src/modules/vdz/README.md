@@ -28,8 +28,18 @@ a later PR). The workbench shell that consumes this lives at
 
 ## The op contract
 
-Ops: `addClip`, `removeClip`, `moveClip`, `trimClip`, `setText`,
-`applyTransition`, `removeTransition`, `renameTimeline`.
+Ops: `addClip`, `removeClip`, `moveClip`, `trimClip`, `splitClip`,
+`rippleDelete`, `nudgeClip`, `setText`, `applyTransition`, `removeTransition`,
+`renameTimeline`.
+
+- `splitClip` `{trackId, clipId, atSeconds}` — cut a clip in two at `atSeconds`
+  (which must fall strictly inside it). The second part gets id `<id>-b`
+  (or a fresh nanoid on collision); for `video` clips its `trimStart` is
+  advanced by the cut offset.
+- `rippleDelete` `{trackId, clipId}` — remove the clip and shift every later
+  clip on that track left by the removed clip's duration, closing the gap.
+- `nudgeClip` `{trackId, clipId, deltaSeconds}` — shift `start` by a signed
+  delta, clamped so it never goes below 0.
 
 **AI edits arrive as `VdzOp[]`** — the model proposes a batch of ops, they run
 through `applyOps`, and only a fully valid result is committed. See
