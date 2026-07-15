@@ -152,6 +152,19 @@ const CDZ_AI_BASE_URL = (
   process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
 ).replace(/\/+$/, '');
 const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
+// CDZ_AI direct-path models: the OpenAI-compatible `cdz-*` catalog served by
+// CDZ_AI_BASE_URL (same ids `runFastPlanner`/pulse/vdz use). ONLY these can be
+// real-streamed pass-through (A1); the marketing `clickdz-*` ids map to the
+// Make agent, which has no token stream, so they keep the buffered path.
+const CDZ_DIRECT_STREAM_MODELS = new Set([
+  'cdz-ultra',
+  'cdz-council',
+  'cdz-sage',
+  'cdz-architect',
+  'cdz-scholar',
+  'cdz-flash',
+  'cdz-polyglot',
+]);
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
 
@@ -661,6 +674,164 @@ export class ClickDzBridgeController {
     return fallback;
   }
 
+  /**
+   * REAL SSE pass-through for the CDZ_AI direct path (A1). Calls the upstream
+   * OpenAI-compatible `/v1/chat/completions` with `stream:true` and pipes its
+   * `chat.completion.chunk` deltas straight to the client AS THEY ARRIVE — no
+   * buffering of the full body — while re-stamping `id`/`model` to the bridge's
+   * values so the emitted contract is byte-for-byte the shape the existing
+   * fake-stream produced (`{id,object:'chat.completion.chunk',created,model,
+   * choices:[{index,delta,finish_reason}]}` + a terminal `finish_reason:'stop'`
+   * + `data: [DONE]`).
+   *
+   * Contract-preserving fallback: if the upstream does NOT start cleanly (network
+   * error, non-2xx, or missing body) BEFORE any bytes are sent, returns `false`
+   * so the caller runs the existing buffered Make path — no regression, no
+   * dead-end. Once streaming has begun we own the response: an error mid-stream
+   * emits a terminal `finish_reason:'stop'` + `[DONE]` and closes; a client abort
+   * cancels the upstream fetch. Returns `true` when it has handled the response.
+   */
+  private async streamCdzChat(
+    res: Response,
+    id: string,
+    model: string,
+    messages: Array<{ role: string; content: string }>,
+    maxTokens: number,
+    clientSignal: AbortSignal
+  ): Promise<boolean> {
+    // Abort upstream if the client disconnects or the request is aborted.
+    const upstream = new AbortController();
+    const onAbort = () => upstream.abort();
+    if (clientSignal.aborted) upstream.abort();
+    else clientSignal.addEventListener('abort', onAbort, { once: true });
+
+    // NB: this file imports `Response` from express, so use the fetch return
+    // type (not the DOM/global `Response`) to type the upstream response.
+    let response: Awaited<ReturnType<typeof fetch>>;
+    try {
+      response = await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${CDZ_AI_KEY}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: true,
+          max_tokens: maxTokens,
+        }),
+        signal: upstream.signal,
+      });
+    } catch {
+      // Upstream never opened — no bytes sent yet, so the caller can safely
+      // fall back to the buffered path.
+      clientSignal.removeEventListener('abort', onAbort);
+      return false;
+    }
+
+    if (!response.ok || !response.body) {
+      // Non-2xx before we streamed anything: drain briefly (best-effort) and
+      // let the caller fall back to Make so a transient upstream hiccup doesn't
+      // become a hard failure.
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+      clientSignal.removeEventListener('abort', onAbort);
+      return false;
+    }
+
+    // We are committed to streaming now — headers + response are ours.
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    const send = (delta: Record<string, unknown>, finish: string | null) => {
+      res.write(
+        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: now(), model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`
+      );
+    };
+    // Opening role chunk — identical to the fake-stream's first frame.
+    send({ role: 'assistant' }, null);
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finished = false;
+    try {
+      // Node 18+/undici streams are async-iterable byte chunks. Parse the SSE
+      // frames incrementally and forward ONLY the assistant delta text, so a
+      // difference in the upstream envelope can never leak to our clients.
+      for await (const bytes of response.body as unknown as AsyncIterable<Uint8Array>) {
+        buffer += decoder.decode(bytes, { stream: true });
+        let sep: number;
+        // SSE events are separated by a blank line ("\n\n").
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          for (const line of rawEvent.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload) continue;
+            if (payload === '[DONE]') {
+              finished = true;
+              break;
+            }
+            try {
+              const parsed = JSON.parse(payload) as {
+                choices?: Array<{
+                  delta?: { content?: unknown };
+                  finish_reason?: string | null;
+                }>;
+              };
+              const choice = parsed.choices?.[0];
+              const text = choice?.delta?.content;
+              if (typeof text === 'string' && text) {
+                send({ content: text }, null);
+              }
+              // Upstream may signal completion via finish_reason instead of
+              // (or before) a [DONE] line.
+              if (choice?.finish_reason) finished = true;
+            } catch {
+              // Ignore a malformed/partial frame; the next chunk may complete it.
+            }
+          }
+          if (finished) break;
+        }
+        if (finished) break;
+      }
+      // Normal completion: emit the terminal stop frame + [DONE], mirroring the
+      // existing fake-stream contract exactly.
+      send({}, 'stop');
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return true;
+    } catch {
+      // Error AFTER streaming began (upstream drop / client abort). We can't
+      // fall back now — close the stream cleanly with a terminal stop + [DONE]
+      // so clients that already consumed deltas end gracefully rather than hang.
+      try {
+        if (!clientSignal.aborted) {
+          send({}, 'stop');
+          res.write('data: [DONE]\n\n');
+        }
+      } catch {
+        /* the socket may already be gone */
+      }
+      try {
+        res.end();
+      } catch {
+        /* ignore */
+      }
+      return true;
+    } finally {
+      clientSignal.removeEventListener('abort', onAbort);
+      upstream.abort();
+    }
+  }
+
   @Public()
   @Get(['/api/v1/models', '/v1/models'])
   models(@Req() req: Request) {
@@ -688,6 +859,31 @@ export class ClickDzBridgeController {
     const id = `chatcmpl_${Date.now()}`;
     const model = body?.model || 'clickdz-smart';
     const messages = normalizeMessages(body?.messages || []);
+
+    // REAL streaming (A1), opt-in behind the SAME `body.stream` flag: only for
+    // the CDZ_AI direct-path `cdz-*` models when a key is configured. Everything
+    // else (marketing `clickdz-*` → Make, or no CDZ_AI key) is UNCHANGED below.
+    // Pipes upstream SSE deltas straight through; on a clean upstream failure it
+    // returns false and we fall back to the existing buffered path — no
+    // regression to the OpenAI-shape contract external clients consume.
+    if (body?.stream && CDZ_AI_KEY && CDZ_DIRECT_STREAM_MODELS.has(model)) {
+      // Tie an AbortController to the response lifecycle: `close` fires when the
+      // client disconnects, letting us cancel the upstream fetch. (`res.on` is
+      // always available and typed; Express 4's `req.signal` is not.)
+      const clientAbort = new AbortController();
+      res.on('close', () => clientAbort.abort());
+      const streamed = await this.streamCdzChat(
+        res,
+        id,
+        model,
+        messages,
+        clampMaxTokens(body?.max_tokens, DEFAULT_MAX_TOKENS),
+        clientAbort.signal
+      );
+      if (streamed) return;
+      // else: upstream didn't start — fall through to the buffered path.
+    }
+
     const agentOverride = this.resolveAgentForRequest(model, messages);
     const content = await this.runMakeAgent(messages, model, agentOverride);
 
