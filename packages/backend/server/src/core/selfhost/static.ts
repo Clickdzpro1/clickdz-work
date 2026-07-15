@@ -9,6 +9,22 @@ import isMobile from 'is-mobile';
 import { Config } from '../../base';
 import { SetupMiddleware } from './setup';
 
+// content-hashed assets emitted by rspack carry an 8-char contenthash
+// segment right before the file extension, e.g.
+//   js/index.a1b2c3d4.js, styles.a1b2c3d4.css, assets/logo.a1b2c3d4.png
+// (see `[name].[contenthash:8]...` in tools/cli/src/rspack/index.ts).
+// Such files are safe to cache forever because a content change mints a new
+// name; anything else (unhashed files, HTML) must stay revalidatable.
+const hashedAssetRegex = /\.[0-9a-f]{8}\.[a-z0-9]+$/i;
+
+const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
+function setHashedAssetHeaders(res: { setHeader(k: string, v: string): void }, path: string) {
+  if (hashedAssetRegex.test(path)) {
+    res.setHeader('Cache-Control', IMMUTABLE_CACHE_CONTROL);
+  }
+}
+
 @Injectable()
 export class StaticFilesResolver implements OnModuleInit {
   constructor(
@@ -57,6 +73,7 @@ export class StaticFilesResolver implements OnModuleInit {
         redirect: false,
         index: false,
         fallthrough: true,
+        setHeaders: setHashedAssetHeaders,
       })
     );
 
@@ -84,6 +101,7 @@ export class StaticFilesResolver implements OnModuleInit {
         redirect: false,
         index: false,
         fallthrough: true,
+        setHeaders: setHashedAssetHeaders,
       })
     );
     // END REGION
@@ -101,8 +119,10 @@ export class StaticFilesResolver implements OnModuleInit {
         redirect: false,
         index: false,
         fallthrough: true,
-        immutable: true,
         dotfiles: 'ignore',
+        // only content-hashed assets get long-lived immutable caching;
+        // unhashed files fall through to the SPA fallback's default headers
+        setHeaders: setHashedAssetHeaders,
       })
     );
 

@@ -591,6 +591,76 @@ export class ClickDzBridgeController {
     );
   }
 
+  /**
+   * Best-effort one-line "what changed" summary for an app EDIT, produced by a
+   * fast CDZ_AI (`cdz-flash`) call. The frontend (clickdz-builder-studio) already
+   * reads `data.summary` and renders it in the version list; when this returns
+   * nothing useful the client falls back to its own default label.
+   *
+   * Kept deliberately cheap and non-blocking: 5s timeout, tiny token budget, and
+   * a deterministic fallback on ANY failure so a summary problem never breaks or
+   * slows the edit itself. We pass only a size/shape diff-hint (not full HTML) to
+   * keep the prompt small and the call fast.
+   */
+  private async summarizeEdit(
+    prompt: string,
+    oldHtml: string,
+    newHtml: string
+  ): Promise<string> {
+    const fallback = 'Updated the app.';
+    if (!CDZ_AI_KEY) {
+      return fallback;
+    }
+    // Cheap structural diff-hint: byte delta + a coarse count of section-ish
+    // landmarks so the model can describe the change without seeing the doc.
+    const sectionCount = (html: string) =>
+      (html.match(/<(section|header|footer|nav|main|article|form)\b/gi) || [])
+        .length;
+    const diffHint = [
+      `bytes: ${oldHtml.length} -> ${newHtml.length} (delta ${newHtml.length - oldHtml.length})`,
+      `sections: ${sectionCount(oldHtml)} -> ${sectionCount(newHtml)}`,
+    ].join(', ');
+    const summaryPrompt = [
+      'You summarize a single edit made to a web app for a version history label.',
+      'Return ONE short past-tense sentence (max ~12 words) describing what changed.',
+      'No preamble, no quotes, no markdown. Example: "Added a pricing section with 3 tiers."',
+      '',
+      `USER REQUEST:\n${prompt.slice(0, 2000)}`,
+      '',
+      `CHANGE HINT: ${diffHint}`,
+    ].join('\n');
+
+    try {
+      const response = await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${CDZ_AI_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'cdz-flash',
+          messages: [{ role: 'user', content: summaryPrompt }],
+          max_tokens: clampMaxTokens(60, 60),
+        }),
+        // fast-tier: never let the summary delay the edit response
+        signal: AbortSignal.timeout(5000),
+      });
+      const data = (await response.json()) as any;
+      const content = data?.choices?.[0]?.message?.content;
+      if (response.ok && typeof content === 'string' && content.trim()) {
+        // one line only; strip wrapping quotes/backticks the model may add
+        return content
+          .trim()
+          .split('\n')[0]
+          .replace(/^["'`]+|["'`]+$/g, '')
+          .slice(0, 140);
+      }
+    } catch {
+      // fall through to deterministic fallback
+    }
+    return fallback;
+  }
+
   @Public()
   @Get(['/api/v1/models', '/v1/models'])
   models(@Req() req: Request) {
@@ -1075,12 +1145,20 @@ export class ClickDzBridgeController {
     this.logger.log(
       `[apps] generated ${html.length} chars in ${Math.round((Date.now() - startedAt) / 1000)}s`
     );
+    // "What changed" label for the version list. Only meaningful for edits (an
+    // existing working doc); best-effort and never blocks/breaks the response.
+    // Additive field — existing consumers ignore it, the app-builder reads it.
+    const isEdit = !!currentHtml && currentHtml.length > 20;
+    const summary = isEdit
+      ? await this.summarizeEdit(prompt, currentHtml as string, html)
+      : undefined;
     return {
       slug,
       prompt,
       html,
       bytes: html.length,
       seconds: Math.round((Date.now() - startedAt) / 1000),
+      ...(summary ? { summary } : {}),
     };
   }
 
