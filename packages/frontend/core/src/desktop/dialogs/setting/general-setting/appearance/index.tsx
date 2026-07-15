@@ -17,6 +17,7 @@ import { useAppSettingHelper } from '../../../../../components/hooks/affine/use-
 import { OpenInAppLinksMenu } from './links';
 import { settingWrapper } from './style.css';
 import { ThemeEditorSetting } from './theme-editor-setting';
+import { ThemePicker } from './theme-picker';
 
 export const getThemeOptions = (t: ReturnType<typeof useI18n>) =>
   [
@@ -195,6 +196,16 @@ export const AppearanceSettings = () => {
           </SettingRow>
         ) : null}
         {enableThemeEditor ? <ThemeEditorSetting /> : null}
+      </SettingWrapper>
+
+      <SettingWrapper title="Theme">
+        <SettingRow
+          name="App theme"
+          desc="Pick a curated ClickDz palette. Applies across the whole app instantly and sets its light or dark base."
+          spreadCol={false}
+        >
+          <ThemePicker />
+        </SettingRow>
       </SettingWrapper>
 
       <SettingWrapper title={t['com.affine.appearanceSettings.images.title']()}>

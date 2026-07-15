@@ -12,6 +12,7 @@ import {
 import { configureAppSidebarModule } from './app-sidebar';
 import { configAtMenuConfigModule } from './at-menu-config';
 import { configureBlobManagementModule } from './blob-management';
+import { configureClickDzThemeModule } from './clickdz-theme';
 import { configureCloudModule } from './cloud';
 import { configureCodeBlockPreviewRendererModule } from './code-block-preview-renderer';
 import { configureCollectionModule } from './collection';
@@ -110,6 +111,7 @@ export function configureCommonModules(framework: Framework) {
   configureJournalModule(framework);
   configureUrlModule(framework);
   configureAppThemeModule(framework);
+  configureClickDzThemeModule(framework);
   configureDialogModule(framework);
   configureDocInfoModule(framework);
   configureOpenInApp(framework);

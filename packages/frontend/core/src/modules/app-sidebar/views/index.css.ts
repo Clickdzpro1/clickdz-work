@@ -9,6 +9,9 @@ export const navWrapperStyle = style({
     },
   },
   paddingBottom: 8,
+  // very soft vertical surface treatment: a hair of the secondary layer at the
+  // top fading into the primary background — reads as gentle depth, not flashy.
+  backgroundImage: `linear-gradient(180deg, color-mix(in srgb, ${cssVarV2('layer/background/secondary')} 55%, transparent) 0%, transparent 140px)`,
   selectors: {
     '&[data-has-border=true]': {
       borderRight: `0.5px solid ${cssVarV2('layer/insideBorder/border')}`,
