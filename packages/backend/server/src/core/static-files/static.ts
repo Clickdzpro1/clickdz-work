@@ -10,6 +10,24 @@ import { isMobileRequest } from '../utils/user-agent';
 
 const staticPathRegex = /^\/(_plugin|assets|imgs|js|plugins|static)\//;
 
+// content-hashed assets emitted by rspack carry an 8-char contenthash segment
+// right before the extension (e.g. js/index.a1b2c3d4.js, styles.a1b2c3d4.css,
+// assets/logo.a1b2c3d4.png — see `[contenthash:8]` in
+// tools/cli/src/rspack/index.ts). They are safe to cache forever; unhashed
+// files keep the default revalidating behavior.
+const hashedAssetRegex = /\.[0-9a-f]{8}\.[a-z0-9]+$/i;
+
+const IMMUTABLE_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
+function setHashedAssetHeaders(
+  res: { setHeader(k: string, v: string): void },
+  path: string
+) {
+  if (hashedAssetRegex.test(path)) {
+    res.setHeader('Cache-Control', IMMUTABLE_CACHE_CONTROL);
+  }
+}
+
 function isMissingStaticAssetError(error: unknown) {
   if (!error || typeof error !== 'object') {
     return false;
@@ -55,11 +73,13 @@ export class StaticFilesResolver implements OnModuleInit {
       redirect: false,
       index: false,
       fallthrough: false,
+      setHeaders: setHashedAssetHeaders,
     });
     const mobileAssetStrict = serveStatic(mobilePath, {
       redirect: false,
       index: false,
       fallthrough: false,
+      setHeaders: setHashedAssetHeaders,
     });
     const adminAsset = serveStatic(adminPath, {
       redirect: false,
