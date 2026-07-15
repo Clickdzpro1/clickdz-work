@@ -10,14 +10,16 @@ const baseAction = style({
 
 export const root = style({
   fontSize: cssVar('fontXs'),
-  height: 20,
+  height: 22,
   width: 'calc(100%)',
   userSelect: 'none',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
   padding: '0 8px',
-  borderRadius: 4,
+  borderRadius: 6,
+  marginTop: 4,
+  transition: 'background-color 0.15s ease',
   selectors: {
     [`&[data-collapsible="true"]`]: {
       cursor: 'pointer',
@@ -43,8 +45,11 @@ export const actions = style([
 ]);
 export const label = style({
   color: cssVarV2('text/tertiary'),
-  fontWeight: 500,
+  fontSize: '11px',
+  fontWeight: 600,
   lineHeight: '20px',
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
   flexGrow: '0',
   display: 'flex',
   gap: 2,

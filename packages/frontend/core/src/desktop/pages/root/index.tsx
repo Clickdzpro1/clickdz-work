@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 
 import { GlobalDialogs } from '../../dialogs';
+import { ClickDzThemeModifier } from './clickdz-theme';
 import { CustomThemeModifier } from './custom-theme';
 import { FindInPagePopup } from './find-in-page/find-in-page-popup';
 
@@ -29,6 +30,7 @@ export const RootWrapper = () => {
       <GlobalDialogs />
       <NotificationCenter />
       <Outlet />
+      <ClickDzThemeModifier />
       <CustomThemeModifier />
       {BUILD_CONFIG.isElectron && <FindInPagePopup />}
     </FrameworkScope>

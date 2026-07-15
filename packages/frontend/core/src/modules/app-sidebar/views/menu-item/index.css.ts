@@ -7,35 +7,53 @@ export const linkItemRoot = style({
 export const root = style({
   display: 'inline-flex',
   alignItems: 'center',
-  borderRadius: '4px',
+  borderRadius: '8px',
   textAlign: 'left',
-  color: 'inherit',
+  color: cssVarV2('text/secondary'),
   width: '100%',
-  minHeight: '30px',
+  minHeight: '32px',
   userSelect: 'none',
   cursor: 'pointer',
   padding: '0 2px 0 0',
   fontSize: cssVar('fontSm'),
-  marginTop: '4px',
+  fontWeight: 500,
+  marginTop: '2px',
   position: 'relative',
+  transition:
+    'background-color 0.15s ease, color 0.15s ease, transform 0.12s ease',
+  // accent left-rail indicator for the active item
+  '::before': {
+    content: '""',
+    position: 'absolute',
+    left: '2px',
+    top: '50%',
+    transform: 'translateY(-50%) scaleY(0.4)',
+    width: '3px',
+    height: '18px',
+    borderRadius: '3px',
+    background: cssVar('primaryColor'),
+    opacity: 0,
+    transition: 'opacity 0.15s ease, transform 0.15s ease',
+  },
   selectors: {
     '&:hover': {
       background: cssVarV2.layer.background.hoverOverlay,
+      color: cssVarV2('text/primary'),
     },
     '&[data-active="true"]': {
       background: cssVarV2.layer.background.hoverOverlay,
+      color: cssVarV2('text/primary'),
+      fontWeight: 600,
+    },
+    '&[data-active="true"]::before': {
+      opacity: 1,
+      transform: 'translateY(-50%) scaleY(1)',
     },
     '&[data-disabled="true"]': {
       cursor: 'default',
       color: cssVarV2.text.disable,
       pointerEvents: 'none',
     },
-    // this is not visible in dark mode
-    // '&[data-active="true"]:hover': {
-    //   background:
-    //     // make this a variable?
-    //     'linear-gradient(0deg, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.04)), rgba(0, 0, 0, 0.04)',
-    // },
     '&[data-collapsible="true"]': {
       paddingLeft: '4px',
       paddingRight: '4px',
@@ -45,6 +63,10 @@ export const root = style({
       transform: 'translateX(-8px)',
       paddingLeft: '8px',
       paddingRight: '10px',
+    },
+    // keep the active rail pinned to the edge even when the row shifts on hover
+    '&[data-collapsible="false"]:is([data-active="true"], :hover)::before': {
+      left: '8px',
     },
     [`${linkItemRoot}:first-of-type &`]: {
       marginTop: '0px',
@@ -72,8 +94,18 @@ export const postfix = style({
   },
 });
 export const icon = style({
-  color: cssVarV2('icon/primary'),
+  color: cssVarV2('icon/secondary'),
   fontSize: '20px',
+  flexShrink: 0,
+  transition: 'color 0.15s ease',
+  selectors: {
+    [`${root}:hover &`]: {
+      color: cssVarV2('icon/primary'),
+    },
+    [`${root}[data-active="true"] &`]: {
+      color: cssVar('primaryColor'),
+    },
+  },
 });
 export const collapsedIconContainer = style({
   width: '16px',

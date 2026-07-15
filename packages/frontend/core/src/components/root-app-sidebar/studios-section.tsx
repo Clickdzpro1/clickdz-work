@@ -13,13 +13,18 @@ const NewChip = () => (
   <span
     style={{
       fontSize: 10,
-      fontWeight: 600,
-      lineHeight: '14px',
+      fontWeight: 700,
+      lineHeight: '15px',
       padding: '0 6px',
-      borderRadius: 4,
-      letterSpacing: '0.04em',
-      color: 'var(--affine-pure-white)',
-      backgroundColor: 'var(--affine-primary-color)',
+      borderRadius: 5,
+      letterSpacing: '0.05em',
+      // accent-tinted pill: legible on every theme (no white-on-accent risk)
+      // and reads as premium rather than a loud solid badge.
+      color: 'var(--affine-primary-color)',
+      backgroundColor:
+        'color-mix(in srgb, var(--affine-primary-color) 16%, transparent)',
+      border:
+        '1px solid color-mix(in srgb, var(--affine-primary-color) 32%, transparent)',
     }}
   >
     NEW
