@@ -52,6 +52,7 @@ import { NotificationButton } from './notification-button';
 import { SidebarAudioPlayer } from './sidebar-audio-player';
 import { StudiosSection } from './studios-section';
 import { TemplateDocEntrance } from './template-doc-entrance';
+import { ThemeSwitcher } from './theme-switcher';
 import { TrashButton } from './trash-button';
 import { WhiteboardButton } from './whiteboard-button';
 import { UpdaterButton } from './updater-button';
@@ -202,6 +203,7 @@ export const RootAppSidebar = memo((): ReactElement => {
               dense
             />
           </div>
+          <ThemeSwitcher />
           <UserInfo />
         </div>
         <div className={quickSearchAndNewPage}>

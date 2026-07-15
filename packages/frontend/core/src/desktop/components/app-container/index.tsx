@@ -8,6 +8,7 @@ import {
 } from '@affine/core/modules/app-sidebar/views';
 import { AppTabsHeader } from '@affine/core/modules/app-tabs-header';
 import { NavigationButtons } from '@affine/core/modules/navigation';
+import { WorkbenchService } from '@affine/core/modules/workbench';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import {
   useLiveData,
@@ -86,6 +87,10 @@ const DesktopLayout = ({
   );
 };
 
+// Full-bleed studio routes where the floating "Open in app" card would overlap
+// the surface (e.g. the vdz timeline). Future studios inherit suppression here.
+const STUDIO_ROUTE_PREFIXES = ['/vdz'];
+
 const BrowserLayout = ({
   children,
   fallback = false,
@@ -93,9 +98,15 @@ const BrowserLayout = ({
   const workspaceService = useServiceOptional(WorkspaceService);
   const isInWorkspace = !!workspaceService;
 
+  const workbench = useServiceOptional(WorkbenchService)?.workbench;
+  const location = useLiveData(workbench?.location$);
+  const isStudioRoute = STUDIO_ROUTE_PREFIXES.some(prefix =>
+    location?.pathname?.startsWith(prefix)
+  );
+
   return (
     <div className={styles.browserAppViewContainer}>
-      <OpenInAppCard />
+      {!isStudioRoute && <OpenInAppCard />}
       {fallback ? <AppSidebarFallback /> : isInWorkspace && <RootAppSidebar />}
       <MainContainer>{children}</MainContainer>
     </div>
