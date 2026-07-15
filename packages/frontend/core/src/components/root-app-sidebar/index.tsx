@@ -50,6 +50,7 @@ import { InviteMembersButton } from './invite-members-button';
 import { AppSidebarJournalButton } from './journal-button';
 import { NotificationButton } from './notification-button';
 import { SidebarAudioPlayer } from './sidebar-audio-player';
+import { StudiosSection } from './studios-section';
 import { TemplateDocEntrance } from './template-doc-entrance';
 import { TrashButton } from './trash-button';
 import { WhiteboardButton } from './whiteboard-button';
@@ -228,6 +229,7 @@ export const RootAppSidebar = memo((): ReactElement => {
         </MenuItem>
       </SidebarContainer>
       <SidebarScrollableContainer>
+        <StudiosSection />
         <NavigationPanelFavorites />
         <NavigationPanelOrganize />
         <NavigationPanelMigrationFavorites />
