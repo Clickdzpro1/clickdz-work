@@ -1,17 +1,37 @@
+import { nanoid } from 'nanoid';
 import { useCallback, useMemo, useRef, useState } from 'react';
 
-import type { VdzClip, VdzOp, VdzTimeline } from '../../../../modules/vdz';
+import type {
+  VdzClip,
+  VdzOp,
+  VdzTimeline,
+  VdzTransition,
+} from '../../../../modules/vdz';
 import {
   LANE_LABEL_WIDTH,
   MIN_CLIP_DURATION,
   SNAP_PX,
   TRACK_COLORS,
   TRIM_HANDLE_PX,
+  VDZ_MEDIA_DND_MIME,
+  type VdzMediaDragPayload,
 } from './constants';
 import * as styles from './index.css';
 import { TimeRuler } from './time-ruler';
 
 type TrackKind = VdzTimeline['tracks'][number]['kind'];
+
+/** Transition kinds offered by the between-clip picker. */
+const TRANSITION_KINDS: VdzTransition['kind'][] = ['fade', 'slide', 'wipe'];
+/** Duration presets (seconds) offered by the picker. */
+const TRANSITION_DURATIONS = [0.3, 0.5, 1] as const;
+
+/** Which between-clip boundary's add-picker is open. */
+interface OpenPicker {
+  trackId: string;
+  /** id of the clip the transition would sit AFTER. */
+  afterClipId: string;
+}
 
 type DragMode = 'move' | 'trim-l' | 'trim-r';
 
@@ -49,6 +69,21 @@ interface TimelineLanesProps {
   onZoomWheel: (deltaY: number) => void;
   /** Commit a single move/trim op (already snapped/clamped). */
   onCommitOp: (op: VdzOp) => void;
+  /**
+   * A media-bin item was dropped on a lane. `trackId` is the drop target and
+   * `atSeconds` is the pointer position mapped to timeline seconds. The host
+   * turns this into a single `addClip` op (routed through the history path).
+   */
+  onDropMedia?: (
+    payload: VdzMediaDragPayload,
+    trackId: string,
+    atSeconds: number
+  ) => void;
+  /**
+   * Raw files were dropped on a lane. Imported through the same pipeline as the
+   * Upload tab; `trackId`/`atSeconds` give the drop location for placement.
+   */
+  onDropFiles?: (files: FileList, trackId: string, atSeconds: number) => void;
 }
 
 /** Round a seconds value to a sane timeline precision (avoids float noise). */
@@ -73,8 +108,14 @@ export function TimelineLanes({
   onScrubToSeconds,
   onZoomWheel,
   onCommitOp,
+  onDropMedia,
+  onDropFiles,
 }: TimelineLanesProps) {
   const [drag, setDrag] = useState<DragState | null>(null);
+  // Track id currently under a drag-drop hover (for the drop highlight).
+  const [dropTrackId, setDropTrackId] = useState<string | null>(null);
+  // Which between-clip boundary is showing its "add transition" picker.
+  const [openPicker, setOpenPicker] = useState<OpenPicker | null>(null);
   // Live rects of each lane track element, for cross-lane hit testing.
   const laneRectsRef = useRef<Map<string, DOMRect>>(new Map());
   const contentWidth = spanSeconds * pxPerSec;
@@ -330,10 +371,124 @@ export function TimelineLanes({
     []
   );
 
+  // ---- Drag & drop of media (bin items or raw files) onto a lane --------
+  // A drop is only meaningful if the host wired a handler; the payload is read
+  // on drop (dragover can only see MIME *types*, not values).
+  const canAcceptDrop = Boolean(onDropMedia || onDropFiles);
+
+  const onLaneDragOver = useCallback(
+    (event: React.DragEvent<HTMLDivElement>, trackId: string) => {
+      if (!canAcceptDrop) return;
+      const types = Array.from(event.dataTransfer.types);
+      const isMedia = types.includes(VDZ_MEDIA_DND_MIME);
+      const isFiles = types.includes('Files');
+      if (!isMedia && !isFiles) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      if (dropTrackId !== trackId) setDropTrackId(trackId);
+    },
+    [canAcceptDrop, dropTrackId]
+  );
+
+  const onLaneDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>, trackId: string) => {
+      if (!canAcceptDrop) return;
+      setDropTrackId(null);
+      const rect = event.currentTarget.getBoundingClientRect();
+      // Same coordinate model as the ruler/clip layout: x → seconds at zoom.
+      const atSeconds = Math.max(
+        0,
+        roundSec((event.clientX - rect.left) / pxPerSec)
+      );
+
+      const raw = event.dataTransfer.getData(VDZ_MEDIA_DND_MIME);
+      if (raw) {
+        event.preventDefault();
+        try {
+          const payload = JSON.parse(raw) as VdzMediaDragPayload;
+          onDropMedia?.(payload, trackId, atSeconds);
+        } catch {
+          // Malformed payload — ignore silently (never mutate on bad input).
+        }
+        return;
+      }
+
+      const files = event.dataTransfer.files;
+      if (files && files.length > 0) {
+        event.preventDefault();
+        onDropFiles?.(files, trackId, atSeconds);
+      }
+    },
+    [canAcceptDrop, pxPerSec, onDropMedia, onDropFiles]
+  );
+
   const snapGuideLeft = useMemo(
     () => (drag?.snapSeconds != null ? drag.snapSeconds * pxPerSec : null),
     [drag, pxPerSec]
   );
+
+  // Add a transition on a boundary (after `afterClipId`) via one applyTransition
+  // op, then close the picker.
+  const addTransition = useCallback(
+    (
+      trackId: string,
+      afterClipId: string,
+      kind: VdzTransition['kind'],
+      duration: number
+    ) => {
+      onCommitOp({
+        op: 'applyTransition',
+        trackId,
+        transition: { id: `xfade-${nanoid(6)}`, kind, afterClipId, duration },
+      });
+      setOpenPicker(null);
+    },
+    [onCommitOp]
+  );
+
+  const removeTransition = useCallback(
+    (trackId: string, transitionId: string) => {
+      onCommitOp({ op: 'removeTransition', trackId, transitionId });
+    },
+    [onCommitOp]
+  );
+
+  // Adjacent-clip boundaries per track: pairs where clip[i] ends exactly where
+  // clip[i+1] starts. Each carries any existing transition after clip[i], the
+  // boundary seconds, and the ids. Clips are read in array order (the editor
+  // keeps them sorted after every structural op).
+  const boundariesByTrack = useMemo(() => {
+    const map = new Map<
+      string,
+      Array<{
+        afterClipId: string;
+        boundary: number;
+        transition: VdzTransition | undefined;
+      }>
+    >();
+    for (const track of timeline.tracks) {
+      const out: Array<{
+        afterClipId: string;
+        boundary: number;
+        transition: VdzTransition | undefined;
+      }> = [];
+      const transitions = track.transitions ?? [];
+      for (let i = 0; i < track.clips.length - 1; i++) {
+        const a = track.clips[i];
+        const b = track.clips[i + 1];
+        const aEnd = a.start + a.duration;
+        // Only abutting clips form a real crossfade boundary.
+        if (Math.abs(aEnd - b.start) > 1e-6) continue;
+        out.push({
+          afterClipId: a.id,
+          boundary: aEnd,
+          transition: transitions.find(tr => tr.afterClipId === a.id),
+        });
+      }
+      map.set(track.id, out);
+    }
+    return map;
+  }, [timeline]);
 
   return (
     <div className={styles.lanesViewport}>
@@ -360,8 +515,12 @@ export function TimelineLanes({
               <div
                 key={track.id}
                 className={styles.laneRow}
+                data-drop-target={dropTrackId === track.id}
                 ref={el => registerLaneRect(track.id, el)}
                 onPointerDown={onTrackBackgroundPointerDown}
+                onDragOver={e => onLaneDragOver(e, track.id)}
+                onDragLeave={() => setDropTrackId(null)}
+                onDrop={e => onLaneDrop(e, track.id)}
               >
                 {track.clips.map(clip => {
                   // Non-null only while THIS clip is the one being dragged.
@@ -405,6 +564,94 @@ export function TimelineLanes({
                     </div>
                   );
                 })}
+
+                {/* Transition badges / add affordances at clip boundaries.
+                    Hidden while dragging so they never fight the ghost. */}
+                {!drag &&
+                  (boundariesByTrack.get(track.id) ?? []).map(b => {
+                    const left = b.boundary * pxPerSec;
+                    const pickerOpen =
+                      openPicker?.trackId === track.id &&
+                      openPicker.afterClipId === b.afterClipId;
+                    return (
+                      <div
+                        key={`bnd-${b.afterClipId}`}
+                        className={styles.boundaryAnchor}
+                        style={{ left }}
+                      >
+                        {b.transition ? (
+                          <button
+                            type="button"
+                            className={styles.transitionBadge}
+                            title={`${b.transition.kind} transition · ${b.transition.duration}s — click to remove`}
+                            onPointerDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              e.stopPropagation();
+                              removeTransition(track.id, b.transition!.id);
+                            }}
+                          >
+                            ⧉
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className={styles.transitionAdd}
+                            title="Add a transition here"
+                            onPointerDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              e.stopPropagation();
+                              setOpenPicker(
+                                pickerOpen
+                                  ? null
+                                  : {
+                                      trackId: track.id,
+                                      afterClipId: b.afterClipId,
+                                    }
+                              );
+                            }}
+                          >
+                            +
+                          </button>
+                        )}
+
+                        {pickerOpen ? (
+                          <div
+                            className={styles.transitionPicker}
+                            onPointerDown={e => e.stopPropagation()}
+                          >
+                            {TRANSITION_KINDS.map(kind => (
+                              <div
+                                key={kind}
+                                className={styles.transitionPickerGroup}
+                              >
+                                <span className={styles.transitionPickerKind}>
+                                  {kind}
+                                </span>
+                                {TRANSITION_DURATIONS.map(d => (
+                                  <button
+                                    key={d}
+                                    type="button"
+                                    className={styles.transitionPickerButton}
+                                    onClick={e => {
+                                      e.stopPropagation();
+                                      addTransition(
+                                        track.id,
+                                        b.afterClipId,
+                                        kind,
+                                        d
+                                      );
+                                    }}
+                                  >
+                                    {d}s
+                                  </button>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
               </div>
             ))}
 

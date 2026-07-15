@@ -10,18 +10,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   computeTimelineDuration,
   createSampleTimeline,
-  type VdzClip,
   type VdzOp,
 } from '../../../../modules/vdz';
+import {
+  useVdzMedia,
+  type VdzMediaItem,
+} from '../../../../modules/vdz/use-vdz-media';
 import { VdzAiDock } from './ai-dock';
 import {
   clampZoom,
+  clipFromMedia,
   DEFAULT_PX_PER_SEC,
   findClip,
   isClipActive,
+  trackKindForMedia,
+  type VdzMediaDragPayload,
 } from './constants';
 import { VdzGeneratePanel } from './generate-panel';
 import * as styles from './index.css';
+import { Inspector } from './inspector';
+import { MediaBin } from './media-bin';
 import { PreviewCanvas } from './preview-canvas';
 import { TimelineLanes } from './timeline-lanes';
 import { Toolbar } from './toolbar';
@@ -57,6 +65,13 @@ const VdzStudioPage = () => {
   // ('generate'). The generator fully replaces the editor body when active.
   const [mode, setMode] = useState<VdzMode>('edit');
 
+  // Media bin: the single place user media enters the studio (upload / AI
+  // images / stock). Owned here so the bin's blob object URLs survive tab
+  // switches and re-renders; shown as a toggleable left-side panel.
+  const media = useVdzMedia();
+  const [showMedia, setShowMedia] = useState(true);
+  const toggleMedia = useCallback(() => setShowMedia(prev => !prev), []);
+
   // A staged, not-yet-applied AI proposal from the dock. null when nothing is
   // pending. The dock never mutates the timeline; the host reviews here and
   // applies through the SAME history path the toolbar uses (runBatch).
@@ -85,20 +100,6 @@ const VdzStudioPage = () => {
     () => findClip(timeline, soleSelectedId),
     [timeline, soleSelectedId]
   );
-
-  // Layers visible at the current playhead, back-to-front (video → overlay).
-  const visibleLayers = useMemo(() => {
-    const layers: VdzClip[] = [];
-    for (const track of timeline.tracks) {
-      if (track.kind === 'audio') continue;
-      for (const clip of track.clips) {
-        if (isClipActive(clip, playheadSeconds)) {
-          layers.push(clip);
-        }
-      }
-    }
-    return layers;
-  }, [timeline, playheadSeconds]);
 
   // ---- Selection ---------------------------------------------------------
   const selectClip = useCallback((clipId: string, shiftKey: boolean) => {
@@ -234,6 +235,110 @@ const VdzStudioPage = () => {
 
   // A single move/trim op emitted by the lanes on pointerup.
   const commitLaneOp = useCallback((op: VdzOp) => run(op), [run]);
+
+  // ---- Media → timeline (all through the one history apply path) --------
+  // Resolve a concrete track id for a media payload: prefer the caller's
+  // explicit target track (a drop lands where you drop it) as long as its kind
+  // is compatible, otherwise fall back to the first track of the media's kind.
+  const resolveTargetTrackId = useCallback(
+    (
+      payload: VdzMediaDragPayload | VdzMediaItem,
+      preferredTrackId?: string
+    ) => {
+      const wantKind = trackKindForMedia(payload.kind);
+      if (preferredTrackId) {
+        const preferred = timeline.tracks.find(t => t.id === preferredTrackId);
+        // Images are happy on video OR overlay; a/v must match kind exactly.
+        if (preferred) {
+          if (payload.kind === 'image') {
+            if (preferred.kind === 'video' || preferred.kind === 'overlay') {
+              return preferred.id;
+            }
+          } else if (preferred.kind === wantKind) {
+            return preferred.id;
+          }
+        }
+      }
+      return timeline.tracks.find(t => t.kind === wantKind)?.id ?? null;
+    },
+    [timeline]
+  );
+
+  // Add a bin item at the playhead (the "+" button / click path).
+  const addMediaToTimeline = useCallback(
+    (item: VdzMediaItem) => {
+      const trackId = resolveTargetTrackId(item);
+      if (!trackId) return;
+      run({
+        op: 'addClip',
+        trackId,
+        clip: clipFromMedia(item, playheadSeconds),
+      });
+    },
+    [resolveTargetTrackId, run, playheadSeconds]
+  );
+
+  // A bin item was dropped on a specific lane at a specific x → one addClip.
+  const handleDropMedia = useCallback(
+    (payload: VdzMediaDragPayload, trackId: string, atSeconds: number) => {
+      const target = resolveTargetTrackId(payload, trackId);
+      if (!target) return;
+      run({
+        op: 'addClip',
+        trackId: target,
+        clip: clipFromMedia(payload, atSeconds),
+      });
+    },
+    [resolveTargetTrackId, run]
+  );
+
+  // Raw files dropped on the timeline: import (same pipeline as Upload), then
+  // drop each onto the lane at the drop position. Imports are async, so we
+  // place them once resolved. The drop lane is only honored when kind-compatible.
+  const handleDropFiles = useCallback(
+    (files: FileList, trackId: string, atSeconds: number) => {
+      void media.importFiles(files).then(added => {
+        let cursor = atSeconds;
+        for (const item of added) {
+          const target = resolveTargetTrackId(item, trackId);
+          if (!target) continue;
+          const clip = clipFromMedia(item, cursor);
+          run({ op: 'addClip', trackId: target, clip });
+          // Lay multiple dropped files back-to-back from the drop point.
+          cursor += clip.duration;
+        }
+      });
+    },
+    [media, resolveTargetTrackId, run]
+  );
+
+  // Page-level file drop: dropping files anywhere in the editor (except a more
+  // specific target that already handled the drop — a timeline lane, or the
+  // bin's own drop zone) imports them into the media bin. `defaultPrevented`
+  // is set by those inner handlers and persists through native bubbling, so
+  // this fires ONLY for otherwise-unhandled drops.
+  const onRootDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (event.defaultPrevented) return;
+      const files = event.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      event.preventDefault();
+      void media.importFiles(files);
+    },
+    [media]
+  );
+
+  const onRootDragOver = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (event.defaultPrevented) return;
+      if (Array.from(event.dataTransfer.types).includes('Files')) {
+        // Permit the drop so onRootDrop fires (default is to reject).
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }
+    },
+    []
+  );
 
   // ---- Demo buttons (rewired through the history apply path) -------------
   const onAddTextClip = useCallback(() => {
@@ -408,18 +513,33 @@ const VdzStudioPage = () => {
             <VdzGeneratePanel />
           </div>
         ) : (
-          <div className={styles.root} ref={containerRef} tabIndex={-1}>
+          <div
+            className={styles.root}
+            ref={containerRef}
+            tabIndex={-1}
+            onDragOver={onRootDragOver}
+            onDrop={onRootDrop}
+          >
             <div className={styles.main}>
+              {/* Media bin — left-side panel; toggled by the toolbar "Media"
+                  button. Items are draggable to the timeline and add at the
+                  playhead via the "+" button (both route through `run`). */}
+              {showMedia ? (
+                <MediaBin media={media} onAddToTimeline={addMediaToTimeline} />
+              ) : null}
+
               {/* Preview + timeline stage */}
               <div className={styles.stage}>
                 <PreviewCanvas
-                  layers={visibleLayers}
+                  timeline={timeline}
                   playheadSeconds={playheadSeconds}
                 />
 
                 {/* Timeline */}
                 <div className={styles.timeline}>
                   <Toolbar
+                    showMedia={showMedia}
+                    onToggleMedia={toggleMedia}
                     isPlaying={isPlaying}
                     onTogglePlay={togglePlay}
                     playheadSeconds={playheadSeconds}
@@ -462,6 +582,8 @@ const VdzStudioPage = () => {
                     onScrubToSeconds={scrubTo}
                     onZoomWheel={onZoomWheel}
                     onCommitOp={commitLaneOp}
+                    onDropMedia={handleDropMedia}
+                    onDropFiles={handleDropFiles}
                   />
                 </div>
               </div>
@@ -471,14 +593,11 @@ const VdzStudioPage = () => {
                 <div className={styles.inspectorTitle}>Inspector</div>
                 <div className={styles.inspectorBody}>
                   {selected ? (
-                    <>
-                      <pre className={styles.jsonBlock}>
-                        {JSON.stringify(selected.clip, null, 2)}
-                      </pre>
-                      <div className={styles.inspectorMeta}>
-                        track: {selected.trackId}
-                      </div>
-                    </>
+                    <Inspector
+                      clip={selected.clip}
+                      trackId={selected.trackId}
+                      onOp={commitLaneOp}
+                    />
                   ) : selectedIds.size > 1 ? (
                     <div className={styles.inspectorHint}>
                       {selectedIds.size} clips selected. Delete / ripple-delete

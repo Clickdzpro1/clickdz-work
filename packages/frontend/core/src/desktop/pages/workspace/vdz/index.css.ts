@@ -151,11 +151,13 @@ export const previewLayer = style({
 
 export const previewText = style({
   position: 'absolute',
-  transform: 'translate(-50%, -50%)',
+  // The transform (including the centering translate(-50%,-50%)) is supplied
+  // inline so the clip's animation/transition offsets compose with it.
   whiteSpace: 'pre-wrap',
   fontWeight: 700,
   lineHeight: 1.1,
   textShadow: '0 2px 12px rgba(0,0,0,0.6)',
+  willChange: 'transform, opacity',
 });
 
 export const previewImage = style({
@@ -450,6 +452,14 @@ export const laneRow = style({
   background: bg,
   borderRadius: 6,
   border: `1px solid ${border}`,
+  transition: 'border-color 120ms ease, background 120ms ease',
+  selectors: {
+    // Highlighted while a media/file drag hovers this lane (see TimelineLanes).
+    '&[data-drop-target="true"]': {
+      borderColor: accent,
+      background: 'rgba(91,140,255,0.1)',
+    },
+  },
 });
 
 // A clip block on a lane. left/width set inline (dynamic).
@@ -596,4 +606,291 @@ export const button = style({
 export const errorText = style({
   color: '#ff6b6b',
   fontSize: 12,
+});
+
+// ---- Inspector: real per-clip controls ----------------------------------
+export const inspStack = style({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
+});
+
+export const inspClipName = style({
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 8,
+  fontSize: 13,
+  fontWeight: 600,
+  color: text,
+});
+
+export const inspClipType = style({
+  fontSize: 10,
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  color: '#fff',
+  background: raised,
+  borderRadius: 999,
+  padding: '2px 8px',
+});
+
+export const inspSection = style({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  paddingTop: 12,
+  borderTop: `1px solid ${border}`,
+});
+
+export const inspSectionTitle = style({
+  fontSize: 11,
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  color: textDim,
+});
+
+export const inspField = style({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  flex: 1,
+  minWidth: 0,
+});
+
+export const inspFieldLabel = style({
+  fontSize: 11,
+  color: textDim,
+  fontVariantNumeric: 'tabular-nums',
+});
+
+export const inspRow = style({
+  display: 'flex',
+  gap: 10,
+});
+
+export const inspRange = style({
+  width: '100%',
+  accentColor: accent,
+  cursor: 'pointer',
+});
+
+export const inspTextarea = style({
+  width: '100%',
+  boxSizing: 'border-box',
+  resize: 'vertical',
+  background: bg,
+  color: text,
+  border: `1px solid ${border}`,
+  borderRadius: 6,
+  padding: '6px 8px',
+  fontSize: 12,
+  fontFamily: 'inherit',
+  ':focus': {
+    outline: 'none',
+    borderColor: accent,
+  },
+});
+
+export const inspSelect = style({
+  width: '100%',
+  boxSizing: 'border-box',
+  appearance: 'none',
+  background: bg,
+  color: text,
+  border: `1px solid ${border}`,
+  borderRadius: 6,
+  padding: '5px 8px',
+  fontSize: 12,
+  cursor: 'pointer',
+  ':focus': {
+    outline: 'none',
+    borderColor: accent,
+  },
+});
+
+export const inspColor = style({
+  width: 40,
+  height: 26,
+  padding: 0,
+  background: bg,
+  border: `1px solid ${border}`,
+  borderRadius: 6,
+  cursor: 'pointer',
+});
+
+export const inspEmptyHint = style({
+  color: textDim,
+  fontSize: 12,
+});
+
+export const inspEffectRow = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+});
+
+export const inspEffectName = style({
+  fontSize: 11,
+  color: text,
+  width: 72,
+  flexShrink: 0,
+  textTransform: 'capitalize',
+});
+
+export const inspIconButton = style({
+  appearance: 'none',
+  flexShrink: 0,
+  border: `1px solid ${border}`,
+  background: bg,
+  color: textDim,
+  fontSize: 11,
+  lineHeight: 1,
+  width: 22,
+  height: 22,
+  borderRadius: 6,
+  cursor: 'pointer',
+  ':hover': {
+    color: '#ff6b6b',
+    borderColor: '#ff6b6b',
+  },
+});
+
+export const inspRawToggle = style({
+  appearance: 'none',
+  alignSelf: 'flex-start',
+  border: 'none',
+  background: 'transparent',
+  color: textDim,
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
+  padding: 0,
+  ':hover': {
+    color: text,
+  },
+});
+
+// ---- Timeline: transition badges + add-picker ---------------------------
+// A zero-width anchor centered on a clip boundary; children are absolutely
+// centered on it. Sits above the lane row's clips.
+export const boundaryAnchor = style({
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+  width: 0,
+  zIndex: 8,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+});
+
+// The ⧉ diamond shown when a transition exists on the boundary.
+export const transitionBadge = style({
+  position: 'absolute',
+  appearance: 'none',
+  left: 0,
+  marginLeft: -9,
+  width: 18,
+  height: 18,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: `1px solid ${accent2}`,
+  background: panel,
+  color: accent2,
+  borderRadius: 5,
+  fontSize: 11,
+  lineHeight: 1,
+  cursor: 'pointer',
+  boxShadow: `0 0 6px ${accent2}`,
+  transition: 'background 120ms ease, color 120ms ease',
+  ':hover': {
+    background: accent2,
+    color: '#fff',
+  },
+});
+
+// The "+" affordance shown on an empty boundary (revealed on lane hover).
+export const transitionAdd = style({
+  position: 'absolute',
+  appearance: 'none',
+  left: 0,
+  marginLeft: -8,
+  width: 16,
+  height: 16,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: `1px dashed ${textDim}`,
+  background: bg,
+  color: textDim,
+  borderRadius: '50%',
+  fontSize: 12,
+  lineHeight: 1,
+  cursor: 'pointer',
+  opacity: 0,
+  transition: 'opacity 120ms ease, color 120ms ease, border-color 120ms ease',
+  selectors: {
+    [`${laneRow}:hover &`]: {
+      opacity: 1,
+    },
+    '&:hover': {
+      color: text,
+      borderColor: accent,
+      opacity: 1,
+    },
+  },
+});
+
+// The tiny kind/duration popover opened from the "+" affordance.
+export const transitionPicker = style({
+  position: 'absolute',
+  top: '100%',
+  left: 0,
+  marginTop: 6,
+  transform: 'translateX(-50%)',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  padding: 6,
+  background: panel,
+  border: `1px solid ${border}`,
+  borderRadius: 8,
+  boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+  zIndex: 9,
+});
+
+export const transitionPickerGroup = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 4,
+});
+
+export const transitionPickerKind = style({
+  fontSize: 11,
+  fontWeight: 600,
+  color: textDim,
+  textTransform: 'capitalize',
+  width: 40,
+  flexShrink: 0,
+});
+
+export const transitionPickerButton = style({
+  appearance: 'none',
+  border: `1px solid ${border}`,
+  background: bg,
+  color: text,
+  fontSize: 11,
+  fontWeight: 600,
+  padding: '3px 7px',
+  borderRadius: 5,
+  cursor: 'pointer',
+  transition: 'background 120ms ease, border-color 120ms ease',
+  ':hover': {
+    background: raised,
+    borderColor: accent,
+  },
 });

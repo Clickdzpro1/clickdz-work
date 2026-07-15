@@ -13,7 +13,71 @@ import { z } from 'zod';
  * resolution-independent.
  */
 
-/** Fields shared by every clip regardless of `type`. */
+/**
+ * Motion presets for a clip's entrance/exit animation. Each maps to a
+ * deterministic opacity + transform curve in the preview (see the page-level
+ * `anim.ts`): `fade` is opacity only; `slide-*` translate in from an edge;
+ * `zoom-in`/`zoom-out` scale; `pop` overshoots slightly on entry.
+ */
+export const vdzAnimationKindSchema = z.enum([
+  'fade',
+  'slide-up',
+  'slide-down',
+  'slide-left',
+  'slide-right',
+  'zoom-in',
+  'zoom-out',
+  'pop',
+]);
+export type VdzAnimationKind = z.infer<typeof vdzAnimationKindSchema>;
+
+/** One end of a clip animation (its `in` entrance or `out` exit). */
+export const vdzAnimationSpecSchema = z.object({
+  kind: vdzAnimationKindSchema,
+  /** Length in seconds. Defaults to 0.5 when omitted. */
+  duration: z.number().positive().default(0.5),
+});
+export type VdzAnimationSpec = z.infer<typeof vdzAnimationSpecSchema>;
+
+/**
+ * A clip's optional entrance/exit animation. `in` plays over its `duration`
+ * from the clip's start; `out` plays over its `duration` ending at the clip's
+ * end. Either side may be omitted.
+ */
+export const vdzAnimationSchema = z.object({
+  in: vdzAnimationSpecSchema.optional(),
+  out: vdzAnimationSpecSchema.optional(),
+});
+export type VdzAnimation = z.infer<typeof vdzAnimationSchema>;
+
+/** Visual filter effects applied to a clip, rendered as a CSS `filter`. */
+export const vdzEffectKindSchema = z.enum([
+  'blur',
+  'brightness',
+  'contrast',
+  'saturate',
+  'grayscale',
+  'sepia',
+  'glow',
+]);
+export type VdzEffectKind = z.infer<typeof vdzEffectKindSchema>;
+
+/**
+ * One effect on a clip. `amount` is a normalized 0..1 knob the preview maps to
+ * a sensible per-effect range (e.g. blur → 0..12px, brightness → 0.5..1.5).
+ */
+export const vdzEffectSchema = z.object({
+  kind: vdzEffectKindSchema,
+  amount: z.number().min(0).max(1),
+});
+export type VdzEffect = z.infer<typeof vdzEffectSchema>;
+
+/**
+ * Fields shared by every clip regardless of `type`.
+ *
+ * `animation` and `effects` are OPTIONAL and additive — a timeline authored
+ * before they existed parses unchanged.
+ */
 export const vdzClipBaseSchema = z.object({
   id: z.string(),
   /** Offset from the start of the track, in seconds. */
@@ -21,6 +85,10 @@ export const vdzClipBaseSchema = z.object({
   /** Length of the clip on the timeline, in seconds. */
   duration: z.number().positive(),
   name: z.string().optional(),
+  /** Optional entrance/exit motion (see {@link vdzAnimationSchema}). */
+  animation: vdzAnimationSchema.optional(),
+  /** Optional visual filter stack (see {@link vdzEffectSchema}). */
+  effects: z.array(vdzEffectSchema).optional(),
 });
 export type VdzClipBase = z.infer<typeof vdzClipBaseSchema>;
 

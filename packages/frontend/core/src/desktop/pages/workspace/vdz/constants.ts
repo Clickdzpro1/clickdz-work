@@ -1,4 +1,10 @@
+import { nanoid } from 'nanoid';
+
 import type { VdzClip, VdzTimeline } from '../../../../modules/vdz';
+import type {
+  VdzMediaItem,
+  VdzMediaKind,
+} from '../../../../modules/vdz/use-vdz-media';
 
 /** Lane accent colors keyed by track kind. */
 export const TRACK_COLORS: Record<
@@ -60,4 +66,86 @@ export function findClip(
     if (clip) return { clip, trackId: track.id };
   }
   return null;
+}
+
+// ---- Media bin drag-and-drop --------------------------------------------
+
+/**
+ * Custom drag MIME the media bin writes and the timeline reads. A bin item is
+ * serialized to JSON on `dragstart`; a lane deserializes it on `drop` and turns
+ * it into an `addClip` op. Using a namespaced type keeps our payload from
+ * clashing with generic text/file drops.
+ */
+export const VDZ_MEDIA_DND_MIME = 'application/x-vdz-media';
+
+/** The subset of a media item carried across a drag (must be JSON-serializable). */
+export interface VdzMediaDragPayload {
+  kind: VdzMediaKind;
+  name: string;
+  url: string;
+  duration: number;
+  blobId?: string;
+  mime?: string;
+}
+
+/** Default on-timeline length (seconds) for media with no intrinsic duration. */
+export const DEFAULT_IMAGE_CLIP_DURATION = 4;
+/** Fallback length (seconds) when a video/audio probe returned 0. */
+export const DEFAULT_AV_CLIP_DURATION = 5;
+
+/** The track kind a media kind lands on when added to the timeline. */
+export function trackKindForMedia(
+  kind: VdzMediaKind
+): VdzTimeline['tracks'][number]['kind'] {
+  if (kind === 'audio') return 'audio';
+  // Video AND image both live on the video track by default; images may also
+  // be dropped onto an overlay lane explicitly (the drop target decides).
+  return 'video';
+}
+
+/**
+ * Build a validated-shape {@link VdzClip} from a media payload at a given start.
+ * The caller still routes it through the single `applyOp` path (which
+ * re-validates), so this only needs to produce the right discriminated shape.
+ */
+export function clipFromMedia(
+  media: VdzMediaDragPayload | VdzMediaItem,
+  startSeconds: number
+): VdzClip {
+  const id = `clip-${nanoid(6)}`;
+  const start = Math.max(0, Math.round(startSeconds * 1000) / 1000);
+  const name = media.name || media.kind;
+  if (media.kind === 'audio') {
+    return {
+      id,
+      type: 'audio',
+      name,
+      start,
+      duration: media.duration > 0 ? media.duration : DEFAULT_AV_CLIP_DURATION,
+      src: media.url,
+      volume: 1,
+    };
+  }
+  if (media.kind === 'video') {
+    return {
+      id,
+      type: 'video',
+      name,
+      start,
+      duration: media.duration > 0 ? media.duration : DEFAULT_AV_CLIP_DURATION,
+      src: media.url,
+      trimStart: 0,
+      volume: 1,
+    };
+  }
+  // image
+  return {
+    id,
+    type: 'image',
+    name,
+    start,
+    duration: DEFAULT_IMAGE_CLIP_DURATION,
+    src: media.url,
+    fit: 'cover',
+  };
 }
