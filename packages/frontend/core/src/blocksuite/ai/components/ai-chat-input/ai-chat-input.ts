@@ -45,6 +45,9 @@ import type { AIChatInputContext, AIReasoningConfig } from './type';
 // Side-effect import: registers the <clickdz-builder-studio> custom element so
 // the composer can host the full studio overlay when a saved app is opened.
 import '../ai-tools/clickdz-builder-studio';
+// Side-effect import: registers <cdz-pulse-ticker> (reasoning-pulse animation
+// shown in the composer's image/app busy state).
+import '../cdz-pulse-ticker';
 
 function getFirstTwoLines(text: string) {
   const lines = text.split('\n');
@@ -598,6 +601,11 @@ export class AIChatInput extends SignalWatcher(
     }
 
     /* ===== Workers ===== */
+    .cdz-composer-pulse {
+      display: block;
+      margin: 0 0 8px;
+      animation: clickdz-card-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
     .cdz-worker-chip {
       display: inline-flex;
       align-items: center;
@@ -1658,6 +1666,11 @@ export class AIChatInput extends SignalWatcher(
 
   @state()
   accessor appBusy = false;
+
+  // Prompt driving the current image/app generation — fed to the reasoning-pulse
+  // ticker as its `task` while imageBusy/appBusy is true.
+  @state()
+  accessor _pulseTask = '';
 
   // the generated app: html is previewed instantly (blob), url exists once published
   @state()
@@ -2768,6 +2781,14 @@ export class AIChatInput extends SignalWatcher(
           </div>`
         : nothing}
       ${this.planBusy || this.planReview ? this._renderPlanReview() : nothing}
+      ${this.imageBusy || this.appBusy
+        ? html`<cdz-pulse-ticker
+            class="cdz-composer-pulse"
+            .task=${this._pulseTask}
+            surface=${this.appBusy ? 'app' : 'image'}
+            ?active=${this.imageBusy || this.appBusy}
+          ></cdz-pulse-ticker>`
+        : nothing}
       ${this.activeWorker
         ? html`<div class="cdz-worker-chip">
             <span class="cdz-worker-chip-icon">${this.activeWorker.icon}</span>
@@ -3151,6 +3172,7 @@ export class AIChatInput extends SignalWatcher(
     const referenceImage = /^https?:\/\//.test(this.imageResult?.url || '')
       ? this.imageResult?.url
       : undefined;
+    this._pulseTask = prompt;
     this.imageBusy = true;
     await this.runtime.dispatch({
       type: 'beginLocalExchange',
@@ -3219,6 +3241,7 @@ export class AIChatInput extends SignalWatcher(
   private readonly _generateClickDzApp = async (prompt: string) => {
     if (!prompt.trim() || this.appBusy || !this.runtime) return;
     const exchangeId = newArtifactId('app-exchange');
+    this._pulseTask = prompt;
     this.appBusy = true;
     const iterating = !!this.appResult?.html;
     await this.runtime.dispatch({

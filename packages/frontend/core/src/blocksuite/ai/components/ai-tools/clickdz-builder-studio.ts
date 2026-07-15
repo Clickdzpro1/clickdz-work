@@ -4,6 +4,7 @@ import { classMap } from 'lit/directives/class-map.js';
 
 // Studio v3 AI-editor modules (new sibling files).
 import { cdzApiUrl } from '../../provider';
+import '../cdz-pulse-ticker'; // side-effect: registers <cdz-pulse-ticker>
 import './cdz-diff-view'; // side-effect: registers <cdz-diff-view>
 import { diffLines } from './cdz-html-diff';
 import {
@@ -1195,6 +1196,13 @@ export class ClickDzBuilderStudio extends LitElement {
       animation-delay: 0.3s;
     }
 
+    /* reasoning-pulse ticker — replaces the bare dots while an AI edit runs */
+    .cdz-dock-pulse {
+      align-self: stretch;
+      display: block;
+      width: 100%;
+    }
+
     @keyframes cdz-bounce {
       0%,
       60%,
@@ -1265,6 +1273,11 @@ export class ClickDzBuilderStudio extends LitElement {
 
   @state()
   private accessor aiBusy = false;
+
+  // Prompt driving the in-flight AI edit — fed to the reasoning-pulse ticker as
+  // its `task` while aiBusy (aiPrompt itself is cleared on send).
+  @state()
+  private accessor pulseTask = '';
 
   @state()
   private accessor publishing = false;
@@ -2559,6 +2572,7 @@ export class ClickDzBuilderStudio extends LitElement {
     this.turnLog = [...this.turnLog, { role: 'user', text: prompt }];
     this.chatLog = [...this.chatLog, { role: 'user', text: prompt }];
     this.aiPrompt = '';
+    this.pulseTask = prompt;
     this.aiBusy = true;
     this.error = '';
 
@@ -3373,9 +3387,12 @@ export class ClickDzBuilderStudio extends LitElement {
               </div>`;
             })}
         ${this.aiBusy
-          ? html`<div class="cdz-typing" aria-label="Assistant is working">
-              <span></span><span></span><span></span>
-            </div>`
+          ? html`<cdz-pulse-ticker
+              class="cdz-dock-pulse"
+              .task=${this.pulseTask}
+              surface="app"
+              ?active=${this.aiBusy}
+            ></cdz-pulse-ticker>`
           : nothing}
       </div>
 
