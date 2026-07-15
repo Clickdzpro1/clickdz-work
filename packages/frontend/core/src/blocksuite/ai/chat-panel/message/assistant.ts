@@ -114,6 +114,11 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
   @property({ attribute: false })
   accessor onOpenDoc!: (docId: string, sessionId?: string) => void;
 
+  // Text of the user message this pending answer replies to (first ~100 chars),
+  // forwarded to the loading indicator's reasoning-pulse ticker as its `task`.
+  @property({ attribute: false })
+  accessor pulseTask = '';
+
   get state() {
     const { isLast, status } = this;
     return isLast
@@ -280,7 +285,7 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     const { isLast, status } = this;
 
     if (isLast && status === 'loading') {
-      return html`<ai-loading></ai-loading>`;
+      return html`<ai-loading .task=${this.pulseTask}></ai-loading>`;
     }
 
     // aria-live="polite" lets screen readers announce the streamed assistant

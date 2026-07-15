@@ -445,12 +445,26 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
                     .item=${item}
                   ></chat-message-user>`;
                 } else if (isChatMessage(item) && item.role === 'assistant') {
+                  // Task for the loading ticker: the nearest preceding user
+                  // message (first ~100 chars). Only needed while this is the
+                  // last, still-loading answer.
+                  let pulseTask = '';
+                  if (isLast) {
+                    for (let i = index - 1; i >= 0; i--) {
+                      const prev = filteredItems[i];
+                      if (isChatMessage(prev) && prev.role === 'user') {
+                        pulseTask = (prev.content ?? '').slice(0, 100);
+                        break;
+                      }
+                    }
+                  }
                   return html`<chat-message-assistant
                     .host=${this.host}
                     .session=${this.session}
                     .item=${item}
                     .isLast=${isLast}
                     .status=${isLast ? status : 'idle'}
+                    .pulseTask=${pulseTask}
                     .error=${isLast ? error : null}
                     .extensions=${this.extensions}
                     .affineFeatureFlagService=${this.affineFeatureFlagService}

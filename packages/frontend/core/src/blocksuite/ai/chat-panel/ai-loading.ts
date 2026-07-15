@@ -2,11 +2,20 @@ import { WithDisposable } from '@blocksuite/affine/global/lit';
 import { css, html, LitElement } from 'lit';
 import { property } from 'lit/decorators.js';
 
+// Side-effect import: registers <cdz-pulse-ticker> (reasoning-pulse animation
+// shown beneath the "working" tip while the chat answer is pending).
+import '../components/cdz-pulse-ticker';
+
 export class AILoading extends WithDisposable(LitElement) {
   static override styles = css`
     :host {
       display: block;
       width: 100%;
+    }
+    .cdz-chat-pulse {
+      display: block;
+      width: min(420px, 100%);
+      margin-top: 8px;
     }
     .generating-tip {
       position: relative;
@@ -117,15 +126,26 @@ export class AILoading extends WithDisposable(LitElement) {
   @property({ attribute: false })
   accessor stopGenerating!: () => void;
 
+  // First ~100 chars of the user's message driving this pending answer, passed
+  // to the reasoning-pulse ticker as its `task` (empty → generic pulse lines).
+  @property({ attribute: false })
+  accessor task = '';
+
   @property({ attribute: 'data-testid', reflect: true })
   accessor testId = 'ai-loading';
 
   override render() {
     return html`<div class="generating-tip">
-      <span class="orb" aria-hidden="true"></span>
-      <span class="text">ClickDz AI is working<span class="dots"></span></span>
-      <span class="progress" aria-hidden="true"></span>
-    </div>`;
+        <span class="orb" aria-hidden="true"></span>
+        <span class="text">ClickDz AI is working<span class="dots"></span></span>
+        <span class="progress" aria-hidden="true"></span>
+      </div>
+      <cdz-pulse-ticker
+        class="cdz-chat-pulse"
+        .task=${this.task}
+        surface="chat"
+        ?active=${true}
+      ></cdz-pulse-ticker>`;
   }
 }
 
