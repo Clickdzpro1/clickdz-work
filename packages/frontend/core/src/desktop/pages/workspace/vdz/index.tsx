@@ -31,6 +31,7 @@ import * as styles from './index.css';
 import { Inspector } from './inspector';
 import { MediaBin } from './media-bin';
 import { PreviewCanvas } from './preview-canvas';
+import { ProjectBar } from './project-bar';
 import { TimelineLanes } from './timeline-lanes';
 import { Toolbar } from './toolbar';
 import { useVdzHistory } from './use-vdz-history';
@@ -62,7 +63,26 @@ function isEditableTarget(node: EventTarget | null): boolean {
 
 const VdzStudioPage = () => {
   const history = useVdzHistory(createSampleTimeline);
-  const { timeline, run, runBatch, undo, redo } = history;
+  const { timeline, run, runBatch, reset, undo, redo } = history;
+
+  // ---- Project persistence (ProjectBar owns save/open; timeline lives here) --
+  // Loading a project replaces the working timeline as a fresh history baseline
+  // (no undo back into the previous project). Renames go through the undoable op
+  // path. New project = a fresh sample timeline.
+  const loadProjectTimeline = useCallback(
+    (next: typeof timeline) => {
+      reset(next);
+      // A loaded/new document has no live selection or running playback.
+      setSelectedIds(new Set());
+      setPlayheadSeconds(0);
+      setIsPlaying(false);
+    },
+    [reset]
+  );
+  const renameProject = useCallback(
+    (name: string) => run({ op: 'renameTimeline', name }),
+    [run]
+  );
 
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
     () => new Set()
@@ -625,18 +645,17 @@ const VdzStudioPage = () => {
             </div>
           </div>
 
-          {/* RIGHT: project name (editable-looking, truncated + tooltip), a
-              slim divider, then the panel View menu. In Generate mode the
-              editor-only panels are mode-controlled, so disable them here. */}
+          {/* RIGHT: the ProjectBar (inline-editable name + Save/Save As/Open,
+              owning all persistence), a slim divider, then the panel View menu.
+              In Generate mode the editor-only panels are mode-controlled, so
+              disable them here. */}
           <div className={styles.headerRight}>
-            <span
-              className={styles.timelineName}
-              title={timeline.name}
-              role="textbox"
-              aria-label="Project name"
-            >
-              {timeline.name}
-            </span>
+            <ProjectBar
+              timeline={timeline}
+              onLoadTimeline={loadProjectTimeline}
+              onRename={renameProject}
+              newTimeline={createSampleTimeline}
+            />
             <span className={styles.headerDivider} aria-hidden="true" />
             <VdzViewMenu
               layout={layout}
