@@ -22,6 +22,15 @@ import * as styles from './generate-panel.css';
  * SELF-CONTAINED: this file imports only React, the compose hook, and its own
  * styles. It does NOT touch the vdz page's index.tsx / index.css.ts (owned by
  * parallel workers) — the integrator wires it in per WIRING-GENERATE.md.
+ *
+ * TWO GENERATION MODES (top-of-panel switch):
+ *   · "In editor"   — the recommended path. The brief is handed to the host
+ *     (onGenerateInEditor), which switches to the timeline editor and runs it
+ *     through the AI dock's text-to-timeline pipeline, landing as an editable
+ *     proposal. This panel does not render a preview in that mode.
+ *   · "Motion HTML" — the original path: the backend returns ONE self-contained
+ *     HTML motion-graphics composition that plays LIVE in the sandboxed iframe
+ *     below and can be refined / exported to MP4.
  */
 
 /** Format seconds as m:ss.d (one decimal) for the timecode readout. */
@@ -32,7 +41,22 @@ function fmt(t: number): string {
   return `${m}:${s.toFixed(1).padStart(4, '0')}`;
 }
 
-export const VdzGeneratePanel = () => {
+/** Which generation surface the panel is offering. */
+type GenMode = 'editor' | 'html';
+
+export interface VdzGeneratePanelProps {
+  /**
+   * Hand a brief to the timeline editor's AI pipeline ("In editor" mode). The
+   * host switches to Edit and feeds this through the same send path the AI dock
+   * uses, producing a pending, editable proposal. Optional: when absent, the
+   * mode switch is hidden and the panel behaves as the pure "Motion HTML" tool.
+   */
+  onGenerateInEditor?: (prompt: string) => void;
+}
+
+export const VdzGeneratePanel = ({
+  onGenerateInEditor,
+}: VdzGeneratePanelProps = {}) => {
   const { busy, error, compose, refine, clearError } = useVdzCompose();
   // MP4 export (real render) — runs on the standalone cdz-render service via the
   // session-authed /api/v1/vdz/render proxy. Degrades gracefully when the render
@@ -52,6 +76,14 @@ export const VdzGeneratePanel = () => {
   // The current composition HTML (state, so the iframe re-mounts on change).
   const [html, setHtml] = useState<string | null>(null);
 
+  // Generation surface. Default to the recommended "In editor" path when the
+  // host wired the callback; otherwise the switch is hidden and we stay on the
+  // standalone "Motion HTML" tool.
+  const canGenerateInEditor = typeof onGenerateInEditor === 'function';
+  const [genMode, setGenMode] = useState<GenMode>(
+    canGenerateInEditor ? 'editor' : 'html'
+  );
+
   // Playback state, driven by the postMessage handshake with the frame.
   const [duration, setDuration] = useState(0);
   const [current, setCurrent] = useState(0);
@@ -62,6 +94,10 @@ export const VdzGeneratePanel = () => {
   const rafRef = useRef<number | null>(null);
   // wall-clock anchor: (performance.now ms at play start) minus (t at play start).
   const playAnchorRef = useRef<number>(0);
+  // Set true when a freshly-loaded frame is waiting for its duration handshake so
+  // we can auto-play it ONCE (so the user instantly sees motion instead of the
+  // paused first frame). Consumed by the duration-watch effect below.
+  const autoPlayPendingRef = useRef(false);
 
   /**
    * Post a message into the sandboxed frame.
@@ -172,29 +208,54 @@ export const VdzGeneratePanel = () => {
     setDuration(0);
     setCurrent(0);
     setPlaying(false);
+    // Disarm any auto-play left over from a prior frame; the new frame's onLoad
+    // re-arms it. (The new iframe mounts keyed on html, so onLoad always fires.)
+    autoPlayPendingRef.current = false;
     stopRaf();
     resetExport();
   }, [html, stopRaf, resetExport]);
 
   // Once the fresh frame has loaded, explicitly ask for its duration (belt-and-
-  // braces alongside the unprompted announce, in case we mounted after it).
+  // braces alongside the unprompted announce, in case we mounted after it) and
+  // pin it to its first frame while we wait. We ARM a one-shot auto-play here;
+  // the duration-watch effect fires it the moment we know the length, so the
+  // user sees motion immediately (the paused first frame — which a fade-in
+  // composition renders near-black — is never what greets them).
   const onIframeLoad = useCallback(() => {
+    autoPlayPendingRef.current = true;
     postToFrame({ type: 'vdz-duration?' });
-    // Ensure the frame shows its first frame, paused.
     postToFrame({ type: 'vdz-pause' });
     postToFrame({ type: 'vdz-seek', t: 0 });
   }, [postToFrame]);
 
+  // Auto-play a freshly-loaded composition once its duration is known. Runs only
+  // when a load armed autoPlayPendingRef, so scrubbing/refine re-renders that
+  // merely change `current`/`duration` don't hijack playback. doPlay reads
+  // `current` via its own closure; we call it after clearing the flag so it
+  // fires exactly once per load and the pause button is immediately usable.
+  useEffect(() => {
+    if (!autoPlayPendingRef.current || duration <= 0 || !html) return;
+    autoPlayPendingRef.current = false;
+    doPlay();
+  }, [duration, html, doPlay]);
+
   const onGenerate = useCallback(async () => {
     const trimmed = prompt.trim();
     if (!trimmed || busy) return;
+    // "In editor" mode delegates to the host (switch to Edit + run through the
+    // AI dock pipeline). We don't clear the prompt so it's still there if the
+    // user flips back to the HTML tool.
+    if (genMode === 'editor' && onGenerateInEditor) {
+      onGenerateInEditor(trimmed);
+      return;
+    }
     try {
       const next = await compose(trimmed);
       setHtml(next);
     } catch {
       // error surfaced via hook state
     }
-  }, [prompt, busy, compose]);
+  }, [prompt, busy, genMode, onGenerateInEditor, compose]);
 
   const onRefine = useCallback(async () => {
     const trimmed = instruction.trim();
@@ -227,9 +288,14 @@ export const VdzGeneratePanel = () => {
     void startExport(html);
   }, [html, startExport]);
 
-  const canGenerate = prompt.trim().length > 0 && !busy;
+  const editorMode = genMode === 'editor' && canGenerateInEditor;
+  // In editor mode the compose hook is idle (busy tracks HTML compose/refine),
+  // so a submit is gated only on having text.
+  const canGenerate =
+    prompt.trim().length > 0 && (editorMode || !busy);
   const canRefine = instruction.trim().length > 0 && !busy && !!html;
-  const hasVideo = !!html;
+  // The live preview + refine/export controls belong to the HTML tool only.
+  const hasVideo = !editorMode && !!html;
   const exporting =
     exportStatus === 'starting' || exportStatus === 'rendering';
   const exportPct = Math.round(exportProgress * 100);
@@ -244,16 +310,57 @@ export const VdzGeneratePanel = () => {
       <div className={styles.header}>
         <h2 className={styles.title}>AI Video Generator</h2>
         <p className={styles.subtitle}>
-          Describe a video and watch it play — then refine it in words.
+          {editorMode
+            ? 'Describe a video — land in the timeline editor with an editable AI proposal.'
+            : 'Describe a video and watch it play — then refine it in words.'}
         </p>
       </div>
+
+      {canGenerateInEditor ? (
+        <div
+          className={styles.modeSwitch}
+          role="radiogroup"
+          aria-label="Generation mode"
+        >
+          <button
+            type="button"
+            role="radio"
+            aria-checked={genMode === 'editor'}
+            className={styles.modeOption}
+            data-active={genMode === 'editor'}
+            onClick={() => setGenMode('editor')}
+          >
+            <span className={styles.modeOptionTitle}>In editor</span>
+            <span className={styles.modeOptionHint}>
+              Editable timeline — recommended
+            </span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={genMode === 'html'}
+            className={styles.modeOption}
+            data-active={genMode === 'html'}
+            onClick={() => setGenMode('html')}
+          >
+            <span className={styles.modeOptionTitle}>Motion HTML</span>
+            <span className={styles.modeOptionHint}>
+              Export-quality composition
+            </span>
+          </button>
+        </div>
+      ) : null}
 
       <div className={styles.promptRow}>
         <textarea
           className={styles.textarea}
-          placeholder="e.g. A 20-second dark, cinematic product teaser for a running shoe called AERO — bold type reveals, three key specs, a closing logo lockup."
+          placeholder={
+            editorMode
+              ? 'e.g. Make a 20s product promo for a running shoe called AERO — title reveal, three specs, a closing logo.'
+              : 'e.g. A 20-second dark, cinematic product teaser for a running shoe called AERO — bold type reveals, three key specs, a closing logo lockup.'
+          }
           value={prompt}
-          disabled={busy}
+          disabled={busy && !editorMode}
           onChange={e => {
             setPrompt(e.target.value);
             if (error) clearError();
@@ -266,11 +373,13 @@ export const VdzGeneratePanel = () => {
             disabled={!canGenerate}
             type="button"
           >
-            {busy && !hasVideo ? (
+            {busy && !hasVideo && !editorMode ? (
               <>
                 <span className={styles.spinner} aria-hidden="true" />
                 Generating…
               </>
+            ) : editorMode ? (
+              'Generate in editor'
             ) : hasVideo ? (
               'Regenerate'
             ) : (
@@ -349,12 +458,27 @@ export const VdzGeneratePanel = () => {
         ) : null}
       </div>
 
-      {error ? (
+      {error && !editorMode ? (
         <div className={styles.errorBanner} role="alert">
           {error}
         </div>
       ) : null}
 
+      {editorMode ? (
+        <div className={styles.result}>
+          <div className={styles.stageWrap}>
+            <div className={styles.empty}>
+              <span>
+                Your video is built as an editable timeline in the editor.
+              </span>
+              <span>
+                Hit Generate and you’ll jump to Edit with an AI proposal to
+                Accept or tweak.
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className={styles.result}>
         <div className={styles.stageWrap}>
           {hasVideo ? (
@@ -438,6 +562,7 @@ export const VdzGeneratePanel = () => {
           </>
         ) : null}
       </div>
+      )}
     </div>
   );
 };

@@ -80,6 +80,12 @@ const VdzStudioPage = () => {
     summary: string;
   } | null>(null);
 
+  // A prompt handed from the Generate panel's "In editor" mode to the AI dock:
+  // set it, switch to Edit, and the dock auto-sends it once (text-to-timeline)
+  // so the user lands on the editable timeline with a pending Accept/Revert
+  // proposal. Cleared by the dock via onInitialPromptConsumed after it sends.
+  const [pendingEditorPrompt, setPendingEditorPrompt] = useState('');
+
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Ids of currently-selected clips, for the AI dock's context. The selection
@@ -402,6 +408,24 @@ const VdzStudioPage = () => {
     setMode(next);
   }, []);
 
+  // "Generate → In editor": stash the brief for the dock, jump to the editor,
+  // and let the dock auto-send it (the SAME send path a typed dock message
+  // uses). The result is a pending proposal the user reviews on the timeline.
+  const onGenerateInEditor = useCallback((prompt: string) => {
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+    setIsPlaying(false);
+    setPendingEditorPrompt(trimmed);
+    setMode('edit');
+  }, []);
+
+  // The dock calls this the instant it has auto-sent the handed-in brief; clear
+  // it so a later re-render never re-sends the same prompt.
+  const onEditorPromptConsumed = useCallback(
+    () => setPendingEditorPrompt(''),
+    []
+  );
+
   // ---- Keyboard (bound to the page container, with cleanup) --------------
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -510,7 +534,7 @@ const VdzStudioPage = () => {
       <ViewBody>
         {mode === 'generate' ? (
           <div className={styles.generateHost}>
-            <VdzGeneratePanel />
+            <VdzGeneratePanel onGenerateInEditor={onGenerateInEditor} />
           </div>
         ) : (
           <div
@@ -621,6 +645,8 @@ const VdzStudioPage = () => {
                 timeline={timeline}
                 selectedClipIds={selectedClipIds}
                 onApplyOps={onApplyOps}
+                initialPrompt={pendingEditorPrompt}
+                onInitialPromptConsumed={onEditorPromptConsumed}
               />
             </div>
 
