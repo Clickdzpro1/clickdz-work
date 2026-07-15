@@ -58,10 +58,55 @@ export const timelineName = style({
   fontSize: 12,
 });
 
+// ---- Mode tabs (Edit / Generate) in the header --------------------------
+export const modeTabs = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  padding: 2,
+  borderRadius: 8,
+  background: bg,
+  border: `1px solid ${border}`,
+});
+
+export const modeTab = style({
+  appearance: 'none',
+  border: 'none',
+  background: 'transparent',
+  color: textDim,
+  fontSize: 12,
+  fontWeight: 600,
+  padding: '4px 12px',
+  borderRadius: 6,
+  cursor: 'pointer',
+  transition: 'background 120ms ease, color 120ms ease',
+  ':hover': {
+    color: text,
+  },
+  selectors: {
+    '&[data-active="true"]': {
+      background: raised,
+      color: text,
+    },
+  },
+});
+
 export const main = style({
   display: 'flex',
   flex: 1,
   minHeight: 0,
+  overflow: 'hidden',
+});
+
+// Host for the Generate panel: fills the body with a definite height so the
+// self-contained panel (height: 100%) can lay out its live-preview stage.
+export const generateHost = style({
+  display: 'flex',
+  flexDirection: 'column',
+  flex: 1,
+  minHeight: 0,
+  width: '100%',
+  height: '100%',
   overflow: 'hidden',
 });
 
