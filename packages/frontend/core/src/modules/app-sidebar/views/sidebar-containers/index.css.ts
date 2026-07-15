@@ -1,4 +1,5 @@
 import { cssVar } from '@toeverything/theme';
+import { cssVarV2 } from '@toeverything/theme/v2';
 import { globalStyle, style } from '@vanilla-extract/css';
 export const baseContainer = style({
   padding: '4px 14px',
@@ -18,12 +19,15 @@ export const scrollableContainerRoot = style({
 export const scrollTopBorder = style({
   position: 'absolute',
   top: 0,
-  left: '16px',
-  right: '16px',
+  left: '12px',
+  right: '12px',
   height: '1px',
-  transition: 'opacity .3s .2s',
+  zIndex: 1,
+  transition: 'opacity .3s .1s',
   opacity: 0,
-  background: cssVar('black10'),
+  // hairline that fades out toward both horizontal edges — a soft scroll-edge
+  // divider rather than a hard rule.
+  background: `linear-gradient(90deg, transparent, ${cssVarV2('layer/insideBorder/border')} 12%, ${cssVarV2('layer/insideBorder/border')} 88%, transparent)`,
   selectors: {
     '&[data-has-scroll-top="true"]': {
       opacity: 1,

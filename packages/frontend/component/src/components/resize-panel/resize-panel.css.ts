@@ -100,12 +100,18 @@ export const resizerInner = style({
   width: '2px',
   borderRadius: '2px',
   backgroundColor: cssVar('primaryColor'),
-  transition: 'all 0.2s ease-in-out',
+  transition: 'width 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
   transform: 'translateX(0.5px)',
+  // soft accent glow line so the handle reads as an interactive affordance
+  boxShadow: `0 0 6px 0 color-mix(in srgb, ${cssVar('primaryColor')} 45%, transparent)`,
   selectors: {
+    [`${resizeHandleContainer}:hover &`]: {
+      boxShadow: `0 0 10px 1px color-mix(in srgb, ${cssVar('primaryColor')} 60%, transparent)`,
+    },
     [`${resizeHandleContainer}[data-resizing="true"] &`]: {
       width: '4px',
       borderRadius: '4px',
+      boxShadow: `0 0 12px 2px color-mix(in srgb, ${cssVar('primaryColor')} 65%, transparent)`,
     },
   },
 });

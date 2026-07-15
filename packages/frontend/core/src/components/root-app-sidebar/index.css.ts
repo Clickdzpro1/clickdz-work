@@ -4,9 +4,9 @@ export const workspaceAndUserWrapper = style({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  gap: 8,
+  gap: 6,
   width: 'calc(100% + 12px)',
-  height: 42,
+  height: 40,
   paddingRight: 6,
   alignSelf: 'center',
 });
@@ -14,7 +14,7 @@ export const quickSearchAndNewPage = style({
   display: 'flex',
   alignItems: 'center',
   gap: 8,
-  padding: '4px 0',
+  padding: '2px 0 4px',
   marginLeft: -8,
   marginRight: -6,
 });
