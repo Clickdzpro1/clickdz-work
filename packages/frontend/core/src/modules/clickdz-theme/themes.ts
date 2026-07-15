@@ -280,16 +280,21 @@ export const CLICKDZ_THEME_MAP: Record<string, ClickDzTheme> = Object.fromEntrie
 
 /**
  * Serialize all presets into a single stylesheet. Each block is scoped by both
- * the theme id attribute and the base-mode class next-themes writes on
- * `<html>` (`.dark` / `.light`), giving specificity (0,2,1) so it reliably
- * wins over `@toeverything/theme`'s own `html.dark` / `:root` declarations
- * regardless of stylesheet order.
+ * the theme id attribute and the base-mode attribute next-themes writes on
+ * `<html>`. next-themes runs in its default `attribute="data-theme"` mode here
+ * (the provider sets no `attribute` prop, and `@toeverything/theme` scopes its
+ * own light/dark tokens with `[data-theme='light'|'dark']`, never a class), so
+ * the base selector must be `[data-theme='<base>']`, NOT `.dark` / `.light` —
+ * those classes never exist on `<html>`, which is why the colored presets never
+ * applied. `html[data-cdz-theme='x'][data-theme='dark']` has specificity
+ * (0,2,1), so it reliably beats the theme package's `[data-theme='dark']`
+ * (0,1,0) regardless of stylesheet order.
  */
 export function buildClickDzThemeStylesheet(): string {
   return CLICKDZ_THEMES.map(theme => {
     const body = Object.entries(theme.vars)
       .map(([key, value]) => `  ${key}: ${value};`)
       .join('\n');
-    return `html[data-cdz-theme='${theme.id}'].${theme.base} {\n${body}\n}`;
+    return `html[data-cdz-theme='${theme.id}'][data-theme='${theme.base}'] {\n${body}\n}`;
   }).join('\n\n');
 }
