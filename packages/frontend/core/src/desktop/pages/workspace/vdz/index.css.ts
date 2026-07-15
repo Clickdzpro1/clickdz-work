@@ -25,45 +25,118 @@ export const root = style({
   overflow: 'hidden',
 });
 
+// The studio header is a strict 3-zone bar: LEFT (title + preview pill),
+// CENTER (Edit/Generate segmented control, kept visually centred by giving the
+// side zones equal flex weight), RIGHT (project name + divider + panel View
+// menu). Zones share a 12px inner gap and a fixed 28px control height so
+// everything sits on one aligned baseline and never wraps at ≥1100px.
+const HEADER_CONTROL_H = 28;
+
 export const header = style({
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-  padding: '10px 16px',
+  padding: '8px 16px',
   borderBottom: `1px solid ${border}`,
   background: panel,
   flexShrink: 0,
+  flexWrap: 'nowrap',
+  minHeight: 48,
+  boxSizing: 'border-box',
+});
+
+// LEFT zone: title + preview pill. Takes an equal share of the free space so
+// the centre zone lands in the true middle; content is left-aligned.
+export const headerLeft = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  flex: 1,
+  minWidth: 0,
+  justifyContent: 'flex-start',
+});
+
+// CENTRE zone: the segmented mode control, never shrinks, stays centred.
+export const headerCenter = style({
+  display: 'flex',
+  alignItems: 'center',
+  flexShrink: 0,
+  justifyContent: 'center',
+});
+
+// RIGHT zone: mirror of the left share, content pushed to the far edge.
+export const headerRight = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  flex: 1,
+  minWidth: 0,
+  justifyContent: 'flex-end',
 });
 
 export const headerTitle = style({
   fontSize: 15,
   fontWeight: 600,
   letterSpacing: 0.2,
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
 });
 
 export const pill = style({
-  fontSize: 11,
-  fontWeight: 600,
-  padding: '2px 8px',
+  fontSize: 10,
+  fontWeight: 700,
+  lineHeight: 1,
+  padding: '4px 8px',
   borderRadius: 999,
   color: '#fff',
   background: `linear-gradient(90deg, ${accent}, ${accent2})`,
   textTransform: 'uppercase',
   letterSpacing: 0.5,
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
 });
 
+// The project name on the right: reads as an editable field (subtle hover
+// affordance) and truncates with an ellipsis rather than pushing the row wider.
 export const timelineName = style({
-  marginLeft: 'auto',
   color: textDim,
   fontSize: 12,
+  fontWeight: 500,
+  minWidth: 0,
+  maxWidth: 240,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+  textOverflow: 'ellipsis',
+  padding: '0 8px',
+  height: HEADER_CONTROL_H,
+  lineHeight: `${HEADER_CONTROL_H}px`,
+  borderRadius: 6,
+  border: '1px solid transparent',
+  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
+  ':hover': {
+    color: text,
+    background: bg,
+    borderColor: border,
+  },
+});
+
+// Slim vertical divider separating the project name from the panel View menu.
+export const headerDivider = style({
+  width: 1,
+  height: 18,
+  flexShrink: 0,
+  background: border,
 });
 
 // ---- Mode tabs (Edit / Generate) in the header --------------------------
+// One segmented group: a bordered track holding two equal segments.
 export const modeTabs = style({
   display: 'flex',
   alignItems: 'center',
   gap: 2,
   padding: 2,
+  height: HEADER_CONTROL_H,
+  boxSizing: 'border-box',
   borderRadius: 8,
   background: bg,
   border: `1px solid ${border}`,
@@ -76,9 +149,13 @@ export const modeTab = style({
   color: textDim,
   fontSize: 12,
   fontWeight: 600,
-  padding: '4px 12px',
+  height: '100%',
+  display: 'inline-flex',
+  alignItems: 'center',
+  padding: '0 14px',
   borderRadius: 6,
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
   transition: 'background 120ms ease, color 120ms ease',
   ':hover': {
     color: text,
@@ -1145,14 +1222,18 @@ export const viewMenuTrigger = style({
   display: 'inline-flex',
   alignItems: 'center',
   gap: 6,
+  height: 28,
+  boxSizing: 'border-box',
   border: `1px solid ${border}`,
   background: bg,
   color: textDim,
   fontSize: 12,
   fontWeight: 600,
-  padding: '4px 10px',
+  padding: '0 10px',
   borderRadius: 8,
   cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
   transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
   ':hover': {
     color: text,

@@ -590,41 +590,64 @@ const VdzStudioPage = () => {
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div className={styles.header}>
-          <span className={styles.headerTitle}>Vdz Studio</span>
-          <span className={styles.pill}>preview build</span>
-          <div className={styles.modeTabs} role="tablist" aria-label="Vdz mode">
-            <button
-              type="button"
-              role="tab"
-              className={styles.modeTab}
-              data-active={mode === 'edit'}
-              aria-selected={mode === 'edit'}
-              onClick={() => switchMode('edit')}
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              role="tab"
-              className={styles.modeTab}
-              data-active={mode === 'generate'}
-              aria-selected={mode === 'generate'}
-              onClick={() => switchMode('generate')}
-            >
-              Generate
-            </button>
+          {/* LEFT: product title + preview-build pill. */}
+          <div className={styles.headerLeft}>
+            <span className={styles.headerTitle}>Vdz Studio</span>
+            <span className={styles.pill}>preview build</span>
           </div>
 
-          {/* Workspace View menu: checkmark/hide each panel. In Generate mode
-              the editor-only panels are mode-controlled, so disable them here. */}
-          <VdzViewMenu
-            layout={layout}
-            onToggle={togglePanel}
-            onReset={resetLayout}
-            disabledIds={mode === 'generate' ? generateDisabledPanels : undefined}
-          />
+          {/* CENTER: Edit / Generate as one segmented control, kept centred. */}
+          <div className={styles.headerCenter}>
+            <div
+              className={styles.modeTabs}
+              role="tablist"
+              aria-label="Vdz mode"
+            >
+              <button
+                type="button"
+                role="tab"
+                className={styles.modeTab}
+                data-active={mode === 'edit'}
+                aria-selected={mode === 'edit'}
+                onClick={() => switchMode('edit')}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={styles.modeTab}
+                data-active={mode === 'generate'}
+                aria-selected={mode === 'generate'}
+                onClick={() => switchMode('generate')}
+              >
+                Generate
+              </button>
+            </div>
+          </div>
 
-          <span className={styles.timelineName}>{timeline.name}</span>
+          {/* RIGHT: project name (editable-looking, truncated + tooltip), a
+              slim divider, then the panel View menu. In Generate mode the
+              editor-only panels are mode-controlled, so disable them here. */}
+          <div className={styles.headerRight}>
+            <span
+              className={styles.timelineName}
+              title={timeline.name}
+              role="textbox"
+              aria-label="Project name"
+            >
+              {timeline.name}
+            </span>
+            <span className={styles.headerDivider} aria-hidden="true" />
+            <VdzViewMenu
+              layout={layout}
+              onToggle={togglePanel}
+              onReset={resetLayout}
+              disabledIds={
+                mode === 'generate' ? generateDisabledPanels : undefined
+              }
+            />
+          </div>
         </div>
       </ViewHeader>
       <ViewBody>

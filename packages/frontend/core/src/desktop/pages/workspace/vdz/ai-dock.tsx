@@ -2,6 +2,7 @@ import { suggestEdits, type VdzSuggestion } from '@affine/core/modules/vdz';
 import {
   useVdzAi,
   type VdzChatMode,
+  type VdzChatResponse,
   type VdzChatTurn,
   type VdzPlanStep,
 } from '@affine/core/modules/vdz/use-vdz-ai';
@@ -12,7 +13,9 @@ import {
   vdzOpSchema,
   type VdzTimeline,
 } from '../../../../modules/vdz';
+import { useAiPulse } from '../../../../modules/vdz/use-ai-pulse';
 import * as styles from './ai-dock.css';
+import { AiPulseTicker } from './ai-pulse-ticker';
 
 /**
  * Vdz Studio "AI Dock" — a self-contained right-side chat panel that turns a
@@ -125,6 +128,10 @@ export function VdzAiDock({
   onCollapse,
 }: VdzAiDockProps) {
   const { history, busy, error, send, reset } = useVdzAi();
+  // Reasoning-pulse ticker: while a send is in flight it streams request-tailored
+  // "thinking" lines in place of a bare spinner (see WIRING-PULSE.md). Purely
+  // cosmetic — started on send, always stopped in a finally.
+  const pulse = useAiPulse();
   const [draft, setDraft] = useState('');
   const [mode, setMode] = useState<VdzChatMode>('edit');
   const [replyMeta, setReplyMeta] = useState<AiReplyMeta[]>([]);
@@ -147,7 +154,19 @@ export function VdzAiDock({
     async (text: string, turnMode: VdzChatMode) => {
       const message = text.trim();
       if (!message || busy) return;
-      const result = await send(message, timeline, selectedClipIds, turnMode);
+
+      // Kick off the reasoning animation for this turn (Edit and Plan alike):
+      // a short task line = the first ~100 chars of the request tagged with the
+      // mode, on the 'video' surface (the dock frames edits as video work).
+      // Always stopped in the finally so an error/abort still clears it.
+      const task = `${message.slice(0, 100)} (${turnMode} mode)`;
+      pulse.start(task, 'video');
+      let result: VdzChatResponse | null;
+      try {
+        result = await send(message, timeline, selectedClipIds, turnMode);
+      } finally {
+        pulse.stop();
+      }
       if (!result) return;
 
       if (turnMode === 'plan') {
@@ -186,7 +205,7 @@ export function VdzAiDock({
 
       if (valid.length > 0) onApplyOps(valid, result.summary);
     },
-    [busy, send, timeline, selectedClipIds, onApplyOps]
+    [busy, send, timeline, selectedClipIds, onApplyOps, pulse]
   );
 
   const onSubmit = useCallback(async () => {
@@ -447,7 +466,21 @@ export function VdzAiDock({
           />
         ) : null}
 
-        {busy ? <div className={styles.typing}>Thinking…</div> : null}
+        {/* Busy indicator: the reasoning-pulse ticker streams request-tailored
+            "thinking" lines. If a pulse line isn't ready yet (it starts in the
+            same tick, so this is only a defensive edge), fall back to a plain
+            typing row so the busy region is never empty. */}
+        {busy ? (
+          pulse.active && pulse.currentLine ? (
+            <AiPulseTicker
+              line={pulse.currentLine}
+              active={pulse.active}
+              done={pulse.done}
+            />
+          ) : (
+            <div className={styles.typing}>Thinking…</div>
+          )
+        ) : null}
       </div>
 
       {error ? <div className={styles.errorBar}>{error}</div> : null}
