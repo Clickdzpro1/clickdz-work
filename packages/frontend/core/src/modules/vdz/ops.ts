@@ -7,6 +7,7 @@ import {
   vdzEffectSchema,
   type VdzTimeline,
   vdzTimelineSchema,
+  vdzTrackSchema,
   vdzTransitionSchema,
 } from './schema';
 
@@ -57,6 +58,16 @@ const patchKeysByType: Record<string, ReadonlySet<string>> = {
  * all edits: the AI's future output is just `VdzOp[]`.
  */
 export const vdzOpSchema = z.discriminatedUnion('op', [
+  z.object({
+    op: z.literal('addTrack'),
+    /**
+     * A whole new track to append (its `clips` array is usually empty — clips
+     * are added via `addClip`). Appended at the END of `tracks`; back-to-front
+     * z-order still holds (video tracks draw under overlay tracks, audio is
+     * never visual — see {@link ../../desktop/pages/workspace/vdz/anim.ts}).
+     */
+    track: vdzTrackSchema,
+  }),
   z.object({
     op: z.literal('addClip'),
     trackId: z.string(),
@@ -181,6 +192,17 @@ export function applyOp(timeline: VdzTimeline, op: VdzOp): VdzApplyResult {
   };
 
   switch (validOp.op) {
+    case 'addTrack': {
+      // Reject a duplicate track id so the append is always unambiguous.
+      if (next.tracks.some(track => track.id === validOp.track.id)) {
+        return {
+          timeline,
+          error: `track id already exists: ${validOp.track.id}`,
+        };
+      }
+      next.tracks.push(validOp.track);
+      break;
+    }
     case 'addClip': {
       const track = findTrack(validOp.trackId);
       if (!track) {

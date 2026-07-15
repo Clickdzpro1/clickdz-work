@@ -307,12 +307,12 @@ export interface VdzPreviewItem {
  */
 function clipWindow(
   track: VdzTrack,
-  clip: VdzClip
+  clip: VdzClip,
+  index: number
 ): { start: number; end: number } {
   let start = clip.start;
   let end = clip.start + clip.duration;
   const transitions = track.transitions ?? [];
-  const index = track.clips.findIndex(c => c.id === clip.id);
 
   // A transition AFTER this clip extends its tail by half the duration — but
   // only when the NEXT clip actually abuts (a real crossfade, not a gap).
@@ -358,8 +358,11 @@ export function computePreviewFrame(
     if (track.kind === 'audio') continue;
     const transitions = track.transitions ?? [];
 
-    for (const clip of track.clips) {
-      const win = clipWindow(track, clip);
+    // Enumerate by index so clipWindow + the transition-neighbour lookups reuse
+    // the same `idx` instead of an O(n) findIndex each (was O(n²) per track).
+    for (let idx = 0; idx < track.clips.length; idx++) {
+      const clip = track.clips[idx];
+      const win = clipWindow(track, clip, idx);
       if (nowSeconds < win.start || nowSeconds >= win.end) continue;
 
       const item: VdzPreviewItem = {
@@ -370,7 +373,6 @@ export function computePreviewFrame(
       };
 
       // Transition where THIS clip is the outgoing side (transition after it).
-      const idx = track.clips.findIndex(c => c.id === clip.id);
       const next = idx >= 0 ? track.clips[idx + 1] : undefined;
       const outgoing = transitions.find(
         tr =>

@@ -38,10 +38,16 @@ a later PR). The workbench shell that consumes this lives at
 
 ## The op contract
 
-Ops: `addClip`, `removeClip`, `moveClip`, `trimClip`, `splitClip`,
+Ops: `addTrack`, `addClip`, `removeClip`, `moveClip`, `trimClip`, `splitClip`,
 `rippleDelete`, `nudgeClip`, `setText`, `applyTransition`, `removeTransition`,
 `setAnimation`, `setEffects`, `updateClip`, `renameTimeline`.
 
+- `addTrack` `{track}` — append a whole new track (a full `VdzTrack`; its
+  `clips` array is normally empty, since clips are added with `addClip`).
+  Rejected if the track `id` already exists. Tracks are appended at the end, so
+  the back-to-front z-order still holds (video under overlay; audio is never
+  visual). Lets media of a kind with no matching lane (e.g. dropping audio into
+  a timeline that has no audio track) create its lane first, then land the clip.
 - `splitClip` `{trackId, clipId, atSeconds}` — cut a clip in two at `atSeconds`
   (which must fall strictly inside it). The second part gets id `<id>-b`
   (or a fresh nanoid on collision); for `video` clips its `trimStart` is
