@@ -11,7 +11,9 @@ export const linkItemRoot = style({
 export const root = style({
   display: 'inline-flex',
   alignItems: 'center',
-  borderRadius: '10px',
+  // Flat rows: a small radius only softens the hover/active tint's corners —
+  // it is deliberately NOT a pill/box around the item.
+  borderRadius: '4px',
   textAlign: 'left',
   color: cssVarV2('text/secondary'),
   width: '100%',
@@ -23,49 +25,30 @@ export const root = style({
   fontWeight: 500,
   marginTop: '2px',
   position: 'relative',
-  // Flat items only — never a browser default focus box. Keyboard focus is
-  // shown via the :focus-visible ring below; pointer focus shows nothing.
+  // Flat items only: no border, no box-shadow ring, no accent rail — never any
+  // box around the row. State is conveyed purely by a subtle bg tint (hover /
+  // active) and the accent icon color on the active item.
   outline: 'none',
-  transition:
-    'background-color 0.12s ease, color 0.12s ease, transform 0.12s ease',
-  // accent left-rail indicator for the active item
-  '::before': {
-    content: '""',
-    position: 'absolute',
-    left: '3px',
-    top: '50%',
-    transform: 'translateY(-50%) scaleY(0.35)',
-    width: '3px',
-    height: '18px',
-    borderRadius: '3px',
-    background: cssVar('primaryColor'),
-    opacity: 0,
-    transition: 'opacity 0.12s ease, transform 0.12s ease',
-  },
+  transition: 'background-color 0.12s ease, color 0.12s ease',
   selectors: {
     '&:hover': {
       background: cssVarV2.layer.background.hoverOverlay,
       color: cssVarV2('text/primary'),
     },
-    // Keyboard focus only: a subtle accent ring that matches the v2 hover/active
-    // treatment instead of the browser's default square outline box.
+    // Keyboard focus only: reuse the flat hover tint (no ring / box-shadow /
+    // outline box) so focus stays visible without drawing a box.
     '&:focus-visible': {
       background: cssVarV2.layer.background.hoverOverlay,
       color: cssVarV2('text/primary'),
-      boxShadow: `0 0 0 2px color-mix(in srgb, ${cssVar('primaryColor')} 45%, transparent)`,
     },
     '&[data-active="true"]': {
-      // tinted accent pill for the active item — reads clearly in every theme
+      // subtle accent tint only — no pill border, outline, or shadow
       background: `color-mix(in srgb, ${cssVar('primaryColor')} 12%, transparent)`,
       color: cssVarV2('text/primary'),
       fontWeight: 600,
     },
     '&[data-active="true"]:hover': {
       background: `color-mix(in srgb, ${cssVar('primaryColor')} 16%, transparent)`,
-    },
-    '&[data-active="true"]::before': {
-      opacity: 1,
-      transform: 'translateY(-50%) scaleY(1)',
     },
     '&[data-disabled="true"]': {
       cursor: 'default',
@@ -75,16 +58,6 @@ export const root = style({
     '&[data-collapsible="true"]': {
       paddingLeft: '4px',
       paddingRight: '4px',
-    },
-    '&[data-collapsible="false"]:is([data-active="true"], :hover)': {
-      width: 'calc(100% + 8px + 8px)',
-      transform: 'translateX(-8px)',
-      paddingLeft: '8px',
-      paddingRight: '10px',
-    },
-    // keep the active rail pinned to the edge even when the row shifts on hover
-    '&[data-collapsible="false"]:is([data-active="true"], :hover)::before': {
-      left: '9px',
     },
     [`${linkItemRoot}:first-of-type &`]: {
       marginTop: '0px',
