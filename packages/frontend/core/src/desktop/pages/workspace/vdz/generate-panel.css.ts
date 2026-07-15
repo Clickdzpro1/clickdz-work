@@ -57,6 +57,49 @@ export const subtitle = style({
   color: MUTED,
 });
 
+// ── generation mode switch ("In editor" vs "Motion HTML") ─────────
+export const modeSwitch = style({
+  display: 'flex',
+  gap: 10,
+  width: '100%',
+});
+
+export const modeOption = style({
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  gap: 2,
+  flex: 1,
+  padding: '10px 14px',
+  borderRadius: 12,
+  border: `1px solid ${BORDER}`,
+  background: RAISED,
+  color: TEXT,
+  textAlign: 'left',
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  transition: 'border-color 120ms ease, background 120ms ease',
+  selectors: {
+    '&:hover': { borderColor: ACCENT_FROM },
+    // Active option: accent border + a faint accent wash.
+    '&[data-active="true"]': {
+      borderColor: ACCENT_FROM,
+      background:
+        'linear-gradient(135deg, rgba(91,140,255,0.16), rgba(160,107,255,0.12))',
+    },
+  },
+});
+
+export const modeOptionTitle = style({
+  fontSize: 14,
+  fontWeight: 600,
+});
+
+export const modeOptionHint = style({
+  fontSize: 12,
+  color: MUTED,
+});
+
 // ── prompt input row ──────────────────────────────────────────────
 export const promptRow = style({
   display: 'flex',

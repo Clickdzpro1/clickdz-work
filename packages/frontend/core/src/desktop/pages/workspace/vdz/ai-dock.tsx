@@ -32,6 +32,16 @@ export interface VdzAiDockProps {
    * user's request produced at least one valid op. The host applies them.
    */
   onApplyOps: (ops: VdzOp[], summary: string) => void;
+  /**
+   * Optional: a prompt to auto-send ONCE when it becomes non-empty. Lets the
+   * Generate panel's "In editor" mode hand a brief straight to the dock pipeline
+   * (text-to-timeline) so the user lands in the editor with a pending proposal.
+   * The dock sends it exactly like a typed message and then calls
+   * {@link onInitialPromptConsumed} so the host can clear it (preventing re-send).
+   */
+  initialPrompt?: string;
+  /** Paired with {@link initialPrompt}: called right after it is auto-sent. */
+  onInitialPromptConsumed?: () => void;
 }
 
 /** One rendered assistant reply: how many ops we accepted/rejected. */
@@ -46,6 +56,8 @@ export function VdzAiDock({
   timeline,
   selectedClipIds,
   onApplyOps,
+  initialPrompt,
+  onInitialPromptConsumed,
 }: VdzAiDockProps) {
   const { history, busy, error, send, reset } = useVdzAi();
   const [draft, setDraft] = useState('');
@@ -62,36 +74,62 @@ export function VdzAiDock({
     if (el) el.scrollTop = el.scrollHeight;
   }, [history, busy]);
 
+  // Send one message through the full pipeline: transport → per-op client
+  // validation → stage the valid ops via onApplyOps. Shared by the composer's
+  // submit and the initialPrompt auto-send so both behave identically.
+  const submitMessage = useCallback(
+    async (text: string) => {
+      const message = text.trim();
+      if (!message || busy) return;
+      const result = await send(message, timeline, selectedClipIds);
+      if (!result) return;
+
+      // Validate each op client-side with the same schema the host applies with.
+      const valid: VdzOp[] = [];
+      let invalid = 0;
+      for (const candidate of result.ops) {
+        const parsed = vdzOpSchema.safeParse(candidate);
+        if (parsed.success) {
+          valid.push(parsed.data);
+        } else {
+          invalid += 1;
+        }
+      }
+
+      // The hook appended exactly one assistant turn on success; record this
+      // reply's metadata in send order to match it (see the render mapping).
+      setReplyMeta(prev => [
+        ...prev,
+        { validCount: valid.length, invalidCount: invalid, raw: result.raw },
+      ]);
+
+      if (valid.length > 0) {
+        onApplyOps(valid, result.summary);
+      }
+    },
+    [busy, send, timeline, selectedClipIds, onApplyOps]
+  );
+
   const onSubmit = useCallback(async () => {
     const message = draft.trim();
     if (!message || busy) return;
     setDraft('');
-    const result = await send(message, timeline, selectedClipIds);
-    if (!result) return;
+    await submitMessage(message);
+  }, [draft, busy, submitMessage]);
 
-    // Validate each op client-side with the same schema the host applies with.
-    const valid: VdzOp[] = [];
-    let invalid = 0;
-    for (const candidate of result.ops) {
-      const parsed = vdzOpSchema.safeParse(candidate);
-      if (parsed.success) {
-        valid.push(parsed.data);
-      } else {
-        invalid += 1;
-      }
-    }
-
-    // The hook appended exactly one assistant turn on success; record this
-    // reply's metadata in send order to match it (see the render mapping).
-    setReplyMeta(prev => [
-      ...prev,
-      { validCount: valid.length, invalidCount: invalid, raw: result.raw },
-    ]);
-
-    if (valid.length > 0) {
-      onApplyOps(valid, result.summary);
-    }
-  }, [draft, busy, send, timeline, selectedClipIds, onApplyOps]);
+  // Auto-send a handed-in prompt exactly once. The host clears initialPrompt via
+  // onInitialPromptConsumed right after, so a re-render never re-sends it; a NEW
+  // non-empty value (a fresh "Generate in editor") sends again. We consume
+  // synchronously (before awaiting) so a slow request can't double-fire.
+  const consumedPromptRef = useRef<string | null>(null);
+  useEffect(() => {
+    const p = initialPrompt?.trim();
+    if (!p || busy) return;
+    if (consumedPromptRef.current === p) return;
+    consumedPromptRef.current = p;
+    onInitialPromptConsumed?.();
+    void submitMessage(p);
+  }, [initialPrompt, busy, submitMessage, onInitialPromptConsumed]);
 
   const onKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
