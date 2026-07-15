@@ -31,6 +31,15 @@ export interface VdzHistory {
   run: (op: VdzOp) => boolean;
   /** Apply a sequence of ops as a single history entry. */
   runBatch: (ops: VdzOp[]) => boolean;
+  /**
+   * Replace the whole timeline with a fresh baseline, discarding all undo/redo
+   * history. Used when loading a saved project or a brand-new (sample/blank)
+   * timeline: the opened document becomes entry 0 of a clean ring, so an undo
+   * right after opening can never walk back into the previous project. This is
+   * the ONE non-op mutation of the timeline — every editing change still funnels
+   * through run/runBatch.
+   */
+  reset: (timeline: VdzTimeline) => void;
   undo: () => void;
   redo: () => void;
   /** Clear the transient error (e.g. after showing it). */
@@ -93,6 +102,15 @@ export function useVdzHistory(initial: () => VdzTimeline): VdzHistory {
     [timeline, commit]
   );
 
+  // Load a fresh baseline: seed a brand-new one-entry ring so there is nothing
+  // to undo back into. Clears any transient error too (the new document starts
+  // clean). Kept out of the run/runBatch path on purpose — this is a document
+  // load, not an editing op, so it must not be an undoable history entry.
+  const reset = useCallback((next: VdzTimeline) => {
+    setState({ past: [next], cursor: 0 });
+    setError(null);
+  }, []);
+
   const undo = useCallback(() => {
     setState(prev =>
       prev.cursor > 0 ? { ...prev, cursor: prev.cursor - 1 } : prev
@@ -117,10 +135,11 @@ export function useVdzHistory(initial: () => VdzTimeline): VdzHistory {
       canRedo: state.cursor < state.past.length - 1,
       run,
       runBatch,
+      reset,
       undo,
       redo,
       clearError,
     }),
-    [timeline, error, state, run, runBatch, undo, redo, clearError]
+    [timeline, error, state, run, runBatch, reset, undo, redo, clearError]
   );
 }
