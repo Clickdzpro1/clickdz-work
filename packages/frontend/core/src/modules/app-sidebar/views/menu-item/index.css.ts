@@ -3,6 +3,10 @@ import { cssVarV2 } from '@toeverything/theme/v2';
 import { style } from '@vanilla-extract/css';
 export const linkItemRoot = style({
   color: 'inherit',
+  // The wrapping <a> is focusable; without this it draws the browser default
+  // focus box around the whole item. Keyboard focus is surfaced on the inner
+  // row (`root`) via :focus-visible instead, so the flat look is preserved.
+  outline: 'none',
 });
 export const root = style({
   display: 'inline-flex',
@@ -19,6 +23,9 @@ export const root = style({
   fontWeight: 500,
   marginTop: '2px',
   position: 'relative',
+  // Flat items only — never a browser default focus box. Keyboard focus is
+  // shown via the :focus-visible ring below; pointer focus shows nothing.
+  outline: 'none',
   transition:
     'background-color 0.12s ease, color 0.12s ease, transform 0.12s ease',
   // accent left-rail indicator for the active item
@@ -39,6 +46,13 @@ export const root = style({
     '&:hover': {
       background: cssVarV2.layer.background.hoverOverlay,
       color: cssVarV2('text/primary'),
+    },
+    // Keyboard focus only: a subtle accent ring that matches the v2 hover/active
+    // treatment instead of the browser's default square outline box.
+    '&:focus-visible': {
+      background: cssVarV2.layer.background.hoverOverlay,
+      color: cssVarV2('text/primary'),
+      boxShadow: `0 0 0 2px color-mix(in srgb, ${cssVar('primaryColor')} 45%, transparent)`,
     },
     '&[data-active="true"]': {
       // tinted accent pill for the active item — reads clearly in every theme

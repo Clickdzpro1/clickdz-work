@@ -123,6 +123,12 @@ const WorkbenchSidebar = () => {
   const views = useLiveData(workbench.views$);
   const activeView = useLiveData(workbench.activeView$);
   const sidebarOpen = useLiveData(workbench.sidebarOpen$);
+  // Only surface the right dock when the active view actually registers sidebar
+  // tabs. Tab-less routes (e.g. /vdz) would otherwise render an empty
+  // "No Selection" panel. Gate the rendered `open` prop rather than calling
+  // closeSidebar() so the user's persisted preference is restored on docs.
+  const activeSidebarTabs = useLiveData(activeView?.sidebarTabs$);
+  const hasSidebarTabs = (activeSidebarTabs?.length ?? 0) > 0;
   const [floating, setFloating] = useState(false);
 
   const onWidthChanged = useCallback(
@@ -162,13 +168,13 @@ const WorkbenchSidebar = () => {
     <ResizePanel
       floating={floating}
       resizeHandlePos="left"
-      resizeHandleOffset={clientBorder && sidebarOpen ? 3 : 0}
+      resizeHandleOffset={clientBorder && sidebarOpen && hasSidebarTabs ? 3 : 0}
       width={width}
       resizing={resizing}
       onResizing={setResizing}
       className={styles.workbenchSidebar}
-      data-client-border={clientBorder && sidebarOpen}
-      open={sidebarOpen ?? false}
+      data-client-border={clientBorder && sidebarOpen && hasSidebarTabs}
+      open={hasSidebarTabs && (sidebarOpen ?? false)}
       onOpen={handleOpenChange}
       onWidthChange={setWidth}
       onWidthChanged={onWidthChanged}
