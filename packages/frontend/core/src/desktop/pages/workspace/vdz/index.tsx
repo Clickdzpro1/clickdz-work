@@ -34,6 +34,16 @@ import { PreviewCanvas } from './preview-canvas';
 import { TimelineLanes } from './timeline-lanes';
 import { Toolbar } from './toolbar';
 import { useVdzHistory } from './use-vdz-history';
+import {
+  type VdzPanelId,
+  useVdzLayout,
+} from './use-vdz-layout';
+import {
+  VdzPanel,
+  VdzReopenTab,
+  VdzResizeHandle,
+  VdzViewMenu,
+} from './vdz-panel';
 
 /** Which top-level surface the page is showing. */
 type VdzMode = 'edit' | 'generate';
@@ -67,10 +77,28 @@ const VdzStudioPage = () => {
 
   // Media bin: the single place user media enters the studio (upload / AI
   // images / stock). Owned here so the bin's blob object URLs survive tab
-  // switches and re-renders; shown as a toggleable left-side panel.
+  // switches and re-renders; shown as a flexible left-side workspace panel.
   const media = useVdzMedia();
-  const [showMedia, setShowMedia] = useState(true);
-  const toggleMedia = useCallback(() => setShowMedia(prev => !prev), []);
+
+  // ---- Workspace layout: flexible, hideable, resizable panels ------------
+  // Every editor surface is a panel the user can resize / hide / re-show; the
+  // state (per-panel {visible, size}) is persisted to localStorage.
+  const {
+    layout,
+    toggle: togglePanel,
+    setVisible: setPanelVisible,
+    setSize: setPanelSize,
+    resetPanelSize,
+    resetLayout,
+  } = useVdzLayout();
+
+  // The media bin still drives the toolbar's "Media" button; route it through
+  // the layout so the button, the panel ×, the View menu and Cmd+1 all agree.
+  const showMedia = layout.mediaBin.visible;
+  const toggleMedia = useCallback(
+    () => togglePanel('mediaBin'),
+    [togglePanel]
+  );
 
   // A staged, not-yet-applied AI proposal from the dock. null when nothing is
   // pending. The dock never mutates the timeline; the host reviews here and
@@ -401,23 +429,67 @@ const VdzStudioPage = () => {
   const revertPendingOps = useCallback(() => setPendingProposal(null), []);
 
   // ---- Mode switch -------------------------------------------------------
+  // Generate mode fills the center with the generator; the editor-only panels
+  // (media / inspector / timeline) are hidden automatically and RESTORED to
+  // whatever the user had when they return to Edit. The AI panel stays available
+  // as the studio's through-line. We stash the pre-generate visibility once on
+  // entry (a ref so it survives re-renders) and replay it on return.
+  const preGenerateVisibilityRef = useRef<Record<VdzPanelId, boolean> | null>(
+    null
+  );
+  const GENERATE_HIDDEN: VdzPanelId[] = useMemo(
+    () => ['mediaBin', 'inspector', 'timeline'],
+    []
+  );
+  // Same set as a lookup for the View menu's disabled state in Generate mode.
+  const generateDisabledPanels = useMemo(
+    () => new Set<VdzPanelId>(GENERATE_HIDDEN),
+    [GENERATE_HIDDEN]
+  );
+
   // Leaving the editor must not leave playback running (the rAF loop keeps
   // ticking even though the timeline is unmounted); stop it on any switch.
-  const switchMode = useCallback((next: VdzMode) => {
-    setIsPlaying(false);
-    setMode(next);
-  }, []);
+  // This runs from an event handler, so the sibling panel-visibility updates are
+  // plain sequential setState calls (not nested inside setMode's updater).
+  const switchMode = useCallback(
+    (next: VdzMode) => {
+      if (next === mode) return;
+      setIsPlaying(false);
+      if (next === 'generate') {
+        // Snapshot current visibility, then hide the editor-only panels.
+        preGenerateVisibilityRef.current = {
+          mediaBin: layout.mediaBin.visible,
+          inspector: layout.inspector.visible,
+          aiDock: layout.aiDock.visible,
+          timeline: layout.timeline.visible,
+        };
+        for (const id of GENERATE_HIDDEN) setPanelVisible(id, false);
+      } else {
+        // Returning to Edit: restore the snapshot (fall back to showing them).
+        const snap = preGenerateVisibilityRef.current;
+        for (const id of GENERATE_HIDDEN) {
+          setPanelVisible(id, snap ? snap[id] : true);
+        }
+        preGenerateVisibilityRef.current = null;
+      }
+      setMode(next);
+    },
+    [mode, GENERATE_HIDDEN, layout, setPanelVisible]
+  );
 
   // "Generate → In editor": stash the brief for the dock, jump to the editor,
   // and let the dock auto-send it (the SAME send path a typed dock message
   // uses). The result is a pending proposal the user reviews on the timeline.
-  const onGenerateInEditor = useCallback((prompt: string) => {
-    const trimmed = prompt.trim();
-    if (!trimmed) return;
-    setIsPlaying(false);
-    setPendingEditorPrompt(trimmed);
-    setMode('edit');
-  }, []);
+  // Route through switchMode so the editor panels are restored on the way in.
+  const onGenerateInEditor = useCallback(
+    (prompt: string) => {
+      const trimmed = prompt.trim();
+      if (!trimmed) return;
+      setPendingEditorPrompt(trimmed);
+      switchMode('edit');
+    },
+    [switchMode]
+  );
 
   // The dock calls this the instant it has auto-sent the handed-in brief; clear
   // it so a later re-render never re-sends the same prompt.
@@ -441,6 +513,19 @@ const VdzStudioPage = () => {
       if (meta && (event.key === 'y' || event.key === 'Y')) {
         event.preventDefault();
         redo();
+        return;
+      }
+
+      // Cmd/Ctrl+1..4 toggle the four workspace panels.
+      if (meta && event.key >= '1' && event.key <= '4') {
+        event.preventDefault();
+        const panelForDigit: Record<string, VdzPanelId> = {
+          '1': 'mediaBin',
+          '2': 'inspector',
+          '3': 'aiDock',
+          '4': 'timeline',
+        };
+        togglePanel(panelForDigit[event.key]);
         return;
       }
 
@@ -484,6 +569,7 @@ const VdzStudioPage = () => {
       deleteSelected,
       clearSelection,
       nudgeSelected,
+      togglePanel,
     ]
   );
 
@@ -528,6 +614,16 @@ const VdzStudioPage = () => {
               Generate
             </button>
           </div>
+
+          {/* Workspace View menu: checkmark/hide each panel. In Generate mode
+              the editor-only panels are mode-controlled, so disable them here. */}
+          <VdzViewMenu
+            layout={layout}
+            onToggle={togglePanel}
+            onReset={resetLayout}
+            disabledIds={mode === 'generate' ? generateDisabledPanels : undefined}
+          />
+
           <span className={styles.timelineName}>{timeline.name}</span>
         </div>
       </ViewHeader>
@@ -545,109 +641,234 @@ const VdzStudioPage = () => {
             onDrop={onRootDrop}
           >
             <div className={styles.main}>
-              {/* Media bin — left-side panel; toggled by the toolbar "Media"
-                  button. Items are draggable to the timeline and add at the
-                  playhead via the "+" button (both route through `run`). */}
+              {/* Media bin — flexible left panel. Draggable items add to the
+                  timeline via drag or the "+" button (both route through
+                  `run`). Resizable seam on its right edge; hides to a slim
+                  reopen tab at the left edge. */}
               {showMedia ? (
-                <MediaBin media={media} onAddToTimeline={addMediaToTimeline} />
-              ) : null}
-
-              {/* Preview + timeline stage */}
-              <div className={styles.stage}>
-                <PreviewCanvas
-                  timeline={timeline}
-                  playheadSeconds={playheadSeconds}
-                />
-
-                {/* Timeline */}
-                <div className={styles.timeline}>
-                  <Toolbar
-                    showMedia={showMedia}
-                    onToggleMedia={toggleMedia}
-                    isPlaying={isPlaying}
-                    onTogglePlay={togglePlay}
-                    playheadSeconds={playheadSeconds}
-                    duration={duration}
-                    pxPerSec={pxPerSec}
-                    onZoomOut={zoomOut}
-                    onZoomIn={zoomIn}
-                    canSplit={canSplit}
-                    onSplit={splitSelectedAtPlayhead}
-                    canDelete={selectedIds.size > 0}
-                    onDelete={deleteSelected}
-                    onRippleDelete={rippleDeleteSelected}
-                    canUndo={history.canUndo}
-                    onUndo={undo}
-                    canRedo={history.canRedo}
-                    onRedo={redo}
-                    selectionCount={selectedIds.size}
-                  />
-
-                  <div className={styles.scrubberRow}>
-                    <input
-                      className={styles.scrubber}
-                      type="range"
-                      min={0}
-                      max={Math.max(duration, 0.1)}
-                      step={0.1}
-                      value={Math.min(playheadSeconds, Math.max(duration, 0.1))}
-                      onChange={onScrub}
-                      aria-label="Playhead"
+                <>
+                  <div
+                    className={styles.sidePanelSlot}
+                    style={{ width: layout.mediaBin.size }}
+                  >
+                    <MediaBin
+                      media={media}
+                      onAddToTimeline={addMediaToTimeline}
+                      onCollapse={() => setPanelVisible('mediaBin', false)}
                     />
                   </div>
+                  <VdzResizeHandle
+                    id="mediaBin"
+                    size={layout.mediaBin.size}
+                    setSize={setPanelSize}
+                    onReset={() => resetPanelSize('mediaBin')}
+                    axis="x"
+                    dir={1}
+                    aria-label="Resize media panel"
+                  />
+                </>
+              ) : (
+                <VdzReopenTab
+                  label="Media"
+                  edge="left"
+                  onClick={() => setPanelVisible('mediaBin', true)}
+                />
+              )}
 
-                  <TimelineLanes
+              {/* Center column: preview canvas + (resizable) timeline. The
+                  flex remainder — grows/shrinks as panels resize. */}
+              <div className={styles.center}>
+                <div className={styles.previewWrapper}>
+                  <PreviewCanvas
                     timeline={timeline}
-                    pxPerSec={pxPerSec}
                     playheadSeconds={playheadSeconds}
-                    selectedIds={selectedIds}
-                    spanSeconds={spanSeconds}
-                    onSelectClip={selectClip}
-                    onScrubToSeconds={scrubTo}
-                    onZoomWheel={onZoomWheel}
-                    onCommitOp={commitLaneOp}
-                    onDropMedia={handleDropMedia}
-                    onDropFiles={handleDropFiles}
                   />
                 </div>
-              </div>
 
-              {/* Inspector */}
-              <div className={styles.inspector}>
-                <div className={styles.inspectorTitle}>Inspector</div>
-                <div className={styles.inspectorBody}>
-                  {selected ? (
-                    <Inspector
-                      clip={selected.clip}
-                      trackId={selected.trackId}
-                      onOp={commitLaneOp}
+                {/* Timeline — flexible bottom panel (its own header via the
+                    toolbar). Height is layout-driven; a vertical seam above
+                    resizes it. Collapses to just toolbar + scrubber. */}
+                {layout.timeline.visible ? (
+                  <>
+                    <VdzResizeHandle
+                      id="timeline"
+                      size={layout.timeline.size}
+                      setSize={setPanelSize}
+                      onReset={() => resetPanelSize('timeline')}
+                      axis="y"
+                      dir={-1}
+                      aria-label="Resize timeline"
                     />
-                  ) : selectedIds.size > 1 ? (
-                    <div className={styles.inspectorHint}>
-                      {selectedIds.size} clips selected. Delete / ripple-delete
-                      act on the whole selection; click a single clip to inspect
-                      its JSON.
+                    <div
+                      className={styles.timeline}
+                      style={{ height: layout.timeline.size }}
+                    >
+                      <Toolbar
+                        showMedia={showMedia}
+                        onToggleMedia={toggleMedia}
+                        isPlaying={isPlaying}
+                        onTogglePlay={togglePlay}
+                        playheadSeconds={playheadSeconds}
+                        duration={duration}
+                        pxPerSec={pxPerSec}
+                        onZoomOut={zoomOut}
+                        onZoomIn={zoomIn}
+                        canSplit={canSplit}
+                        onSplit={splitSelectedAtPlayhead}
+                        canDelete={selectedIds.size > 0}
+                        onDelete={deleteSelected}
+                        onRippleDelete={rippleDeleteSelected}
+                        canUndo={history.canUndo}
+                        onUndo={undo}
+                        canRedo={history.canRedo}
+                        onRedo={redo}
+                        selectionCount={selectedIds.size}
+                        onCollapse={() => setPanelVisible('timeline', false)}
+                      />
+
+                      <div className={styles.scrubberRow}>
+                        <input
+                          className={styles.scrubber}
+                          type="range"
+                          min={0}
+                          max={Math.max(duration, 0.1)}
+                          step={0.1}
+                          value={Math.min(
+                            playheadSeconds,
+                            Math.max(duration, 0.1)
+                          )}
+                          onChange={onScrub}
+                          aria-label="Playhead"
+                        />
+                      </div>
+
+                      <div className={styles.timelineLanesWrap}>
+                        <TimelineLanes
+                          timeline={timeline}
+                          pxPerSec={pxPerSec}
+                          playheadSeconds={playheadSeconds}
+                          selectedIds={selectedIds}
+                          spanSeconds={spanSeconds}
+                          onSelectClip={selectClip}
+                          onScrubToSeconds={scrubTo}
+                          onZoomWheel={onZoomWheel}
+                          onCommitOp={commitLaneOp}
+                          onDropMedia={handleDropMedia}
+                          onDropFiles={handleDropFiles}
+                        />
+                      </div>
                     </div>
-                  ) : (
-                    <div className={styles.inspectorHint}>
-                      Select a clip in the timeline below to inspect its JSON.
-                      Everything here is a validated <code>VdzTimeline</code> —
-                      the same document the AI will edit via <code>VdzOp</code>
-                      s.
-                    </div>
-                  )}
-                </div>
+                  </>
+                ) : (
+                  <VdzReopenTab
+                    label="Timeline"
+                    edge="bottom"
+                    onClick={() => setPanelVisible('timeline', true)}
+                  />
+                )}
               </div>
 
-              {/* AI dock — right-side panel, sibling of the inspector. It
-                proposes edits; onApplyOps stages them for review below. */}
-              <VdzAiDock
-                timeline={timeline}
-                selectedClipIds={selectedClipIds}
-                onApplyOps={onApplyOps}
-                initialPrompt={pendingEditorPrompt}
-                onInitialPromptConsumed={onEditorPromptConsumed}
-              />
+              {/* Right stack: inspector + AI dock, each a flexible panel with a
+                  resize seam on its left edge. Hidden panels leave a reopen tab
+                  at the right edge. */}
+              {layout.inspector.visible || layout.aiDock.visible ? (
+                <div className={styles.rightStack}>
+                  {layout.inspector.visible ? (
+                    <>
+                      <VdzResizeHandle
+                        id="inspector"
+                        size={layout.inspector.size}
+                        setSize={setPanelSize}
+                        onReset={() => resetPanelSize('inspector')}
+                        axis="x"
+                        dir={-1}
+                        aria-label="Resize inspector"
+                      />
+                      <div
+                        className={styles.sidePanelSlot}
+                        style={{ width: layout.inspector.size }}
+                      >
+                        <VdzPanel
+                          title="Inspector"
+                          data-testid="vdz-inspector"
+                          onCollapse={() =>
+                            setPanelVisible('inspector', false)
+                          }
+                          bodyClassName={styles.inspectorBody}
+                        >
+                          {selected ? (
+                            <Inspector
+                              clip={selected.clip}
+                              trackId={selected.trackId}
+                              onOp={commitLaneOp}
+                            />
+                          ) : selectedIds.size > 1 ? (
+                            <div className={styles.inspectorHint}>
+                              {selectedIds.size} clips selected. Delete /
+                              ripple-delete act on the whole selection; click a
+                              single clip to inspect its JSON.
+                            </div>
+                          ) : (
+                            <div className={styles.inspectorHint}>
+                              Select a clip in the timeline below to inspect its
+                              JSON. Everything here is a validated{' '}
+                              <code>VdzTimeline</code> — the same document the AI
+                              will edit via <code>VdzOp</code>s.
+                            </div>
+                          )}
+                        </VdzPanel>
+                      </div>
+                    </>
+                  ) : null}
+
+                  {/* AI dock — proposes edits; onApplyOps stages them below. */}
+                  {layout.aiDock.visible ? (
+                    <>
+                      <VdzResizeHandle
+                        id="aiDock"
+                        size={layout.aiDock.size}
+                        setSize={setPanelSize}
+                        onReset={() => resetPanelSize('aiDock')}
+                        axis="x"
+                        dir={-1}
+                        aria-label="Resize AI panel"
+                      />
+                      <div
+                        className={styles.sidePanelSlot}
+                        style={{ width: layout.aiDock.size }}
+                      >
+                        <VdzAiDock
+                          timeline={timeline}
+                          selectedClipIds={selectedClipIds}
+                          onApplyOps={onApplyOps}
+                          initialPrompt={pendingEditorPrompt}
+                          onInitialPromptConsumed={onEditorPromptConsumed}
+                          onCollapse={() => setPanelVisible('aiDock', false)}
+                        />
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* Reopen tabs for a hidden right panel (stacked at the right
+                  edge so each can be re-shown independently). */}
+              {!layout.inspector.visible ? (
+                <VdzReopenTab
+                  label="Inspector"
+                  edge="right"
+                  index={0}
+                  onClick={() => setPanelVisible('inspector', true)}
+                />
+              ) : null}
+              {!layout.aiDock.visible ? (
+                <VdzReopenTab
+                  label="AI"
+                  edge="right"
+                  index={layout.inspector.visible ? 0 : 1}
+                  onClick={() => setPanelVisible('aiDock', true)}
+                />
+              ) : null}
             </div>
 
             {/* Footer: pending AI proposal (Accept/Revert) or dock status. */}

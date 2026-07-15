@@ -42,6 +42,8 @@ export interface VdzAiDockProps {
   initialPrompt?: string;
   /** Paired with {@link initialPrompt}: called right after it is auto-sent. */
   onInitialPromptConsumed?: () => void;
+  /** Hide this panel (× in the header strip). */
+  onCollapse?: () => void;
 }
 
 /** One rendered assistant reply: how many ops we accepted/rejected. */
@@ -58,6 +60,7 @@ export function VdzAiDock({
   onApplyOps,
   initialPrompt,
   onInitialPromptConsumed,
+  onCollapse,
 }: VdzAiDockProps) {
   const { history, busy, error, send, reset } = useVdzAi();
   const [draft, setDraft] = useState('');
@@ -175,6 +178,17 @@ export function VdzAiDock({
         >
           Clear
         </button>
+        {onCollapse ? (
+          <button
+            type="button"
+            className={styles.collapseButton}
+            onClick={onCollapse}
+            title="Hide AI"
+            aria-label="Hide AI"
+          >
+            ×
+          </button>
+        ) : null}
       </div>
 
       <div className={styles.thread} ref={threadRef}>

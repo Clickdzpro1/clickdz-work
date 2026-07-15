@@ -92,6 +92,7 @@ export const modeTab = style({
 });
 
 export const main = style({
+  position: 'relative',
   display: 'flex',
   flex: 1,
   minHeight: 0,
@@ -126,6 +127,8 @@ export const previewWrapper = style({
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
+  padding: 16,
+  boxSizing: 'border-box',
 });
 
 // 16:9 preview canvas. `containerType: size` lets clip text scale to the box
@@ -203,10 +206,11 @@ export const previewEmpty = style({
   fontSize: 13,
 });
 
-// Right inspector panel.
+// Right inspector panel. Width owned by its layout slot; fills it.
 export const inspector = style({
-  width: 300,
-  flexShrink: 0,
+  width: '100%',
+  flex: 1,
+  minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
   borderLeft: `1px solid ${border}`,
@@ -257,15 +261,28 @@ export const inspectorMeta = style({
   lineHeight: 1.5,
 });
 
-// Timeline area.
+// Timeline area — flexible bottom panel; height set inline by the layout hook.
+// flexShrink:0 keeps it at exactly that height in the center column; minHeight:0
+// + the scrolling lanes wrap below let it collapse to just toolbar + scrubber.
 export const timeline = style({
   flexShrink: 0,
+  minHeight: 0,
   borderTop: `1px solid ${border}`,
   background: panel,
   padding: '10px 16px 14px',
   display: 'flex',
   flexDirection: 'column',
   gap: 8,
+  overflow: 'hidden',
+  boxSizing: 'border-box',
+});
+
+// The lanes area inside the timeline panel: takes the remaining height and
+// scrolls, so shrinking the panel never clips the toolbar/scrubber above it.
+export const timelineLanesWrap = style({
+  flex: 1,
+  minHeight: 0,
+  overflow: 'auto',
 });
 
 export const scrubberRow = style({
@@ -893,4 +910,345 @@ export const transitionPickerButton = style({
     background: raised,
     borderColor: accent,
   },
+});
+
+// =========================================================================
+// Workspace layout: flexible/hideable panels, resize seams, reopen tabs, View
+// menu. Panels are sized by inline width/height on their slot wrappers; the
+// child components fill the slot (their own root is width/height: 100%).
+// =========================================================================
+
+// A sizing slot for a side panel: owns the width, never shrinks.
+export const sidePanelSlot = style({
+  position: 'relative',
+  flexShrink: 0,
+  display: 'flex',
+  minWidth: 0,
+  minHeight: 0,
+  height: '100%',
+});
+
+// The center column (preview + timeline): the flex remainder.
+export const center = style({
+  display: 'flex',
+  flexDirection: 'column',
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  overflow: 'hidden',
+});
+
+// The right-hand stack that holds inspector + AI dock, each its own slot.
+export const rightStack = style({
+  display: 'flex',
+  flexShrink: 0,
+  minHeight: 0,
+  height: '100%',
+});
+
+// ---- Slim reusable panel chrome (<VdzPanel>) ----------------------------
+export const vdzPanel = style({
+  display: 'flex',
+  flexDirection: 'column',
+  width: '100%',
+  height: '100%',
+  minHeight: 0,
+  background: panel,
+  color: text,
+  overflow: 'hidden',
+});
+
+export const panelHeader = style({
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 10px 8px 14px',
+  borderBottom: `1px solid ${border}`,
+  flexShrink: 0,
+  minHeight: 36,
+  boxSizing: 'border-box',
+});
+
+export const panelTitle = style({
+  fontSize: 12,
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  letterSpacing: 0.5,
+  color: textDim,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
+export const panelHeaderSpacer = style({
+  flex: 1,
+});
+
+export const panelCollapse = style({
+  appearance: 'none',
+  flexShrink: 0,
+  border: `1px solid transparent`,
+  background: 'transparent',
+  color: textDim,
+  fontSize: 15,
+  lineHeight: 1,
+  width: 22,
+  height: 22,
+  borderRadius: 6,
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
+  ':hover': {
+    color: text,
+    background: raised,
+    borderColor: border,
+  },
+});
+
+export const panelBody = style({
+  flex: 1,
+  minHeight: 0,
+  overflow: 'auto',
+});
+
+// ---- Resize seams -------------------------------------------------------
+const HANDLE = 6;
+
+// Shared base: a thin hit-target with a hairline that lights up on hover/drag.
+const resizeHandleBase = style({
+  position: 'relative',
+  flexShrink: 0,
+  zIndex: 10,
+  background: 'transparent',
+  selectors: {
+    '&::after': {
+      content: '""',
+      position: 'absolute',
+      background: border,
+      transition: 'background 120ms ease',
+    },
+    '&:hover::after, &[data-dragging="true"]::after': {
+      background: accent,
+    },
+    '&[data-dragging="true"]': {
+      background: 'rgba(91,140,255,0.12)',
+    },
+  },
+});
+
+// Vertical seam between two side-by-side panels (drag horizontally).
+export const resizeHandleX = style([
+  resizeHandleBase,
+  {
+    width: HANDLE,
+    height: '100%',
+    cursor: 'col-resize',
+    touchAction: 'none',
+    selectors: {
+      '&::after': {
+        top: 0,
+        bottom: 0,
+        left: '50%',
+        width: 1,
+        transform: 'translateX(-0.5px)',
+      },
+      '&:hover::after, &[data-dragging="true"]::after': {
+        width: 2,
+      },
+    },
+  },
+]);
+
+// Horizontal seam between stacked panels — preview above / timeline below
+// (drag vertically).
+export const resizeHandleY = style([
+  resizeHandleBase,
+  {
+    height: HANDLE,
+    width: '100%',
+    cursor: 'row-resize',
+    touchAction: 'none',
+    selectors: {
+      '&::after': {
+        left: 0,
+        right: 0,
+        top: '50%',
+        height: 1,
+        transform: 'translateY(-0.5px)',
+      },
+      '&:hover::after, &[data-dragging="true"]::after': {
+        height: 2,
+      },
+    },
+  },
+]);
+
+// ---- Reopen tab (hidden panel leaves a slim tab at its edge) -------------
+export const reopenTab = style({
+  appearance: 'none',
+  position: 'absolute',
+  zIndex: 11,
+  border: `1px solid ${border}`,
+  color: textDim,
+  fontSize: 10,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: 0.6,
+  cursor: 'pointer',
+  padding: '8px 3px',
+  background: panel,
+  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
+  ':hover': {
+    color: text,
+    background: raised,
+    borderColor: accent,
+  },
+  selectors: {
+    // Left/right edge tabs read vertically.
+    '&[data-edge="left"], &[data-edge="right"]': {
+      top: 12,
+      writingMode: 'vertical-rl',
+    },
+    '&[data-edge="left"]': {
+      left: 0,
+      borderLeft: 'none',
+      borderTopRightRadius: 6,
+      borderBottomRightRadius: 6,
+    },
+    '&[data-edge="right"]': {
+      right: 0,
+      borderRight: 'none',
+      borderTopLeftRadius: 6,
+      borderBottomLeftRadius: 6,
+      transform: 'rotate(180deg)',
+    },
+    '&[data-edge="bottom"]': {
+      right: 16,
+      bottom: 8,
+      padding: '4px 10px',
+      borderRadius: 6,
+      writingMode: 'horizontal-tb',
+    },
+  },
+});
+
+// ---- View menu (header dropdown) ----------------------------------------
+export const viewMenuRoot = style({
+  position: 'relative',
+  display: 'inline-flex',
+});
+
+export const viewMenuTrigger = style({
+  appearance: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  border: `1px solid ${border}`,
+  background: bg,
+  color: textDim,
+  fontSize: 12,
+  fontWeight: 600,
+  padding: '4px 10px',
+  borderRadius: 8,
+  cursor: 'pointer',
+  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
+  ':hover': {
+    color: text,
+    borderColor: accent,
+  },
+  selectors: {
+    '&[data-open="true"]': {
+      color: text,
+      background: raised,
+      borderColor: accent,
+    },
+  },
+});
+
+export const viewMenuGlyph = style({
+  fontSize: 12,
+  lineHeight: 1,
+});
+
+export const viewMenuBadge = style({
+  fontSize: 10,
+  fontWeight: 700,
+  color: textDim,
+  background: bg,
+  border: `1px solid ${border}`,
+  borderRadius: 999,
+  padding: '1px 6px',
+  fontVariantNumeric: 'tabular-nums',
+});
+
+export const viewMenu = style({
+  position: 'absolute',
+  top: 'calc(100% + 6px)',
+  left: 0,
+  minWidth: 220,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  padding: 6,
+  background: panel,
+  border: `1px solid ${border}`,
+  borderRadius: 10,
+  boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
+  zIndex: 40,
+});
+
+export const viewMenuItem = style({
+  appearance: 'none',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  width: '100%',
+  border: 'none',
+  background: 'transparent',
+  color: text,
+  fontSize: 13,
+  fontWeight: 500,
+  padding: '6px 8px',
+  borderRadius: 6,
+  cursor: 'pointer',
+  textAlign: 'left',
+  transition: 'background 120ms ease',
+  ':hover': {
+    background: raised,
+  },
+  selectors: {
+    '&:disabled': {
+      opacity: 0.4,
+      cursor: 'default',
+      background: 'transparent',
+    },
+  },
+});
+
+export const viewMenuCheck = style({
+  width: 14,
+  flexShrink: 0,
+  color: accent,
+  fontSize: 12,
+  fontWeight: 700,
+  textAlign: 'center',
+});
+
+export const viewMenuLabel = style({
+  flex: 1,
+});
+
+export const viewMenuHint = style({
+  fontSize: 10,
+  color: textDim,
+  fontFamily:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+});
+
+export const viewMenuSep = style({
+  height: 1,
+  background: border,
+  margin: '4px 2px',
 });
