@@ -18,6 +18,7 @@ import {
 } from '../../../../modules/vdz/use-vdz-media';
 import { useVdzTimelineExport } from '../../../../modules/vdz/use-vdz-timeline-export';
 import { VdzAiDock } from './ai-dock';
+import { VdzAudioPlayback } from './audio-playback';
 import {
   clampZoom,
   clipFromMedia,
@@ -90,6 +91,9 @@ const VdzStudioPage = () => {
   );
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  // Master mute for preview audio (the toolbar speaker toggle). Per-clip gain
+  // still lives on each clip's `volume`; this is a global override.
+  const [audioMuted, setAudioMuted] = useState(false);
   const [pxPerSec, setPxPerSec] = useState(DEFAULT_PX_PER_SEC);
 
   // Top-level surface: the timeline editor ('edit') or the AI video generator
@@ -766,6 +770,15 @@ const VdzStudioPage = () => {
                     timeline={timeline}
                     playheadSeconds={playheadSeconds}
                   />
+                  {/* Non-visual: hidden <audio> pool slaved to the playhead so
+                      the preview actually plays sound. Unmounts with the editor
+                      body (Generate mode / leaving the route), stopping audio. */}
+                  <VdzAudioPlayback
+                    timeline={timeline}
+                    playheadSeconds={playheadSeconds}
+                    isPlaying={isPlaying}
+                    muted={audioMuted}
+                  />
                 </div>
 
                 {/* Timeline — flexible bottom panel (its own header via the
@@ -791,6 +804,8 @@ const VdzStudioPage = () => {
                         onToggleMedia={toggleMedia}
                         isPlaying={isPlaying}
                         onTogglePlay={togglePlay}
+                        audioMuted={audioMuted}
+                        onToggleAudioMute={() => setAudioMuted(m => !m)}
                         playheadSeconds={playheadSeconds}
                         duration={duration}
                         pxPerSec={pxPerSec}

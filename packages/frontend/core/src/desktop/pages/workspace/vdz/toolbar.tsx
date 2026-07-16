@@ -8,6 +8,10 @@ interface ToolbarProps {
   onToggleMedia: () => void;
   isPlaying: boolean;
   onTogglePlay: () => void;
+  /** Master mute for preview audio (drives the speaker toggle state). */
+  audioMuted?: boolean;
+  /** Toggle master preview-audio mute. */
+  onToggleAudioMute?: () => void;
   playheadSeconds: number;
   duration: number;
   pxPerSec: number;
@@ -46,6 +50,8 @@ export function Toolbar({
   onToggleMedia,
   isPlaying,
   onTogglePlay,
+  audioMuted,
+  onToggleAudioMute,
   playheadSeconds,
   duration,
   pxPerSec,
@@ -92,6 +98,18 @@ export function Toolbar({
       >
         {isPlaying ? '⏸ Pause' : '▶ Play'}
       </button>
+
+      {onToggleAudioMute ? (
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onToggleAudioMute}
+          aria-pressed={audioMuted}
+          title={audioMuted ? 'Unmute preview audio' : 'Mute preview audio'}
+        >
+          {audioMuted ? '🔇 Muted' : '🔊 Audio'}
+        </button>
+      ) : null}
 
       <span className={styles.toolTimecode}>
         {formatTimecode(playheadSeconds)} / {formatTimecode(duration)}
