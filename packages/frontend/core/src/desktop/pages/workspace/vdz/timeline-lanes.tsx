@@ -7,6 +7,7 @@ import type {
   VdzTimeline,
   VdzTransition,
 } from '../../../../modules/vdz';
+import { AudioClipWaveform } from './audio-waveform';
 import {
   LANE_LABEL_WIDTH,
   MIN_CLIP_DURATION,
@@ -553,8 +554,19 @@ export function TimelineLanes({
                       onPointerCancel={finishDrag}
                       title={clip.name ?? clip.id}
                     >
+                      {/* Waveform underlay for audio clips (non-interactive;
+                          first child so handles/label paint above it). */}
+                      {clip.type === 'audio' ? (
+                        <AudioClipWaveform
+                          clip={clip}
+                          widthPx={Math.max(2, dur * pxPerSec)}
+                        />
+                      ) : null}
                       <span className={styles.clipTrimHandleLeft} />
-                      <span className={styles.clipLabel}>
+                      <span
+                        className={styles.clipLabel}
+                        style={{ position: 'relative', zIndex: 1 }}
+                      >
                         {clip.name ?? clip.type}
                       </span>
                       <span className={styles.clipTrimHandleRight} />
