@@ -979,6 +979,25 @@ mod tests {
     assert_eq!(openai.protocol.as_deref(), Some("openai_images"));
     assert_eq!(openai.request_layer.as_deref(), Some("openai_images"));
 
+    // CDZIMAGE (WS1 PR3): the built-in image prompts now bind gpt-image-2 —
+    // lock in that the routing rule covers the new default engine too.
+    let openai_v2 = llm_match_model_registry(ModelRegistryMatchRequest {
+      backend_kind: "openai_responses".to_string(),
+      cond: ModelConditionsContract {
+        input_types: Some(vec!["text".to_string()]),
+        attachment_kinds: None,
+        attachment_source_kinds: None,
+        has_remote_attachments: None,
+        model_id: Some("gpt-image-2".to_string()),
+        output_type: Some("image".to_string()),
+      },
+    })
+    .unwrap()
+    .variant
+    .unwrap();
+    assert_eq!(openai_v2.protocol.as_deref(), Some("openai_images"));
+    assert_eq!(openai_v2.request_layer.as_deref(), Some("openai_images"));
+
     let fal = llm_match_model_registry(ModelRegistryMatchRequest {
       backend_kind: "fal".to_string(),
       cond: ModelConditionsContract {
