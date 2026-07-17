@@ -34,6 +34,12 @@ export async function run() {
   });
 
   app.useBodyParser('raw', { limit: 100 * OneMB });
+  // WS1 PR4 (and the long-suspected timeline-export 413): Nest's default
+  // express json limit is ~100KB, which chokes (a) base64 reference images
+  // sent to the CDZIMAGE image-to-image route and (b) the Vdz timeline MP4
+  // export's inlined-media HTML (~1.4MB budget). Raise json to a sane
+  // app-wide ceiling; raw stays 100MB for byte uploads.
+  app.useBodyParser('json', { limit: 20 * OneMB });
 
   const logger = app.get(AFFiNELogger);
   app.useLogger(logger);

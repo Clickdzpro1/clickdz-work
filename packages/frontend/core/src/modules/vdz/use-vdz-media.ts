@@ -311,6 +311,62 @@ export function useBlobUrl(src: string): string | undefined {
   return resolved;
 }
 
+// ---- CDZIMAGE generation options (WS1 PR4) --------------------------------
+
+/** The CDZIMAGE tiers the Vdz bin can request (1.0 is Vdz-only by policy). */
+export type CdzImageTier = 'cdzimage-2.0' | 'cdzimage-1.5' | 'cdzimage-1.0';
+export const CDZIMAGE_TIER_OPTIONS: Array<{ id: CdzImageTier; label: string }> =
+  [
+    { id: 'cdzimage-2.0', label: 'CDZIMAGE 2.0 · best' },
+    { id: 'cdzimage-1.5', label: 'CDZIMAGE 1.5 · balanced' },
+    { id: 'cdzimage-1.0', label: 'CDZIMAGE 1.0 · economy' },
+  ];
+
+/** How a reference image is used: true edit vs inspiration (reinterpret). */
+export type CdzImageRefMode = 'edit' | 'reinterpret';
+
+export interface VdzGenerateImageOptions {
+  tier?: CdzImageTier;
+  reference?: { item: VdzMediaItem; mode: CdzImageRefMode };
+}
+
+/** Reference images bigger than this are rejected client-side (JSON weight). */
+const MAX_REFERENCE_BYTES = 6 * 1024 * 1024;
+
+/**
+ * Resolve a bin item to something the images API accepts as input: data: and
+ * http(s) URLs pass through (the server fetches public URLs behind its SSRF
+ * guard); session `blob:` object URLs are read into a base64 data URL here —
+ * the server can never fetch a browser-local blob.
+ */
+async function resolveReferenceForApi(item: VdzMediaItem): Promise<string> {
+  const url = item.url;
+  if (/^data:/i.test(url) || /^https?:/i.test(url)) return url;
+  if (!/^blob:/i.test(url)) {
+    throw new Error('This item cannot be used as a reference image.');
+  }
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error('Could not read the reference image.');
+  }
+  const blob = await response.blob();
+  if (blob.size > MAX_REFERENCE_BYTES) {
+    throw new Error(
+      `Reference image is too large (max ${Math.floor(MAX_REFERENCE_BYTES / (1024 * 1024))}MB).`
+    );
+  }
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Could not read the reference image.'));
+    reader.readAsDataURL(blob);
+  });
+  if (!/^data:image\//i.test(dataUrl)) {
+    throw new Error('The reference must be an image.');
+  }
+  return dataUrl;
+}
+
 export interface UseVdzMedia {
   items: VdzMediaItem[];
   /** Non-fatal status message for the current op (upload/search), or null. */
@@ -323,8 +379,18 @@ export interface UseVdzMedia {
    * the items that were added (skipping unsupported / oversized files).
    */
   importFiles: (files: File[] | FileList) => Promise<VdzMediaItem[]>;
-  /** Generate AI images from a prompt and add them to the bin. */
-  generateImages: (prompt: string) => Promise<void>;
+  /**
+   * Generate AI images from a prompt and add them to the bin.
+   * `options.tier` picks the CDZIMAGE model (2.0 default; Vdz is the ONE
+   * surface that exposes the 1.0 economy tier). `options.reference` sends a
+   * bin image as input — `mode: 'edit'` = true image-to-image (the engine
+   * sees the pixels), `mode: 'reinterpret'` = "use as inspiration" (vision
+   * description feeds a fresh generation).
+   */
+  generateImages: (
+    prompt: string,
+    options?: VdzGenerateImageOptions
+  ) => Promise<void>;
   /** Search Unsplash and add the chosen photo to the bin on click. */
   searchStock: (query: string) => Promise<VdzMediaItem[]>;
   /** Add a stock/AI result URL to the bin (used by the grid click). */
@@ -453,16 +519,31 @@ export function useVdzMedia(): UseVdzMedia {
     []
   );
 
-  const generateImages = useCallback(async (prompt: string): Promise<void> => {
+  const generateImages = useCallback(
+    async (
+      prompt: string,
+      options?: VdzGenerateImageOptions
+    ): Promise<void> => {
     const trimmed = prompt.trim();
     if (!trimmed) return;
     setBusy(true);
     setError(null);
     try {
+      // CDZIMAGE: every Vdz generation carries an explicit tier (2.0 default;
+      // Vdz is the one surface where the 1.0 economy tier is offered). An
+      // optional bin reference rides along as true-edit or inspiration input.
+      const payload: Record<string, unknown> = {
+        prompt: trimmed,
+        model: options?.tier ?? 'cdzimage-2.0',
+      };
+      if (options?.reference) {
+        payload.image = await resolveReferenceForApi(options.reference.item);
+        payload.mode = options.reference.mode;
+      }
       const response = await fetch(cdzApiUrl('/api/v1/images/generations'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: trimmed }),
+        body: JSON.stringify(payload),
       });
       const data = (await response
         .json()
@@ -495,7 +576,9 @@ export function useVdzMedia(): UseVdzMedia {
     } finally {
       setBusy(false);
     }
-  }, []);
+    },
+    []
+  );
 
   const searchStock = useCallback(
     async (query: string): Promise<VdzMediaItem[]> => {

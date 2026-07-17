@@ -1,8 +1,11 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 
-import type {
-  UseVdzMedia,
-  VdzMediaItem,
+import {
+  CDZIMAGE_TIER_OPTIONS,
+  type CdzImageRefMode,
+  type CdzImageTier,
+  type UseVdzMedia,
+  type VdzMediaItem,
 } from '../../../../modules/vdz/use-vdz-media';
 import { VDZ_MEDIA_DND_MIME, type VdzMediaDragPayload } from './constants';
 import * as styles from './media-bin.css';
@@ -213,11 +216,40 @@ function UploadTab({ media }: { media: UseVdzMedia }) {
 // ---- AI images tab ------------------------------------------------------
 function AiImagesTab({ media }: { media: UseVdzMedia }) {
   const [prompt, setPrompt] = useState('');
+  // CDZIMAGE (WS1 PR4): explicit tier on every generation. Vdz is the ONE
+  // surface exposing the 1.0 economy tier (cheap bulk storyboard frames).
+  const [tier, setTier] = useState<CdzImageTier>('cdzimage-2.0');
+  // Optional bin reference: '' = none; otherwise a bin image item id.
+  const [refId, setRefId] = useState('');
+  const [refMode, setRefMode] = useState<CdzImageRefMode>('edit');
+
+  const referenceCandidates = media.items.filter(
+    item => item.kind === 'image'
+  );
+  const referenceItem =
+    referenceCandidates.find(item => item.id === refId) ?? null;
 
   const onGenerate = useCallback(() => {
     if (!prompt.trim() || media.busy) return;
-    void media.generateImages(prompt);
-  }, [prompt, media]);
+    void media.generateImages(prompt, {
+      tier,
+      reference: referenceItem
+        ? { item: referenceItem, mode: refMode }
+        : undefined,
+    });
+  }, [prompt, media, tier, referenceItem, refMode]);
+
+  const selectStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    height: 28,
+    fontSize: 11,
+    padding: '0 6px',
+    borderRadius: 7,
+    border: '1px solid var(--vdz-border, #262a35)',
+    background: 'var(--vdz-bg, #0b0d12)',
+    color: 'var(--vdz-text, #e6e9f0)',
+  };
 
   return (
     <>
@@ -245,11 +277,62 @@ function AiImagesTab({ media }: { media: UseVdzMedia }) {
           {media.busy ? '…' : 'Generate'}
         </button>
       </div>
+
+      {/* Model tier + optional reference (edit / inspire). */}
+      <div className={styles.searchRow}>
+        <select
+          style={selectStyle}
+          value={tier}
+          disabled={media.busy}
+          onChange={e => setTier(e.target.value as CdzImageTier)}
+          aria-label="Image model"
+          title="Which CDZIMAGE model generates this image"
+        >
+          {CDZIMAGE_TIER_OPTIONS.map(option => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <select
+          style={selectStyle}
+          value={refId}
+          disabled={media.busy || referenceCandidates.length === 0}
+          onChange={e => setRefId(e.target.value)}
+          aria-label="Reference image"
+          title="Optionally use a bin image as input"
+        >
+          <option value="">No reference</option>
+          {referenceCandidates.map(item => (
+            <option key={item.id} value={item.id}>
+              📎 {item.name.slice(0, 28)}
+            </option>
+          ))}
+        </select>
+        {referenceItem ? (
+          <select
+            style={{ ...selectStyle, flex: '0 0 auto', width: 110 }}
+            value={refMode}
+            disabled={media.busy}
+            onChange={e => setRefMode(e.target.value as CdzImageRefMode)}
+            aria-label="Reference mode"
+            title="Edit the image directly, or use it as inspiration for a new one"
+          >
+            <option value="edit">✏️ Edit it</option>
+            <option value="reinterpret">✨ Inspire</option>
+          </select>
+        ) : null}
+      </div>
+
       {media.busy ? (
         <div className={styles.status}>Generating image…</div>
       ) : (
         <div className={styles.emptyHint}>
-          Generated images are added straight to the bin below.
+          {referenceItem
+            ? refMode === 'edit'
+              ? 'The model edits the reference image following your prompt.'
+              : 'The model draws inspiration from the reference for a new image.'
+            : 'Generated images are added straight to the bin below.'}
         </div>
       )}
     </>
