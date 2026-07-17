@@ -72,8 +72,13 @@ export interface UseVdzExport {
   fileUrl: string | null;
   /** true when the service reported itself unconfigured (degrade the UI). */
   unavailable: boolean;
-  /** Kick off a render for the given composition HTML. */
-  start: (html: string) => Promise<void>;
+  /**
+   * Kick off a render for the given composition HTML. `extra` is an OPTIONAL,
+   * additive set of fields merged into the POST body — used by the Remotion
+   * opt-in path to send `{ engine: 'remotion', manifest }` alongside the html.
+   * When omitted the body is exactly `{ html }` (unchanged behavior).
+   */
+  start: (html: string, extra?: Record<string, unknown>) => Promise<void>;
   /** Reset back to idle (e.g. when the composition changes). */
   reset: () => void;
 }
@@ -102,7 +107,8 @@ export function useVdzExport(): UseVdzExport {
     };
   }, []);
 
-  const start = useCallback(async (html: string): Promise<void> => {
+  const start = useCallback(
+    async (html: string, extra?: Record<string, unknown>): Promise<void> => {
     if (!html) return;
     const token = ++activeRef.current;
     setStatus('starting');
@@ -116,7 +122,10 @@ export function useVdzExport(): UseVdzExport {
       const res = await fetch(cdzApiUrl(RENDER_URL), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ html }),
+        // `{ html }` is the default body; `extra` (when present) additively adds
+        // the Remotion opt-in fields (`engine`, `manifest`). Spread AFTER html so
+        // it never accidentally overwrites it.
+        body: JSON.stringify({ html, ...(extra ?? {}) }),
       });
       if (!res.ok) {
         const msg = await readError(res);

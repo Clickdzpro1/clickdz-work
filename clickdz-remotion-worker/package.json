@@ -1,0 +1,33 @@
+{
+  "name": "clickdz-remotion-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ClickDz Vdz Studio — Remotion MP4 render worker: renders a self-contained VdzRenderManifest to MP4 with real per-frame video + audio mixing. Deployed as a standalone Railway service; the app's ClickDzVdzRenderController proxies to it when CDZ_REMOTION_URL is set.",
+  "type": "commonjs",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "tsc -p tsconfig.json && node dist/server.js",
+    "studio": "remotion studio src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.490",
+    "@remotion/cli": "4.0.490",
+    "@remotion/renderer": "4.0.490",
+    "express": "5.1.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.490"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.0",
+    "@types/node": "22.10.5",
+    "@types/react": "19.2.0",
+    "typescript": "5.7.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

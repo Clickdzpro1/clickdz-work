@@ -44,6 +44,24 @@ import { blobIdFromSrc, isVdzBlobSrc } from './use-vdz-media';
  */
 const MAX_INLINE_BYTES = 1_400_000;
 
+/**
+ * localStorage flag that opts an export into the Remotion engine (true-video
+ * export). When set to a truthy value ("1"/"true"), {@link start} additionally
+ * builds a render manifest and sends it with the html so the backend can route
+ * to the Remotion worker (only effective when the server has CDZ_REMOTION_URL
+ * set). Absent/false → the existing HTML export, unchanged. Read defensively so
+ * a non-browser / storage-blocked environment simply reports "off".
+ */
+const REMOTION_OPT_IN_KEY = 'cdz:remotion-opt-in';
+function remotionOptInEnabled(): boolean {
+  try {
+    const v = globalThis.localStorage?.getItem(REMOTION_OPT_IN_KEY);
+    return v === '1' || v === 'true';
+  } catch {
+    return false;
+  }
+}
+
 /** Read a Blob as a base64 `data:` URL. */
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -174,10 +192,26 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
         setSkippedMedia(skipped);
         const compiled = compileTimelineToHtml(timeline, { resolveSrc });
         setLastCompile(compiled);
+        // OPTIONAL Remotion engine (true-video-export track). When the local
+        // opt-in flag is set we ALSO build the render manifest and send it with
+        // the html so the backend can route to the Remotion worker (when the
+        // server has CDZ_REMOTION_URL set). The manifest reuses the SAME
+        // resolved media map (data: URLs are valid loadable srcs for the worker
+        // too). Code-split alongside the compiler so a non-opted-in export never
+        // loads it. Byte-identical to before when the flag is unset: `extra`
+        // stays undefined and the POST body is exactly `{ html }`.
+        let extra: Record<string, unknown> | undefined;
+        if (remotionOptInEnabled()) {
+          const { buildRenderManifest } = await import(
+            './remotion/render-manifest'
+          );
+          const manifest = buildRenderManifest(timeline, { resolveSrc });
+          extra = { engine: 'remotion', manifest };
+        }
         // Hand the compiled HTML to the shared render path (enqueue → poll →
         // file url). The service rejects an empty composition with a typed 400
         // that the export hook surfaces as an error.
-        await startRender(compiled.html);
+        await startRender(compiled.html, extra);
       } finally {
         setPreparing(false);
       }
