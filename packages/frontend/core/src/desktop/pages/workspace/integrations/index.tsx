@@ -19,7 +19,7 @@ import {
 // The whole surface is gated server-side behind COMPOSIO_API_KEY. This page
 // simply reflects what /api/v1/integrations/* reports:
 //   • {enabled:false}  -> friendly setup state (ask the owner to set the key)
-//   • {enabled:true}   -> toolkit grid with Connect buttons
+//   • {enabled:true}   -> toolkit grid with Connect buttons + a ▶ Run section
 // It is purely additive: with no key the only visible change in the whole app
 // is the sidebar item + this informative page. No new .css.ts (inline styles
 // only, per house rules — small new UI prefers inline styles).
@@ -37,6 +37,25 @@ interface ToolkitsResponse {
   error?: string;
 }
 
+// One executed orchestrator step, mirrors the backend RunStep shape.
+interface RunStep {
+  tool: string;
+  arguments?: Record<string, unknown>;
+  ok: boolean;
+  resultPreview: string;
+}
+
+interface RunResponse {
+  ok: boolean;
+  answer: string;
+  steps: RunStep[];
+  iterations: number;
+}
+
+// Max toolkits the orchestrator accepts (mirrors backend RUN_MAX_TOOLKITS).
+const RUN_MAX_TOOLKITS = 5;
+const RUN_PROMPT_MAX = 4_000;
+
 // Dark, app-consistent palette. Each value is an --affine-* theme var with a
 // hard dark fallback so the page reads correctly even before theme vars load.
 const C = {
@@ -51,6 +70,7 @@ const C = {
   warnBorder: 'color-mix(in srgb, #e8a33d 40%, transparent)',
   errBg: 'color-mix(in srgb, var(--affine-error-color, #eb4b4b) 12%, transparent)',
   errBorder: 'color-mix(in srgb, var(--affine-error-color, #eb4b4b) 40%, transparent)',
+  okText: 'var(--affine-success-color, #4cae4c)',
 } as const;
 
 type LoadState = 'loading' | 'ready' | 'error';
@@ -61,6 +81,13 @@ const IntegrationsPage = () => {
   const [toolkits, setToolkits] = useState<CdzToolkit[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
+
+  // ---- ▶ Run orchestrator state ----
+  const [prompt, setPrompt] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [result, setResult] = useState<RunResponse | null>(null);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -121,6 +148,57 @@ const IntegrationsPage = () => {
       setConnecting(null);
     }
   }, []);
+
+  // Toggle a toolkit chip on/off, enforcing the max-5 selection cap.
+  const toggleToolkit = useCallback((slug: string) => {
+    setSelected(prev => {
+      if (prev.includes(slug)) return prev.filter(s => s !== slug);
+      if (prev.length >= RUN_MAX_TOOLKITS) return prev;
+      return [...prev, slug];
+    });
+  }, []);
+
+  const run = useCallback(async () => {
+    const trimmed = prompt.trim();
+    if (!trimmed || running) return;
+    setRunning(true);
+    setRunError(null);
+    setResult(null);
+    try {
+      const res = await fetch(cdzApiUrl('/api/v1/integrations/run'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: trimmed, toolkits: selected }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Partial<RunResponse> & {
+        error?: string;
+      };
+      if (res.status === 409 || data.error === 'not_configured') {
+        setRunError('Integrations are not configured yet — ask the owner to set COMPOSIO_API_KEY.');
+        return;
+      }
+      if (res.status === 502 || data.error === 'planner_unavailable') {
+        setRunError("The integrations agent is unavailable right now. Please try again in a moment.");
+        return;
+      }
+      if (!res.ok || !data.ok) {
+        setRunError('The run could not be completed. Please try again.');
+        return;
+      }
+      setResult({
+        ok: true,
+        answer: typeof data.answer === 'string' ? data.answer : '',
+        steps: Array.isArray(data.steps) ? data.steps : [],
+        iterations: typeof data.iterations === 'number' ? data.iterations : 0,
+      });
+    } catch {
+      setRunError('Network error while running. Check your connection and try again.');
+    } finally {
+      setRunning(false);
+    }
+  }, [prompt, selected, running]);
+
+  const canRun = enabled && state === 'ready' && prompt.trim().length > 0 && !running;
 
   return (
     <>
@@ -324,6 +402,214 @@ const IntegrationsPage = () => {
                 </Banner>
               )
             ) : null}
+
+            {/* ▶ Run orchestrator ------------------------------------------- */}
+            <section
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12,
+                padding: 18,
+                borderRadius: 12,
+                background: C.panel,
+                border: `1px solid ${C.border}`,
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <h2
+                  style={{
+                    margin: 0,
+                    fontSize: 15,
+                    fontWeight: 700,
+                    color: C.text,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <span>▶</span> Run
+                </h2>
+                <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>
+                  Describe what you want to do; the agent picks and runs the
+                  right tools from the toolkits you select below.
+                </p>
+              </div>
+
+              {!enabled ? (
+                <Banner tone="warn">
+                  Running is disabled until an owner sets{' '}
+                  <code style={codeStyle}>COMPOSIO_API_KEY</code> on the server.
+                </Banner>
+              ) : null}
+
+              {/* Prompt */}
+              <textarea
+                value={prompt}
+                onChange={e => setPrompt(e.target.value.slice(0, RUN_PROMPT_MAX))}
+                disabled={!enabled || running}
+                placeholder="e.g. Star the composiohq/composio repo on GitHub"
+                rows={3}
+                style={{
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  resize: 'vertical',
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                  lineHeight: 1.5,
+                  color: C.text,
+                  background: C.bg,
+                  border: `1px solid ${C.border}`,
+                  opacity: !enabled ? 0.55 : 1,
+                }}
+              />
+
+              {/* Toolkit chips (click to toggle, max 5) */}
+              {toolkits.length > 0 ? (
+                <div
+                  style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
+                  role="group"
+                  aria-label="Toolkits to allow"
+                >
+                  {toolkits.map(tk => {
+                    const on = selected.includes(tk.slug);
+                    const capped = !on && selected.length >= RUN_MAX_TOOLKITS;
+                    return (
+                      <button
+                        key={tk.slug}
+                        type="button"
+                        disabled={!enabled || running || capped}
+                        onClick={() => toggleToolkit(tk.slug)}
+                        title={
+                          capped
+                            ? `Up to ${RUN_MAX_TOOLKITS} toolkits`
+                            : tk.name
+                        }
+                        style={{
+                          appearance: 'none',
+                          cursor:
+                            !enabled || running || capped ? 'default' : 'pointer',
+                          padding: '5px 12px',
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: on ? '#fff' : C.text,
+                          background: on ? C.accent : 'transparent',
+                          border: `1px solid ${on ? C.accent : C.border}`,
+                          opacity: capped ? 0.4 : 1,
+                        }}
+                      >
+                        {tk.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {/* Run button + selection hint */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <button
+                  type="button"
+                  disabled={!canRun}
+                  onClick={() => void run()}
+                  style={{
+                    appearance: 'none',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '9px 18px',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    cursor: canRun ? 'pointer' : 'default',
+                    color: '#fff',
+                    background: C.accent,
+                    opacity: canRun ? 1 : 0.5,
+                  }}
+                >
+                  {running ? (
+                    <>
+                      <Spinner /> Running…
+                    </>
+                  ) : (
+                    <>▶ Run</>
+                  )}
+                </button>
+                <span style={{ fontSize: 12, color: C.muted }}>
+                  {selected.length > 0
+                    ? `${selected.length}/${RUN_MAX_TOOLKITS} toolkit${selected.length > 1 ? 's' : ''} selected`
+                    : 'No toolkit filter — the agent may have nothing to run.'}
+                </span>
+              </div>
+
+              {/* Run error states (409 / 502 / network) */}
+              {runError ? <Banner tone="error">{runError}</Banner> : null}
+
+              {/* Results panel */}
+              {result ? (
+                <div
+                  style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+                >
+                  {/* Final answer — prominent */}
+                  <div
+                    style={{
+                      padding: '14px 16px',
+                      borderRadius: 10,
+                      background: C.accentSoft,
+                      border: `1px solid ${C.border}`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                        color: C.muted,
+                        marginBottom: 6,
+                      }}
+                    >
+                      Answer
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 14,
+                        color: C.text,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {result.answer || '(no answer returned)'}
+                    </div>
+                  </div>
+
+                  {/* Steps */}
+                  {result.steps.length > 0 ? (
+                    <div
+                      style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 11,
+                          fontWeight: 700,
+                          letterSpacing: '0.06em',
+                          textTransform: 'uppercase',
+                          color: C.muted,
+                        }}
+                      >
+                        Steps ({result.steps.length}) · {result.iterations}{' '}
+                        iteration{result.iterations === 1 ? '' : 's'}
+                      </div>
+                      {result.steps.map((step, i) => (
+                        <StepRow key={`${step.tool}-${i}`} step={step} index={i} />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
           </div>
         </div>
       </ViewBody>
@@ -352,6 +638,113 @@ const linkBtnStyle: CSSProperties = {
   color: 'var(--affine-primary-color, #1e96eb)',
   textDecoration: 'underline',
 };
+
+// A single collapsible orchestrator step (tool name + ok/fail badge + <pre>).
+const StepRow = ({ step, index }: { step: RunStep; index: number }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      style={{
+        borderRadius: 8,
+        background: C.bg,
+        border: `1px solid ${C.border}`,
+        overflow: 'hidden',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          appearance: 'none',
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '9px 12px',
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          color: C.text,
+          textAlign: 'left',
+          font: 'inherit',
+        }}
+      >
+        <span style={{ fontSize: 11, color: C.muted, width: 18 }}>
+          {index + 1}.
+        </span>
+        <span
+          style={{
+            fontFamily: 'var(--affine-font-code-family, monospace)',
+            fontSize: 12,
+            fontWeight: 600,
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {step.tool}
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            padding: '1px 8px',
+            borderRadius: 999,
+            color: step.ok ? C.okText : 'var(--affine-error-color, #eb4b4b)',
+            background: step.ok ? C.accentSoft : C.errBg,
+            border: `1px solid ${step.ok ? C.border : C.errBorder}`,
+          }}
+        >
+          {step.ok ? 'ok' : 'failed'}
+        </span>
+        <span style={{ fontSize: 11, color: C.muted }}>
+          {open ? '▾' : '▸'}
+        </span>
+      </button>
+      {open ? (
+        <pre
+          style={{
+            margin: 0,
+            padding: '10px 12px',
+            borderTop: `1px solid ${C.border}`,
+            background: C.panel,
+            color: C.muted,
+            fontSize: 11.5,
+            fontFamily: 'var(--affine-font-code-family, monospace)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            maxHeight: 260,
+            overflow: 'auto',
+          }}
+        >
+          {step.resultPreview || '(empty result)'}
+        </pre>
+      ) : null}
+    </div>
+  );
+};
+
+// Tiny CSS spinner (keyframes injected inline once via a <style> tag).
+const Spinner = () => (
+  <span
+    style={{
+      display: 'inline-block',
+      width: 12,
+      height: 12,
+      borderRadius: '50%',
+      border: '2px solid rgba(255,255,255,0.4)',
+      borderTopColor: '#fff',
+      animation: 'cdz-integrations-spin 0.7s linear infinite',
+    }}
+  >
+    <style>
+      {'@keyframes cdz-integrations-spin{to{transform:rotate(360deg)}}'}
+    </style>
+  </span>
+);
 
 const Banner = ({
   tone,

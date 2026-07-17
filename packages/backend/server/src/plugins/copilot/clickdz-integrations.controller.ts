@@ -4,8 +4,8 @@ import type { Response } from 'express';
 import { CurrentUser } from '../../core/auth';
 // Typed errors from ../../base (raw HttpException is coerced to a generic 500
 // by AFFiNE's GlobalExceptionFilter — see base/nestjs/exception.ts mapAnyError).
-// For the contract's non-standard status + typed-body responses (409 / 501 /
-// 502) we therefore write them directly via the injected Express Response
+// For the contract's non-standard status + typed-body responses (409 / 502)
+// we therefore write them directly via the injected Express Response
 // (@Res()), exactly like ClickDzBridgeController's chatCompletions/tts routes.
 // BadRequest stays available for genuinely malformed input (typed 400).
 import { BadRequest, Throttle } from '../../base';
@@ -22,13 +22,209 @@ const COMPOSIO_TOOLKITS_URL =
 // Auth-link session (returns a hosted redirect_url the user opens to connect).
 const COMPOSIO_LINK_URL =
   'https://backend.composio.dev/api/v3.1/connected_accounts/link';
+// Tool discovery (per-toolkit) + execution — the /run orchestrator surface.
+const COMPOSIO_TOOLS_URL = 'https://backend.composio.dev/api/v3/tools';
+const COMPOSIO_TOOLS_EXECUTE_URL =
+  'https://backend.composio.dev/api/v3/tools/execute';
 
 const COMPOSIO_TIMEOUT_MS = 8_000;
+
+// --- CDZ_AI direct-path envs (mirrors clickdz-bridge.controller.ts:179-193 &
+// conversation/compact.ts). The OpenAI-compatible `cdz-flash` catalog served by
+// CDZ_AI_BASE_URL is the planner brain for the /run tool loop. ---
+const CDZ_AI_BASE_URL = (
+  process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
+).replace(/\/+$/, '');
+const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
+const CDZ_PLANNER_MODEL = process.env.CDZ_PLANNER_MODEL || 'cdz-flash';
+
+// --- /run orchestrator budgets (AbortControllers everywhere) ---
+// Per-toolkit tool discovery timeout, per-planner-call timeout, per-execute
+// timeout, and a total wall-clock cap for the whole loop.
+const RUN_TOOLS_TIMEOUT_MS = 8_000;
+const RUN_PLANNER_TIMEOUT_MS = 10_000;
+const RUN_EXECUTE_TIMEOUT_MS = 20_000;
+const RUN_WALL_CLOCK_MS = 75_000;
+// Hard iteration cap on tool CALLS (not counting the terminal final turn).
+const RUN_MAX_ITERATIONS = 4;
+// Prompt/response budgets.
+const RUN_MAX_TOOLKITS = 5;
+const RUN_TOOLS_PER_TOOLKIT = 25;
+const RUN_PROMPT_MIN = 1;
+const RUN_PROMPT_MAX = 4_000;
+const CONDENSED_TOOLS_CHAR_CAP = 6_000;
+const STEP_PREVIEW_CHAR_CAP = 2_000;
+const RESULT_FEEDBACK_CHAR_CAP = 2_000;
+const PLANNER_MAX_TOKENS = 700;
 
 interface CdzToolkit {
   slug: string;
   name: string;
   logo?: string;
+}
+
+// A discovered, normalized Composio tool used by the /run planner.
+interface CdzTool {
+  slug: string;
+  name: string;
+  description: string;
+  parameters: any;
+}
+
+// One executed loop step surfaced back to the client.
+interface RunStep {
+  tool: string;
+  arguments: Record<string, unknown>;
+  ok: boolean;
+  resultPreview: string;
+}
+
+// The planner's parsed single-turn decision (normalized, fail-closed).
+interface PlannerDecision {
+  action: 'call' | 'final';
+  tool?: string;
+  arguments?: Record<string, unknown>;
+  answer?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Pure helpers (module-level, no `this`, no I/O) — unit-tested in isolation.
+// ---------------------------------------------------------------------------
+
+/** Strip ```json ... ``` (or plain ``` / ~~~ ... ) fences the model may wrap JSON in. */
+function stripCodeFences(raw: string): string {
+  let s = String(raw ?? '').trim();
+  const fence = /^[`~]{3,}[^\n]*\n?/;
+  if (fence.test(s)) {
+    s = s.replace(fence, '');
+    s = s.replace(/[`~]{3,}\s*$/, '');
+  }
+  return s.trim();
+}
+
+/**
+ * Fail-closed parse of the planner's JSON turn. Strips fences, tries JSON.parse
+ * inside a try/catch, and NORMALIZES to a PlannerDecision. Anything unparseable
+ * or shape-wrong becomes a {action:'final', answer:<raw text>} so the loop can
+ * never crash on model noise.
+ */
+function parsePlannerJson(raw: string): PlannerDecision {
+  const text = String(raw ?? '');
+  const stripped = stripCodeFences(text);
+  let obj: any;
+  try {
+    obj = JSON.parse(stripped);
+  } catch {
+    // Model sometimes prepends prose then emits JSON — try the first {...} span.
+    const first = stripped.indexOf('{');
+    const last = stripped.lastIndexOf('}');
+    if (first !== -1 && last > first) {
+      try {
+        obj = JSON.parse(stripped.slice(first, last + 1));
+      } catch {
+        return { action: 'final', answer: text.trim() };
+      }
+    } else {
+      return { action: 'final', answer: text.trim() };
+    }
+  }
+  if (!obj || typeof obj !== 'object') {
+    return { action: 'final', answer: text.trim() };
+  }
+  if (obj.action === 'call' && typeof obj.tool === 'string' && obj.tool.trim()) {
+    const args =
+      obj.arguments &&
+      typeof obj.arguments === 'object' &&
+      !Array.isArray(obj.arguments)
+        ? (obj.arguments as Record<string, unknown>)
+        : {};
+    return { action: 'call', tool: obj.tool.trim(), arguments: args };
+  }
+  if (obj.action === 'final') {
+    const answer =
+      typeof obj.answer === 'string' && obj.answer.trim()
+        ? obj.answer.trim()
+        : text.trim();
+    return { action: 'final', answer };
+  }
+  // Unknown/absent action -> treat the whole thing as a final answer.
+  return { action: 'final', answer: text.trim() };
+}
+
+/** Defensively pull the array of tool objects out of a Composio v3 tools payload. */
+function extractToolList(data: any): any[] {
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.tools)) return data.tools;
+  if (Array.isArray(data)) return data;
+  return [];
+}
+
+/** Map one raw Composio tool object to a normalized CdzTool (or null). */
+function normalizeTool(t: any): CdzTool | null {
+  const slug =
+    typeof t?.slug === 'string'
+      ? t.slug
+      : typeof t?.name === 'string'
+        ? t.name
+        : typeof t?.key === 'string'
+          ? t.key
+          : null;
+  if (!slug) return null;
+  const name = typeof t?.name === 'string' && t.name.length ? t.name : slug;
+  const description =
+    typeof t?.description === 'string'
+      ? t.description
+      : typeof t?.meta?.description === 'string'
+        ? t.meta.description
+        : '';
+  const parameters =
+    t?.input_parameters ?? t?.parameters ?? t?.inputParameters ?? null;
+  return { slug, name, description, parameters };
+}
+
+/**
+ * Condense tool schemas into a compact, char-capped block for the planner
+ * system prompt: slug + short description + the list of REQUIRED param names
+ * only. Never exceeds `cap` total chars.
+ */
+function condenseToolSchemas(
+  tools: CdzTool[],
+  cap: number = CONDENSED_TOOLS_CHAR_CAP
+): string {
+  const lines: string[] = [];
+  let used = 0;
+  for (const tool of tools) {
+    const required: string[] = Array.isArray(tool.parameters?.required)
+      ? tool.parameters.required.filter((x: any) => typeof x === 'string')
+      : [];
+    const desc = (tool.description || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 160);
+    const reqStr = required.length ? ` [required: ${required.join(', ')}]` : '';
+    const line = `- ${tool.slug}: ${desc}${reqStr}`;
+    if (used + line.length + 1 > cap) break;
+    lines.push(line);
+    used += line.length + 1;
+  }
+  return lines.join('\n');
+}
+
+/** JSON-stringify a value and hard-truncate to `cap` chars (default 2000). */
+function truncatePreview(
+  value: unknown,
+  cap: number = STEP_PREVIEW_CHAR_CAP
+): string {
+  let s: string;
+  try {
+    s = typeof value === 'string' ? value : JSON.stringify(value);
+  } catch {
+    s = String(value);
+  }
+  if (s == null) s = '';
+  if (s.length <= cap) return s;
+  return s.slice(0, cap) + `… [truncated ${s.length - cap} chars]`;
 }
 
 /**
@@ -44,13 +240,14 @@ interface CdzToolkit {
 export class ClickDzIntegrationsController {
   private readonly logger = new Logger(ClickDzIntegrationsController.name);
 
-  /** Small helper: fetch with a hard AbortController timeout (8s). */
+  /** Small helper: fetch with a hard AbortController timeout (default 8s). */
   private async fetchWithTimeout(
     url: string,
-    init: RequestInit
+    init: RequestInit,
+    timeoutMs: number = COMPOSIO_TIMEOUT_MS
   ): Promise<globalThis.Response> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), COMPOSIO_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       return await fetch(url, { ...init, signal: controller.signal });
     } finally {
@@ -229,13 +426,360 @@ export class ClickDzIntegrationsController {
     }
   }
 
-  /**
-   * POST run — experimental tool execution. Deliberately disabled this round
-   * (the loop lands when a key exists): always 501.
-   */
+  // -------------------------------------------------------------------------
+  // POST run — the integrations orchestrator.
+  //
+  //   body {prompt: string (1..4000), toolkits?: string[] (<=5 slugs)}
+  //
+  // Flow:
+  //   (a) no COMPOSIO_API_KEY   -> 409 {error:'not_configured'}
+  //   (b) discover tools for the given toolkits (Composio v3, 8s each), and
+  //       condense their schemas (slug+desc+required, char-capped) into the
+  //       planner system prompt.
+  //   (c) run a cdz-flash tool loop (direct CDZ_AI call per compact.ts, 10s per
+  //       call). The model replies ONLY with JSON:
+  //         {"action":"call","tool":"<slug>","arguments":{...}}  or
+  //         {"action":"final","answer":"..."}
+  //       Parsed fail-closed (strip fences, JSON.parse in try/catch; unparseable
+  //       -> treated as a final answer with the raw text).
+  //   (d) on "call": POST tools/execute/<tool_slug> {user_id, arguments} (20s);
+  //       record a step {tool, arguments, ok, resultPreview(<=2000)}; feed a
+  //       truncated result back as the next user turn. Execution errors become
+  //       ok:false steps whose error text is fed back (loop continues).
+  //   (e) iteration cap (4 calls) + total wall-clock cap (~75s) via
+  //       AbortControllers; when a cap hits, ask/synthesize a final answer.
+  //
+  // Success -> 200 {ok:true, answer, steps, iterations}.
+  // cdz-flash unreachable (planner call fails on the FIRST turn) -> @Res 502
+  // {error:'planner_unavailable'} — mirrors the file's @Res passthrough; NEVER
+  // a raw HttpException.
+  // -------------------------------------------------------------------------
   @Throttle('strict')
   @Post('/api/v1/integrations/run')
-  run(@CurrentUser() _user: CurrentUser, @Res() res: Response) {
-    res.status(501).json({ error: 'experimental_disabled' });
+  async run(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    // ---- input validation (typed 400 for genuinely malformed input) ----
+    const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
+    if (prompt.length < RUN_PROMPT_MIN || prompt.length > RUN_PROMPT_MAX) {
+      throw new BadRequest(
+        `"prompt" must be a string of ${RUN_PROMPT_MIN}..${RUN_PROMPT_MAX} chars`
+      );
+    }
+    const toolkitSlugs: string[] = Array.isArray(body?.toolkits)
+      ? body.toolkits
+          .filter((s: any) => typeof s === 'string' && s.trim())
+          .map((s: string) => s.trim())
+          .slice(0, RUN_MAX_TOOLKITS)
+      : [];
+
+    // (a) dark by default.
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+
+    // Wall-clock budget for the whole loop (independent of per-call timeouts).
+    const deadline = Date.now() + RUN_WALL_CLOCK_MS;
+    const timeLeft = () => deadline - Date.now();
+
+    // (b) discover + condense tools. Tool discovery failures are soft: an empty
+    // catalog just means the planner will (correctly) tell the user to connect a
+    // toolkit or that it has nothing to run.
+    const tools = await this.discoverTools(toolkitSlugs);
+    const condensed = condenseToolSchemas(tools);
+    const knownSlugs = new Set(tools.map(t => t.slug));
+
+    const systemPrompt = this.buildPlannerSystemPrompt(condensed);
+
+    // Conversation seed: system + the user's request.
+    const messages: Array<{ role: string; content: string }> = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: prompt },
+    ];
+
+    const steps: RunStep[] = [];
+    let iterations = 0;
+    let answer: string | null = null;
+
+    // ---- the tool loop ----
+    while (iterations < RUN_MAX_ITERATIONS && timeLeft() > 0) {
+      const planned = await this.callPlanner(messages, timeLeft());
+
+      // planner unreachable BEFORE we produced anything -> 502. Once we have
+      // steps we prefer to synthesize a partial answer instead of 502ing.
+      if (planned === null) {
+        if (steps.length === 0) {
+          res.status(502).json({ error: 'planner_unavailable' });
+          return;
+        }
+        answer = this.synthesizeAnswer(steps);
+        break;
+      }
+
+      // Record the assistant's raw turn so the model sees its own history.
+      messages.push({ role: 'assistant', content: planned.raw });
+
+      const decision = parsePlannerJson(planned.raw);
+
+      if (decision.action === 'final') {
+        answer = decision.answer ?? '';
+        break;
+      }
+
+      // action === 'call'
+      const toolSlug = decision.tool ?? '';
+      const args = decision.arguments ?? {};
+
+      // Guard against invented tools: never execute a slug the model wasn't
+      // given. Feed the correction back and let it retry (does NOT burn an
+      // execution, but DOES count as an iteration to keep the loop bounded).
+      if (!knownSlugs.has(toolSlug)) {
+        iterations++;
+        const correction = `Tool "${toolSlug}" is not in the available tools. Choose one of the listed tool slugs, or finish with {"action":"final","answer":"..."}.`;
+        messages.push({ role: 'user', content: correction });
+        continue;
+      }
+
+      iterations++;
+      const step = await this.executeTool(toolSlug, args, user.id, timeLeft());
+      steps.push(step);
+
+      // Feed a truncated result back to the model as the next user turn.
+      const feedback = step.ok
+        ? `Result of ${toolSlug} (ok): ${truncatePreview(step.resultPreview, RESULT_FEEDBACK_CHAR_CAP)}`
+        : `Error from ${toolSlug} (failed): ${truncatePreview(step.resultPreview, RESULT_FEEDBACK_CHAR_CAP)}`;
+      messages.push({ role: 'user', content: feedback });
+    }
+
+    // (e) cap hit with no final answer yet: ask the model one last time for a
+    // final answer (best-effort), else synthesize from the steps.
+    if (answer === null) {
+      const finalTry =
+        timeLeft() > 1_000
+          ? await this.callPlanner(
+              [
+                ...messages,
+                {
+                  role: 'user',
+                  content:
+                    'You have reached the step limit. Reply now with {"action":"final","answer":"..."} summarizing what you did or what the user should do next. No more tool calls.',
+                },
+              ],
+              timeLeft()
+            )
+          : null;
+      if (finalTry) {
+        const d = parsePlannerJson(finalTry.raw);
+        answer =
+          d.action === 'final' && d.answer ? d.answer : this.synthesizeAnswer(steps);
+      } else {
+        answer = this.synthesizeAnswer(steps);
+      }
+    }
+
+    res.status(200).json({ ok: true, answer, steps, iterations });
+  }
+
+  // ---- /run internals -----------------------------------------------------
+
+  /** Compose the planner system prompt from the condensed tool block. */
+  private buildPlannerSystemPrompt(condensed: string): string {
+    const toolBlock = condensed || '(no tools are available for the selected toolkits)';
+    return [
+      "You are ClickDz's integrations agent. You accomplish the user's request by",
+      'calling the available tools below, one at a time.',
+      '',
+      'AVAILABLE TOOLS (slug: description [required params]):',
+      toolBlock,
+      '',
+      'RESPOND WITH JSON ONLY — no prose, no markdown, no code fences. Exactly one of:',
+      '  {"action":"call","tool":"<slug>","arguments":{ ...tool inputs... }}',
+      '  {"action":"final","answer":"<plain-language answer for the user>"}',
+      '',
+      'Rules:',
+      '- Use ONLY the exact tool slugs listed above. NEVER invent a tool.',
+      '- Put every argument the tool needs inside "arguments".',
+      '- If a tool fails because a connected account is missing (auth / not connected),',
+      '  STOP and finish with {"action":"final","answer":"..."} telling the user to',
+      '  connect that toolkit first on the Integrations page.',
+      '- When you have enough to answer, finish with an "final" action.',
+    ].join('\n');
+  }
+
+  /**
+   * Discover tools for each toolkit slug via Composio v3 (8s per toolkit).
+   * Defensive parse (items|data|tools|array). Per-toolkit failures are logged
+   * and skipped — a partial or empty catalog is fine (the planner adapts).
+   */
+  private async discoverTools(toolkitSlugs: string[]): Promise<CdzTool[]> {
+    const collected: CdzTool[] = [];
+    const seen = new Set<string>();
+    for (const slug of toolkitSlugs) {
+      try {
+        const url = `${COMPOSIO_TOOLS_URL}?toolkit_slug=${encodeURIComponent(
+          slug
+        )}&limit=${RUN_TOOLS_PER_TOOLKIT}`;
+        const response = await this.fetchWithTimeout(
+          url,
+          {
+            method: 'GET',
+            headers: {
+              'x-api-key': COMPOSIO_API_KEY,
+              Accept: 'application/json',
+            },
+          },
+          RUN_TOOLS_TIMEOUT_MS
+        );
+        if (!response.ok) {
+          this.logger.warn(
+            `[integrations] tools ${slug} HTTP ${response.status}`
+          );
+          continue;
+        }
+        const data: any = await response.json();
+        for (const raw of extractToolList(data)) {
+          const tool = normalizeTool(raw);
+          if (tool && !seen.has(tool.slug)) {
+            seen.add(tool.slug);
+            collected.push(tool);
+          }
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[integrations] tools ${slug} fetch failed: ${(err as Error)?.message ?? err}`
+        );
+      }
+    }
+    return collected;
+  }
+
+  /**
+   * One planner turn against cdz-flash (direct CDZ_AI, OpenAI-compatible). The
+   * timeout is min(10s, remaining wall-clock). Returns {raw} on a clean 2xx with
+   * string content, or null on ANY failure (no key, non-2xx, timeout, empty) so
+   * the caller can decide 502-vs-synthesize.
+   */
+  private async callPlanner(
+    messages: Array<{ role: string; content: string }>,
+    remainingMs: number
+  ): Promise<{ raw: string } | null> {
+    if (!CDZ_AI_KEY) {
+      return null;
+    }
+    const timeoutMs = Math.max(1, Math.min(RUN_PLANNER_TIMEOUT_MS, remainingMs));
+    try {
+      const response = await this.fetchWithTimeout(
+        `${CDZ_AI_BASE_URL}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: CDZ_PLANNER_MODEL,
+            messages,
+            max_tokens: PLANNER_MAX_TOKENS,
+            temperature: 0.1,
+          }),
+        },
+        timeoutMs
+      );
+      const data = (await response.json()) as any;
+      const content = data?.choices?.[0]?.message?.content;
+      if (response.ok && typeof content === 'string' && content.trim()) {
+        return { raw: content };
+      }
+      this.logger.warn(
+        `[integrations] planner non-ok (${response.status}) or empty content`
+      );
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        `[integrations] planner call failed: ${(err as Error)?.message ?? err}`
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Execute one Composio tool (20s, capped by remaining wall-clock). Always
+   * returns a RunStep — execution errors are captured as ok:false steps whose
+   * text is fed back to the model so the loop can recover.
+   */
+  private async executeTool(
+    toolSlug: string,
+    args: Record<string, unknown>,
+    userId: string,
+    remainingMs: number
+  ): Promise<RunStep> {
+    const timeoutMs = Math.max(1, Math.min(RUN_EXECUTE_TIMEOUT_MS, remainingMs));
+    try {
+      const response = await this.fetchWithTimeout(
+        `${COMPOSIO_TOOLS_EXECUTE_URL}/${encodeURIComponent(toolSlug)}`,
+        {
+          method: 'POST',
+          headers: {
+            'x-api-key': COMPOSIO_API_KEY,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({ user_id: userId, arguments: args }),
+        },
+        timeoutMs
+      );
+      const data: any = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail =
+          typeof data?.error?.message === 'string'
+            ? data.error.message
+            : typeof data?.error === 'string'
+              ? data.error
+              : typeof data?.message === 'string'
+                ? data.message
+                : `composio responded ${response.status}`;
+        return {
+          tool: toolSlug,
+          arguments: args,
+          ok: false,
+          resultPreview: truncatePreview(detail),
+        };
+      }
+      // Composio wraps successful output in {data}/{response_data} on some
+      // tools; surface whatever is there, truncated.
+      const payload = data?.data ?? data?.response_data ?? data;
+      return {
+        tool: toolSlug,
+        arguments: args,
+        ok: true,
+        resultPreview: truncatePreview(payload),
+      };
+    } catch (err) {
+      const detail = (err as Error)?.message ?? 'tool_execute_failed';
+      this.logger.warn(`[integrations] execute ${toolSlug} threw: ${detail}`);
+      return {
+        tool: toolSlug,
+        arguments: args,
+        ok: false,
+        resultPreview: truncatePreview(detail),
+      };
+    }
+  }
+
+  /** Deterministic fallback answer when the planner can't produce a final one. */
+  private synthesizeAnswer(steps: RunStep[]): string {
+    if (steps.length === 0) {
+      return "I couldn't complete the request — the planner was unavailable and no tools ran. Please try again in a moment.";
+    }
+    const okCount = steps.filter(s => s.ok).length;
+    const parts = steps.map(
+      s => `${s.tool}: ${s.ok ? 'ok' : 'failed'}`
+    );
+    return `I ran ${steps.length} tool step(s) (${okCount} succeeded): ${parts.join(
+      '; '
+    )}. Reached the step/time limit before a final summary — review the steps above for details.`;
   }
 }
