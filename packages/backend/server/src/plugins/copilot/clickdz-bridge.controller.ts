@@ -280,6 +280,101 @@ function resolveCdzImageModel(
   }
   return 'invalid';
 }
+
+// ---------------------------------------------------------------------------
+// Image-to-image inputs (WS1 PR2). An input image (and optional mask) may be
+// a data: URL (decoded inline, no network) or a PUBLIC https URL (fetched
+// server-side behind the same SSRF guard the OCR path uses). Hard size cap —
+// this route pays per request.
+// ---------------------------------------------------------------------------
+const MAX_IMAGE_INPUT_BYTES = 20 * 1024 * 1024;
+const DATA_URL_IMAGE_RE =
+  /^data:(image\/(?:png|jpe?g|webp));base64,([A-Za-z0-9+/=\s]+)$/i;
+const IMAGE_MIME_EXT: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/webp': 'webp',
+};
+
+interface FetchedImageInput {
+  bytes: Uint8Array;
+  mime: string;
+  origin: 'data-url' | 'remote';
+}
+
+/** OpenAI-error-shaped 400 for bad i2i inputs (this is the OpenAI-compatible surface). */
+function badImageInput(label: string, message: string): HttpException {
+  return new HttpException(
+    {
+      error: {
+        message: `${label}: ${message}`,
+        type: 'invalid_request_error',
+        code: 'image_input_invalid',
+      },
+    },
+    HttpStatus.BAD_REQUEST
+  );
+}
+
+/** Resolve an i2i input ref (data: URL or public https URL) to raw bytes. */
+async function fetchImageInput(
+  ref: string,
+  label: string
+): Promise<FetchedImageInput> {
+  const dataMatch = ref.match(DATA_URL_IMAGE_RE);
+  if (dataMatch) {
+    let bytes: Buffer;
+    try {
+      bytes = Buffer.from(dataMatch[2].replace(/\s+/g, ''), 'base64');
+    } catch {
+      throw badImageInput(label, 'data URL is not valid base64');
+    }
+    if (bytes.length === 0) throw badImageInput(label, 'empty image data');
+    if (bytes.length > MAX_IMAGE_INPUT_BYTES) {
+      throw badImageInput(
+        label,
+        `image too large (max ${Math.floor(MAX_IMAGE_INPUT_BYTES / (1024 * 1024))}MB)`
+      );
+    }
+    return {
+      bytes: new Uint8Array(bytes),
+      mime: dataMatch[1].toLowerCase(),
+      origin: 'data-url',
+    };
+  }
+  if (/^data:/i.test(ref)) {
+    throw badImageInput(label, 'only base64 png/jpeg/webp data URLs are supported');
+  }
+  if (!isSafePublicUrl(ref)) {
+    throw badImageInput(label, 'URL must be a public http(s) address');
+  }
+  let response: Awaited<ReturnType<typeof fetch>>;
+  try {
+    response = await fetch(ref, { signal: AbortSignal.timeout(20000) });
+  } catch {
+    throw badImageInput(label, 'could not fetch the image URL');
+  }
+  if (!response.ok) {
+    throw badImageInput(label, `image URL returned ${response.status}`);
+  }
+  const mime = (response.headers.get('content-type') || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  if (!IMAGE_MIME_EXT[mime]) {
+    throw badImageInput(label, `unsupported content-type "${mime}" (png/jpeg/webp only)`);
+  }
+  const buf = new Uint8Array(await response.arrayBuffer());
+  if (buf.length === 0) throw badImageInput(label, 'empty image data');
+  if (buf.length > MAX_IMAGE_INPUT_BYTES) {
+    throw badImageInput(
+      label,
+      `image too large (max ${Math.floor(MAX_IMAGE_INPUT_BYTES / (1024 * 1024))}MB)`
+    );
+  }
+  return { bytes: buf, mime, origin: 'remote' };
+}
 const IMAGE_ENHANCER_GUIDELINES = [
   'You are ClickDz 1.0, an elite image prompt engineer. Rewrite the request',
   'below into ONE masterful English image-generation prompt.',
@@ -1043,6 +1138,55 @@ export class ClickDzBridgeController {
   }
 
   /**
+   * WS1 PR2 — vision description for the REINTERPRET path: a fast cdz-flash
+   * vision call describes the reference image (subjects, composition, style,
+   * palette, visible text verbatim) for prompt-pro to blend into a fresh
+   * generation. Falls back to the Make OCR webhook (remote URLs only — the
+   * webhook can't fetch a data: URL), then to empty context. Best-effort:
+   * never blocks generation.
+   */
+  private async describeImageContext(imageRef: string): Promise<string> {
+    if (!imageRef) return '';
+    if (CDZ_AI_KEY) {
+      try {
+        const response = await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'cdz-flash',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'Describe this image precisely as reference context for an image-generation prompt: subject(s), composition, style, color palette, lighting, mood, and any visible text VERBATIM in quotes. Plain text, at most 120 words.',
+                  },
+                  { type: 'image_url', image_url: { url: imageRef } },
+                ],
+              },
+            ],
+            max_tokens: clampMaxTokens(350, DEFAULT_MAX_TOKENS),
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        const data = (await response.json()) as any;
+        const content = data?.choices?.[0]?.message?.content;
+        if (response.ok && typeof content === 'string' && content.trim()) {
+          return content.trim().slice(0, 2000);
+        }
+      } catch {
+        // fall through to the OCR webhook
+      }
+    }
+    if (/^data:/i.test(imageRef)) return '';
+    return this.ocrImageContext(imageRef);
+  }
+
+  /**
    * Prompt-pro (WS1): enhance a raw image prompt via a FAST direct cdz-flash
    * call, falling back to the Make agent, falling back to the user's own
    * words. Never blocks generation — every failure path returns a usable
@@ -1174,19 +1318,61 @@ export class ClickDzBridgeController {
       };
     }
 
+    // ---- Image-to-image router (WS1 PR2) ---------------------------------
+    // `image` / `image_url` (+ optional `mask` / `mask_url`) supplies an
+    // input image. Default with an image = a TRUE EDIT via /v1/images/edits
+    // (the engine sees the pixels; the mask marks the editable region).
+    // `mode: 'reinterpret'` instead ANALYZES the reference (cdz-flash vision,
+    // Make-OCR fallback) and feeds the description through prompt-pro into a
+    // FRESH generation — the old reference behavior, upgraded.
+    const imageRef =
+      typeof body?.image === 'string' && body.image
+        ? String(body.image)
+        : typeof body?.image_url === 'string'
+          ? String(body.image_url)
+          : '';
+    const maskRef =
+      typeof body?.mask === 'string' && body.mask
+        ? String(body.mask)
+        : typeof body?.mask_url === 'string'
+          ? String(body.mask_url)
+          : '';
+    const requestedMode =
+      body?.mode === 'reinterpret' || body?.mode === 'edit'
+        ? (body.mode as 'reinterpret' | 'edit')
+        : undefined;
+    if (requestedMode === 'edit' && !imageRef) {
+      throw new HttpException(
+        {
+          error: {
+            message: 'mode "edit" requires an input image ("image" or "image_url")',
+            type: 'invalid_request_error',
+            code: 'image_input_required',
+          },
+        },
+        HttpStatus.BAD_REQUEST
+      );
+    }
+    const i2iMode: 'edit' | 'reinterpret' | 'none' = imageRef
+      ? (requestedMode ?? 'edit')
+      : 'none';
+
     // ---- Prompt-pro (always on for tier/legacy/default requests) ---------
     // Raw-engine requests (OpenAI-compatible machine clients) keep their
     // prompt verbatim; `enhance: false` is the explicit opt-out for everyone.
+    // Edit mode enhances the INSTRUCTION only (the engine sees the pixels);
+    // reinterpret mode folds the vision description into the enhancement.
     let prompt = String(body?.prompt || '');
     let enhancedPrompt: string | undefined;
     let ocrUsed = false;
     const wantsEnhance = body?.enhance !== false && resolution.source !== 'raw-engine';
     if (wantsEnhance && prompt) {
-      const imageUrl =
-        typeof body?.image_url === 'string' ? body.image_url : '';
-      const ocrContext = imageUrl ? await this.ocrImageContext(imageUrl) : '';
-      ocrUsed = !!ocrContext;
-      enhancedPrompt = await this.enhanceImagePrompt(prompt, ocrContext);
+      const referenceContext =
+        i2iMode === 'reinterpret'
+          ? await this.describeImageContext(imageRef)
+          : '';
+      ocrUsed = !!referenceContext;
+      enhancedPrompt = await this.enhanceImagePrompt(prompt, referenceContext);
       prompt = enhancedPrompt;
     }
 
@@ -1194,33 +1380,71 @@ export class ClickDzBridgeController {
     // gpt-image-* rejects response_format/style and always returns b64_json;
     // (all CDZIMAGE engines are gpt-image-*, guard kept for safety.)
     const isGptImage = String(model).startsWith('gpt-image');
-    const payload: Record<string, unknown> = {
-      model,
-      prompt: prompt || body?.prompt || '',
-      n: Math.min(Number(body?.n || 1), 1),
-      size: body?.size || '1024x1024',
-    };
-    if (isGptImage) {
-      // Per-tier quality default (2.0 high / 1.5 medium / 1.0 low); explicit
-      // body.quality wins when it's one of the valid knobs.
-      const requestedQuality = String(body?.quality || '');
-      payload.quality = ['low', 'medium', 'high', 'auto'].includes(
-        requestedQuality
-      )
-        ? requestedQuality
-        : resolution.quality;
+    // Per-tier quality default (2.0 high / 1.5 medium / 1.0 low); explicit
+    // body.quality wins when it's one of the valid knobs.
+    const requestedQuality = String(body?.quality || '');
+    const quality = ['low', 'medium', 'high', 'auto'].includes(requestedQuality)
+      ? requestedQuality
+      : resolution.quality;
+    const finalPrompt = String(prompt || body?.prompt || '');
+    const size = String(body?.size || '1024x1024');
+
+    let response: Awaited<ReturnType<typeof fetch>>;
+    if (i2iMode === 'edit') {
+      // TRUE image-to-image: multipart to /v1/images/edits. Inputs resolve
+      // from data: URLs (inline) or SSRF-guarded public URLs; hard size caps.
+      const image = await fetchImageInput(imageRef, 'image');
+      const mask = maskRef ? await fetchImageInput(maskRef, 'mask') : null;
+      const form = new FormData();
+      form.append('model', model);
+      form.append('prompt', finalPrompt);
+      form.append('n', '1');
+      form.append('size', size);
+      if (isGptImage) form.append('quality', quality);
+      form.append(
+        'image',
+        new Blob([image.bytes], { type: image.mime }),
+        `image.${IMAGE_MIME_EXT[image.mime] ?? 'png'}`
+      );
+      if (mask) {
+        form.append(
+          'mask',
+          new Blob([mask.bytes], { type: mask.mime }),
+          `mask.${IMAGE_MIME_EXT[mask.mime] ?? 'png'}`
+        );
+      }
+      response = await fetch('https://api.openai.com/v1/images/edits', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${OPENAI_IMAGE_API_KEY}` },
+        body: form,
+        signal: AbortSignal.timeout(180000),
+      });
     } else {
-      payload.response_format = body?.response_format || 'url';
-      payload.style = body?.style || 'vivid';
+      const payload: Record<string, unknown> = {
+        model,
+        prompt: finalPrompt,
+        n: Math.min(Number(body?.n || 1), 1),
+        size,
+      };
+      if (isGptImage) {
+        payload.quality = quality;
+      } else {
+        payload.response_format = body?.response_format || 'url';
+        payload.style = body?.style || 'vivid';
+      }
+      response = await fetch(
+        'https://api.openai.com/v1/images/generations',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${OPENAI_IMAGE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(180000),
+        }
+      );
     }
-    const response = await fetch('https://api.openai.com/v1/images/generations', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENAI_IMAGE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
     const data = (await response.json()) as any;
     if (!response.ok) {
       throw new HttpException(data, response.status);
@@ -1242,6 +1466,14 @@ export class ClickDzBridgeController {
       model_source: resolution.source,
       enhanced_prompt: enhancedPrompt,
       reference_ocr_used: ocrUsed,
+      ...(i2iMode !== 'none'
+        ? {
+            i2i: {
+              mode: i2iMode,
+              mask_used: i2iMode === 'edit' && Boolean(maskRef),
+            },
+          }
+        : {}),
     };
     return data;
   }
