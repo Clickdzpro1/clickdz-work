@@ -152,6 +152,20 @@ export const vdzOpSchema = z.discriminatedUnion('op', [
     patch: z.object(clipStylePatchShape).partial(),
   }),
   z.object({
+    op: z.literal('setAudioMix'),
+    trackId: z.string(),
+    clipId: z.string(),
+    /**
+     * Audio-mix fields (AUDIO clips only). Per field: omit = leave unchanged,
+     * null = clear, value = set. Fades are seconds ramping from/to silence at
+     * the clip edges; `duck: true` dips every OTHER audio clip while this one
+     * plays (the voiceover-over-music pattern).
+     */
+    fadeIn: z.number().min(0).nullable().optional(),
+    fadeOut: z.number().min(0).nullable().optional(),
+    duck: z.boolean().nullable().optional(),
+  }),
+  z.object({
     op: z.literal('renameTimeline'),
     name: z.string(),
   }),
@@ -469,6 +483,38 @@ export function applyOp(timeline: VdzTimeline, op: VdzOp): VdzApplyResult {
       // Assign only the provided keys; the discriminated-union clip keeps its
       // type. Cast through a record since keys are already type-validated.
       Object.assign(clip as Record<string, unknown>, validOp.patch);
+      break;
+    }
+    case 'setAudioMix': {
+      const track = findTrack(validOp.trackId);
+      if (!track) {
+        return { timeline, error: `track not found: ${validOp.trackId}` };
+      }
+      const clip = track.clips.find(c => c.id === validOp.clipId);
+      if (!clip) {
+        return { timeline, error: `clip not found: ${validOp.clipId}` };
+      }
+      if (clip.type !== 'audio') {
+        return {
+          timeline,
+          error: `setAudioMix only applies to audio clips: ${validOp.clipId}`,
+        };
+      }
+      // Tri-state per field: undefined = untouched, null = clear, value = set.
+      if (validOp.fadeIn !== undefined) {
+        if (validOp.fadeIn === null) delete clip.fadeIn;
+        else clip.fadeIn = validOp.fadeIn;
+      }
+      if (validOp.fadeOut !== undefined) {
+        if (validOp.fadeOut === null) delete clip.fadeOut;
+        else clip.fadeOut = validOp.fadeOut;
+      }
+      if (validOp.duck !== undefined) {
+        // `duck: false` and `duck: null` both mean "not a ducker" — store
+        // neither (keeps documents clean and the field truly tri-state).
+        if (validOp.duck === null || validOp.duck === false) delete clip.duck;
+        else clip.duck = true;
+      }
       break;
     }
     case 'renameTimeline': {

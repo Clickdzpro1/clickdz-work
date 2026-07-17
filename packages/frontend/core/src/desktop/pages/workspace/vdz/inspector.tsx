@@ -317,6 +317,68 @@ export function Inspector({ clip, trackId, onOp }: InspectorProps) {
         ) : null}
       </div>
 
+      {/* ---- Audio mix (audio clips only): fades + ducking ---- */}
+      {clip.type === 'audio' ? (
+        <div className={styles.inspSection}>
+          <div className={styles.inspSectionTitle}>Audio mix</div>
+          <div className={styles.inspRow}>
+            <Field label={`Fade in ${(clip.fadeIn ?? 0).toFixed(1)}s`}>
+              <input
+                type="range"
+                className={styles.inspRange}
+                min={0}
+                max={3}
+                step={0.1}
+                value={clip.fadeIn ?? 0}
+                onChange={e => {
+                  const v = Number(e.target.value);
+                  onOp({
+                    op: 'setAudioMix',
+                    trackId,
+                    clipId: clip.id,
+                    // 0 clears the fade rather than storing a dead field.
+                    fadeIn: v === 0 ? null : v,
+                  });
+                }}
+              />
+            </Field>
+            <Field label={`Fade out ${(clip.fadeOut ?? 0).toFixed(1)}s`}>
+              <input
+                type="range"
+                className={styles.inspRange}
+                min={0}
+                max={3}
+                step={0.1}
+                value={clip.fadeOut ?? 0}
+                onChange={e => {
+                  const v = Number(e.target.value);
+                  onOp({
+                    op: 'setAudioMix',
+                    trackId,
+                    clipId: clip.id,
+                    fadeOut: v === 0 ? null : v,
+                  });
+                }}
+              />
+            </Field>
+          </div>
+          <Field label="Duck other audio while this plays">
+            <input
+              type="checkbox"
+              checked={clip.duck ?? false}
+              onChange={e =>
+                onOp({
+                  op: 'setAudioMix',
+                  trackId,
+                  clipId: clip.id,
+                  duck: e.target.checked ? true : null,
+                })
+              }
+            />
+          </Field>
+        </div>
+      ) : null}
+
       {/* ---- Animation ---- */}
       <div className={styles.inspSection}>
         <div className={styles.inspSectionTitle}>Animation</div>

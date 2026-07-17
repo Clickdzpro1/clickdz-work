@@ -108,6 +108,19 @@ export const vdzAudioClipSchema = vdzClipBaseSchema.extend({
   src: z.string(),
   /** 0..1 linear gain. */
   volume: z.number().min(0).max(1).optional(),
+  /**
+   * Seconds to ramp in from silence at the clip's start. OPTIONAL and
+   * additive — timelines authored before fades existed parse unchanged.
+   * A fade longer than the clip is clamped to its duration at playback.
+   */
+  fadeIn: z.number().min(0).optional(),
+  /** Seconds to ramp out to silence ending at the clip's end (see fadeIn). */
+  fadeOut: z.number().min(0).optional(),
+  /**
+   * When true, every OTHER audio clip dips (ducks) while this clip plays —
+   * mark a voiceover with `duck` so music automatically sits under it.
+   */
+  duck: z.boolean().optional(),
 });
 export type VdzAudioClip = z.infer<typeof vdzAudioClipSchema>;
 

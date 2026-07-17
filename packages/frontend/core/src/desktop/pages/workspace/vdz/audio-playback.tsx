@@ -1,7 +1,12 @@
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 
 import type { VdzAudioClip, VdzTimeline } from '../../../../modules/vdz';
 import { useBlobUrl } from '../../../../modules/vdz/use-vdz-media';
+import {
+  computeAudioClipGain,
+  type DuckWindow,
+  duckWindows,
+} from './audio-gain';
 import { isClipActive } from './constants';
 
 /**
@@ -24,9 +29,15 @@ import { isClipActive } from './constants';
  * - Paused / scrubbing is silent (mirrors the visual scrub) but we keep the
  *   element's `currentTime` aligned so the next Play resumes in sync.
  *
- * Out of scope here (documented follow-ups): video-clip audio, waveforms,
- * ducking and fades. MP4-export audio is a Remotion-tier concern — the HTML
- * export path is muted by design (see compile-timeline.ts).
+ * Gain: each element's volume is the clip's base volume × its fade envelope
+ * (fadeIn/fadeOut ramps) × the duck multiplier (other audio dips under `duck`
+ * clips) — pure math in audio-gain.ts, applied per playhead tick (rAF cadence,
+ * perceptually smooth; a WebAudio MediaElementSource graph would silence
+ * cross-origin sources, so element.volume automation is the deliberate call).
+ *
+ * Out of scope here (documented follow-ups): video-clip audio. MP4-export
+ * audio is a Remotion-tier concern — the HTML export path is muted by design
+ * (see compile-timeline.ts).
  */
 
 /** Only re-seek an element when it drifts this far (seconds) from the playhead. */
@@ -37,6 +48,8 @@ interface AudioClipVoiceProps {
   playheadSeconds: number;
   isPlaying: boolean;
   muted: boolean;
+  /** Merged duck windows for the whole timeline (see audio-gain.ts). */
+  windows: DuckWindow[];
 }
 
 /** A single hidden `<audio>` slaved to the master playhead. */
@@ -45,6 +58,7 @@ const AudioClipVoice = memo(function AudioClipVoice({
   playheadSeconds,
   isPlaying,
   muted,
+  windows,
 }: AudioClipVoiceProps) {
   const resolvedSrc = useBlobUrl(clip.src);
   const ref = useRef<HTMLAudioElement | null>(null);
@@ -54,13 +68,18 @@ const AudioClipVoice = memo(function AudioClipVoice({
   // trim in the schema today), offset by where the playhead sits in the clip.
   const sourceTime = Math.max(0, playheadSeconds - clip.start);
 
+  // Effective gain this tick: base volume × fade envelope × duck multiplier.
+  // playheadSeconds advances every rAF frame during playback, so ramps land
+  // as ~60Hz volume automation — smooth for fades and duck attack/release.
+  const gain = computeAudioClipGain({ clip, t: playheadSeconds, windows });
+
   // Keep gain / mute in sync without touching transport.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.volume = clip.volume ?? 1;
+    el.volume = gain;
     el.muted = muted;
-  }, [clip.volume, muted]);
+  }, [gain, muted]);
 
   // Transport: play under the playhead, pause otherwise, correct drift lazily.
   useEffect(() => {
@@ -134,6 +153,9 @@ export const VdzAudioPlayback = memo(function VdzAudioPlayback({
     }
   }
 
+  // Duck windows change only on a timeline edit — never on a playhead tick.
+  const windows = useMemo(() => duckWindows(timeline), [timeline]);
+
   return (
     <div aria-hidden="true" style={{ display: 'none' }}>
       {voices.map(clip => (
@@ -143,6 +165,7 @@ export const VdzAudioPlayback = memo(function VdzAudioPlayback({
           playheadSeconds={playheadSeconds}
           isPlaying={isPlaying}
           muted={muted}
+          windows={windows}
         />
       ))}
     </div>
