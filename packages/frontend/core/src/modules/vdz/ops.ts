@@ -19,6 +19,8 @@ import {
  * start, duration, animation, effects, transitions) have dedicated ops.
  */
 const clipStylePatchShape = {
+  // every clip type (display label in the lanes/inspector)
+  name: z.string().min(1).max(200),
   // text
   text: z.string(),
   fontSize: z.number().positive(),
@@ -42,11 +44,11 @@ const clipStylePatchShape = {
  * whole-timeline re-validation anyway, but this yields a precise error).
  */
 const patchKeysByType: Record<string, ReadonlySet<string>> = {
-  text: new Set(['text', 'fontSize', 'align', 'color', 'x', 'y']),
-  shape: new Set(['color', 'x', 'y', 'w', 'h']),
-  video: new Set(['volume']),
-  audio: new Set(['volume']),
-  image: new Set(['fit']),
+  text: new Set(['name', 'text', 'fontSize', 'align', 'color', 'x', 'y']),
+  shape: new Set(['name', 'color', 'x', 'y', 'w', 'h']),
+  video: new Set(['name', 'volume']),
+  audio: new Set(['name', 'volume']),
+  image: new Set(['name', 'fit']),
 };
 
 /**

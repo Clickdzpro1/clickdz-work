@@ -66,10 +66,10 @@ Ops: `addTrack`, `addClip`, `removeClip`, `moveClip`, `trimClip`, `splitClip`,
 - `setEffects` `{trackId, clipId, effects}` — replace a clip's whole `effects`
   stack; an empty array clears it.
 - `updateClip` `{trackId, clipId, patch}` — patch a clip's presentational
-  style fields (`text`, `fontSize`, `color`, `x`, `y`, `w`, `h`, `align`,
-  `fit`, `volume`). Patch keys are validated against the clip's `type`
-  (e.g. `fontSize` is rejected on a shape), and structural/time fields have
-  their own dedicated ops.
+  style fields (`name` on every type, plus `text`, `fontSize`, `color`, `x`,
+  `y`, `w`, `h`, `align`, `fit`, `volume` per type). Patch keys are validated
+  against the clip's `type` (e.g. `fontSize` is rejected on a shape), and
+  structural/time fields have their own dedicated ops.
 - `setAudioMix` `{trackId, clipId, fadeIn?, fadeOut?, duck?}` — set an AUDIO
   clip's mix fields. Tri-state per field: omit = leave unchanged, `null` =
   clear, value = set (`duck: false` clears like `null`). Rejected on non-audio

@@ -1,3 +1,4 @@
+import { nanoid } from 'nanoid';
 import { useCallback, useState } from 'react';
 
 import type {
@@ -11,6 +12,7 @@ import type {
   VdzTimeline,
 } from '../../../../modules/vdz';
 import * as styles from './index.css';
+import * as ics from './inspector.css';
 import { useVdzCaptions } from './use-vdz-captions';
 
 /** All animation kinds, for the in/out pickers. */
@@ -38,6 +40,20 @@ const EFFECT_KINDS: VdzEffectKind[] = [
 
 const DEFAULT_ANIM_DURATION = 0.5;
 
+/** One-click color presets for text/shape clips (native picker stays too). */
+const COLOR_SWATCHES = [
+  '#ffffff',
+  '#0f172a',
+  '#ffd700',
+  '#ff6b6b',
+  '#3fb7a6',
+  '#5b8cff',
+  '#a06bff',
+  '#22c55e',
+];
+
+const round3 = (value: number) => Math.round(value * 1000) / 1000;
+
 interface InspectorProps {
   clip: VdzClip;
   trackId: string;
@@ -50,6 +66,268 @@ interface InspectorProps {
    * the inspector renders without it; the captions button needs it.
    */
   onOps?: (ops: VdzOp[]) => void;
+}
+
+/** A labeled row wrapper. */
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={styles.inspField}>
+      <span className={styles.inspFieldLabel}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/**
+ * A collapsible section: the familiar uppercase header, now clickable with a
+ * chevron and an optional right-aligned count badge. Sections default OPEN;
+ * the open/closed set lives in the Inspector so it survives control edits but
+ * intentionally resets with the panel (fresh selection = fresh workspace).
+ */
+function Section({
+  id,
+  title,
+  count,
+  closed,
+  onToggle,
+  children,
+}: {
+  id: string;
+  title: string;
+  count?: number;
+  closed: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+  children: React.ReactNode;
+}) {
+  const open = !closed.has(id);
+  return (
+    <div className={styles.inspSection}>
+      <button
+        type="button"
+        className={ics.sectionToggle}
+        aria-expanded={open}
+        onClick={() => onToggle(id)}
+      >
+        <span className={ics.sectionChevron} aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
+        {title}
+        {typeof count === 'number' && count > 0 ? (
+          <span className={ics.sectionCount}>{count}</span>
+        ) : null}
+      </button>
+      {open ? children : null}
+    </div>
+  );
+}
+
+/**
+ * Rename control. Local draft (keyed by clip id via the parent's `key`) so
+ * typing never spams ops; commits ONE updateClip on blur/Enter when changed.
+ */
+function RenameRow({
+  clip,
+  trackId,
+  onOp,
+}: {
+  clip: VdzClip;
+  trackId: string;
+  onOp: (op: VdzOp) => void;
+}) {
+  const [draft, setDraft] = useState(clip.name ?? '');
+  const commit = useCallback(() => {
+    const next = draft.trim();
+    if (next === (clip.name ?? '') || next.length === 0) return;
+    onOp({ op: 'updateClip', trackId, clipId: clip.id, patch: { name: next } });
+  }, [draft, clip.name, clip.id, trackId, onOp]);
+  return (
+    <input
+      className={ics.renameInput}
+      value={draft}
+      placeholder={clip.type}
+      aria-label="Clip name"
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+      }}
+    />
+  );
+}
+
+/**
+ * Timing controls. Number drafts commit on blur/Enter as ONE trimClip op with
+ * only the changed fields — dragging on the lanes stays the fluid path; this
+ * is the precise one. Keyed by clip id so drafts reset on selection change.
+ */
+function TimingSection({
+  clip,
+  trackId,
+  onOp,
+}: {
+  clip: VdzClip;
+  trackId: string;
+  onOp: (op: VdzOp) => void;
+}) {
+  const [startDraft, setStartDraft] = useState(String(clip.start));
+  const [durDraft, setDurDraft] = useState(String(clip.duration));
+  const [trimDraft, setTrimDraft] = useState(
+    clip.type === 'video' ? String(clip.trimStart ?? 0) : '0'
+  );
+
+  const commit = useCallback(() => {
+    const start = round3(Math.max(0, Number(startDraft)));
+    const duration = round3(Math.max(0.1, Number(durDraft)));
+    const trimStart =
+      clip.type === 'video' ? round3(Math.max(0, Number(trimDraft))) : undefined;
+
+    const changes: {
+      start?: number;
+      duration?: number;
+      trimStart?: number;
+    } = {};
+    if (Number.isFinite(start) && start !== clip.start) changes.start = start;
+    if (Number.isFinite(duration) && duration !== clip.duration) {
+      changes.duration = duration;
+    }
+    if (
+      clip.type === 'video' &&
+      trimStart !== undefined &&
+      Number.isFinite(trimStart) &&
+      trimStart !== (clip.trimStart ?? 0)
+    ) {
+      changes.trimStart = trimStart;
+    }
+    if (Object.keys(changes).length === 0) return;
+    onOp({ op: 'trimClip', trackId, clipId: clip.id, ...changes });
+  }, [startDraft, durDraft, trimDraft, clip, trackId, onOp]);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+  };
+
+  return (
+    <div className={ics.numRow}>
+      <Field label="Start (s)">
+        <input
+          className={ics.numInput}
+          type="number"
+          min={0}
+          step={0.1}
+          value={startDraft}
+          onChange={e => setStartDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={onKeyDown}
+        />
+      </Field>
+      <Field label="Duration (s)">
+        <input
+          className={ics.numInput}
+          type="number"
+          min={0.1}
+          step={0.1}
+          value={durDraft}
+          onChange={e => setDurDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={onKeyDown}
+        />
+      </Field>
+      {clip.type === 'video' ? (
+        <Field label="Trim head (s)">
+          <input
+            className={ics.numInput}
+            type="number"
+            min={0}
+            step={0.1}
+            value={trimDraft}
+            onChange={e => setTrimDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={onKeyDown}
+          />
+        </Field>
+      ) : null}
+    </div>
+  );
+}
+
+/** Volume slider + live % readout + one-tap mute/unmute (video & audio). */
+function VolumeRow({
+  volume,
+  onVolume,
+}: {
+  volume: number;
+  onVolume: (v: number) => void;
+}) {
+  const muted = volume <= 0;
+  return (
+    <Field label="Volume">
+      <div className={ics.volumeRow}>
+        <input
+          type="range"
+          className={styles.inspRange}
+          min={0}
+          max={1}
+          step={0.01}
+          value={volume}
+          onChange={e => onVolume(Number(e.target.value))}
+        />
+        <span className={ics.pctBadge}>{Math.round(volume * 100)}%</span>
+        <button
+          type="button"
+          className={ics.muteBtn}
+          title={muted ? 'Unmute (restore 100%)' : 'Mute this clip'}
+          aria-pressed={muted}
+          onClick={() => onVolume(muted ? 1 : 0)}
+        >
+          {muted ? '🔇' : '🔊'}
+        </button>
+      </div>
+    </Field>
+  );
+}
+
+/** Swatch presets + native picker + hex readout for text/shape color. */
+function ColorRow({
+  value,
+  fallback,
+  onColor,
+}: {
+  value: string | undefined;
+  fallback: string;
+  onColor: (color: string) => void;
+}) {
+  const current = (value ?? fallback).toLowerCase();
+  return (
+    <Field label="Color">
+      <div className={ics.colorRow}>
+        {COLOR_SWATCHES.map(swatch => (
+          <button
+            key={swatch}
+            type="button"
+            className={ics.swatch}
+            style={{ background: swatch }}
+            data-active={current === swatch}
+            title={swatch}
+            aria-label={`Set color ${swatch}`}
+            onClick={() => onColor(swatch)}
+          />
+        ))}
+        <input
+          type="color"
+          className={styles.inspColor}
+          value={current}
+          onChange={e => onColor(e.target.value)}
+        />
+        <span className={ics.hexReadout}>{current}</span>
+      </div>
+    </Field>
+  );
 }
 
 /**
@@ -84,11 +362,10 @@ function CaptionTools({
   }, [captions, onOps]);
 
   return (
-    <div className={styles.inspSection}>
-      <div className={styles.inspSectionTitle}>Captions</div>
+    <>
       <button
         type="button"
-        className={styles.inspRawToggle}
+        className={ics.quickBtn}
         onClick={onGenerate}
         disabled={captions.busy || !captions.ready || !onOps}
         title="Transcribe this clip and add a caption text clip per phrase"
@@ -105,36 +382,22 @@ function CaptionTools({
       {lastCount !== null ? (
         <div className={styles.inspEmptyHint}>
           Added {lastCount} caption{lastCount === 1 ? '' : 's'} to the overlay
-          lane (one undo entry).
+          lane (one undo entry). Open the Transcript panel to edit them.
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/** A labeled row wrapper. */
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className={styles.inspField}>
-      <span className={styles.inspFieldLabel}>{label}</span>
-      {children}
-    </label>
+    </>
   );
 }
 
 /**
- * The clip inspector: type-appropriate style controls, entrance/exit animation
- * pickers, an effects stack editor, and a collapsible raw-JSON view.
+ * The clip inspector: quick actions (duplicate / delete / ripple), rename,
+ * precise timing, type-appropriate style controls (with swatches + volume
+ * mute), audio mix + captions for audio clips, animation, effects and a raw
+ * JSON view — every section collapsible.
  *
- * Every control change emits ONE {@link VdzOp} via `onOp` — the same validated
- * history path the toolbar and lanes use (updateClip / setAnimation /
- * setEffects). The component holds no timeline state of its own.
+ * Every control change emits ops via `onOp`/`onOps` — the same validated
+ * history path the toolbar and lanes use. The component holds no timeline
+ * state of its own (only ephemeral input drafts + section open/closed state).
  */
 export function Inspector({
   clip,
@@ -144,12 +407,42 @@ export function Inspector({
   onOps,
 }: InspectorProps) {
   const [rawOpen, setRawOpen] = useState(false);
+  const [closedSections, setClosedSections] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  const toggleSection = useCallback((id: string) => {
+    setClosedSections(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // ---- Style patch (updateClip) -----------------------------------------
   const patch = useCallback(
     (p: Record<string, unknown>) => {
       onOp({ op: 'updateClip', trackId, clipId: clip.id, patch: p });
     },
+    [onOp, trackId, clip.id]
+  );
+
+  // ---- Quick actions ------------------------------------------------------
+  const duplicateClip = useCallback(() => {
+    // Deep copy keeps the discriminated shape; fresh id; lands right after.
+    const copy = JSON.parse(JSON.stringify(clip)) as VdzClip;
+    copy.id = `clip-${nanoid(6)}`;
+    copy.start = round3(clip.start + clip.duration);
+    onOp({ op: 'addClip', trackId, clip: copy });
+  }, [clip, trackId, onOp]);
+
+  const deleteClip = useCallback(
+    () => onOp({ op: 'removeClip', trackId, clipId: clip.id }),
+    [onOp, trackId, clip.id]
+  );
+
+  const rippleDeleteClip = useCallback(
+    () => onOp({ op: 'rippleDelete', trackId, clipId: clip.id }),
     [onOp, trackId, clip.id]
   );
 
@@ -196,8 +489,7 @@ export function Inspector({
 
   const addEffect = useCallback(
     (kind: VdzEffectKind) => {
-      // brightness/contrast read "neutral" at 0.5; others at their low end.
-      const amount = kind === 'brightness' || kind === 'contrast' ? 0.5 : 0.5;
+      const amount = 0.5;
       onOp({
         op: 'setEffects',
         trackId,
@@ -226,6 +518,11 @@ export function Inspector({
     [effects, onOp, trackId, clip.id]
   );
 
+  const clearEffects = useCallback(
+    () => onOp({ op: 'setEffects', trackId, clipId: clip.id, effects: [] }),
+    [onOp, trackId, clip.id]
+  );
+
   return (
     <div className={styles.inspStack}>
       <div className={styles.inspClipName}>
@@ -233,10 +530,59 @@ export function Inspector({
         <span className={styles.inspClipType}>{clip.type}</span>
       </div>
 
-      {/* ---- Type-appropriate style controls ---- */}
-      <div className={styles.inspSection}>
-        <div className={styles.inspSectionTitle}>Style</div>
+      {/* ---- Quick actions ---- */}
+      <div className={ics.quickRow}>
+        <button
+          type="button"
+          className={ics.quickBtn}
+          onClick={duplicateClip}
+          title="Duplicate this clip right after itself"
+        >
+          ⧉ Duplicate
+        </button>
+        <button
+          type="button"
+          className={ics.quickBtnDanger}
+          onClick={deleteClip}
+          title="Delete this clip (leaves a gap)"
+        >
+          🗑 Delete
+        </button>
+        <button
+          type="button"
+          className={ics.quickBtnDanger}
+          onClick={rippleDeleteClip}
+          title="Delete and close the gap (ripple)"
+        >
+          ⇤ Ripple
+        </button>
+      </div>
 
+      {/* ---- Rename (commits on blur/Enter) ---- */}
+      <RenameRow key={`name-${clip.id}`} clip={clip} trackId={trackId} onOp={onOp} />
+
+      {/* ---- Timing ---- */}
+      <Section
+        id="timing"
+        title="Timing"
+        closed={closedSections}
+        onToggle={toggleSection}
+      >
+        <TimingSection
+          key={`timing-${clip.id}-${clip.start}-${clip.duration}`}
+          clip={clip}
+          trackId={trackId}
+          onOp={onOp}
+        />
+      </Section>
+
+      {/* ---- Type-appropriate style controls ---- */}
+      <Section
+        id="style"
+        title="Style"
+        closed={closedSections}
+        onToggle={toggleSection}
+      >
         {clip.type === 'text' ? (
           <>
             <Field label="Text">
@@ -258,14 +604,11 @@ export function Inspector({
                 onChange={e => patch({ fontSize: Number(e.target.value) })}
               />
             </Field>
-            <Field label="Color">
-              <input
-                type="color"
-                className={styles.inspColor}
-                value={clip.color ?? '#ffffff'}
-                onChange={e => patch({ color: e.target.value })}
-              />
-            </Field>
+            <ColorRow
+              value={clip.color}
+              fallback="#ffffff"
+              onColor={color => patch({ color })}
+            />
             <div className={styles.inspRow}>
               <Field label={`X ${((clip.x ?? 0.5) * 100).toFixed(0)}%`}>
                 <input
@@ -306,14 +649,11 @@ export function Inspector({
 
         {clip.type === 'shape' ? (
           <>
-            <Field label="Color">
-              <input
-                type="color"
-                className={styles.inspColor}
-                value={clip.color ?? '#5b8cff'}
-                onChange={e => patch({ color: e.target.value })}
-              />
-            </Field>
+            <ColorRow
+              value={clip.color}
+              fallback="#5b8cff"
+              onColor={color => patch({ color })}
+            />
             <div className={styles.inspRow}>
               <Field label={`X ${((clip.x ?? 0) * 100).toFixed(0)}%`}>
                 <input
@@ -366,17 +706,10 @@ export function Inspector({
         ) : null}
 
         {clip.type === 'video' || clip.type === 'audio' ? (
-          <Field label={`Volume ${((clip.volume ?? 1) * 100).toFixed(0)}%`}>
-            <input
-              type="range"
-              className={styles.inspRange}
-              min={0}
-              max={1}
-              step={0.01}
-              value={clip.volume ?? 1}
-              onChange={e => patch({ volume: Number(e.target.value) })}
-            />
-          </Field>
+          <VolumeRow
+            volume={clip.volume ?? 1}
+            onVolume={volume => patch({ volume })}
+          />
         ) : null}
 
         {clip.type === 'image' ? (
@@ -391,12 +724,16 @@ export function Inspector({
             </select>
           </Field>
         ) : null}
-      </div>
+      </Section>
 
       {/* ---- Audio mix (audio clips only): fades + ducking ---- */}
       {clip.type === 'audio' ? (
-        <div className={styles.inspSection}>
-          <div className={styles.inspSectionTitle}>Audio mix</div>
+        <Section
+          id="audiomix"
+          title="Audio mix"
+          closed={closedSections}
+          onToggle={toggleSection}
+        >
           <div className={styles.inspRow}>
             <Field label={`Fade in ${(clip.fadeIn ?? 0).toFixed(1)}s`}>
               <input
@@ -452,17 +789,29 @@ export function Inspector({
               }
             />
           </Field>
-        </div>
+        </Section>
       ) : null}
 
       {/* ---- Captions (audio clips only): transcribe → text clips ---- */}
       {clip.type === 'audio' ? (
-        <CaptionTools clip={clip} timeline={timeline} onOps={onOps} />
+        <Section
+          id="captions"
+          title="Captions"
+          closed={closedSections}
+          onToggle={toggleSection}
+        >
+          <CaptionTools clip={clip} timeline={timeline} onOps={onOps} />
+        </Section>
       ) : null}
 
       {/* ---- Animation ---- */}
-      <div className={styles.inspSection}>
-        <div className={styles.inspSectionTitle}>Animation</div>
+      <Section
+        id="animation"
+        title="Animation"
+        count={(anim.in ? 1 : 0) + (anim.out ? 1 : 0)}
+        closed={closedSections}
+        onToggle={toggleSection}
+      >
         <div className={styles.inspRow}>
           <Field label="In">
             <select
@@ -523,11 +872,16 @@ export function Inspector({
             />
           </Field>
         </div>
-      </div>
+      </Section>
 
       {/* ---- Effects ---- */}
-      <div className={styles.inspSection}>
-        <div className={styles.inspSectionTitle}>Effects</div>
+      <Section
+        id="effects"
+        title="Effects"
+        count={effects.length}
+        closed={closedSections}
+        onToggle={toggleSection}
+      >
         {effects.length === 0 ? (
           <div className={styles.inspEmptyHint}>No effects.</div>
         ) : (
@@ -543,6 +897,9 @@ export function Inspector({
                 value={effect.amount}
                 onChange={e => setEffectAmount(i, Number(e.target.value))}
               />
+              <span className={ics.pctBadge}>
+                {Math.round(effect.amount * 100)}%
+              </span>
               <button
                 type="button"
                 className={styles.inspIconButton}
@@ -568,7 +925,16 @@ export function Inspector({
             </option>
           ))}
         </select>
-      </div>
+        {effects.length > 1 ? (
+          <button
+            type="button"
+            className={ics.clearAllBtn}
+            onClick={clearEffects}
+          >
+            Clear all effects
+          </button>
+        ) : null}
+      </Section>
 
       {/* ---- Raw JSON (collapsible) ---- */}
       <div className={styles.inspSection}>
