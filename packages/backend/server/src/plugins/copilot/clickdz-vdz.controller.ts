@@ -6,6 +6,7 @@ import {
   Logger,
   Param,
   Post,
+  Query,
 } from '@nestjs/common';
 // SECURITY: crypto-strong randomness for unguessable auto project ids.
 import { randomBytes } from 'node:crypto';
@@ -55,6 +56,25 @@ const CDZ_AI_BASE_URL = (
   process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
 ).replace(/\/+$/, '');
 const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
+
+// ---------------------------------------------------------------------------
+// Transcription (captions) — OpenAI Whisper. There is NO Gemini API key on
+// this deployment (Gemini exists only as a Make chat engine) and Deepgram is
+// wired for TTS, so Whisper is the one real STT path. Key cascade mirrors the
+// bridge's images pattern, preferring a dedicated audio key when present.
+// ---------------------------------------------------------------------------
+const OPENAI_AUDIO_API_KEY =
+  process.env.OPENAI_AUDIO_API_KEY ||
+  process.env.OPEN_AI ||
+  process.env.OPENAI_API_KEY ||
+  process.env.OPENAI_IMAGE_API_KEY ||
+  '';
+const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
+// Whisper's own hard cap is 25MB; reject just under it. Audio arrives as RAW
+// bytes (application/octet-stream) through the app's 100MB raw body parser —
+// JSON would both bloat the payload ~33% and hit the express json limit.
+const MAX_TRANSCRIBE_BYTES = 24 * 1024 * 1024;
+const TRANSCRIBE_TIMEOUT_MS = 180_000;
 
 // ---------------------------------------------------------------------------
 // Input caps for this cost/side-effecting route. Reject (not clamp) oversized
@@ -513,6 +533,115 @@ export class ClickDzVdzController {
   }
 
   /** GET /api/v1/vdz/projects — compact list (id, name, updatedAt only). */
+  /**
+   * POST /api/v1/vdz/transcribe — speech-to-text for caption generation.
+   *
+   * BODY: the RAW audio bytes with `Content-Type: application/octet-stream`
+   * (routed through the app's 100MB raw parser). QUERY: `?mime=` the real
+   * audio mime for the STT engine, `?name=` an optional filename hint.
+   *
+   * Engine: OpenAI `whisper-1` with `verbose_json` + segment timestamps —
+   * the response is a compact `{ text, segments: [{start, end, text}] }`
+   * (seconds relative to the audio head) the client maps onto caption clips.
+   * Same auth stance as every vdz route: session cookie, real CurrentUser.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/vdz/transcribe')
+  async transcribe(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: unknown,
+    @Query('mime') mime?: string,
+    @Query('name') name?: string
+  ): Promise<{
+    text: string;
+    segments: Array<{ start: number; end: number; text: string }>;
+  }> {
+    if (!OPENAI_AUDIO_API_KEY) {
+      throw new InternalServerError(
+        'Transcription is not configured on this deployment'
+      );
+    }
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      throw new BadRequest(
+        'Send the raw audio bytes with Content-Type: application/octet-stream'
+      );
+    }
+    if (body.length > MAX_TRANSCRIBE_BYTES) {
+      throw new BadRequest(
+        `Audio too large for transcription (max ${Math.floor(
+          MAX_TRANSCRIBE_BYTES / (1024 * 1024)
+        )}MB)`
+      );
+    }
+    // Sanitize the client-supplied hints (they only shape the upload part).
+    const safeMime =
+      typeof mime === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
+        ? mime
+        : 'audio/mpeg';
+    const safeName =
+      typeof name === 'string' && name.trim()
+        ? name.trim().slice(0, 120).replace(/[^\w.\- ]+/g, '_')
+        : 'audio';
+
+    const form = new FormData();
+    form.append(
+      'file',
+      new Blob([new Uint8Array(body)], { type: safeMime }),
+      safeName
+    );
+    form.append('model', 'whisper-1');
+    form.append('response_format', 'verbose_json');
+    form.append('timestamp_granularities[]', 'segment');
+
+    const res = await fetch(OPENAI_TRANSCRIBE_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENAI_AUDIO_API_KEY}` },
+      body: form,
+      signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS),
+    }).catch(() => null);
+    if (!res) {
+      throw new InternalServerError('Transcription service unreachable');
+    }
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      this.logger.warn(
+        `[vdz] transcribe upstream ${res.status} user=${user.id} bytes=${body.length} detail=${detail.slice(0, 300)}`
+      );
+      // Payload-shaped failures (bad/unsupported audio) are the caller's to
+      // fix; everything else is on us/the upstream.
+      if (res.status === 400 || res.status === 415 || res.status === 422) {
+        throw new BadRequest(
+          'The audio could not be transcribed (unsupported or corrupt format)'
+        );
+      }
+      throw new InternalServerError(`Transcription failed (${res.status})`);
+    }
+
+    const data = (await res.json().catch(() => null)) as {
+      text?: unknown;
+      segments?: unknown;
+    } | null;
+    if (!data) {
+      throw new InternalServerError('Transcription returned malformed JSON');
+    }
+    const text = typeof data.text === 'string' ? data.text.trim() : '';
+    const segments = (Array.isArray(data.segments) ? data.segments : [])
+      .map(raw => {
+        const s = (raw ?? {}) as Record<string, unknown>;
+        return {
+          start: Number(s.start) || 0,
+          end: Number(s.end) || 0,
+          text: typeof s.text === 'string' ? s.text.trim() : '',
+        };
+      })
+      .filter(s => s.text.length > 0 && s.end > s.start);
+
+    this.logger.log(
+      `[vdz] transcribe user=${user.id} bytes=${body.length} segments=${segments.length}`
+    );
+    return { text, segments };
+  }
+
   @Throttle('strict')
   @Get('/api/v1/vdz/projects')
   async listProjects(

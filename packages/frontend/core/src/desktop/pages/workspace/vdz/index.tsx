@@ -909,6 +909,8 @@ const VdzStudioPage = () => {
                               clip={selected.clip}
                               trackId={selected.trackId}
                               onOp={commitLaneOp}
+                              timeline={timeline}
+                              onOps={runBatch}
                             />
                           ) : selectedIds.size > 1 ? (
                             <div className={styles.inspectorHint}>
