@@ -140,7 +140,14 @@ const MAKE_API_KEY = process.env.MAKE_API_KEY || '';
 const MAKE_TEAM_ID = process.env.MAKE_TEAM_ID || '';
 const MAKE_AGENT_ID = process.env.MAKE_SUPERAGENT_ID || process.env.MAKE_AGENT_ID || '';
 const MAKE_ARABIC_AGENT_ID = process.env.MAKE_ARABIC_AGENT_ID || MAKE_AGENT_ID;
-const OPENAI_IMAGE_API_KEY = process.env.OPENAI_IMAGE_API_KEY || process.env.OPENAI_API_KEY || '';
+// WS1 (CDZIMAGE): ONE unified OpenAI key for all image generation. Order:
+// the dedicated image key, then the app's canonical OPEN_AI (present on
+// prod), then the generic fallback.
+const OPENAI_IMAGE_API_KEY =
+  process.env.OPENAI_IMAGE_API_KEY ||
+  process.env.OPEN_AI ||
+  process.env.OPENAI_API_KEY ||
+  '';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
 const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
 const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
@@ -206,9 +213,73 @@ function extractHtmlApp(reply: string): string {
   return '';
 }
 
-// ClickDz 1.0 — the smart image model: Make-enhanced prompt -> gpt-image-1
-const CLICKDZ_IMAGE_MODEL_IDS = new Set(['clickdz-image-1.0', 'clickdz-image']);
-const CLICKDZ_IMAGE_ENGINE = 'gpt-image-1';
+// ---------------------------------------------------------------------------
+// CDZIMAGE tiers (WS1) — display aliases over OpenAI gpt-image engines.
+// 2.0 = flagship default, 1.5 = balanced, 1.0 = economy (UI exposes 1.0 in
+// Vdz only, per owner decision; the server accepts all three). dall-e-* and
+// bare gpt-image-1 are RETIRED as targets (gpt-image-1 deprecates upstream
+// 2026-10-23) — legacy ids resolve to the nearest tier so old clients keep
+// working during the transition.
+// ---------------------------------------------------------------------------
+const CDZIMAGE_TIERS: Record<
+  string,
+  { engine: string; quality: 'low' | 'medium' | 'high'; label: string }
+> = {
+  'cdzimage-2.0': { engine: 'gpt-image-2', quality: 'high', label: 'CDZIMAGE 2.0' },
+  'cdzimage-1.5': { engine: 'gpt-image-1.5', quality: 'medium', label: 'CDZIMAGE 1.5' },
+  'cdzimage-1.0': { engine: 'gpt-image-1-mini', quality: 'low', label: 'CDZIMAGE 1.0' },
+};
+const CDZIMAGE_DEFAULT_TIER = 'cdzimage-2.0';
+const CDZIMAGE_LEGACY_ALIASES: Record<string, string> = {
+  // the old "ClickDz 1.0 smart image" marketing ids → best tier
+  'clickdz-image': CDZIMAGE_DEFAULT_TIER,
+  'clickdz-image-1.0': CDZIMAGE_DEFAULT_TIER,
+  // retired engines → nearest tier
+  'dall-e-3': CDZIMAGE_DEFAULT_TIER,
+  'dall-e-2': 'cdzimage-1.0',
+  'gpt-image-1': 'cdzimage-1.5',
+};
+/**
+ * Strict mode: when '1', requests WITHOUT a model are rejected with
+ * `image_model_required` (the owner's "every generation must pick a model").
+ * Ships OFF so existing clients keep working until the surface pickers land
+ * (WS1 PR4/PR5); flip the env after those deploy.
+ */
+const CDZIMAGE_REQUIRE_MODEL = process.env.CDZIMAGE_REQUIRE_MODEL === '1';
+
+interface CdzImageResolution {
+  tierId: string;
+  engine: string;
+  quality: 'low' | 'medium' | 'high';
+  label: string;
+  /** How the tier was chosen — echoed in the response for observability. */
+  source: 'tier' | 'legacy' | 'raw-engine' | 'default';
+}
+
+/**
+ * Resolve a requested model id to a CDZIMAGE tier.
+ * Returns 'missing' (no id — caller applies strict/default policy) or
+ * 'invalid' (unknown id — always a 400; previously junk ids fell through RAW
+ * to OpenAI, which is tightened here on purpose).
+ */
+function resolveCdzImageModel(
+  requested: string
+): CdzImageResolution | 'missing' | 'invalid' {
+  const id = requested.trim().toLowerCase();
+  if (!id) return 'missing';
+  const tier = CDZIMAGE_TIERS[id];
+  if (tier) return { tierId: id, ...tier, source: 'tier' };
+  const legacyTier = CDZIMAGE_LEGACY_ALIASES[id];
+  if (legacyTier) {
+    return { tierId: legacyTier, ...CDZIMAGE_TIERS[legacyTier], source: 'legacy' };
+  }
+  // Explicit raw engine ids stay honored for OpenAI-compatible machine
+  // clients (mapped back to their tier for metadata/quality defaults).
+  for (const [tierId, spec] of Object.entries(CDZIMAGE_TIERS)) {
+    if (spec.engine === id) return { tierId, ...spec, source: 'raw-engine' };
+  }
+  return 'invalid';
+}
 const IMAGE_ENHANCER_GUIDELINES = [
   'You are ClickDz 1.0, an elite image prompt engineer. Rewrite the request',
   'below into ONE masterful English image-generation prompt.',
@@ -237,7 +308,10 @@ const MODELS = [
   'claude-sonnet-5',
   'gemini-3.5-flash',
   'gemini-2.5-pro',
-  'dall-e-3',
+  // CDZIMAGE tiers (dall-e-3 retired; legacy ids still resolve server-side)
+  'cdzimage-2.0',
+  'cdzimage-1.5',
+  'cdzimage-1.0',
 ];
 
 function now() {
@@ -842,7 +916,7 @@ export class ClickDzBridgeController {
         id,
         object: 'model',
         created: now(),
-        owned_by: id === 'dall-e-3' ? 'openai-images' : 'make.com',
+        owned_by: id.startsWith('cdzimage-') ? 'openai-images' : 'make.com',
       })),
     };
   }
@@ -968,27 +1042,69 @@ export class ClickDzBridgeController {
     }
   }
 
-  /** enhance a raw image prompt through the Make agent (best-effort) */
+  /**
+   * Prompt-pro (WS1): enhance a raw image prompt via a FAST direct cdz-flash
+   * call, falling back to the Make agent, falling back to the user's own
+   * words. Never blocks generation — every failure path returns a usable
+   * prompt. cdz-flash replaces Make as primary because the enhancement sits
+   * on the critical path of every CDZIMAGE generation and the direct call is
+   * seconds faster (same swap the fast-planner made).
+   */
   private async enhanceImagePrompt(
     rawPrompt: string,
     ocrContext: string
   ): Promise<string> {
-    try {
-      const parts = [IMAGE_ENHANCER_GUIDELINES];
-      if (ocrContext) {
-        parts.push(
-          `Content extracted from the user's attached reference image:\n"""${ocrContext}"""\nBlend this reference faithfully into the scene.`
-        );
+    const parts = [IMAGE_ENHANCER_GUIDELINES];
+    if (ocrContext) {
+      parts.push(
+        `Content extracted from the user's attached reference image:\n"""${ocrContext}"""\nBlend this reference faithfully into the scene.`
+      );
+    }
+    parts.push(`Request: ${rawPrompt}`);
+    const enhancerInput = parts.join('\n\n');
+
+    // sanity shared by both paths: reject junk, keep the user's words
+    const accept = (candidate: string): string | null => {
+      const cleaned = (candidate || '').trim().replace(/^["'`]+|["'`]+$/g, '');
+      if (cleaned.length < 10 || cleaned.length > 4000) return null;
+      return cleaned;
+    };
+
+    if (CDZ_AI_KEY) {
+      try {
+        const response = await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'cdz-flash',
+            messages: [{ role: 'user', content: enhancerInput }],
+            // ~180-word prompt ceiling per the guidelines; clamp cost hard.
+            max_tokens: clampMaxTokens(400, DEFAULT_MAX_TOKENS),
+          }),
+          signal: AbortSignal.timeout(12000),
+        });
+        const data = (await response.json()) as any;
+        const content = data?.choices?.[0]?.message?.content;
+        if (response.ok && typeof content === 'string') {
+          const cleaned = accept(content);
+          if (cleaned) return cleaned;
+        }
+      } catch {
+        // fall through to the Make enhancer
       }
-      parts.push(`Request: ${rawPrompt}`);
+    }
+
+    try {
       const enhanced = await this.runMakeAgent(
-        [{ role: 'user', content: parts.join('\n\n') }],
+        [{ role: 'user', content: enhancerInput }],
         'clickdz-image-enhancer'
       );
-      const cleaned = (enhanced || '').trim().replace(/^["'`]+|["'`]+$/g, '');
-      // sanity: reject junk enhancements, keep the user's own words instead
-      if (cleaned.length < 10 || cleaned.length > 4000) return rawPrompt;
-      return cleaned;
+      const cleaned = accept(enhanced || '');
+      if (cleaned) return cleaned;
+      return rawPrompt;
     } catch {
       return rawPrompt;
     }
@@ -1016,14 +1132,56 @@ export class ClickDzBridgeController {
       );
     }
 
+    // ---- CDZIMAGE model resolution (WS1) --------------------------------
     const requestedModel = String(body?.model || '');
-    const isClickDzImage = CLICKDZ_IMAGE_MODEL_IDS.has(requestedModel);
+    let resolution = resolveCdzImageModel(requestedModel);
+    if (resolution === 'invalid') {
+      throw new HttpException(
+        {
+          error: {
+            message: `Unknown image model "${requestedModel}". Valid: ${[
+              ...Object.keys(CDZIMAGE_TIERS),
+              ...Object.keys(CDZIMAGE_LEGACY_ALIASES),
+            ].join(', ')}`,
+            type: 'invalid_request_error',
+            code: 'image_model_invalid',
+          },
+        },
+        HttpStatus.BAD_REQUEST
+      );
+    }
+    if (resolution === 'missing') {
+      if (CDZIMAGE_REQUIRE_MODEL) {
+        // Strict mode (flips on once every surface ships its picker): the
+        // owner's contract that EVERY generation carries an explicit choice.
+        throw new HttpException(
+          {
+            error: {
+              message: `An image model is required. Pick one of: ${Object.keys(CDZIMAGE_TIERS).join(', ')}`,
+              type: 'invalid_request_error',
+              code: 'image_model_required',
+            },
+          },
+          HttpStatus.BAD_REQUEST
+        );
+      }
+      // Transition mode: default to the flagship tier so pre-picker clients
+      // (e.g. the Vdz media bin until WS1 PR4) keep working — upgraded, even.
+      resolution = {
+        tierId: CDZIMAGE_DEFAULT_TIER,
+        ...CDZIMAGE_TIERS[CDZIMAGE_DEFAULT_TIER],
+        source: 'default',
+      };
+    }
 
+    // ---- Prompt-pro (always on for tier/legacy/default requests) ---------
+    // Raw-engine requests (OpenAI-compatible machine clients) keep their
+    // prompt verbatim; `enhance: false` is the explicit opt-out for everyone.
     let prompt = String(body?.prompt || '');
     let enhancedPrompt: string | undefined;
     let ocrUsed = false;
-    if (isClickDzImage && prompt) {
-      // ClickDz 1.0 pipeline: OCR reference (optional) -> Make enhancement
+    const wantsEnhance = body?.enhance !== false && resolution.source !== 'raw-engine';
+    if (wantsEnhance && prompt) {
       const imageUrl =
         typeof body?.image_url === 'string' ? body.image_url : '';
       const ocrContext = imageUrl ? await this.ocrImageContext(imageUrl) : '';
@@ -1032,13 +1190,9 @@ export class ClickDzBridgeController {
       prompt = enhancedPrompt;
     }
 
-    const model = isClickDzImage
-      ? CLICKDZ_IMAGE_ENGINE
-      : body?.model && body.model !== 'clickdz-image'
-        ? body.model
-        : 'dall-e-3';
-    // gpt-image-1 rejects response_format/style and always returns b64_json;
-    // dall-e-* accept response_format url. Build a valid payload for both.
+    const model = resolution.engine;
+    // gpt-image-* rejects response_format/style and always returns b64_json;
+    // (all CDZIMAGE engines are gpt-image-*, guard kept for safety.)
     const isGptImage = String(model).startsWith('gpt-image');
     const payload: Record<string, unknown> = {
       model,
@@ -1046,7 +1200,16 @@ export class ClickDzBridgeController {
       n: Math.min(Number(body?.n || 1), 1),
       size: body?.size || '1024x1024',
     };
-    if (!isGptImage) {
+    if (isGptImage) {
+      // Per-tier quality default (2.0 high / 1.5 medium / 1.0 low); explicit
+      // body.quality wins when it's one of the valid knobs.
+      const requestedQuality = String(body?.quality || '');
+      payload.quality = ['low', 'medium', 'high', 'auto'].includes(
+        requestedQuality
+      )
+        ? requestedQuality
+        : resolution.quality;
+    } else {
       payload.response_format = body?.response_format || 'url';
       payload.style = body?.style || 'vivid';
     }
@@ -1070,14 +1233,16 @@ export class ClickDzBridgeController {
         }
       }
     }
-    if (isClickDzImage) {
-      data.clickdz = {
-        model: 'clickdz-image-1.0',
-        engine: CLICKDZ_IMAGE_ENGINE,
-        enhanced_prompt: enhancedPrompt,
-        reference_ocr_used: ocrUsed,
-      };
-    }
+    // CDZIMAGE metadata — now attached to EVERY generation (superset of the
+    // old clickdz-only shape; enhanced_prompt/reference_ocr_used keys kept).
+    data.clickdz = {
+      model: resolution.tierId,
+      label: resolution.label,
+      engine: resolution.engine,
+      model_source: resolution.source,
+      enhanced_prompt: enhancedPrompt,
+      reference_ocr_used: ocrUsed,
+    };
     return data;
   }
 
