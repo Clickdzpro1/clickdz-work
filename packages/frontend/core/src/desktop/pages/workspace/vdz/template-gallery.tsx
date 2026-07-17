@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { VdzTimeline } from '../../../../modules/vdz';
 import {
@@ -56,9 +57,11 @@ export function TemplateGallery({
     [onPick]
   );
 
-  if (!open) return null;
+  if (!open || typeof document === 'undefined') return null;
 
-  return (
+  // Portal to <body> so the fixed backdrop escapes the studio header's
+  // containing block (which was clipping this modal to a top strip).
+  return createPortal(
     <div
       className={styles.backdrop}
       role="presentation"
@@ -148,6 +151,7 @@ export function TemplateGallery({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

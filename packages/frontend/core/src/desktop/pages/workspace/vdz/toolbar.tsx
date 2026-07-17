@@ -22,6 +22,8 @@ interface ToolbarProps {
   canDelete: boolean;
   onDelete: () => void;
   onRippleDelete: () => void;
+  /** Add a text clip at the playhead (relocated here from the footer). */
+  onAddText?: () => void;
   canUndo: boolean;
   onUndo: () => void;
   canRedo: boolean;
@@ -62,6 +64,7 @@ export function Toolbar({
   canDelete,
   onDelete,
   onRippleDelete,
+  onAddText,
   canUndo,
   onUndo,
   canRedo,
@@ -138,6 +141,16 @@ export function Toolbar({
 
       <span className={styles.toolDivider} />
 
+      {onAddText ? (
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onAddText}
+          title="Add a text clip at the playhead"
+        >
+          ＋ Text
+        </button>
+      ) : null}
       <button
         type="button"
         className={styles.toolButton}

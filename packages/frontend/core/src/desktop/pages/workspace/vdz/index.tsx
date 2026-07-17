@@ -460,39 +460,36 @@ const VdzStudioPage = () => {
     []
   );
 
-  // ---- Demo buttons (rewired through the history apply path) -------------
+  // ---- Add text clip (lives in the toolbar's editing group) --------------
+  // Adds an overlay text clip at the playhead through the one validated
+  // history path. If the timeline has no overlay lane, create one first so
+  // the add always lands (mirrors the media-drop lane-ensure intent).
   const onAddTextClip = useCallback(() => {
     const overlay = timeline.tracks.find(track => track.kind === 'overlay');
-    if (!overlay) return;
     const start = Math.min(playheadSeconds, Math.max(0, duration - 2));
-    run({
-      op: 'addClip',
-      trackId: overlay.id,
-      clip: {
-        id: `clip-${nanoid(6)}`,
-        type: 'text',
-        name: 'New text',
-        start,
-        duration: 3,
-        text: 'New text',
-        fontSize: 0.06,
-        color: '#ffffff',
-        x: 0.5,
-        y: 0.5,
-        align: 'center',
-      },
-    });
-  }, [timeline, playheadSeconds, duration, run]);
-
-  const onMoveSelected = useCallback(() => {
-    if (!selected) return;
-    run({
-      op: 'moveClip',
-      trackId: selected.trackId,
-      clipId: selected.clip.id,
-      start: selected.clip.start + 1,
-    });
-  }, [selected, run]);
+    const textClip = {
+      id: `clip-${nanoid(6)}`,
+      type: 'text' as const,
+      name: 'New text',
+      start,
+      duration: 3,
+      text: 'New text',
+      fontSize: 0.06,
+      color: '#ffffff',
+      x: 0.5,
+      y: 0.5,
+      align: 'center' as const,
+    };
+    if (!overlay) {
+      const trackId = `track-overlay-${nanoid(4)}`;
+      runBatch([
+        { op: 'addTrack', track: { id: trackId, kind: 'overlay', name: 'Overlay', clips: [] } },
+        { op: 'addClip', trackId, clip: textClip },
+      ]);
+      return;
+    }
+    run({ op: 'addClip', trackId: overlay.id, clip: textClip });
+  }, [timeline, playheadSeconds, duration, run, runBatch]);
 
   // ---- AI dock: stage → review → apply -----------------------------------
   // The dock hands us client-validated ops; we STAGE them (do not apply) so the
@@ -840,6 +837,7 @@ const VdzStudioPage = () => {
                         canDelete={selectedIds.size > 0}
                         onDelete={deleteSelected}
                         onRippleDelete={rippleDeleteSelected}
+                        onAddText={onAddTextClip}
                         canUndo={history.canUndo}
                         onUndo={undo}
                         canRedo={history.canRedo}
@@ -1046,9 +1044,11 @@ const VdzStudioPage = () => {
             </div>
 
             {/* Footer: a SLIM status line only. The AI proposal's Accept /
-                Revert now live in an in-thread card inside the dock (where the
-                user is already looking); the footer just reflects state. The
-                two demo buttons remain as quick manual-edit shortcuts. */}
+                Revert live in an in-thread card inside the dock; the footer
+                just reflects state. (The old demo buttons that used to float
+                here — "Add text clip" / "Move selected +1s" — were relocated:
+                Add-text now lives in the toolbar's editing group, and the
+                move-demo was dropped in favor of drag / arrow-key nudge.) */}
             <div className={styles.footer}>
               <span className={styles.footerLabel}>
                 <span className={styles.footerDot} />
@@ -1062,20 +1062,6 @@ const VdzStudioPage = () => {
                 <span className={styles.errorText}>{history.error}</span>
               ) : null}
               <span className={styles.footerSpacer} />
-              <button
-                type="button"
-                className={styles.button}
-                onClick={onAddTextClip}
-              >
-                Add text clip
-              </button>
-              <button
-                type="button"
-                className={styles.button}
-                onClick={onMoveSelected}
-              >
-                Move selected +1s
-              </button>
             </div>
           </div>
         )}

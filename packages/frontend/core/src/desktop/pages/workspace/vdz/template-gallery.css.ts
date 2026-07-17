@@ -1,23 +1,32 @@
 import { style } from '@vanilla-extract/css';
 
-import { accentAlpha, v } from './theme.css';
+import { accentAlpha, v, vdzTheme } from './theme.css';
 
 /**
- * Template gallery / first-run welcome overlay. Lives INSIDE the studio root
- * (already themed), so plain `--vdz-*` references are enough — no vdzTheme
- * composition, and (lesson learned) never a runtime import of theme.css.
+ * Template gallery / first-run welcome overlay.
+ *
+ * The modal is PORTALED to document.body (see template-gallery.tsx) so its
+ * `position: fixed` resolves against the viewport, not the 40px studio header
+ * — the header (a transformed/contained ancestor) was trapping the fixed
+ * backdrop and clipping the modal to a thin strip at the top. Because the
+ * portal lands OUTSIDE the studio's `vdzTheme` root, the backdrop must carry
+ * `vdzTheme` itself (css composition, never a runtime theme.css import) so the
+ * `--vdz-*` variables resolve on the portaled node.
  */
 
-export const backdrop = style({
-  position: 'fixed',
-  inset: 0,
-  zIndex: 80,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'rgba(0, 0, 0, 0.55)',
-  backdropFilter: 'blur(2px)',
-});
+export const backdrop = style([
+  vdzTheme,
+  {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 2147483000, // above the studio header + any workbench chrome
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(0, 0, 0, 0.55)',
+    backdropFilter: 'blur(2px)',
+  },
+]);
 
 export const card = style({
   width: 'min(680px, 92vw)',
