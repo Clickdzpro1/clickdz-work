@@ -117,6 +117,8 @@ export function TimelineLanes({
   const [dropTrackId, setDropTrackId] = useState<string | null>(null);
   // Which between-clip boundary is showing its "add transition" picker.
   const [openPicker, setOpenPicker] = useState<OpenPicker | null>(null);
+  // The "add lane" menu (video / overlay-text / audio-music).
+  const [addLaneOpen, setAddLaneOpen] = useState(false);
   // Live rects of each lane track element, for cross-lane hit testing.
   const laneRectsRef = useRef<Map<string, DOMRect>>(new Map());
   const contentWidth = spanSeconds * pxPerSec;
@@ -463,6 +465,19 @@ export function TimelineLanes({
     [onCommitOp]
   );
 
+  // Add a new empty lane. Overlay lanes host text + shapes, so "more text"
+  // and "more overlays" are the same op; audio lanes host music/voiceover.
+  const addLane = useCallback(
+    (kind: TrackKind, name: string) => {
+      onCommitOp({
+        op: 'addTrack',
+        track: { id: `track-${kind}-${nanoid(4)}`, kind, name, clips: [] },
+      });
+      setAddLaneOpen(false);
+    },
+    [onCommitOp]
+  );
+
   // Adjacent-clip boundaries per track: pairs where clip[i] ends exactly where
   // clip[i+1] starts. Each carries any existing transition after clip[i], the
   // boundary seconds, and the ids. Clips are read in array order (the editor
@@ -697,6 +712,77 @@ export function TimelineLanes({
             {track.name ?? track.kind}
           </div>
         ))}
+        {/* Add-lane control: more video / text-overlay / music lanes. */}
+        <div style={{ position: 'relative', padding: '4px 2px' }}>
+          <button
+            type="button"
+            onClick={() => setAddLaneOpen(open => !open)}
+            title="Add a track"
+            aria-label="Add a track"
+            aria-haspopup="menu"
+            aria-expanded={addLaneOpen}
+            style={{
+              width: '100%',
+              height: 24,
+              borderRadius: 6,
+              border: '1px dashed var(--vdz-border, #2a2f3a)',
+              background: 'transparent',
+              color: 'var(--vdz-muted, #8a90a0)',
+              fontSize: 14,
+              lineHeight: 1,
+              cursor: 'pointer',
+            }}
+          >
+            ＋
+          </button>
+          {addLaneOpen ? (
+            <div
+              role="menu"
+              style={{
+                position: 'absolute',
+                bottom: 'calc(100% + 4px)',
+                left: 0,
+                zIndex: 40,
+                minWidth: 150,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 2,
+                padding: 6,
+                borderRadius: 10,
+                border: '1px solid var(--vdz-border, #262a35)',
+                background: 'var(--vdz-panel, #12141a)',
+                boxShadow: '0 10px 28px rgba(0,0,0,0.45)',
+              }}
+            >
+              {[
+                { label: '🎬 Video track', kind: 'video' as const, name: 'Video' },
+                { label: '🅣 Text / overlay', kind: 'overlay' as const, name: 'Overlay' },
+                { label: '🎵 Music track', kind: 'audio' as const, name: 'Audio' },
+              ].map(opt => (
+                <button
+                  key={opt.kind + opt.name}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => addLane(opt.kind, opt.name)}
+                  style={{
+                    appearance: 'none',
+                    textAlign: 'left',
+                    padding: '6px 8px',
+                    borderRadius: 7,
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--vdz-text, #e6e9f0)',
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* Scroll container: ruler + lanes + playhead share one width & scroll. */}

@@ -18,13 +18,11 @@ const NewChip = () => (
       padding: '0 6px',
       borderRadius: 5,
       letterSpacing: '0.05em',
-      // accent-tinted pill: legible on every theme (no white-on-accent risk)
-      // and reads as premium rather than a loud solid badge.
+      // Flat-sidebar rule: NO line box. A soft accent-tinted badge only —
+      // the bordered pill read as an amateur "line box" (owner feedback).
       color: 'var(--affine-primary-color)',
       backgroundColor:
-        'color-mix(in srgb, var(--affine-primary-color) 16%, transparent)',
-      border:
-        '1px solid color-mix(in srgb, var(--affine-primary-color) 32%, transparent)',
+        'color-mix(in srgb, var(--affine-primary-color) 14%, transparent)',
     }}
   >
     NEW

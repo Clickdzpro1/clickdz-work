@@ -886,12 +886,14 @@ export class AIChatInput extends SignalWatcher(
          bar stays pinned at the bottom on every surface and viewport. */
       display: flex;
       flex-direction: column;
-      max-height: calc(var(--cdz-plan-budget, 560px) - 128px);
+      max-height: calc(var(--cdz-plan-budget, 640px) - 96px);
       overflow: hidden;
     }
     .cdz-plan-body {
       flex: 1 1 auto;
-      min-height: 0;
+      /* Never let a tight dock squeeze the body to nothing: the steps list
+         must ALWAYS be meaningfully visible — the card grows instead. */
+      min-height: 180px;
       overflow-y: auto;
       overscroll-behavior: contain;
       /* breathing room so focus rings and the scrollbar don't kiss the edge */
@@ -2728,8 +2730,11 @@ export class AIChatInput extends SignalWatcher(
     // (instead of a fixed pixel cap) and the plan card derives its own
     // max-height from the same custom property, so the two can flex
     // together on any screen — docked panel, full page, or short laptop.
+    // Plan mode gets an AGGRESSIVE budget: the card should extend as far as
+    // the viewport allows so the user sees the WHOLE plan (goal, question,
+    // chips, and every step) without hunting inside a squeezed scroller.
     const maxHeight = hasPlanReview
-      ? 'min(72vh, 680px)'
+      ? 'min(86vh, 920px)'
       : hasImages
         ? `${272 + 2}px`
         : `${200 + 2}px`;
