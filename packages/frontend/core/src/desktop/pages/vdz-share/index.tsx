@@ -385,29 +385,18 @@ const SharedVdzPage = () => {
 
   return (
     <div className={shareStyles.page}>
-      <div
-        style={{
-          width: 'min(960px, 100%)',
-          display: 'flex',
-          alignItems: 'baseline',
-          gap: 10,
-        }}
-      >
-        <span style={{ fontSize: 18, fontWeight: 700 }}>
+      <div className={shareStyles.headRow}>
+        <span className={shareStyles.titleText}>
           {state.status === 'ready' ? state.name : 'Vdz Studio'}
         </span>
-        <span style={{ fontSize: 12, color: 'var(--vdz-muted, #8a90a0)' }}>
-          shared video
-        </span>
+        <span className={shareStyles.badge}>shared video</span>
       </div>
 
-      <div style={{ width: 'min(960px, 100%)' }}>
+      <div className={shareStyles.stage}>
         {state.status === 'loading' ? (
-          <div style={{ color: 'var(--vdz-muted, #8a90a0)', fontSize: 13 }}>
-            Loading…
-          </div>
+          <div className={shareStyles.hint}>Loading…</div>
         ) : state.status === 'error' ? (
-          <div style={{ color: '#ff6b6b', fontSize: 13 }}>{state.message}</div>
+          <div className={shareStyles.errorText}>{state.message}</div>
         ) : (
           <>
             <div className={styles.previewWrapper}>
@@ -441,33 +430,17 @@ const SharedVdzPage = () => {
               ))}
             </div>
 
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                marginTop: 12,
-              }}
-            >
+            <div className={shareStyles.controlsRow}>
               <button
                 type="button"
+                className={shareStyles.playBtn}
                 onClick={togglePlay}
-                style={{
-                  appearance: 'none',
-                  border: '1px solid var(--vdz-border, #262a35)',
-                  background: 'var(--vdz-raised, #191c25)',
-                  color: 'var(--vdz-text, #e6e9f0)',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  padding: '7px 14px',
-                  borderRadius: 8,
-                  cursor: 'pointer',
-                }}
               >
                 {isPlaying ? '⏸ Pause' : '▶ Play'}
               </button>
               <input
                 type="range"
+                className={shareStyles.scrubber}
                 min={0}
                 max={Math.max(duration, 0.1)}
                 step={0.1}
@@ -477,16 +450,8 @@ const SharedVdzPage = () => {
                   setPlayheadSeconds(Number(e.target.value));
                 }}
                 aria-label="Playhead"
-                style={{ flex: 1 }}
               />
-              <span
-                style={{
-                  fontSize: 12,
-                  fontVariantNumeric: 'tabular-nums',
-                  color: 'var(--vdz-muted, #8a90a0)',
-                  whiteSpace: 'nowrap',
-                }}
-              >
+              <span className={shareStyles.timeText}>
                 {formatTimecode(playheadSeconds)} / {formatTimecode(duration)}
               </span>
             </div>
@@ -494,18 +459,9 @@ const SharedVdzPage = () => {
         )}
       </div>
 
-      <div
-        style={{
-          marginTop: 'auto',
-          fontSize: 12,
-          color: 'var(--vdz-muted, #8a90a0)',
-        }}
-      >
+      <div className={shareStyles.footer}>
         Made with{' '}
-        <a
-          href="/"
-          style={{ color: 'var(--vdz-accent, #5b8cff)', fontWeight: 600 }}
-        >
+        <a href="/" className={shareStyles.footerLink}>
           Vdz Studio — ClickDz Work
         </a>
       </div>

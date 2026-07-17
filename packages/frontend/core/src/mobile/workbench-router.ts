@@ -52,6 +52,13 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/trash'),
   },
   {
+    // Read-only Vdz on mobile: browse saved projects and play them. Editing
+    // stays desktop-only. MUST sit before the '/:pageId' catch route or
+    // "vdz" would be swallowed as a page id.
+    path: '/vdz',
+    lazy: () => import('./pages/workspace/vdz'),
+  },
+  {
     path: '/:pageId',
     lazy: () => import('./pages/workspace/detail/mobile-detail-page'),
   },

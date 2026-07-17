@@ -87,6 +87,14 @@ export const topLevelRoutes = [
         lazy: () => import('@affine/core/desktop/pages/open-app'),
       },
       {
+        // PUBLIC Vdz share viewer — share links get opened on phones more
+        // than anywhere; without this entry they fell through to 404. The
+        // page has zero workspace deps, so reusing the desktop page here is
+        // exactly the redirect/open-app pattern above.
+        path: '/vdz-share/:shareId',
+        lazy: () => import('@affine/core/desktop/pages/vdz-share'),
+      },
+      {
         path: '*',
         lazy: () => import('./pages/404'),
       },
