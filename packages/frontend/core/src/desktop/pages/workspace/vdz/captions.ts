@@ -98,3 +98,44 @@ export function clampCaptionText(text: string): string {
   const lastSpace = cut.lastIndexOf(' ');
   return (lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
+
+// ---------------------------------------------------------------------------
+// Transcript view (the Descript-style panel reads the timeline through this).
+// ---------------------------------------------------------------------------
+
+/** One transcript row: a text clip on an overlay lane, in timeline order. */
+export interface VdzTranscriptLine {
+  trackId: string;
+  clipId: string;
+  start: number;
+  duration: number;
+  text: string;
+}
+
+/**
+ * Every text clip on every overlay lane, sorted by start (id as tiebreaker so
+ * the order is stable). Captions and hand-made titles both appear — the
+ * transcript is simply the timeline's spoken/written layer, and edits flow
+ * back through ordinary ops (`setText`, `removeClip`, `moveClip`, …).
+ */
+export function collectTranscriptLines(
+  timeline: VdzTimeline
+): VdzTranscriptLine[] {
+  const lines: VdzTranscriptLine[] = [];
+  for (const track of timeline.tracks) {
+    if (track.kind !== 'overlay') continue;
+    for (const clip of track.clips) {
+      if (clip.type !== 'text') continue;
+      lines.push({
+        trackId: track.id,
+        clipId: clip.id,
+        start: clip.start,
+        duration: clip.duration,
+        text: clip.text,
+      });
+    }
+  }
+  return lines.sort(
+    (a, b) => a.start - b.start || a.clipId.localeCompare(b.clipId)
+  );
+}

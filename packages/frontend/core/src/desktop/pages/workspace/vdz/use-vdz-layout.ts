@@ -15,7 +15,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
  */
 
 /** The resizable / hideable panels (preview is the flex remainder, not listed). */
-export type VdzPanelId = 'mediaBin' | 'inspector' | 'aiDock' | 'timeline';
+export type VdzPanelId =
+  | 'mediaBin'
+  | 'inspector'
+  | 'aiDock'
+  | 'timeline'
+  | 'transcript';
 
 export interface VdzPanelState {
   visible: boolean;
@@ -38,6 +43,9 @@ export const VDZ_PANEL_SPECS: Record<VdzPanelId, PanelSpec> = {
   inspector: { size: 300, min: 240, max: 520, visible: true },
   aiDock: { size: 340, min: 280, max: 560, visible: true },
   timeline: { size: 300, min: 132, max: 640, visible: true },
+  // Hidden by default — opt-in via View menu / Cmd+5 (no layout shift for
+  // existing workspaces; readLayout() merges the default for old storage).
+  transcript: { size: 300, min: 240, max: 520, visible: false },
 };
 
 export const VDZ_PANEL_IDS = Object.keys(VDZ_PANEL_SPECS) as VdzPanelId[];
@@ -59,6 +67,10 @@ function defaultLayout(): VdzLayout {
     inspector: { visible: true, size: VDZ_PANEL_SPECS.inspector.size },
     aiDock: { visible: true, size: VDZ_PANEL_SPECS.aiDock.size },
     timeline: { visible: true, size: VDZ_PANEL_SPECS.timeline.size },
+    transcript: {
+      visible: VDZ_PANEL_SPECS.transcript.visible,
+      size: VDZ_PANEL_SPECS.transcript.size,
+    },
   };
 }
 

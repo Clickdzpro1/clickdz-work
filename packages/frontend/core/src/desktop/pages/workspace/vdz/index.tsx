@@ -36,6 +36,7 @@ import { PreviewCanvas } from './preview-canvas';
 import { ProjectBar } from './project-bar';
 import { TimelineLanes } from './timeline-lanes';
 import { Toolbar } from './toolbar';
+import { TranscriptPanel } from './transcript-panel';
 import { useVdzHistory } from './use-vdz-history';
 import {
   type VdzPanelId,
@@ -504,7 +505,7 @@ const VdzStudioPage = () => {
     null
   );
   const GENERATE_HIDDEN: VdzPanelId[] = useMemo(
-    () => ['mediaBin', 'inspector', 'timeline'],
+    () => ['mediaBin', 'inspector', 'timeline', 'transcript'],
     []
   );
   // Same set as a lookup for the View menu's disabled state in Generate mode.
@@ -528,6 +529,7 @@ const VdzStudioPage = () => {
           inspector: layout.inspector.visible,
           aiDock: layout.aiDock.visible,
           timeline: layout.timeline.visible,
+          transcript: layout.transcript.visible,
         };
         for (const id of GENERATE_HIDDEN) setPanelVisible(id, false);
       } else {
@@ -582,14 +584,15 @@ const VdzStudioPage = () => {
         return;
       }
 
-      // Cmd/Ctrl+1..4 toggle the four workspace panels.
-      if (meta && event.key >= '1' && event.key <= '4') {
+      // Cmd/Ctrl+1..5 toggle the workspace panels.
+      if (meta && event.key >= '1' && event.key <= '5') {
         event.preventDefault();
         const panelForDigit: Record<string, VdzPanelId> = {
           '1': 'mediaBin',
           '2': 'inspector',
           '3': 'aiDock',
           '4': 'timeline',
+          '5': 'transcript',
         };
         togglePanel(panelForDigit[event.key]);
         return;
@@ -879,8 +882,42 @@ const VdzStudioPage = () => {
               {/* Right stack: inspector + AI dock, each a flexible panel with a
                   resize seam on its left edge. Hidden panels leave a reopen tab
                   at the right edge. */}
-              {layout.inspector.visible || layout.aiDock.visible ? (
+              {layout.inspector.visible ||
+              layout.aiDock.visible ||
+              layout.transcript.visible ? (
                 <div className={styles.rightStack}>
+                  {/* Transcript — the Descript-style spoken-layer view.
+                      Hidden by default; opt-in via View menu / Cmd+5. Edits
+                      route through the SAME single-op history path. */}
+                  {layout.transcript.visible ? (
+                    <>
+                      <VdzResizeHandle
+                        id="transcript"
+                        size={layout.transcript.size}
+                        setSize={setPanelSize}
+                        onReset={() => resetPanelSize('transcript')}
+                        axis="x"
+                        dir={-1}
+                        aria-label="Resize transcript"
+                      />
+                      <div
+                        className={styles.sidePanelSlot}
+                        style={{ width: layout.transcript.size }}
+                      >
+                        <TranscriptPanel
+                          timeline={timeline}
+                          playheadSeconds={playheadSeconds}
+                          selectedIds={selectedIds}
+                          onSeek={scrubTo}
+                          onSelectClip={clipId => selectClip(clipId, false)}
+                          onOp={commitLaneOp}
+                          onCollapse={() =>
+                            setPanelVisible('transcript', false)
+                          }
+                        />
+                      </div>
+                    </>
+                  ) : null}
                   {layout.inspector.visible ? (
                     <>
                       <VdzResizeHandle

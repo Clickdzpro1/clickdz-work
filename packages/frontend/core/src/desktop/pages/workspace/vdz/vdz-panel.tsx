@@ -157,6 +157,7 @@ const VIEW_MENU_ITEMS: { id: VdzPanelId; label: string; hint: string }[] = [
   { id: 'inspector', label: 'Inspector', hint: 'Cmd/Ctrl+2' },
   { id: 'aiDock', label: 'AI', hint: 'Cmd/Ctrl+3' },
   { id: 'timeline', label: 'Timeline', hint: 'Cmd/Ctrl+4' },
+  { id: 'transcript', label: 'Transcript', hint: 'Cmd/Ctrl+5' },
 ];
 
 interface VdzViewMenuProps {
@@ -222,7 +223,9 @@ export function VdzViewMenu({
           ▦
         </span>
         View
-        <span className={styles.viewMenuBadge}>{visibleCount}/4</span>
+        <span className={styles.viewMenuBadge}>
+          {visibleCount}/{VIEW_MENU_ITEMS.length}
+        </span>
       </button>
 
       {open ? (
