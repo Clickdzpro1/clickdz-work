@@ -357,15 +357,11 @@ export function ProjectBar({
   // popover creates/updates the snapshot link, copies it, or revokes it.
   const shareApi = useVdzShare();
   const [shareOpen, setShareOpen] = useState(false);
+  // The ⋯ overflow menu (Save As / Templates / Share) — top-bar fix.
+  const [moreOpen, setMoreOpen] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [shareSkipped, setShareSkipped] = useState(0);
   const [copied, setCopied] = useState(false);
-
-  const toggleShare = useCallback(() => {
-    setShareOpen(prev => !prev);
-    setCopied(false);
-    shareApi.clearError();
-  }, [shareApi]);
 
   const handleCreateShare = useCallback(async () => {
     const id = stateRef.current.projectId;
@@ -457,16 +453,6 @@ export function ProjectBar({
         <span className={styles.shortcutHint}>⌘S</span>
       </button>
 
-      <button
-        type="button"
-        className={styles.barButton}
-        onClick={handleSaveAs}
-        disabled={projects.loading}
-        title="Save as a new project"
-      >
-        Save As
-      </button>
-
       <div className={styles.browserRoot}>
         <button
           type="button"
@@ -493,36 +479,86 @@ export function ProjectBar({
         />
       </div>
 
-      <button
-        type="button"
-        className={styles.barButton}
-        onClick={() => {
-          setGalleryWelcome(false);
-          setGalleryOpen(true);
-        }}
-        title="Start from a prebuilt template"
-      >
-        Templates
-      </button>
-
-      {/* ---- Share (public snapshot link) ---- */}
+      {/* ---- ⋯ overflow: Save As / Templates / Share (top-bar fix: the
+           header-right was overflowing and buttons overlapped — the bar now
+           always fits: Name · Save · Open · ⋯). The Share popover stays
+           anchored to this wrapper. ---- */}
       <div className={styles.browserRoot}>
         <button
           type="button"
           className={styles.barButton}
-          data-open={shareOpen}
-          aria-haspopup="dialog"
-          aria-expanded={shareOpen}
-          onClick={toggleShare}
-          disabled={!projectId}
-          title={
-            projectId
-              ? 'Share a public view-only link'
-              : 'Save the project first to share it'
-          }
+          data-open={moreOpen}
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          onClick={() => {
+            setMoreOpen(prev => !prev);
+            setShareOpen(false);
+          }}
+          title="More project actions"
+          aria-label="More project actions"
         >
-          Share
+          ⋯
         </button>
+        {moreOpen ? (
+          <div
+            role="menu"
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 6px)',
+              right: 0,
+              zIndex: 60,
+              minWidth: 170,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+              padding: 6,
+              borderRadius: 10,
+              border: '1px solid var(--vdz-border, #262a35)',
+              background: 'var(--vdz-panel, #12141a)',
+              boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
+            }}
+          >
+            {[
+              {
+                label: '💾 Save As…',
+                disabled: projects.loading,
+                run: () => handleSaveAs(),
+              },
+              {
+                label: '✨ Templates…',
+                disabled: false,
+                run: () => {
+                  setGalleryWelcome(false);
+                  setGalleryOpen(true);
+                },
+              },
+              {
+                label: '🔗 Share…',
+                disabled: !projectId,
+                run: () => {
+                  setShareOpen(true);
+                  shareApi.clearError();
+                  setCopied(false);
+                },
+              },
+            ].map(item => (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                className={styles.barButton}
+                style={{ justifyContent: 'flex-start', width: '100%' }}
+                disabled={item.disabled}
+                onClick={() => {
+                  setMoreOpen(false);
+                  item.run();
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {shareOpen ? (
           <div
             role="dialog"
