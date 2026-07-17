@@ -555,6 +555,69 @@ const FALLBACK_PLAN_STEPS: PlanStep[] = [
   { text: 'Verify the result and report what was done.', recommended: true },
 ];
 
+/** CDZIMAGE clarify response (WS1 PR6). */
+interface ImageClarification {
+  needs_details: boolean;
+  question: string;
+  options: string[];
+  suggested: { subject: string; style: string; mood: string; aspect: string };
+}
+
+/**
+ * Defensive parse of the image clarifier's JSON. FAIL-OPEN: anything
+ * unusable yields `needs_details: false` with empty enrichments so the
+ * caller just generates — a clarifier failure never blocks an image.
+ */
+function parseImageClarification(raw: string): ImageClarification {
+  const fallback: ImageClarification = {
+    needs_details: false,
+    question: '',
+    options: [],
+    suggested: { subject: '', style: '', mood: '', aspect: '' },
+  };
+  const unfenced = raw
+    .replace(/```(?:json)?/gi, '')
+    .replace(/```/g, '')
+    .trim();
+  const start = unfenced.indexOf('{');
+  const end = unfenced.lastIndexOf('}');
+  if (start === -1 || end <= start) return fallback;
+  try {
+    const parsed = JSON.parse(unfenced.slice(start, end + 1)) as Record<
+      string,
+      unknown
+    >;
+    const suggestedRaw = (parsed.suggested ?? {}) as Record<string, unknown>;
+    const aspect = String(suggestedRaw.aspect || '').toLowerCase();
+    const question = String(parsed.question || '').trim().slice(0, 300);
+    const options = Array.isArray(parsed.options)
+      ? parsed.options
+          .map(option => String(option).trim().slice(0, 60))
+          .filter(Boolean)
+          .slice(0, 4)
+      : [];
+    // A "needs details" verdict is only actionable with a real question and
+    // at least two choices — otherwise fail open.
+    const needsDetails =
+      parsed.needs_details === true && question.length > 0 && options.length >= 2;
+    return {
+      needs_details: needsDetails,
+      question,
+      options,
+      suggested: {
+        subject: String(suggestedRaw.subject || '').trim().slice(0, 200),
+        style: String(suggestedRaw.style || '').trim().slice(0, 120),
+        mood: String(suggestedRaw.mood || '').trim().slice(0, 120),
+        aspect: ['square', 'landscape', 'portrait'].includes(aspect)
+          ? aspect
+          : '',
+      },
+    };
+  } catch {
+    return fallback;
+  }
+}
+
 function parsePlanClarification(raw: string): PlanClarification {
   const unfenced = raw.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
   const start = unfenced.indexOf('{');
@@ -1106,6 +1169,101 @@ export class ClickDzBridgeController {
     const raw = await this.runFastPlanner(request);
 
     return parsePlanClarification(raw);
+  }
+
+  /**
+   * CDZIMAGE detail-gathering (WS1 PR6): one fast, SKIPPABLE clarification
+   * before an image generation. cdz-flash inspects the prompt and returns
+   * `needs_details` + one decisive question with 2–4 concrete option chips +
+   * suggested enrichments. Rich prompts auto-skip (`needs_details: false`).
+   * FAIL-OPEN CONTRACT: any parse/model failure returns needs_details:false —
+   * a clarifier hiccup must never block generation, and the client's
+   * "Generate now" button simply ignores the card.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/images/clarify')
+  async clarifyImagePrompt(@Body() body: any) {
+    const prompt = String(body?.prompt || '').trim();
+    if (!prompt) {
+      throw new HttpException(
+        {
+          error: {
+            message: 'A non-empty "prompt" string is required',
+            type: 'invalid_request_error',
+            code: 'prompt_missing',
+          },
+        },
+        HttpStatus.BAD_REQUEST
+      );
+    }
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      throw new PayloadTooLargeException(
+        `Prompt is too long (max ${MAX_PROMPT_CHARS} characters)`
+      );
+    }
+    const raw = await this.runImageClarifier(prompt);
+    return parseImageClarification(raw);
+  }
+
+  /**
+   * cdz-flash image-prompt clarifier (Make fallback, empty-string last —
+   * the parser fail-opens on anything unusable).
+   */
+  private async runImageClarifier(request: string): Promise<string> {
+    const prompt = [
+      'You are the image-request clarifier for ClickDz Work.',
+      'Decide if this image request needs ONE clarifying question before',
+      'generation, and return ONLY valid JSON with this exact shape:',
+      '{"needs_details": true, "question": "one short decisive question in the user language", "options": ["2 to 4 short concrete choices"], "suggested": {"subject": "the main subject, enriched", "style": "a fitting visual style", "mood": "a fitting mood/lighting", "aspect": "square|landscape|portrait"}}',
+      'Rules:',
+      '- needs_details=false when the request ALREADY specifies a clear subject',
+      '  plus at least one of: style, mood, setting, or composition. Rich',
+      '  requests must auto-skip — do not invent questions for them.',
+      '- Ask about the single BIGGEST missing visual decision only (style vs',
+      '  subject detail vs mood — never more than one question).',
+      '- Options must be concrete and instantly pickable (e.g. "cinematic',
+      '  photo", "flat illustration"), never "other" or "you decide".',
+      '- suggested.* must always be filled with your best enrichment of the',
+      '  request, usable as-is if the user skips.',
+      '- Do NOT generate the image. Output the JSON only.',
+      '',
+      `REQUEST:\n${request.slice(0, 4000)}`,
+    ].join('\n');
+
+    if (CDZ_AI_KEY) {
+      try {
+        const response = await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'cdz-flash',
+            messages: [{ role: 'user', content: prompt }],
+            max_tokens: clampMaxTokens(400, DEFAULT_MAX_TOKENS),
+          }),
+          signal: AbortSignal.timeout(12000),
+        });
+        const data = (await response.json()) as any;
+        const content = data?.choices?.[0]?.message?.content;
+        if (response.ok && typeof content === 'string' && content.trim()) {
+          return content;
+        }
+      } catch {
+        // fall through to the Make agent
+      }
+    }
+    try {
+      return await this.runMakeAgent(
+        [{ role: 'user', content: prompt }],
+        'clickdz-fast',
+        undefined,
+        15000
+      );
+    } catch {
+      return '';
+    }
   }
 
   /** extract text from an attached image via the Make OCR scenario */
