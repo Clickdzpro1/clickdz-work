@@ -3,12 +3,15 @@ import { useCallback, useState } from 'react';
 import type {
   VdzAnimation,
   VdzAnimationKind,
+  VdzAudioClip,
   VdzClip,
   VdzEffect,
   VdzEffectKind,
   VdzOp,
+  VdzTimeline,
 } from '../../../../modules/vdz';
 import * as styles from './index.css';
+import { useVdzCaptions } from './use-vdz-captions';
 
 /** All animation kinds, for the in/out pickers. */
 const ANIMATION_KINDS: VdzAnimationKind[] = [
@@ -40,6 +43,73 @@ interface InspectorProps {
   trackId: string;
   /** Emit exactly one op through the host history path. */
   onOp: (op: VdzOp) => void;
+  /** The whole timeline (captions need the overlay track + clip offsets). */
+  timeline: VdzTimeline;
+  /**
+   * Commit a BATCH of ops as one history entry (host `runBatch`). Optional so
+   * the inspector renders without it; the captions button needs it.
+   */
+  onOps?: (ops: VdzOp[]) => void;
+}
+
+/**
+ * "Generate captions" for an audio clip: transcribe (Whisper via the vdz
+ * transcribe route) and land one text clip per segment on the overlay track,
+ * committed as a single undoable batch. A separate component so the hook's
+ * per-clip state (busy/error) remounts cleanly when the selection changes.
+ */
+function CaptionTools({
+  clip,
+  timeline,
+  onOps,
+}: {
+  clip: VdzAudioClip;
+  timeline: VdzTimeline;
+  onOps?: (ops: VdzOp[]) => void;
+}) {
+  const captions = useVdzCaptions(clip, timeline);
+  const [lastCount, setLastCount] = useState<number | null>(null);
+
+  const onGenerate = useCallback(() => {
+    setLastCount(null);
+    captions
+      .generate()
+      .then(({ ops, count }) => {
+        onOps?.(ops);
+        setLastCount(count);
+      })
+      .catch(() => {
+        // captions.error already carries the message; nothing else to do.
+      });
+  }, [captions, onOps]);
+
+  return (
+    <div className={styles.inspSection}>
+      <div className={styles.inspSectionTitle}>Captions</div>
+      <button
+        type="button"
+        className={styles.inspRawToggle}
+        onClick={onGenerate}
+        disabled={captions.busy || !captions.ready || !onOps}
+        title="Transcribe this clip and add a caption text clip per phrase"
+      >
+        {captions.busy
+          ? '⏳ Transcribing…'
+          : !captions.ready
+            ? 'Loading audio…'
+            : '💬 Generate captions'}
+      </button>
+      {captions.error ? (
+        <div className={styles.inspEmptyHint}>{captions.error}</div>
+      ) : null}
+      {lastCount !== null ? (
+        <div className={styles.inspEmptyHint}>
+          Added {lastCount} caption{lastCount === 1 ? '' : 's'} to the overlay
+          lane (one undo entry).
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /** A labeled row wrapper. */
@@ -66,7 +136,13 @@ function Field({
  * history path the toolbar and lanes use (updateClip / setAnimation /
  * setEffects). The component holds no timeline state of its own.
  */
-export function Inspector({ clip, trackId, onOp }: InspectorProps) {
+export function Inspector({
+  clip,
+  trackId,
+  onOp,
+  timeline,
+  onOps,
+}: InspectorProps) {
   const [rawOpen, setRawOpen] = useState(false);
 
   // ---- Style patch (updateClip) -----------------------------------------
@@ -377,6 +453,11 @@ export function Inspector({ clip, trackId, onOp }: InspectorProps) {
             />
           </Field>
         </div>
+      ) : null}
+
+      {/* ---- Captions (audio clips only): transcribe → text clips ---- */}
+      {clip.type === 'audio' ? (
+        <CaptionTools clip={clip} timeline={timeline} onOps={onOps} />
       ) : null}
 
       {/* ---- Animation ---- */}
