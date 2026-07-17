@@ -97,6 +97,10 @@ export class ChatSession implements AsyncDisposable {
     return this.state.turns.slice(-this.stashTurnCount);
   }
 
+  get userTurnCount() {
+    return this.state.turns.filter(t => t.role === 'user').length;
+  }
+
   get latestUserTurn() {
     return this.state.turns.findLast(({ role }) => role === 'user');
   }
@@ -234,8 +238,11 @@ export class ChatSessionService {
     };
   }
 
-  async getState(sessionId: string): Promise<ConversationState | undefined> {
-    const session = await this.store.get(sessionId);
+  async getState(
+    sessionId: string,
+    contextMode?: string
+  ): Promise<ConversationState | undefined> {
+    const session = await this.store.get(sessionId, contextMode as any);
     if (!session) return;
 
     return await this.toConversationState(session);
@@ -477,8 +484,11 @@ export class ChatSessionService {
    * @param sessionId session id
    * @returns
    */
-  async get(sessionId: string): Promise<ChatSession | null> {
-    const state = await this.getState(sessionId);
+  async get(
+    sessionId: string,
+    contextMode?: string
+  ): Promise<ChatSession | null> {
+    const state = await this.getState(sessionId, contextMode);
     if (state) {
       return new ChatSession(
         {

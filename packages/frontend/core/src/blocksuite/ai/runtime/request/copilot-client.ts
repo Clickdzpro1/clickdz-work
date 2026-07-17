@@ -474,6 +474,12 @@ export class CopilotClient {
       runId,
       retry,
       byokLeaseId,
+      // WS2 — model-switch context handoff. When set ('recent' | 'compact' |
+      // 'fresh') it rides as `?contextMode=` exactly the way modelId does; the
+      // copilot controller forwards it to the orchestrator. Left undefined it
+      // is dropped by paramsToQueryString, so requests stay byte-identical to
+      // today when no handoff choice has been made.
+      contextMode,
     }: {
       sessionId: string;
       messageId?: string;
@@ -485,6 +491,7 @@ export class CopilotClient {
       runId?: string;
       retry?: boolean;
       byokLeaseId?: string;
+      contextMode?: string;
     },
     endpoint = Endpoint.StreamObject
   ) {
@@ -502,6 +509,7 @@ export class CopilotClient {
       runId,
       retry,
       byokLeaseId,
+      contextMode,
     });
     if (queryString) {
       url += `?${queryString}`;

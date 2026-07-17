@@ -37,6 +37,10 @@ import {
 } from '../../base';
 import { CurrentUser, Public } from '../../core/auth';
 import {
+  type ContextMode,
+  parseContextMode,
+} from './conversation/store';
+import {
   ActionStreamHost,
   projectActionEventToChatEvent,
 } from './runtime/hosts/action-stream-host';
@@ -95,6 +99,29 @@ export class CopilotController implements BeforeApplicationShutdown {
     return { type: 'attachment' as const, id: messageId, data };
   }
 
+  /**
+   * WS2 — normalise the `?contextMode=` query param on the chat SSE endpoints.
+   *
+   * Valid values are 'recent' | 'compact' | 'fresh'; anything else (including
+   * an absent param) narrows to `undefined`. The normalised value is written
+   * back onto the same `query` object that is forwarded untouched to the
+   * orchestrator (RECON F.3), where `ChatQuerySchema.catchall` carries it
+   * through to history materialization/clamping. When the param is absent this
+   * is a no-op — the query is unchanged and behaviour is byte-identical.
+   */
+  private normalizeContextMode(
+    query: Record<string, string>
+  ): ContextMode | undefined {
+    const contextMode = parseContextMode(query.contextMode);
+    if (contextMode) {
+      query.contextMode = contextMode;
+    } else {
+      // Strip any stray/invalid value so it can never reach downstream parsing.
+      delete query.contextMode;
+    }
+    return contextMode;
+  }
+
   @Sse('/chat/:sessionId/stream')
   @CallMetric('ai', 'chat_stream', { timer: true })
   async chatStream(
@@ -103,7 +130,13 @@ export class CopilotController implements BeforeApplicationShutdown {
     @Param('sessionId') sessionId: string,
     @Query() query: Record<string, string>
   ): Promise<Observable<ChatEvent>> {
-    const info: any = { sessionId, params: query, throwInStream: false };
+    const contextMode = this.normalizeContextMode(query);
+    const info: any = {
+      sessionId,
+      params: query,
+      contextMode,
+      throwInStream: false,
+    };
 
     try {
       const { signal, onConnectionClosed } = getSignal(req);
@@ -156,7 +189,13 @@ export class CopilotController implements BeforeApplicationShutdown {
     @Param('sessionId') sessionId: string,
     @Query() query: Record<string, string>
   ): Promise<Observable<ChatEvent>> {
-    const info: any = { sessionId, params: query, throwInStream: false };
+    const contextMode = this.normalizeContextMode(query);
+    const info: any = {
+      sessionId,
+      params: query,
+      contextMode,
+      throwInStream: false,
+    };
 
     try {
       const { signal, onConnectionClosed } = getSignal(req);

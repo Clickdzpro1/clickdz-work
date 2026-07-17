@@ -17,6 +17,7 @@ import {
 } from './context';
 import { ConversationInboxService } from './conversation/inbox';
 import { ConversationPolicy } from './conversation/policy';
+import { CompactSummaryService } from './conversation/compact';
 import { ConversationStore } from './conversation/store';
 import { CopilotCronJobs } from './cron';
 import {
@@ -76,6 +77,7 @@ export const COPILOT_RUNTIME_PROVIDERS = [
   ByokEntitlementPolicy,
   ByokService,
   ChatSessionService,
+  CompactSummaryService,
   ConversationStore,
   ConversationInboxService,
   ConversationPolicy,
