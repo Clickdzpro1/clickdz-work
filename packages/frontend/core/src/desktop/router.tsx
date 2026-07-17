@@ -117,6 +117,13 @@ export const topLevelRoutes = [
         lazy: () => import('./pages/theme-editor'),
       },
       {
+        // PUBLIC read-only viewer for shared Vdz projects. Signed-out like
+        // the other public routes here: the crypto-strong share id IS the
+        // capability (the API side is the @Public() vdz shared route).
+        path: '/vdz-share/:shareId',
+        lazy: () => import('./pages/vdz-share'),
+      },
+      {
         path: '/clipper/import',
         lazy: () => import('./pages/import-clipper'),
       },

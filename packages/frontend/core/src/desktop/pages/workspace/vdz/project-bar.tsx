@@ -5,6 +5,7 @@ import {
   useVdzProjects,
   type VdzProjectSummary,
 } from '../../../../modules/vdz/use-vdz-projects';
+import { useVdzShare } from '../../../../modules/vdz/use-vdz-share';
 import * as styles from './project-bar.css';
 import { ProjectBrowser } from './project-browser';
 
@@ -290,6 +291,58 @@ export function ProjectBar({
 
   const saveDisabled = projects.loading || (!dirty && !!projectId);
 
+  // ---- Public share link (C4) ---------------------------------------------
+  // Sharing needs a SAVED project (the share hangs off the project id). The
+  // popover creates/updates the snapshot link, copies it, or revokes it.
+  const shareApi = useVdzShare();
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareSkipped, setShareSkipped] = useState(0);
+  const [copied, setCopied] = useState(false);
+
+  const toggleShare = useCallback(() => {
+    setShareOpen(prev => !prev);
+    setCopied(false);
+    shareApi.clearError();
+  }, [shareApi]);
+
+  const handleCreateShare = useCallback(async () => {
+    const id = stateRef.current.projectId;
+    if (!id) return;
+    setCopied(false);
+    try {
+      // Share the LAST-SAVED state: save first when dirty so the link matches
+      // what the user sees (one extra save is cheaper than a stale share).
+      if (stateRef.current.dirty) await doSave();
+      const result = await shareApi.share(id, stateRef.current.timeline);
+      setShareUrl(result.url);
+      setShareSkipped(result.skipped.length);
+    } catch {
+      // shareApi.error carries the message shown in the popover.
+    }
+  }, [shareApi, doSave]);
+
+  const handleCopyShare = useCallback(() => {
+    if (!shareUrl) return;
+    navigator.clipboard
+      ?.writeText(shareUrl)
+      .then(() => setCopied(true))
+      .catch(() => setCopied(false));
+  }, [shareUrl]);
+
+  const handleRevokeShare = useCallback(async () => {
+    const id = stateRef.current.projectId;
+    if (!id) return;
+    try {
+      await shareApi.revoke(id);
+      setShareUrl(null);
+      setShareSkipped(0);
+      setCopied(false);
+    } catch {
+      // shareApi.error surfaces below.
+    }
+  }, [shareApi]);
+
   return (
     <div className={styles.bar}>
       {dirty ? (
@@ -377,6 +430,119 @@ export function ProjectBar({
           onDeleteProject={id => void handleDeleteProject(id)}
           onNewProject={handleNewProject}
         />
+      </div>
+
+      {/* ---- Share (public snapshot link) ---- */}
+      <div className={styles.browserRoot}>
+        <button
+          type="button"
+          className={styles.barButton}
+          data-open={shareOpen}
+          aria-haspopup="dialog"
+          aria-expanded={shareOpen}
+          onClick={toggleShare}
+          disabled={!projectId}
+          title={
+            projectId
+              ? 'Share a public view-only link'
+              : 'Save the project first to share it'
+          }
+        >
+          Share
+        </button>
+        {shareOpen ? (
+          <div
+            role="dialog"
+            aria-label="Share project"
+            style={{
+              position: 'absolute',
+              top: 'calc(100% + 6px)',
+              right: 0,
+              zIndex: 60,
+              width: 300,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              padding: 12,
+              borderRadius: 10,
+              border: '1px solid var(--vdz-border, #262a35)',
+              background: 'var(--vdz-panel, #12141a)',
+              color: 'var(--vdz-text, #e6e9f0)',
+              boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
+              fontSize: 12,
+            }}
+          >
+            <div style={{ fontWeight: 600 }}>Public view-only link</div>
+            <div style={{ color: 'var(--vdz-muted, #8a90a0)', lineHeight: 1.5 }}>
+              Anyone with the link can watch a snapshot of this project. Edits
+              stay private until you share again.
+            </div>
+            {shareUrl ? (
+              <>
+                <input
+                  readOnly
+                  value={shareUrl}
+                  aria-label="Share URL"
+                  onFocus={e => e.currentTarget.select()}
+                  style={{
+                    width: '100%',
+                    padding: '6px 8px',
+                    borderRadius: 7,
+                    border: '1px solid var(--vdz-border, #262a35)',
+                    background: 'var(--vdz-bg, #0b0d12)',
+                    color: 'var(--vdz-text, #e6e9f0)',
+                    fontSize: 11,
+                  }}
+                />
+                {shareSkipped > 0 ? (
+                  <div style={{ color: 'var(--vdz-muted, #8a90a0)' }}>
+                    {shareSkipped} media file(s) could not be embedded — those
+                    clips show placeholders for viewers.
+                  </div>
+                ) : null}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    className={styles.barButton}
+                    data-primary="true"
+                    onClick={handleCopyShare}
+                  >
+                    {copied ? 'Copied ✓' : 'Copy link'}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.barButton}
+                    onClick={() => void handleCreateShare()}
+                    disabled={shareApi.busy}
+                  >
+                    {shareApi.busy ? 'Updating…' : 'Update'}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.barButton}
+                    onClick={() => void handleRevokeShare()}
+                    disabled={shareApi.busy}
+                  >
+                    Revoke
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button
+                type="button"
+                className={styles.barButton}
+                data-primary="true"
+                onClick={() => void handleCreateShare()}
+                disabled={shareApi.busy}
+              >
+                {shareApi.busy ? 'Creating…' : 'Create share link'}
+              </button>
+            )}
+            {shareApi.error ? (
+              <div style={{ color: '#ff6b6b' }}>{shareApi.error}</div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );
