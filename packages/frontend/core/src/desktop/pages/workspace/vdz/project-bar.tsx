@@ -8,6 +8,7 @@ import {
 import { useVdzShare } from '../../../../modules/vdz/use-vdz-share';
 import * as styles from './project-bar.css';
 import { ProjectBrowser } from './project-browser';
+import { TemplateGallery } from './template-gallery';
 
 /**
  * Vdz Studio — the header ProjectBar.
@@ -39,6 +40,25 @@ import { ProjectBrowser } from './project-browser';
 
 const LAST_OPEN_KEY = 'vdz:last-open-project-id';
 const AUTOSAVE_DEBOUNCE_MS = 2000;
+/** First-run flag: once set, the welcome gallery never auto-opens again. */
+const ONBOARDED_KEY = 'vdz:onboarded:v1';
+
+function readOnboarded(): boolean {
+  try {
+    return localStorage.getItem(ONBOARDED_KEY) === '1';
+  } catch {
+    // No storage (private mode / SSR) → treat as onboarded: never nag.
+    return true;
+  }
+}
+
+function writeOnboarded(): void {
+  try {
+    localStorage.setItem(ONBOARDED_KEY, '1');
+  } catch {
+    // non-fatal
+  }
+}
 
 interface ProjectBarProps {
   /** The live working timeline (from useVdzHistory). */
@@ -167,17 +187,23 @@ export function ProjectBar({
     [projects, onLoadTimeline]
   );
 
+  // Load ANY timeline as a fresh unsaved working project (New / template pick):
+  // no id, no clean snapshot (reads dirty; autosave stays OFF until the user
+  // explicitly Saves — we never persist a starting point on their behalf).
+  const loadFresh = useCallback(
+    (fresh: VdzTimeline) => {
+      onLoadTimeline(fresh);
+      setProjectId(null);
+      setSavedSnapshot(null);
+      writeLastOpenId(null);
+      setBrowserOpen(false);
+    },
+    [onLoadTimeline]
+  );
+
   const handleNewProject = useCallback(() => {
-    const fresh = newTimeline();
-    onLoadTimeline(fresh);
-    // A brand-new working timeline is unsaved: no id, no clean snapshot (so it
-    // reads dirty and autosave stays OFF until the user explicitly Saves — we
-    // never persist the untouched sample on their behalf).
-    setProjectId(null);
-    setSavedSnapshot(null);
-    writeLastOpenId(null);
-    setBrowserOpen(false);
-  }, [newTimeline, onLoadTimeline]);
+    loadFresh(newTimeline());
+  }, [newTimeline, loadFresh]);
 
   const handleDeleteProject = useCallback(
     async (id: string) => {
@@ -265,6 +291,31 @@ export function ProjectBar({
     return () => clearTimeout(timer);
   }, [projectId, dirty, currentJson, doSave]);
 
+  // ---- Templates + first-run welcome (C5) ---------------------------------
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [galleryWelcome, setGalleryWelcome] = useState(false);
+
+  const closeGallery = useCallback(() => {
+    setGalleryOpen(false);
+    // Seeing the gallery once (however it closes) counts as onboarded.
+    writeOnboarded();
+  }, []);
+
+  const handlePickTemplate = useCallback(
+    (timeline: VdzTimeline) => {
+      loadFresh(timeline);
+      setGalleryOpen(false);
+      writeOnboarded();
+    },
+    [loadFresh]
+  );
+
+  const handlePickBlank = useCallback(() => {
+    loadFresh(newTimeline());
+    setGalleryOpen(false);
+    writeOnboarded();
+  }, [loadFresh, newTimeline]);
+
   // ---- Reopen the last-open project on mount ------------------------------
   // One-shot: read the persisted id and load it. If it 404s (expired / deleted)
   // we silently clear it and stay on the working sample.
@@ -273,7 +324,17 @@ export function ProjectBar({
     if (didReopenRef.current) return;
     didReopenRef.current = true;
     const lastId = readLastOpenId();
-    if (!lastId) return;
+    if (!lastId) {
+      // TRUE first run only: no saved work AND never onboarded → welcome
+      // gallery. Existing users (who predate the flag) have a last-open id
+      // and are quietly marked onboarded instead.
+      if (!readOnboarded()) {
+        setGalleryWelcome(true);
+        setGalleryOpen(true);
+      }
+      return;
+    }
+    writeOnboarded();
     void (async () => {
       try {
         const doc = await projects.load(lastId);
@@ -432,6 +493,18 @@ export function ProjectBar({
         />
       </div>
 
+      <button
+        type="button"
+        className={styles.barButton}
+        onClick={() => {
+          setGalleryWelcome(false);
+          setGalleryOpen(true);
+        }}
+        title="Start from a prebuilt template"
+      >
+        Templates
+      </button>
+
       {/* ---- Share (public snapshot link) ---- */}
       <div className={styles.browserRoot}>
         <button
@@ -544,6 +617,15 @@ export function ProjectBar({
           </div>
         ) : null}
       </div>
+
+      {/* ---- Template gallery / first-run welcome ---- */}
+      <TemplateGallery
+        open={galleryOpen}
+        welcome={galleryWelcome}
+        onClose={closeGallery}
+        onPick={handlePickTemplate}
+        onBlank={handlePickBlank}
+      />
     </div>
   );
 }
