@@ -21,7 +21,7 @@ import { randomBytes } from 'node:crypto';
 // WS4 publish-cap: the global AuthGuard already authenticates these first-party
 // routes (no @Public / no bridge token). `CurrentUser` just RECEIVES the
 // already-verified session user so the per-owner cap can key on identity.
-import { CurrentUser } from '../../core/auth';
+import { CurrentUser, Public } from '../../core/auth';
 // SECURITY: hard per-IP rate cap for cost/side-effecting routes (strict = 20/min).
 // AuthenticationRequired -> typed 401 (raw HttpException becomes a generic 500 here).
 // WS4: BadRequest/NotFound are the typed 4xx (a raw HttpException becomes a
