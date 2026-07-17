@@ -57,7 +57,7 @@ const round3 = (value: number) => Math.round(value * 1000) / 1000;
 
 /** Caption presets for text clips (commit as capPreset via setClipStyle). */
 const CAPTION_PRESETS: {
-  value: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill';
+  value: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill' | 'karaoke';
   label: string;
 }[] = [
   { value: 'plain', label: 'Plain' },
@@ -65,6 +65,9 @@ const CAPTION_PRESETS: {
   { value: 'outline', label: 'Outline' },
   { value: 'shadow', label: 'Shadow' },
   { value: 'pill', label: 'Pill' },
+  // Karaoke only highlights word-by-word when the caption carries `words`
+  // (generated captions do); otherwise it renders as the boxed look.
+  { value: 'karaoke', label: 'Karaoke' },
 ];
 
 /** Caption vertical placement (commit as capPosition via setClipStyle). */
@@ -523,13 +526,16 @@ function CaptionStyleRow({
 }: {
   clip: VdzClip;
   onStyle: (changes: {
-    capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill';
+    capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill' | 'karaoke';
     capPosition?: 'top' | 'middle' | 'lower';
   }) => void;
 }) {
   const capPreset =
-    (clip as { capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill' })
-      .capPreset ?? 'plain';
+    (
+      clip as {
+        capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill' | 'karaoke';
+      }
+    ).capPreset ?? 'plain';
   const capPosition =
     (clip as { capPosition?: 'top' | 'middle' | 'lower' }).capPosition ??
     'lower';
@@ -702,7 +708,7 @@ export function Inspector({
     (changes: {
       opacity?: number;
       rotation?: number;
-      capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill';
+      capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill' | 'karaoke';
       capPosition?: 'top' | 'middle' | 'lower';
     }) => {
       onOp({ op: 'setClipStyle', trackId, clipId: clip.id, ...changes });

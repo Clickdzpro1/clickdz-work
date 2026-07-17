@@ -36,6 +36,10 @@ const CAP_PRESETS = [
   { value: 'outline', label: 'Outline' },
   { value: 'shadow', label: 'Shadow' },
   { value: 'pill', label: 'Pill' },
+  // Applying karaoke to all captions is harmless: clips that already carry
+  // per-word `words` highlight word-by-word; clips without them (hand titles,
+  // or captions generated before word timestamps) render as the boxed look.
+  { value: 'karaoke', label: 'Karaoke' },
 ] as const;
 type CapPreset = (typeof CAP_PRESETS)[number]['value'];
 

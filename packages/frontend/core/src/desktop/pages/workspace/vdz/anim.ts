@@ -621,9 +621,22 @@ export function mergeFilters(
 // ---- Caption presets (text clips) -----------------------------------------
 
 /** A text clip's caption preset, as carried on the schema. */
-export type VdzCaptionPreset = 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill';
+export type VdzCaptionPreset =
+  | 'plain'
+  | 'boxed'
+  | 'outline'
+  | 'shadow'
+  | 'pill'
+  | 'karaoke';
 /** A text clip's caption vertical-position preset. */
 export type VdzCaptionPosition = 'top' | 'middle' | 'lower';
+
+/** One karaoke word (clip-relative seconds), mirroring `vdzWordSchema`. */
+export interface VdzCaptionWord {
+  w: string;
+  t0: number;
+  t1: number;
+}
 
 /** The subset of a text clip the caption helpers read. */
 export interface VdzCaptionInput {
@@ -631,7 +644,12 @@ export interface VdzCaptionInput {
   capPosition?: VdzCaptionPosition;
   /** Explicit vertical anchor (fraction 0..1); when set it always wins. */
   y?: number;
+  /** Per-word karaoke timings (clip-relative seconds); drives `karaoke`. */
+  words?: VdzCaptionWord[];
 }
+
+/** Per-word highlight state at the current clip-relative playhead. */
+export type VdzKaraokeWordState = 'spoken' | 'active' | 'upcoming';
 
 /**
  * The default text drop-shadow the preview/compiler already apply to every
@@ -709,9 +727,136 @@ export function captionPresetCss(clip: VdzCaptionInput): {
         wrap: 'text-shadow:0 4px 18px rgba(0,0,0,0.85);',
         text: '',
       };
+    case 'karaoke':
+      // A boxed-style pill slab behind the whole line; the per-word spans carry
+      // their own spoken/active/upcoming colours on top (see karaokeWordCss).
+      // The wrapper chrome is intentionally close to `boxed` so a karaoke
+      // caption with NO words degrades to the familiar boxed look.
+      return {
+        wrap:
+          'background:rgba(0,0,0,0.6);padding:0.24em 0.62em;' +
+          'border-radius:12px;',
+        text: '',
+      };
     case 'plain':
     default:
       // No chrome — identical to pre-preset rendering.
       return { wrap: '', text: '' };
   }
+}
+
+// ---- Karaoke word highlighting (text clips) -------------------------------
+
+/**
+ * Accent colour used for the ACTIVE (currently spoken) karaoke word's highlight
+ * pill/underline. A warm gold reads well on the dark caption slab in both the
+ * preview and the exported HTML. Exported so the preview and the pure-CSS
+ * compiler share ONE constant (no drift between the two renderers).
+ */
+export const KARAOKE_ACCENT = '#ffd54a';
+/** Opacity applied to words not yet spoken (dimmed until their turn). */
+export const KARAOKE_UPCOMING_OPACITY = 0.55;
+
+/**
+ * The active word index for a karaoke caption at clip-relative time `tRel`
+ * (seconds from the clip's start), or -1 when no word is active (before the
+ * first word, in a gap between words, or after the last). A word is active over
+ * `[t0, t1)`; ties resolve to the FIRST matching word. When several windows
+ * overlap we still pick the earliest that contains `tRel`, which keeps the
+ * highlight monotonic. Pure — the same clip + `tRel` always yields the same
+ * index, so the preview and any sampler agree.
+ */
+export function karaokeActiveIndex(
+  words: readonly VdzCaptionWord[] | undefined,
+  tRel: number
+): number {
+  if (!words || words.length === 0) return -1;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    if (tRel >= word.t0 && tRel < word.t1) return i;
+  }
+  return -1;
+}
+
+/**
+ * Per-word karaoke state at clip-relative time `tRel`: the active word's index
+ * plus a `state(i)` classifier every renderer shares. A word is `active` while
+ * the playhead is inside its window; `spoken` once its start has passed (full
+ * colour); `upcoming` before then (dimmed). When NO word is active yet (before
+ * the first / in a gap), words already begun still read as `spoken` so the line
+ * fills in naturally rather than snapping.
+ *
+ * Pure and deterministic; the preview calls it per frame and the exported CSS
+ * mirrors the SAME thresholds via per-word animation delays (see
+ * `compile-timeline.ts`), so preview and export highlight identically.
+ */
+export function karaokeProgress(
+  clip: VdzCaptionInput,
+  tRel: number
+): {
+  activeIndex: number;
+  state: (index: number) => VdzKaraokeWordState;
+} {
+  const words = clip.words;
+  const activeIndex = karaokeActiveIndex(words, tRel);
+  const state = (index: number): VdzKaraokeWordState => {
+    if (index === activeIndex) return 'active';
+    const word = words?.[index];
+    // Begun (its t0 has passed) → spoken; otherwise still upcoming. Using t0
+    // (not the active window) means a word stays lit after its highlight ends.
+    if (word && tRel >= word.t0) return 'spoken';
+    return 'upcoming';
+  };
+  return { activeIndex, state };
+}
+
+/**
+ * Inline style declarations for ONE karaoke word span in a given `state`,
+ * returned as a plain `k:v;` block (so both the preview's `parseCssBlock` and
+ * the compiler's verbatim emit consume it identically). `active` gets an accent
+ * background pill + slight scale-up + underline; `spoken` is full-colour and
+ * upright; `upcoming` is dimmed. A trailing space between words is added by the
+ * renderer, not here. Pure and shared so preview/export match frame-for-frame.
+ */
+export function karaokeWordCss(state: VdzKaraokeWordState): string {
+  // Common: each word is an inline-block so scale/padding don't reflow the box.
+  const base =
+    'display:inline-block;border-radius:6px;' +
+    'transition:none;transform-origin:center bottom;';
+  switch (state) {
+    case 'active':
+      return (
+        base +
+        `background:${KARAOKE_ACCENT};color:#1a1200;` +
+        'padding:0 0.12em;transform:scale(1.08);' +
+        `box-shadow:0 0 0.5em rgba(255,213,74,0.5);` +
+        `text-decoration:underline;text-decoration-thickness:0.06em;`
+      );
+    case 'spoken':
+      // Fully spoken: full colour, no pill, upright.
+      return base + 'opacity:1;';
+    case 'upcoming':
+    default:
+      // Not yet spoken: dimmed.
+      return base + `opacity:${KARAOKE_UPCOMING_OPACITY};`;
+  }
+}
+
+/**
+ * Split a caption's `text` into display tokens paired with their karaoke word
+ * timing, when the two align. Whisper word tokens carry their own spacing; here
+ * we simply pair each `words[i]` with its trimmed display text and let the
+ * renderer join with spaces. Returns `null` when there is nothing to karaoke
+ * (no words) so callers fall back to the plain single-node text render.
+ */
+export function karaokeTokens(
+  clip: VdzCaptionInput
+): { w: string; t0: number; t1: number }[] | null {
+  const words = clip.words;
+  if (!words || words.length === 0) return null;
+  return words.map(word => ({
+    w: word.w.trim(),
+    t0: word.t0,
+    t1: word.t1,
+  }));
 }

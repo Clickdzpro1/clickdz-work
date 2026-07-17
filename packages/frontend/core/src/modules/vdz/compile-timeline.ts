@@ -2,6 +2,9 @@ import {
   captionAnchorY,
   captionPresetCss,
   computePreviewFrame,
+  KARAOKE_ACCENT,
+  KARAOKE_UPCOMING_OPACITY,
+  karaokeTokens,
   mergeFilters,
   resolveItemRender,
   type VdzPreviewItem,
@@ -217,6 +220,95 @@ function num(value: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Karaoke word highlighting — PURE CSS, no JS.
+//
+// Each spoken word is a <span> whose BASE style is the `upcoming` (dimmed) look
+// and which carries a single CSS animation bound to the ONE shared @keyframes
+// `KARAOKE_KEYFRAMES_NAME` (emitted once per document). Per span:
+//   animation: <name> <max(t1-t0,0.12)>s linear <clip.start + t0>s 1 forwards;
+//   animation-play-state: paused;
+// The delay is ABSOLUTE-timeline seconds (clip-relative t0 shifted by the
+// clip's own start), because the runtime seeks EVERY animation to the same
+// absolute time via document.getAnimations() → a.currentTime = t*1000. So a
+// word's animation sits at 0% exactly when the playhead reaches clip.start+t0.
+//
+// The keyframes hold the `active` look for the bulk of the word then flip to
+// `spoken` at the end; combined with base=upcoming + fill=forwards this yields
+// the three discrete states the preview shows (upcoming before, active during,
+// spoken after) with NO script — the host's existing seek/pause of
+// getAnimations() drives it, so preview and export highlight identically.
+// ---------------------------------------------------------------------------
+
+/** Name of the one shared karaoke @keyframes rule (emitted once per document). */
+const KARAOKE_KEYFRAMES_NAME = 'vdz-kw';
+/** Minimum per-word animation duration so a very short word still shows. */
+const KARAOKE_MIN_WORD_SECONDS = 0.12;
+
+/**
+ * The single `@keyframes` that every karaoke word span binds to. `0%..80%`
+ * holds the ACTIVE look (accent pill + scale + underline + dark text), then
+ * `100%` settles to the SPOKEN look (full colour, upright, no pill). The span's
+ * own base style supplies the UPCOMING (dimmed) look during the animation's
+ * delay (fill:forwards leaves the base showing before it starts). Fixed block —
+ * no user input — so it is emitted verbatim.
+ */
+function karaokeKeyframesRule(): string {
+  return (
+    `@keyframes ${KARAOKE_KEYFRAMES_NAME} {\n` +
+    '  0% { ' +
+    `background:${KARAOKE_ACCENT};color:#1a1200;` +
+    'transform:scale(1.08);opacity:1;' +
+    'text-decoration:underline;text-decoration-thickness:0.06em;' +
+    'box-shadow:0 0 0.5em rgba(255,213,74,0.5);' +
+    ' }\n' +
+    '  80% { ' +
+    `background:${KARAOKE_ACCENT};color:#1a1200;` +
+    'transform:scale(1.08);opacity:1;' +
+    'text-decoration:underline;text-decoration-thickness:0.06em;' +
+    'box-shadow:0 0 0.5em rgba(255,213,74,0.5);' +
+    ' }\n' +
+    '  100% { ' +
+    'background:transparent;color:inherit;' +
+    'transform:scale(1);opacity:1;' +
+    'text-decoration:none;box-shadow:none;' +
+    ' }\n' +
+    '}'
+  );
+}
+
+/**
+ * Build the inner HTML for a KARAOKE caption clip: one `<span>` per word, each
+ * with the upcoming base look + a paused per-word animation (delay/duration
+ * from its clip-relative `t0`/`t1`, shifted to absolute-timeline seconds by
+ * `clipStart`). Returns `null` when the clip has no usable words so the caller
+ * falls back to the plain single-node text render (degrades to boxed). Text is
+ * HTML-escaped; the style blocks are fixed (numbers only) and emitted verbatim.
+ */
+function karaokeInnerHtml(
+  clip: Extract<VdzClip, { type: 'text' }>,
+  clipStart: number
+): string | null {
+  const tokens = karaokeTokens(clip);
+  if (!tokens || tokens.length === 0) return null;
+  // Base (upcoming) look shared by every span; the animation overrides it.
+  const spanBase =
+    'display:inline-block;border-radius:6px;padding:0 0.12em;' +
+    'transform-origin:center bottom;' +
+    `opacity:${KARAOKE_UPCOMING_OPACITY};`;
+  const spans = tokens.map((tok, i) => {
+    const dur = num(Math.max(KARAOKE_MIN_WORD_SECONDS, tok.t1 - tok.t0));
+    const delay = num(clipStart + tok.t0);
+    const anim =
+      `animation:${KARAOKE_KEYFRAMES_NAME} ${dur}s linear ${delay}s 1 forwards;` +
+      'animation-play-state:paused;';
+    // A trailing space between words (outside the span) so wrapping is natural.
+    const sep = i < tokens.length - 1 ? ' ' : '';
+    return `<span style="${spanBase}${anim}">${escapeHtml(tok.w)}</span>${sep}`;
+  });
+  return spans.join('');
+}
+
+// ---------------------------------------------------------------------------
 // Clip window — mirrors anim.ts::clipWindow so a clip is on screen for exactly
 // the same span the preview shows it (including the half-windows of an abutting
 // transition on either boundary). This is the [data-start, data-duration) we
@@ -403,7 +495,14 @@ function clipInnerHtml(
         `font-size:${px}px;color:${color};text-align:${align};` +
         'font-weight:700;line-height:1.1;' +
         capText;
-      return `<div style="${style}">${escapeHtml(clip.text)}</div>`;
+      // Karaoke: per-word spans with pure-CSS per-word animations (delay/dur
+      // from t0/t1), when the `karaoke` preset carries words. Otherwise (plain
+      // caption, or karaoke with no words) render the whole line as one node —
+      // the boxed wrapper chrome already applied in clipBoxCss makes karaoke
+      // degrade to the familiar boxed look.
+      const kw = karaokeInnerHtml(clip, clip.start);
+      const body = kw ?? escapeHtml(clip.text);
+      return `<div style="${style}">${body}</div>`;
     }
     case 'shape': {
       const color = safeCssValue(clip.color, '#5b8cff');
@@ -498,6 +597,10 @@ export function compileTimelineToHtml(
   const keyframeRules: string[] = [];
   const clipEls: string[] = [];
   let clipCount = 0;
+  // Whether any emitted clip uses the karaoke word spans — the one shared
+  // @keyframes is only added to the document when true, so a timeline with no
+  // karaoke captions produces byte-identical CSS to before.
+  let usesKaraoke = false;
 
   timeline.tracks.forEach((track, trackIndex) => {
     // Audio tracks contribute nothing visible (identical to computePreviewFrame).
@@ -510,6 +613,16 @@ export function compileTimelineToHtml(
       const win = clipRenderWindow(track, clip, clipIndex);
       const span = win.end - win.start;
       if (span <= 0) return;
+
+      // A karaoke caption with usable words emits per-word spans → mark that the
+      // shared @keyframes is needed.
+      if (
+        clip.type === 'text' &&
+        clip.capPreset === 'karaoke' &&
+        karaokeTokens(clip)
+      ) {
+        usesKaraoke = true;
+      }
 
       const animName = `vdz-${track.id}-${clip.id}`.replace(/[^a-zA-Z0-9_-]/g, '_');
       const stops = sampleClipKeyframes(timeline, track, clip, win, samples);
@@ -552,6 +665,13 @@ export function compileTimelineToHtml(
       clipCount++;
     });
   });
+
+  // Emit the ONE shared karaoke @keyframes exactly once, only when a karaoke
+  // caption was rendered (keeps non-karaoke documents byte-identical). Every
+  // word span across every caption binds to this single rule.
+  if (usesKaraoke) {
+    keyframeRules.push(karaokeKeyframesRule());
+  }
 
   const durationSeconds = computeTimelineDuration(timeline);
 

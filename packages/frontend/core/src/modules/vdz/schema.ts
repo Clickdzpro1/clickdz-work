@@ -151,6 +151,21 @@ export const vdzImageClipSchema = vdzClipBaseSchema.extend({
 });
 export type VdzImageClip = z.infer<typeof vdzImageClipSchema>;
 
+/**
+ * ONE karaoke word on a caption text clip. Times are RELATIVE TO THE CLIP'S
+ * OWN START (seconds), unlike the transcript segments the server returns (which
+ * are absolute audio seconds) — the caption builder rebases them onto the clip
+ * window. `w` is the word text; `t0`/`t1` are its highlight-in / highlight-out
+ * offsets. Both clamp to `min(0)`; a word ending before it starts is harmless
+ * (it just never becomes the active word). See {@link vdzTextClipSchema.words}.
+ */
+export const vdzWordSchema = z.object({
+  w: z.string(),
+  t0: z.number().min(0),
+  t1: z.number().min(0),
+});
+export type VdzWord = z.infer<typeof vdzWordSchema>;
+
 export const vdzTextClipSchema = vdzClipBaseSchema.extend({
   type: z.literal('text'),
   text: z.string(),
@@ -165,16 +180,31 @@ export const vdzTextClipSchema = vdzClipBaseSchema.extend({
   /**
    * Caption STYLE preset (text-clips only). Controls the chrome drawn around
    * the text: `plain` (as before — no chrome), `boxed`/`pill` (a rounded
-   * background behind the text), `outline` (a stroke ring) or `shadow` (a soft
-   * drop shadow). OPTIONAL/additive — omitted renders exactly as before.
+   * background behind the text), `outline` (a stroke ring), `shadow` (a soft
+   * drop shadow) or `karaoke` (a boxed pill with per-word highlighting — the
+   * active spoken word is accent-lit; needs {@link words} to be meaningful,
+   * and degrades to the boxed look when it is absent). OPTIONAL/additive —
+   * omitted renders exactly as before.
    */
-  capPreset: z.enum(['plain', 'boxed', 'outline', 'shadow', 'pill']).optional(),
+  capPreset: z
+    .enum(['plain', 'boxed', 'outline', 'shadow', 'pill', 'karaoke'])
+    .optional(),
   /**
    * Caption vertical POSITION preset (text-clips only): `top`, `middle` or
    * `lower`-third. Applies ONLY when `y` is not set explicitly (an explicit `y`
    * always wins). OPTIONAL/additive — omitted keeps the default centering.
    */
   capPosition: z.enum(['top', 'middle', 'lower']).optional(),
+  /**
+   * Per-word karaoke timings (text-clips only), each `{ w, t0, t1 }` with times
+   * RELATIVE TO THIS CLIP'S START in seconds (see {@link vdzWordSchema}). Drives
+   * the `karaoke` preset's word-by-word highlight in the preview and export.
+   * Hard-capped at 600 words (a subtitle clip never has that many; the cap
+   * bounds a pathological transcript). OPTIONAL/additive — a clip authored
+   * before karaoke existed, or any non-karaoke caption, parses unchanged and
+   * simply carries no words.
+   */
+  words: z.array(vdzWordSchema).max(600).optional(),
 });
 export type VdzTextClip = z.infer<typeof vdzTextClipSchema>;
 
