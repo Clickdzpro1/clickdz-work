@@ -139,3 +139,42 @@ export const tplDesc = style({
   color: v.muted,
   lineHeight: 1.5,
 });
+
+/** Category filter chips row (derived from the template data). */
+export const filterRow = style({
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+});
+
+export const chip = style({
+  appearance: 'none',
+  border: `1px solid ${v.border}`,
+  background: 'transparent',
+  color: v.muted,
+  fontSize: 12,
+  lineHeight: 1,
+  padding: '6px 12px',
+  borderRadius: 999,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  ':hover': {
+    color: v.text,
+    borderColor: v.accent,
+  },
+});
+
+/** Small aspect-ratio badge painted in the corner of a card's thumb. */
+export const ratioBadge = style({
+  position: 'absolute',
+  top: 6,
+  right: 6,
+  fontSize: 10,
+  fontWeight: 600,
+  lineHeight: 1,
+  padding: '3px 6px',
+  borderRadius: 6,
+  color: '#ffffff',
+  background: 'rgba(0, 0, 0, 0.4)',
+  letterSpacing: '0.02em',
+});

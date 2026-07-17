@@ -171,6 +171,29 @@ export const vdzOpSchema = z.discriminatedUnion('op', [
     op: z.literal('renameTimeline'),
     name: z.string(),
   }),
+  z.object({
+    op: z.literal('setCanvas'),
+    /** New canvas width in pixels (integer, 320..4096). */
+    width: z.number().int().min(320).max(4096),
+    /** New canvas height in pixels (integer, 320..4096). */
+    height: z.number().int().min(320).max(4096),
+  }),
+  z.object({
+    op: z.literal('setClipStyle'),
+    trackId: z.string(),
+    clipId: z.string(),
+    /**
+     * Presentational style patch shared by all visual clip types plus the
+     * text-only caption fields. Every field is OPTIONAL — {@link applyOp}
+     * merges ONLY the keys that are present (omit = leave unchanged) and
+     * fails closed on illegal targets: `capPreset`/`capPosition` on a
+     * non-text clip, or `opacity`/`rotation` on an audio clip.
+     */
+    opacity: z.number().min(0).max(1).optional(),
+    rotation: z.number().min(-180).max(180).optional(),
+    capPreset: z.enum(['plain', 'boxed', 'outline', 'shadow', 'pill']).optional(),
+    capPosition: z.enum(['top', 'middle', 'lower']).optional(),
+  }),
 ]);
 export type VdzOp = z.infer<typeof vdzOpSchema>;
 
@@ -521,6 +544,50 @@ export function applyOp(timeline: VdzTimeline, op: VdzOp): VdzApplyResult {
     }
     case 'renameTimeline': {
       next.name = validOp.name;
+      break;
+    }
+    case 'setCanvas': {
+      // Canvas size lives on the timeline itself; ranges are already enforced
+      // by the op schema (integer 320..4096). No clip/track lookup needed.
+      next.width = validOp.width;
+      next.height = validOp.height;
+      break;
+    }
+    case 'setClipStyle': {
+      const track = findTrack(validOp.trackId);
+      if (!track) {
+        return { timeline, error: `track not found: ${validOp.trackId}` };
+      }
+      const clip = track.clips.find(c => c.id === validOp.clipId);
+      if (!clip) {
+        return { timeline, error: `clip not found: ${validOp.clipId}` };
+      }
+      // Fail closed on illegal targets BEFORE mutating anything.
+      const wantsCaption =
+        validOp.capPreset !== undefined || validOp.capPosition !== undefined;
+      if (wantsCaption && clip.type !== 'text') {
+        return {
+          timeline,
+          error: `capPreset/capPosition only apply to text clips: ${validOp.clipId}`,
+        };
+      }
+      const wantsTransform =
+        validOp.opacity !== undefined || validOp.rotation !== undefined;
+      if (wantsTransform && clip.type === 'audio') {
+        return {
+          timeline,
+          error: `opacity/rotation do not apply to audio clips: ${validOp.clipId}`,
+        };
+      }
+      // Merge ONLY the provided fields (omit = leave unchanged). Cast through a
+      // record since the keys are already type/target-validated above.
+      const target = clip as Record<string, unknown>;
+      if (validOp.opacity !== undefined) target.opacity = validOp.opacity;
+      if (validOp.rotation !== undefined) target.rotation = validOp.rotation;
+      if (validOp.capPreset !== undefined) target.capPreset = validOp.capPreset;
+      if (validOp.capPosition !== undefined) {
+        target.capPosition = validOp.capPosition;
+      }
       break;
     }
     default: {

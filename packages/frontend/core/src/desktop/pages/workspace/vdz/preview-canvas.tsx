@@ -3,11 +3,30 @@ import { memo, useEffect, useMemo, useRef } from 'react';
 import type { VdzClip, VdzTimeline } from '../../../../modules/vdz';
 import { useBlobUrl } from '../../../../modules/vdz/use-vdz-media';
 import {
+  captionAnchorY,
+  captionPresetCss,
   computePreviewFrame,
+  type VdzCaptionInput,
   type VdzPreviewItem,
   resolveItemRender,
+  vignetteOverlayCss,
   visualTransformCss,
 } from './anim';
+
+/** Parse a `prop:value;` CSS block into a React style object. */
+function parseCssBlock(block: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const decl of block.split(';')) {
+    const i = decl.indexOf(':');
+    if (i < 0) continue;
+    const key = decl.slice(0, i).trim();
+    const val = decl.slice(i + 1).trim();
+    if (!key || !val) continue;
+    const camel = key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+    out[camel] = val;
+  }
+  return out;
+}
 import { formatTimecode } from './constants';
 import * as styles from './index.css';
 
@@ -119,7 +138,15 @@ const PreviewClipContent = memo(function PreviewClipContent({
   playheadSeconds: number;
 }) {
   switch (clip.type) {
-    case 'text':
+    case 'text': {
+      // `outline` caption preset draws a stroke ring on the glyphs.
+      const stroke =
+        (clip as unknown as VdzCaptionInput).capPreset === 'outline'
+          ? {
+              WebkitTextStroke: '0.06em rgba(0,0,0,0.85)',
+              paintOrder: 'stroke fill' as const,
+            }
+          : undefined;
       return (
         <div
           style={{
@@ -128,11 +155,13 @@ const PreviewClipContent = memo(function PreviewClipContent({
             textAlign: clip.align ?? 'center',
             fontWeight: 700,
             lineHeight: 1.1,
+            ...stroke,
           }}
         >
           {clip.text}
         </div>
       );
+    }
     case 'shape':
       return (
         <div
@@ -198,19 +227,27 @@ const PreviewItem = memo(function PreviewItem({
   const transform = visualTransformCss(composedVisual, isText ? 'text' : 'clip');
 
   if (isText) {
+    // capPosition anchors the caption when there is no explicit `y`; capPreset
+    // wrap-chrome (pill/boxed bg+padding+radius, shadow/outline text-shadow
+    // override) — both from anim.ts so this matches the exported HTML.
+    const capClip = clip as unknown as VdzCaptionInput;
+    const capWrap = parseCssBlock(captionPresetCss(capClip).wrap);
+    const textVignette = vignetteOverlayCss(clip.effects);
     return (
       <div
         className={styles.previewText}
         style={{
           left: `${(clip.x ?? 0.5) * 100}%`,
-          top: `${(clip.y ?? 0.5) * 100}%`,
+          top: `${captionAnchorY(capClip) * 100}%`,
           transform,
           opacity,
           filter: item.filter,
           clipPath,
+          ...capWrap,
         }}
       >
         <PreviewClipContent clip={clip} playheadSeconds={playheadSeconds} />
+        {textVignette ? <div style={parseCssBlock(textVignette)} /> : null}
       </div>
     );
   }
@@ -239,6 +276,9 @@ const PreviewItem = memo(function PreviewItem({
       }}
     >
       <PreviewClipContent clip={clip} playheadSeconds={playheadSeconds} />
+      {vignetteOverlayCss(clip.effects) ? (
+        <div style={parseCssBlock(vignetteOverlayCss(clip.effects) as string)} />
+      ) : null}
     </div>
   );
 });
@@ -249,11 +289,17 @@ interface PreviewCanvasProps {
 }
 
 /**
- * The 16:9 preview stage: composited layers at the current playhead, with
- * per-clip entrance/exit animation, effect filters, and boundary transitions —
- * all computed by the pure {@link computePreviewFrame}. Video clips with real
- * media additionally render a frame-accurate seeked <video> inside the animated
+ * The preview stage: composited layers at the current playhead, with per-clip
+ * entrance/exit animation, effect filters, and boundary transitions — all
+ * computed by the pure {@link computePreviewFrame}. Video clips with real media
+ * additionally render a frame-accurate seeked <video> inside the animated
  * wrapper (see {@link PreviewVideo}).
+ *
+ * The stage's aspect ratio is derived from the timeline's `width`/`height`
+ * (letterboxed inside the flex-centered wrapper), so changing the project's
+ * canvas ratio reshapes the preview. The inline `aspectRatio` overrides the
+ * `styles.preview` fallback; every clip value is aspect-relative (`cqh` text,
+ * fraction/inset boxes) so it follows the box automatically.
  */
 export function PreviewCanvas({ timeline, playheadSeconds }: PreviewCanvasProps) {
   const items = useMemo(
@@ -261,9 +307,17 @@ export function PreviewCanvas({ timeline, playheadSeconds }: PreviewCanvasProps)
     [timeline, playheadSeconds]
   );
 
+  // Derive the stage aspect from the timeline canvas size. Fall back to 16:9
+  // (the schema default 1280×720) if a legacy timeline is missing dimensions.
+  const aspectRatio = useMemo(() => {
+    const w = timeline.width;
+    const h = timeline.height;
+    return w && h && w > 0 && h > 0 ? `${w} / ${h}` : '16 / 9';
+  }, [timeline.width, timeline.height]);
+
   return (
     <div className={styles.previewWrapper}>
-      <div className={styles.preview}>
+      <div className={styles.preview} style={{ aspectRatio, maxWidth: '100%' }}>
         {items.length === 0 ? (
           <div className={styles.previewEmpty}>
             no clips at {formatTimecode(playheadSeconds)}

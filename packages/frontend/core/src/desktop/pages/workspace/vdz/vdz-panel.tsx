@@ -158,6 +158,7 @@ const VIEW_MENU_ITEMS: { id: VdzPanelId; label: string; hint: string }[] = [
   { id: 'aiDock', label: 'AI', hint: 'Cmd/Ctrl+3' },
   { id: 'timeline', label: 'Timeline', hint: 'Cmd/Ctrl+4' },
   { id: 'transcript', label: 'Transcript', hint: 'Cmd/Ctrl+5' },
+  { id: 'effects', label: 'Effects', hint: 'Cmd/Ctrl+6' },
 ];
 
 interface VdzViewMenuProps {

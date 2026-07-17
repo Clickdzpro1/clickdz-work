@@ -1,9 +1,11 @@
 import {
-  clipVisualStateAt,
+  captionAnchorY,
+  captionPresetCss,
   computePreviewFrame,
-  effectsFilterCss,
+  mergeFilters,
   resolveItemRender,
   type VdzPreviewItem,
+  vignetteOverlayCss,
   visualTransformCss,
 } from '../../desktop/pages/workspace/vdz/anim';
 import type { VdzClip, VdzTimeline, VdzTrack } from './schema';
@@ -28,12 +30,22 @@ import { computeTimelineDuration } from './schema';
  * PREVIEW PARITY — the load-bearing guarantee.
  * We do NOT re-derive any easing/animation/transition math here. For every clip
  * we SAMPLE the preview's OWN pure functions (`computePreviewFrame` →
- * `resolveItemRender` / `visualTransformCss` / `clipVisualStateAt`, plus
- * `effectsFilterCss`) at N points across the clip's on-screen window and emit
- * those exact opacity / transform / clip-path values as keyframe stops. So the
- * exported frames are byte-identical to what `preview-canvas.tsx` paints at the
- * same playhead — animation curves, effect filters and boundary transitions all
- * come from `anim.ts`, never a fork.
+ * `resolveItemRender` / `visualTransformCss`) at N points across the clip's
+ * on-screen window and emit those exact opacity / transform / clip-path /
+ * filter values as keyframe stops. So the exported frames are byte-identical to
+ * what `preview-canvas.tsx` paints at the same playhead — animation curves,
+ * effect filters and boundary transitions all come from `anim.ts`, never a fork.
+ *
+ * Because the sampled pipeline is kind-agnostic, EVERY transition mirrors for
+ * free through it: `fade` (opacity), `dissolve` (opacity + a time-varying
+ * defocus blur folded into the sampled `filter`), `slide` and `push` (an
+ * `extraTranslateX` folded into the transform), and `wipe` and `iris` (an inset
+ * / circular `clip-path`). Likewise a clip's static `opacity`/`rotation` ride
+ * the sampled transform+opacity. The ONE effect that is NOT a filter — the
+ * `vignette` edge-darkening overlay — and the caption presets (`capPreset`
+ * chrome + `capPosition` anchor) are the only things emitted directly below,
+ * both via the SAME `anim.ts` helpers (`vignetteOverlayCss`, `captionPresetCss`,
+ * `captionAnchorY`) the preview uses, so those match frame-for-frame too.
  *
  * VIDEO-CLIP LIMITATION (stated honestly).
  * The host seeks the DOM by driving `document.getAnimations()`; a real <video>
@@ -243,6 +255,13 @@ interface KeyframeStop {
   opacity: number;
   transform: string;
   clipPath: string | undefined;
+  /**
+   * The per-frame CSS `filter` (a clip's static effects PLUS any time-varying
+   * transition defocus — the DISSOLVE blur). Undefined when there is none.
+   * Emitted as an animated keyframe property so a dissolve's blur ramps in the
+   * export exactly as it does in the preview, instead of a static filter.
+   */
+  filter: string | undefined;
 }
 
 /**
@@ -282,6 +301,7 @@ function sampleClipKeyframes(
     let opacity: number;
     let transform: string;
     let clipPath: string | undefined;
+    let filter: string | undefined;
     if (item) {
       const r = resolveItemRender(item);
       opacity = r.opacity;
@@ -291,14 +311,20 @@ function sampleClipKeyframes(
         translateX: item.visual.translateX + r.extraTranslateX,
       };
       transform = visualTransformCss(composed, isText ? 'text' : 'clip');
+      // `computePreviewFrame` has already merged a DISSOLVE's defocus into
+      // `item.filter`; belt-and-braces re-merge `extraFilter` so the blur is
+      // present even if a caller mutated the item. Static effects + dissolve
+      // blur therefore ride the SAME animated `filter` track as the preview.
+      filter = mergeFilters(item.filter, r.extraFilter);
     } else {
       // Edge miss: reproduce the neutral-but-hidden state. Text keeps its
       // centering transform so it doesn't jump if the browser interpolates.
       opacity = 0;
       transform = isText ? 'translate(-50%, -50%)' : 'none';
       clipPath = undefined;
+      filter = undefined;
     }
-    stops.push({ offset: frac, opacity, transform, clipPath });
+    stops.push({ offset: frac, opacity, transform, clipPath, filter });
   }
   return stops;
 }
@@ -320,6 +346,10 @@ function keyframesRule(name: string, stops: KeyframeStop[]): string {
       decls.push('transform:none');
     }
     decls.push(`clip-path:${s.clipPath ?? 'none'}`);
+    // Filter rides the keyframes too so a clip's static effects AND a
+    // DISSOLVE's time-varying defocus animate in lockstep with the preview.
+    // Sanitized (same rules as a color/filter value); `none` is the default.
+    decls.push(`filter:${s.filter ? safeCssValue(s.filter, 'none') : 'none'}`);
     const body = decls.join(';');
     // De-dupe: skip an interior stop identical to the previous one (keep the
     // first and last no matter what so the rule always has both endpoints).
@@ -361,9 +391,18 @@ function clipInnerHtml(
       const px = num((clip.fontSize ?? 0.08) * timeline.height);
       const color = safeCssValue(clip.color, '#ffffff');
       const align = clip.align ?? 'center';
+      // Caption preset (capPreset) contributes an inner text-node style — the
+      // `outline` ring via -webkit-text-stroke. The wrapper chrome (pill bg,
+      // padding, shadow override) is applied on the box in clipBoxCss so both
+      // the preview and this compiler read the SAME captionPresetCss helper.
+      // capText is a fixed declaration block from our own helper (no user
+      // input flows into it), so it is emitted verbatim — safeCssValue is for
+      // single user-supplied values (it rejects the ';'/':' a block needs).
+      const capText = captionPresetCss(clip).text;
       const style =
         `font-size:${px}px;color:${color};text-align:${align};` +
-        'font-weight:700;line-height:1.1;';
+        'font-weight:700;line-height:1.1;' +
+        capText;
       return `<div style="${style}">${escapeHtml(clip.text)}</div>`;
     }
     case 'shape': {
@@ -411,11 +450,20 @@ function clipInnerHtml(
 function clipBoxCss(clip: VdzClip): string {
   if (clip.type === 'text') {
     const left = num((clip.x ?? 0.5) * 100);
-    const top = num((clip.y ?? 0.5) * 100);
-    // whiteSpace + textShadow mirror styles.previewText.
+    // Vertical anchor: an explicit `y` wins, else the capPosition preset
+    // (top/middle/lower) via captionAnchorY — the SAME helper the preview
+    // uses, so exported captions sit exactly where the preview shows them.
+    const top = num(captionAnchorY(clip) * 100);
+    // whiteSpace + textShadow mirror styles.previewText. The caption preset's
+    // WRAPPER chrome (capPreset: pill/boxed background+padding+radius, or a
+    // shadow/outline text-shadow override) is appended AFTER the default
+    // shadow so a preset override wins (CSS keeps the last declaration). It is
+    // a fixed block from our helper (no user strings) — emitted verbatim.
+    const capWrap = captionPresetCss(clip).wrap;
     return (
       `position:absolute;left:${left}%;top:${top}%;` +
-      'white-space:pre-wrap;text-shadow:0 2px 12px rgba(0,0,0,0.6);'
+      'white-space:pre-wrap;text-shadow:0 2px 12px rgba(0,0,0,0.6);' +
+      capWrap
     );
   }
   if (clip.type === 'shape') {
@@ -467,10 +515,16 @@ export function compileTimelineToHtml(
       const stops = sampleClipKeyframes(timeline, track, clip, win, samples);
       keyframeRules.push(keyframesRule(animName, stops));
 
-      // Effects are a static CSS filter (the preview applies them outside the
-      // animated transform); read straight from anim.ts for parity.
-      const filter = effectsFilterCss(clip.effects);
-      const filterCss = filter ? `filter:${safeCssValue(filter, 'none')};` : '';
+      // Effects (and any DISSOLVE defocus) are emitted as an ANIMATED `filter`
+      // inside the keyframes above — sampled from anim.ts for parity — so no
+      // static element-level filter is applied here (that would override the
+      // animation). The `vignette` effect is the exception: it is NOT a CSS
+      // filter but an edge-darkening OVERLAY (see below).
+      // vignetteOverlayCss returns a fixed declaration block (only numbers
+      // derived from the effect `amount` flow into it — no user strings), so
+      // it is emitted verbatim; safeCssValue would reject the ';'/':' it needs.
+      const vignette = vignetteOverlayCss(clip.effects);
+      const vignetteEl = vignette ? `<div style="${vignette}"></div>` : '';
 
       // The animation runs over the clip's on-screen window, PAUSED (the host
       // seeks it via document.getAnimations()); fill:both holds first/last frame.
@@ -484,13 +538,15 @@ export function compileTimelineToHtml(
       // data-start/data-duration/data-track-index on the OPENING tag — required
       // by both the runtime (visibility) and the service's text-scan duration
       // probe. z-index by track order so overlays sit above video (the preview
-      // draws in the same back-to-front order).
+      // draws in the same back-to-front order). The vignette overlay is drawn
+      // LAST (after the clip content) so it darkens the corners on top.
       clipEls.push(
         `<div class="clip" data-start="${num(win.start)}" ` +
           `data-duration="${num(span)}" data-track-index="${trackIndex}" ` +
-          `style="${box}${filterCss}${animCss}z-index:${trackIndex + 1};` +
-          'transform-origin:center;will-change:transform,opacity;">' +
+          `style="${box}${animCss}z-index:${trackIndex + 1};` +
+          'transform-origin:center;will-change:transform,opacity,filter;">' +
           inner +
+          vignetteEl +
           '</div>'
       );
       clipCount++;

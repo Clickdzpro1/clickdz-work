@@ -67,6 +67,9 @@ const VdzGeneratePanel = lazy(() =>
 const TranscriptPanel = lazy(() =>
   import('./transcript-panel').then(m => ({ default: m.TranscriptPanel }))
 );
+const EffectsPanel = lazy(() =>
+  import('./effects-panel').then(m => ({ default: m.EffectsPanel }))
+);
 
 /** Which top-level surface the page is showing. */
 type VdzMode = 'edit' | 'generate';
@@ -521,7 +524,7 @@ const VdzStudioPage = () => {
     null
   );
   const GENERATE_HIDDEN: VdzPanelId[] = useMemo(
-    () => ['mediaBin', 'inspector', 'timeline', 'transcript'],
+    () => ['mediaBin', 'inspector', 'timeline', 'transcript', 'effects'],
     []
   );
   // Same set as a lookup for the View menu's disabled state in Generate mode.
@@ -546,6 +549,7 @@ const VdzStudioPage = () => {
           aiDock: layout.aiDock.visible,
           timeline: layout.timeline.visible,
           transcript: layout.transcript.visible,
+          effects: layout.effects.visible,
         };
         for (const id of GENERATE_HIDDEN) setPanelVisible(id, false);
       } else {
@@ -600,8 +604,8 @@ const VdzStudioPage = () => {
         return;
       }
 
-      // Cmd/Ctrl+1..5 toggle the workspace panels.
-      if (meta && event.key >= '1' && event.key <= '5') {
+      // Cmd/Ctrl+1..6 toggle the workspace panels.
+      if (meta && event.key >= '1' && event.key <= '6') {
         event.preventDefault();
         const panelForDigit: Record<string, VdzPanelId> = {
           '1': 'mediaBin',
@@ -609,6 +613,7 @@ const VdzStudioPage = () => {
           '3': 'aiDock',
           '4': 'timeline',
           '5': 'transcript',
+          '6': 'effects',
         };
         togglePanel(panelForDigit[event.key]);
         return;
@@ -821,6 +826,8 @@ const VdzStudioPage = () => {
                       style={{ height: layout.timeline.size }}
                     >
                       <Toolbar
+                        timeline={timeline}
+                        onCommitOp={commitLaneOp}
                         showMedia={showMedia}
                         onToggleMedia={toggleMedia}
                         isPlaying={isPlaying}
@@ -903,8 +910,41 @@ const VdzStudioPage = () => {
                   at the right edge. */}
               {layout.inspector.visible ||
               layout.aiDock.visible ||
-              layout.transcript.visible ? (
+              layout.transcript.visible ||
+              layout.effects.visible ? (
                 <div className={styles.rightStack}>
+                  {/* Effects & Transitions — one-click looks + clip-to-clip
+                      transitions for the selected clip. Hidden by default;
+                      opt-in via View menu / Cmd+6. One op per action through
+                      the SAME single-op history path. */}
+                  {layout.effects.visible ? (
+                    <>
+                      <VdzResizeHandle
+                        id="effects"
+                        size={layout.effects.size}
+                        setSize={setPanelSize}
+                        onReset={() => resetPanelSize('effects')}
+                        axis="x"
+                        dir={-1}
+                        aria-label="Resize effects"
+                      />
+                      <div
+                        className={styles.sidePanelSlot}
+                        style={{ width: layout.effects.size }}
+                      >
+                        <Suspense fallback={null}>
+                          <EffectsPanel
+                            timeline={timeline}
+                            selected={selected}
+                            onOp={commitLaneOp}
+                            onCollapse={() =>
+                              setPanelVisible('effects', false)
+                            }
+                          />
+                        </Suspense>
+                      </div>
+                    </>
+                  ) : null}
                   {/* Transcript — the Descript-style spoken-layer view.
                       Hidden by default; opt-in via View menu / Cmd+5. Edits
                       route through the SAME single-op history path. */}
@@ -931,6 +971,7 @@ const VdzStudioPage = () => {
                             onSeek={scrubTo}
                             onSelectClip={clipId => selectClip(clipId, false)}
                             onOp={commitLaneOp}
+                            onOps={runBatch}
                             onCollapse={() =>
                               setPanelVisible('transcript', false)
                             }
