@@ -99,3 +99,61 @@ export const countBadge = style({
   borderRadius: 999,
   padding: '1px 7px',
 });
+
+/**
+ * Compact "Caption style" bar above the transcript list: two selects
+ * (preset / position) + an apply button, on one wrapping row. Colors come from
+ * the same `--vdz-*` theme bridge every vdz surface uses (no `accentAlpha`
+ * here — plain tokens keep this export a pure `style()` result).
+ */
+export const styleBar = style({
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'flex-end',
+  gap: 6,
+  padding: '6px',
+  marginBottom: 6,
+  borderRadius: 8,
+  border: `1px solid ${v.border}`,
+  background: v.bg,
+});
+
+export const styleBarLabel = style({
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  flex: '1 1 96px',
+  minWidth: 0,
+});
+
+export const styleBarLabelText = style({
+  fontSize: 9,
+  fontWeight: 600,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: v.muted,
+});
+
+export const styleBarApply = style({
+  appearance: 'none',
+  flex: '1 1 100%',
+  border: `1px solid ${v.border}`,
+  background: v.bg,
+  color: v.text,
+  fontSize: 11,
+  fontWeight: 600,
+  lineHeight: 1.4,
+  padding: '5px 8px',
+  borderRadius: 6,
+  cursor: 'pointer',
+  selectors: {
+    '&:hover:not(:disabled)': {
+      borderColor: v.accent,
+      color: v.accent,
+    },
+    '&:disabled': {
+      opacity: 0.5,
+      cursor: 'default',
+    },
+  },
+});

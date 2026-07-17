@@ -11,6 +11,7 @@ import type {
   VdzOp,
   VdzTimeline,
 } from '../../../../modules/vdz';
+import { VDZ_EFFECT_PRESETS } from '../../../../modules/vdz/presets';
 import * as styles from './index.css';
 import * as ics from './inspector.css';
 import { useVdzCaptions } from './use-vdz-captions';
@@ -53,6 +54,49 @@ const COLOR_SWATCHES = [
 ];
 
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
+
+/** Caption presets for text clips (commit as capPreset via setClipStyle). */
+const CAPTION_PRESETS: {
+  value: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill';
+  label: string;
+}[] = [
+  { value: 'plain', label: 'Plain' },
+  { value: 'boxed', label: 'Boxed' },
+  { value: 'outline', label: 'Outline' },
+  { value: 'shadow', label: 'Shadow' },
+  { value: 'pill', label: 'Pill' },
+];
+
+/** Caption vertical placement (commit as capPosition via setClipStyle). */
+const CAPTION_POSITIONS: {
+  value: 'top' | 'middle' | 'lower';
+  label: string;
+}[] = [
+  { value: 'top', label: 'Top' },
+  { value: 'middle', label: 'Middle' },
+  { value: 'lower', label: 'Lower' },
+];
+
+/** Quick rotation chips for the Style rotation control. */
+const ROTATION_CHIPS = [
+  { value: 0, label: '0°' },
+  { value: -90, label: '-90°' },
+  { value: 90, label: '+90°' },
+];
+
+/**
+ * Order-sensitive deep compare of two effect stacks — used to highlight the
+ * "active" effect preset when a clip's effects exactly match one. Kept simple
+ * (kind + rounded amount) since presets and stored effects share the shape.
+ */
+function effectsMatch(a: VdzEffect[], b: VdzEffect[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].kind !== b[i].kind) return false;
+    if (round3(a[i].amount) !== round3(b[i].amount)) return false;
+  }
+  return true;
+}
 
 interface InspectorProps {
   clip: VdzClip;
@@ -331,6 +375,230 @@ function ColorRow({
 }
 
 /**
+ * A small segmented control: a row of pill buttons where exactly one is
+ * active. Built from the existing quick-button look (border + hover) plus an
+ * inline active style — the same className+inline+data-active pattern the
+ * color swatches use, so it reads as native inspector chrome.
+ */
+function SegRow<T extends string | number>({
+  options,
+  value,
+  onPick,
+}: {
+  options: { value: T; label: string }[];
+  value: T | undefined;
+  onPick: (value: T) => void;
+}) {
+  return (
+    <div className={ics.colorRow}>
+      {options.map(opt => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={String(opt.value)}
+            type="button"
+            className={ics.quickBtn}
+            data-active={active}
+            aria-pressed={active}
+            style={
+              active
+                ? {
+                    flex: 'none',
+                    borderColor: 'var(--vdz-accent)',
+                    background: 'color-mix(in srgb, var(--vdz-accent) 16%, transparent)',
+                  }
+                : { flex: 'none' }
+            }
+            onClick={() => onPick(opt.value)}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Style controls for visual clips (video / image / text / shape): an opacity
+ * slider (0..100% → 0..1) and a rotation control (numeric −180..180 with quick
+ * chips). Both commit through {@link setClipStyle} sending ONLY the changed
+ * field. NEVER rendered for audio clips (guarded by the caller).
+ */
+function StyleRow({
+  clip,
+  onStyle,
+}: {
+  clip: VdzClip;
+  onStyle: (changes: { opacity?: number; rotation?: number }) => void;
+}) {
+  const opacity = (clip as { opacity?: number }).opacity ?? 1;
+  const rotation = (clip as { rotation?: number }).rotation ?? 0;
+  const [rotDraft, setRotDraft] = useState(String(rotation));
+
+  const commitRotation = useCallback(() => {
+    let next = Math.round(Number(rotDraft));
+    if (!Number.isFinite(next)) return;
+    next = Math.max(-180, Math.min(180, next));
+    if (next === rotation) {
+      // Keep the draft normalized to the clamped value.
+      setRotDraft(String(next));
+      return;
+    }
+    onStyle({ rotation: next });
+    setRotDraft(String(next));
+  }, [rotDraft, rotation, onStyle]);
+
+  return (
+    <>
+      <Field label={`Opacity ${Math.round(opacity * 100)}%`}>
+        <div className={ics.volumeRow}>
+          <input
+            type="range"
+            className={styles.inspRange}
+            min={0}
+            max={1}
+            step={0.01}
+            value={opacity}
+            onChange={e => onStyle({ opacity: Number(e.target.value) })}
+          />
+          <span className={ics.pctBadge}>{Math.round(opacity * 100)}%</span>
+        </div>
+      </Field>
+      <Field label={`Rotation ${rotation}°`}>
+        <div className={ics.volumeRow}>
+          <input
+            className={ics.numInput}
+            type="number"
+            min={-180}
+            max={180}
+            step={1}
+            value={rotDraft}
+            onChange={e => setRotDraft(e.target.value)}
+            onBlur={commitRotation}
+            onKeyDown={e => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            }}
+          />
+          {ROTATION_CHIPS.map(chip => (
+            <button
+              key={chip.value}
+              type="button"
+              className={ics.quickBtn}
+              data-active={rotation === chip.value}
+              aria-pressed={rotation === chip.value}
+              style={
+                rotation === chip.value
+                  ? {
+                      flex: 'none',
+                      borderColor: 'var(--vdz-accent)',
+                      background:
+                        'color-mix(in srgb, var(--vdz-accent) 16%, transparent)',
+                    }
+                  : { flex: 'none' }
+              }
+              onClick={() => {
+                setRotDraft(String(chip.value));
+                if (chip.value !== rotation) onStyle({ rotation: chip.value });
+              }}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      </Field>
+    </>
+  );
+}
+
+/**
+ * Caption styling for TEXT clips: a preset picker (plain/boxed/outline/shadow/
+ * pill) and a vertical position picker (top/middle/lower). Both commit
+ * capPreset / capPosition through {@link setClipStyle} (one changed field per
+ * click). Friendly segmented controls, consistent with the rest of the panel.
+ */
+function CaptionStyleRow({
+  clip,
+  onStyle,
+}: {
+  clip: VdzClip;
+  onStyle: (changes: {
+    capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill';
+    capPosition?: 'top' | 'middle' | 'lower';
+  }) => void;
+}) {
+  const capPreset =
+    (clip as { capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill' })
+      .capPreset ?? 'plain';
+  const capPosition =
+    (clip as { capPosition?: 'top' | 'middle' | 'lower' }).capPosition ??
+    'lower';
+  return (
+    <>
+      <Field label="Caption style">
+        <SegRow
+          options={CAPTION_PRESETS}
+          value={capPreset}
+          onPick={value => onStyle({ capPreset: value })}
+        />
+      </Field>
+      <Field label="Caption position">
+        <SegRow
+          options={CAPTION_POSITIONS}
+          value={capPosition}
+          onPick={value => onStyle({ capPosition: value })}
+        />
+      </Field>
+    </>
+  );
+}
+
+/**
+ * One-click effect presets for video / image clips. Each chip replaces the
+ * clip's whole effect stack via `setEffects` (the same op the manual editor
+ * below uses); the `none` preset ships an empty stack so it clears effects.
+ * The chip whose effects exactly match the clip's current stack shows active.
+ */
+function EffectPresetsRow({
+  effects,
+  onSetEffects,
+}: {
+  effects: VdzEffect[];
+  onSetEffects: (effects: VdzEffect[]) => void;
+}) {
+  return (
+    <div className={ics.colorRow}>
+      {VDZ_EFFECT_PRESETS.map(preset => {
+        const active = effectsMatch(effects, preset.effects);
+        return (
+          <button
+            key={preset.id}
+            type="button"
+            className={ics.quickBtn}
+            data-active={active}
+            aria-pressed={active}
+            title={preset.description}
+            style={
+              active
+                ? {
+                    flex: 'none',
+                    borderColor: 'var(--vdz-accent)',
+                    background:
+                      'color-mix(in srgb, var(--vdz-accent) 16%, transparent)',
+                  }
+                : { flex: 'none' }
+            }
+            onClick={() => onSetEffects(preset.effects)}
+          >
+            {preset.emoji} {preset.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * "Generate captions" for an audio clip: transcribe (Whisper via the vdz
  * transcribe route) and land one text clip per segment on the overlay track,
  * committed as a single undoable batch. A separate component so the hook's
@@ -423,6 +691,21 @@ export function Inspector({
   const patch = useCallback(
     (p: Record<string, unknown>) => {
       onOp({ op: 'updateClip', trackId, clipId: clip.id, patch: p });
+    },
+    [onOp, trackId, clip.id]
+  );
+
+  // ---- Visual style (setClipStyle) --------------------------------------
+  // Opacity / rotation / caption preset+position. Sends ONLY changed fields;
+  // fields are merged host-side. Never invoked for audio clips (guarded).
+  const setClipStyle = useCallback(
+    (changes: {
+      opacity?: number;
+      rotation?: number;
+      capPreset?: 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill';
+      capPosition?: 'top' | 'middle' | 'lower';
+    }) => {
+      onOp({ op: 'setClipStyle', trackId, clipId: clip.id, ...changes });
     },
     [onOp, trackId, clip.id]
   );
@@ -583,6 +866,15 @@ export function Inspector({
         closed={closedSections}
         onToggle={toggleSection}
       >
+        {/* Opacity + rotation — visual clips only, never audio. */}
+        {clip.type !== 'audio' ? (
+          <StyleRow
+            key={`clipstyle-${clip.id}`}
+            clip={clip}
+            onStyle={setClipStyle}
+          />
+        ) : null}
+
         {clip.type === 'text' ? (
           <>
             <Field label="Text">
@@ -644,6 +936,12 @@ export function Inspector({
                 <option value="right">right</option>
               </select>
             </Field>
+            {/* Caption preset + position (text clips only). */}
+            <CaptionStyleRow
+              key={`capstyle-${clip.id}`}
+              clip={clip}
+              onStyle={setClipStyle}
+            />
           </>
         ) : null}
 
@@ -873,6 +1171,23 @@ export function Inspector({
           </Field>
         </div>
       </Section>
+
+      {/* ---- Effect presets (video / image): one-click filter looks ---- */}
+      {clip.type === 'video' || clip.type === 'image' ? (
+        <Section
+          id="effectpresets"
+          title="Effect presets"
+          closed={closedSections}
+          onToggle={toggleSection}
+        >
+          <EffectPresetsRow
+            effects={effects}
+            onSetEffects={next =>
+              onOp({ op: 'setEffects', trackId, clipId: clip.id, effects: next })
+            }
+          />
+        </Section>
+      ) : null}
 
       {/* ---- Effects ---- */}
       <Section

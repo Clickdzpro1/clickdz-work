@@ -18,13 +18,23 @@ export interface VdzTranscriptSegment {
   text: string;
 }
 
-/** Lower-third caption look (canvas-fraction units, like every text clip). */
+/**
+ * Lower-third caption look (canvas-fraction units, like every text clip).
+ *
+ * `capPreset`/`capPosition` are the caption-styling fields from the shared
+ * schema ({@link ../../../../modules/vdz}); freshly generated captions default
+ * to a boxed, lower-third look. Both are optional/additive on the text clip, so
+ * projects authored before they existed still parse — and the Transcript
+ * panel's "Caption style" bar restyles them later via `setClipStyle`.
+ */
 export const CAPTION_STYLE = {
   fontSize: 0.045,
   color: '#ffffff',
   x: 0.5,
   y: 0.88,
   align: 'center',
+  capPreset: 'boxed',
+  capPosition: 'lower',
 } as const;
 
 /** Captions shorter than this read as flicker; stretch them to be readable. */

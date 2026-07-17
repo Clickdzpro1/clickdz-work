@@ -326,6 +326,11 @@ export function VdzAiDock({
     [timeline, pendingProposal]
   );
 
+  // Compact, at-a-glance summary of the timeline the AI is looking at — shown as
+  // a one-line strip above the suggestion chips so the user can see the context
+  // the dock is reasoning over (aspect ratio, track/clip counts, captions).
+  const contextInfo = useMemo(() => summarizeContext(timeline), [timeline]);
+
   const bubbles = useMemo(() => {
     let assistantOrdinal = -1;
     return history.map((turn, index) => {
@@ -432,11 +437,14 @@ export function VdzAiDock({
                 'title LAUNCH at 2s”, or “make a 12s intro”. I’ll propose ' +
                 'timeline edits you can review before they’re applied.'}
             {!planMode && suggestions.length > 0 ? (
-              <SuggestionChips
-                suggestions={suggestions}
-                onPick={runAsEdit}
-                busy={busy}
-              />
+              <>
+                <ContextStrip info={contextInfo} />
+                <SuggestionChips
+                  suggestions={suggestions}
+                  onPick={runAsEdit}
+                  busy={busy}
+                />
+              </>
             ) : null}
           </div>
         ) : (
@@ -459,11 +467,14 @@ export function VdzAiDock({
         !pendingProposal &&
         !busy &&
         suggestions.length > 0 ? (
-          <SuggestionChips
-            suggestions={suggestions}
-            onPick={runAsEdit}
-            busy={busy}
-          />
+          <>
+            <ContextStrip info={contextInfo} />
+            <SuggestionChips
+              suggestions={suggestions}
+              onPick={runAsEdit}
+              busy={busy}
+            />
+          </>
         ) : null}
 
         {/* Busy indicator: the reasoning-pulse ticker streams request-tailored
@@ -537,12 +548,170 @@ function SuggestionChips({
           onClick={() => onPick(s.message)}
           disabled={busy}
           title={s.message}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
         >
+          <span aria-hidden="true" style={{ fontSize: 12, lineHeight: 1 }}>
+            {suggestionGlyph(s.id)}
+          </span>
           {s.label}
         </button>
       ))}
     </div>
   );
+}
+
+/**
+ * A small leading glyph per suggestion, keyed off its stable id, so the chip
+ * row reads as grouped/typed at a glance (canvas, text, audio, transition, …)
+ * instead of a flat list of identical pills. Purely decorative — falls back to
+ * a neutral spark for any unmapped id, so a new suggestion still renders fine.
+ */
+function suggestionGlyph(id: string): string {
+  switch (id) {
+    case 'build-intro':
+      return '🎬';
+    case 'reformat-vertical':
+      return '📱';
+    case 'add-title':
+    case 'long-needs-title':
+      return '🔤';
+    case 'style-captions':
+      return '💬';
+    case 'add-audio':
+      return '🎙️';
+    case 'duck-music':
+      return '🎚️';
+    case 'add-transition':
+      return '🔀';
+    case 'close-gap':
+      return '✂️';
+    case 'cinematic-look':
+      return '🎞️';
+    case 'add-outro':
+      return '🏁';
+    case 'add-motion':
+      return '✨';
+    default:
+      return '✦';
+  }
+}
+
+/** The at-a-glance timeline summary rendered in {@link ContextStrip}. */
+interface VdzContextInfo {
+  /** Friendly aspect-ratio label, e.g. "16:9" / "9:16" / "1:1". */
+  ratio: string;
+  /** Number of tracks in the timeline. */
+  trackCount: number;
+  /** Total number of clips across all tracks. */
+  clipCount: number;
+  /** True when at least one text/caption clip exists. */
+  hasCaptions: boolean;
+}
+
+/**
+ * A compact one-line context strip — e.g. "16:9 · 3 tracks · 12 clips ·
+ * captions ✓" — shown just above the suggestion chips so the user can see the
+ * timeline the AI is reasoning over. Read-only; inline-styled to stay within
+ * the dock's palette without touching the stylesheet.
+ */
+function ContextStrip({ info }: { info: VdzContextInfo }) {
+  const dim = 'var(--affine-text-secondary-color, #8a8f98)';
+  const item: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    whiteSpace: 'nowrap',
+  };
+  const sep = (
+    <span aria-hidden="true" style={{ opacity: 0.5 }}>
+      ·
+    </span>
+  );
+  return (
+    <div
+      data-testid="vdz-context-strip"
+      style={{
+        width: '100%',
+        display: 'flex',
+        flexWrap: 'wrap',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 8,
+        marginTop: 10,
+        fontSize: 11,
+        fontWeight: 600,
+        color: dim,
+      }}
+    >
+      <span style={item}>
+        <span aria-hidden="true">🖼️</span>
+        {info.ratio}
+      </span>
+      {sep}
+      <span style={item}>
+        {info.trackCount} track{info.trackCount === 1 ? '' : 's'}
+      </span>
+      {sep}
+      <span style={item}>
+        {info.clipCount} clip{info.clipCount === 1 ? '' : 's'}
+      </span>
+      {sep}
+      <span style={item}>
+        captions {info.hasCaptions ? '✓' : '—'}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Derive the {@link VdzContextInfo} for the strip from a live timeline. Pure and
+ * defensive — reads through optional fields and never assumes a track/clip
+ * exists, mirroring {@link suggestEdits}. Not exported (dock-local UI helper).
+ */
+function summarizeContext(timeline: VdzTimeline): VdzContextInfo {
+  const tracks = Array.isArray(timeline?.tracks) ? timeline.tracks : [];
+  let clipCount = 0;
+  let hasCaptions = false;
+  for (const t of tracks) {
+    const clips = Array.isArray(t?.clips) ? t.clips : [];
+    clipCount += clips.length;
+    if (clips.some(c => c?.type === 'text')) hasCaptions = true;
+  }
+  const width = typeof timeline?.width === 'number' ? timeline.width : 1920;
+  const height = typeof timeline?.height === 'number' ? timeline.height : 1080;
+  return {
+    ratio: aspectRatioLabel(width, height),
+    trackCount: tracks.length,
+    clipCount,
+    hasCaptions,
+  };
+}
+
+/**
+ * A friendly aspect-ratio label for a canvas size. Maps the common social /
+ * editorial ratios to their conventional names (16:9, 9:16, 1:1, 4:5, 21:9)
+ * within a small tolerance; otherwise reduces w:h by their GCD (e.g. "5:3").
+ * Falls back to "16:9" for a degenerate (zero) size.
+ */
+function aspectRatioLabel(width: number, height: number): string {
+  if (!(width > 0) || !(height > 0)) return '16:9';
+  const known: [number, number, string][] = [
+    [16, 9, '16:9'],
+    [9, 16, '9:16'],
+    [1, 1, '1:1'],
+    [4, 5, '4:5'],
+    [21, 9, '21:9'],
+    [4, 3, '4:3'],
+    [3, 4, '3:4'],
+  ];
+  const ratio = width / height;
+  for (const [w, h, label] of known) {
+    if (Math.abs(ratio - w / h) <= 0.03) return label;
+  }
+  const gcd = (a: number, b: number): number =>
+    b === 0 ? a : gcd(b, a % b);
+  const g = gcd(Math.round(width), Math.round(height)) || 1;
+  return `${Math.round(width) / g}:${Math.round(height) / g}`;
 }
 
 /** The staged AI proposal, rendered in-thread with Accept / Revert. */

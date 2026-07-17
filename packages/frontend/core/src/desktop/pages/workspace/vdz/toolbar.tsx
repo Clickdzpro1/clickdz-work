@@ -1,3 +1,7 @@
+import { useEffect, useRef, useState } from 'react';
+
+import type { VdzOp, VdzTimeline } from '../../../../modules/vdz';
+import { VDZ_RATIO_PRESETS } from '../../../../modules/vdz/presets';
 import { formatTimecode } from './constants';
 import * as styles from './index.css';
 
@@ -29,6 +33,12 @@ interface ToolbarProps {
   canRedo: boolean;
   onRedo: () => void;
   selectionCount: number;
+  /** The working timeline — the Ratio picker derives the current canvas
+   * aspect from `timeline.width` / `timeline.height`. */
+  timeline?: VdzTimeline;
+  /** Single-op commit path (the SAME one the lanes/inspector use via `run`).
+   * The Ratio picker emits `{ op:'setCanvas', width, height }` through it. */
+  onCommitOp?: (op: VdzOp) => void;
   /** Hide the timeline panel (collapse × at the end of the toolbar). */
   onCollapse?: () => void;
   // ---- MP4 export (compile timeline → cdz-render kind:'html') -------------
@@ -44,6 +54,190 @@ interface ToolbarProps {
   exportUnavailable?: boolean;
   /** A short human status/error line for the export, or null. */
   exportNote?: string | null;
+}
+
+/** How close (fractional aspect delta) a preset must be to be the "current"
+ * match; wider than this and the button reads "Custom". ~2% tolerance. */
+const RATIO_MATCH_TOLERANCE = 0.02;
+
+/**
+ * The compact aspect-ratio picker: a toolbar button showing the current ratio
+ * (the closest {@link VDZ_RATIO_PRESETS} match to the timeline's width/height,
+ * or "Custom" when nothing is within ~2%) that opens a small popover of the
+ * presets. Selecting one commits `{ op:'setCanvas', width, height }` through the
+ * toolbar's shared op-commit path — the exact mechanism Split/Delete/etc. use.
+ */
+function RatioPicker({
+  timeline,
+  onCommitOp,
+}: {
+  timeline?: VdzTimeline;
+  onCommitOp: (op: VdzOp) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  const width = timeline?.width ?? 0;
+  const height = timeline?.height ?? 0;
+  const aspect = width > 0 && height > 0 ? width / height : 0;
+
+  // Closest preset by fractional aspect delta; "Custom" when the nearest is
+  // still outside the tolerance band (or the timeline has no usable size yet).
+  let match: (typeof VDZ_RATIO_PRESETS)[number] | null = null;
+  if (aspect > 0) {
+    let best = Infinity;
+    for (const preset of VDZ_RATIO_PRESETS) {
+      const presetAspect = preset.width / preset.height;
+      const delta = Math.abs(presetAspect - aspect) / presetAspect;
+      if (delta < best) {
+        best = delta;
+        match = preset;
+      }
+    }
+    if (best > RATIO_MATCH_TOLERANCE) match = null;
+  }
+  const currentLabel = match ? match.label : 'Custom';
+
+  // Close on an outside click or Escape while the popover is open.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [open]);
+
+  const select = (preset: (typeof VDZ_RATIO_PRESETS)[number]) => {
+    onCommitOp({ op: 'setCanvas', width: preset.width, height: preset.height });
+    setOpen(false);
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative', display: 'inline-flex' }}>
+      <button
+        type="button"
+        className={styles.toolButton}
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
+        title="Canvas aspect ratio"
+      >
+        ▭ {currentLabel}
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Canvas aspect ratio"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            zIndex: 40,
+            minWidth: 176,
+            padding: 6,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            background: '#1b1d22',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: 8,
+            boxShadow: '0 12px 40px rgba(0,0,0,0.55)',
+          }}
+        >
+          {VDZ_RATIO_PRESETS.map(preset => {
+            const active = match?.id === preset.id;
+            // A tiny visual aspect box, longest side fixed at 22px.
+            const boxLong = 22;
+            const wide = preset.width >= preset.height;
+            const boxW = wide
+              ? boxLong
+              : Math.max(4, Math.round((preset.width / preset.height) * boxLong));
+            const boxH = wide
+              ? Math.max(4, Math.round((preset.height / preset.width) * boxLong))
+              : boxLong;
+            return (
+              <button
+                key={preset.id}
+                type="button"
+                role="menuitemradio"
+                aria-checked={active}
+                onClick={() => select(preset)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  width: '100%',
+                  padding: '6px 8px',
+                  border: '1px solid transparent',
+                  borderRadius: 6,
+                  background: active ? 'rgba(91,140,255,0.18)' : 'transparent',
+                  color: active ? '#dfe7ff' : '#e7e9ee',
+                  font: 'inherit',
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={e => {
+                  if (!active) {
+                    e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+                  }
+                }}
+                onMouseLeave={e => {
+                  if (!active) e.currentTarget.style.background = 'transparent';
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    flex: '0 0 auto',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: boxLong,
+                    height: boxLong,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: boxW,
+                      height: boxH,
+                      borderRadius: 2,
+                      border: '1px solid rgba(255,255,255,0.55)',
+                      background: 'rgba(255,255,255,0.10)',
+                    }}
+                  />
+                </span>
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    lineHeight: 1.25,
+                  }}
+                >
+                  <span style={{ fontWeight: 600 }}>
+                    {preset.id} · {preset.label}
+                  </span>
+                  <span style={{ color: '#9aa0ab', fontSize: 11 }}>
+                    {preset.width}×{preset.height}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 /** Editor action bar. Sits ABOVE the lanes (never in the AI-dock footer). */
@@ -70,6 +264,8 @@ export function Toolbar({
   canRedo,
   onRedo,
   selectionCount,
+  timeline,
+  onCommitOp,
   onCollapse,
   onExport,
   exportBusy,
@@ -204,6 +400,13 @@ export function Toolbar({
       >
         +
       </button>
+
+      {onCommitOp ? (
+        <>
+          <span className={styles.toolDivider} />
+          <RatioPicker timeline={timeline} onCommitOp={onCommitOp} />
+        </>
+      ) : null}
 
       {onExport ? (
         <>

@@ -38,6 +38,12 @@ export interface VdzClipVisualState {
   translateY: number;
   /** Uniform scale factor (1 = natural size). */
   scale: number;
+  /**
+   * Rotation in DEGREES, applied around the clip's center. Additive across
+   * composed states (animation curves never set this — only a clip's static
+   * `rotation` field contributes — so it composes cleanly with them).
+   */
+  rotate: number;
 }
 
 /** The neutral state: fully visible, no transform. */
@@ -46,6 +52,7 @@ export const IDENTITY_VISUAL: VdzClipVisualState = {
   translateX: 0,
   translateY: 0,
   scale: 1,
+  rotate: 0,
 };
 
 /**
@@ -91,7 +98,11 @@ function stateForKind(
   }
 }
 
-/** Compose two visual states (multiply opacity/scale, add translates). */
+/**
+ * Compose two visual states: multiply opacity/scale, add translates AND
+ * rotations. Adding rotations means a clip's static `rotation` folds in without
+ * clobbering an animation's transform (animations never set `rotate`).
+ */
 function composeVisual(
   a: VdzClipVisualState,
   b: VdzClipVisualState
@@ -101,6 +112,7 @@ function composeVisual(
     translateX: a.translateX + b.translateX,
     translateY: a.translateY + b.translateY,
     scale: a.scale * b.scale,
+    rotate: a.rotate + b.rotate,
   };
 }
 
@@ -117,11 +129,15 @@ export function clipVisualStateAt(
   clip: VdzClip,
   nowSeconds: number
 ): VdzClipVisualState {
+  // A clip's STATIC base: its own `opacity` (multiplies) and `rotation`
+  // (composes) fold in even with NO animation. `staticVisualState` returns the
+  // identity when both are absent, so a plain clip is unchanged.
+  let state = staticVisualState(clip);
+
   const anim = clip.animation;
-  if (!anim) return IDENTITY_VISUAL;
+  if (!anim) return state;
 
   const end = clip.start + clip.duration;
-  let state = IDENTITY_VISUAL;
 
   if (anim.in) {
     const dur = animDuration(anim.in);
@@ -141,6 +157,21 @@ export function clipVisualStateAt(
   }
 
   return state;
+}
+
+/**
+ * The static (time-independent) visual contribution of a clip: its own
+ * `opacity` (0..1, multiplied into everything downstream) and `rotation`
+ * (degrees, composed additively into the transform). Audio clips — and any
+ * clip without these fields — yield the identity. Kept separate so both the
+ * animated path ({@link clipVisualStateAt}) and any caller can reuse it.
+ */
+export function staticVisualState(clip: VdzClip): VdzClipVisualState {
+  const opacity =
+    typeof clip.opacity === 'number' ? clamp01(clip.opacity) : 1;
+  const rotate = typeof clip.rotation === 'number' ? clip.rotation : 0;
+  if (opacity === 1 && rotate === 0) return IDENTITY_VISUAL;
+  return { ...IDENTITY_VISUAL, opacity, rotate };
 }
 
 /** Resolve an animation side's duration, defaulting to 0.5s. */
@@ -167,6 +198,12 @@ export function visualTransformCss(
   }
   if (state.scale !== 1) {
     parts.push(`scale(${state.scale.toFixed(4)})`);
+  }
+  // Rotation last so it spins the already-centered/scaled box around its
+  // center (the elements set transform-origin:center). Skipped when 0 so an
+  // unrotated clip's transform string is byte-identical to before.
+  if (state.rotate !== 0) {
+    parts.push(`rotate(${state.rotate.toFixed(3)}deg)`);
   }
   return parts.length ? parts.join(' ') : 'none';
 }
@@ -200,12 +237,69 @@ function effectToFilter(effect: VdzEffect): string | null {
         0.2 +
         a * 0.6
       ).toFixed(3)}))`;
+    case 'vignette':
+      // A vignette darkens the FRAME EDGES; there is no CSS `filter` for that,
+      // so it contributes nothing to the filter string. It is rendered as an
+      // overlay instead — see {@link vignetteOverlayCss} / {@link effectsOverlayCss}.
+      return null;
     default: {
       // Exhaustiveness guard (see stateForKind).
       const _never: never = effect.kind;
       return _never;
     }
   }
+}
+
+// ---- Vignette (overlay, not a filter) -------------------------------------
+
+/**
+ * The CSS `box-shadow` value that paints a vignette for a normalized `amount`
+ * (0..1). A vignette is an INSET shadow feathered inward from the clip's edges;
+ * `amount` scales both the darkness and the spread. Rendered on an overlay that
+ * fills the clip box (`position:absolute;inset:0`) so it darkens the corners
+ * without touching the clip's own transform/opacity. Returns `null` at amount 0.
+ */
+export function vignetteBoxShadow(amount: number): string | null {
+  const a = clamp01(amount);
+  if (a <= 0) return null;
+  // Feather (blur) grows with the clip; spread pulls the darkness inward.
+  const blur = (12 + a * 28).toFixed(1);
+  const spread = (a * 14).toFixed(1);
+  const alpha = (0.15 + a * 0.65).toFixed(3);
+  return `inset 0 0 ${blur}vmin ${spread}vmin rgba(0,0,0,${alpha})`;
+}
+
+/**
+ * The full inline style for a vignette OVERLAY element covering a clip's box,
+ * or `undefined` when the stack has no (non-zero) vignette. The strongest
+ * vignette in the stack wins. The overlay is non-interactive and sits above the
+ * clip content but inside its animated/opacity wrapper, so it fades and moves
+ * with the clip. Consumed by the preview (an overlay div) and the compiler.
+ */
+export function vignetteOverlayCss(
+  effects: VdzEffect[] | undefined
+): string | undefined {
+  if (!effects || effects.length === 0) return undefined;
+  let strongest = 0;
+  for (const e of effects) {
+    if (e.kind === 'vignette' && e.amount > strongest) strongest = e.amount;
+  }
+  const shadow = vignetteBoxShadow(strongest);
+  if (!shadow) return undefined;
+  return (
+    'position:absolute;inset:0;pointer-events:none;border-radius:inherit;' +
+    `box-shadow:${shadow};`
+  );
+}
+
+/**
+ * Does this effect stack contain a (non-zero) vignette? Lets a renderer decide
+ * whether to emit the overlay element at all, without re-scanning by hand.
+ */
+export function hasVignette(effects: VdzEffect[] | undefined): boolean {
+  return (
+    !!effects && effects.some(e => e.kind === 'vignette' && e.amount > 0)
+  );
 }
 
 /**
@@ -243,6 +337,26 @@ export interface VdzTransitionState {
    * 0 = fully hidden, 1 = fully revealed.
    */
   wipeReveal: number;
+  /**
+   * Blur radius in px for a DISSOLVE — a crossfade PLUS a slight defocus that
+   * peaks mid-transition (0 at the ends) so the two clips melt together rather
+   * than a hard opacity cut. Applied on top of the crossfade opacities.
+   */
+  dissolveBlurPx: number;
+  /**
+   * X translate (fraction of box) for a PUSH — the incoming clip shoves the
+   * outgoing one off-screen, the pair moving in lockstep with NO opacity change.
+   * `pushIn` runs 1 → 0 (enters from the right); `pushOut` runs 0 → -1 (leaves
+   * to the left).
+   */
+  pushIn: number;
+  pushOut: number;
+  /**
+   * `clip-path` circle radius fraction (0..1) revealing the incoming clip for
+   * an IRIS. 0 = a closed circle (hidden), 1 = fully open (revealed). The
+   * outgoing clip stays fully drawn beneath.
+   */
+  irisReveal: number;
 }
 
 /**
@@ -266,6 +380,8 @@ export function transitionStateAt(
   const raw = span > 0 ? (nowSeconds - winStart) / span : 1;
   const p = clamp01(raw);
   const eased = easeOutCubic(p);
+  // Dissolve defocus: a bell that is 0 at both ends and peaks at the midpoint.
+  const bell = Math.sin(p * Math.PI);
   return {
     kind: transition.kind,
     progress: p,
@@ -275,6 +391,14 @@ export function transitionStateAt(
     inTranslateX: 1 - eased,
     outTranslateX: -eased,
     wipeReveal: eased,
+    // Dissolve = crossfade + a slight defocus peaking mid-transition (~6px).
+    dissolveBlurPx: bell * 6,
+    // Push = the pair travels in lockstep, incoming from the right pushing the
+    // outgoing one out to the left (same geometry as a slide, no fade).
+    pushIn: 1 - eased,
+    pushOut: -eased,
+    // Iris = a circle that opens from the center to reveal the incoming clip.
+    irisReveal: eased,
   };
 }
 
@@ -403,6 +527,14 @@ export function computePreviewFrame(
         }
       }
 
+      // Fold a DISSOLVE's time-varying defocus into `item.filter` now that the
+      // transition (if any) is resolved, so the single `filter` prop the
+      // preview and the compiler already read carries it — no extra plumbing.
+      if (item.transition) {
+        const { extraFilter } = resolveItemRender(item);
+        if (extraFilter) item.filter = mergeFilters(item.filter, extraFilter);
+      }
+
       items.push(item);
     }
   }
@@ -412,25 +544,53 @@ export function computePreviewFrame(
 
 /**
  * Fold a clip's base visual and any active transition into the FINAL opacity,
- * transform and clip-path the preview applies. Pure.
+ * transform, clip-path and (transition-only) extra filter the preview applies.
+ * Pure.
+ *
+ * `extraFilter` carries the DISSOLVE defocus blur — a time-varying `filter`
+ * contribution that is NOT part of the clip's static effect stack. Callers
+ * compose it after the effect filter (`computePreviewFrame` merges it into
+ * `item.filter` so the preview and the exported keyframes both pick it up).
  */
 export function resolveItemRender(item: VdzPreviewItem): {
   opacity: number;
   extraTranslateX: number;
   clipPath?: string;
+  extraFilter?: string;
 } {
   let opacity = item.visual.opacity;
   let extraTranslateX = 0;
   let clipPath: string | undefined;
+  let extraFilter: string | undefined;
 
   const t = item.transition;
   if (t) {
     const { state, role } = t;
     if (state.kind === 'fade') {
       opacity *= role === 'out' ? state.outOpacity : state.inOpacity;
+    } else if (state.kind === 'dissolve') {
+      // dissolve: a crossfade (like fade) PLUS a slight defocus that peaks
+      // mid-transition, so the two clips melt rather than hard-cut.
+      opacity *= role === 'out' ? state.outOpacity : state.inOpacity;
+      if (state.dissolveBlurPx > 0.01) {
+        extraFilter = `blur(${state.dissolveBlurPx.toFixed(2)}px)`;
+      }
     } else if (state.kind === 'slide') {
       extraTranslateX =
         role === 'out' ? state.outTranslateX : state.inTranslateX;
+    } else if (state.kind === 'push') {
+      // push: incoming and outgoing travel in lockstep (no fade) — the
+      // incoming clip shoves the outgoing one off to the left.
+      extraTranslateX = role === 'out' ? state.pushOut : state.pushIn;
+    } else if (state.kind === 'iris') {
+      // iris: a circle opens from the center revealing the incoming clip; the
+      // outgoing clip stays fully drawn beneath it. A `circle()` radius of 75%
+      // fully covers the box corners (the reference length is ~0.707·diagonal),
+      // so scale reveal 0→1 onto 0→75% to end fully open.
+      if (role === 'in') {
+        const r = (state.irisReveal * 75).toFixed(2);
+        clipPath = `circle(${r}% at 50% 50%)`;
+      }
     } else {
       // wipe: reveal the incoming clip via an inset clip-path from the left;
       // the outgoing clip stays fully drawn beneath it.
@@ -441,5 +601,117 @@ export function resolveItemRender(item: VdzPreviewItem): {
     }
   }
 
-  return { opacity, extraTranslateX, clipPath };
+  return { opacity, extraTranslateX, clipPath, extraFilter };
+}
+
+/**
+ * Merge a clip's static effect filter with an optional transition `extraFilter`
+ * (the dissolve defocus). Either may be undefined; the result is `undefined`
+ * when both are, so callers can omit the CSS prop. Kept as one helper so the
+ * preview and the compiler combine them identically.
+ */
+export function mergeFilters(
+  base: string | undefined,
+  extra: string | undefined
+): string | undefined {
+  if (base && extra) return `${base} ${extra}`;
+  return base ?? extra ?? undefined;
+}
+
+// ---- Caption presets (text clips) -----------------------------------------
+
+/** A text clip's caption preset, as carried on the schema. */
+export type VdzCaptionPreset = 'plain' | 'boxed' | 'outline' | 'shadow' | 'pill';
+/** A text clip's caption vertical-position preset. */
+export type VdzCaptionPosition = 'top' | 'middle' | 'lower';
+
+/** The subset of a text clip the caption helpers read. */
+export interface VdzCaptionInput {
+  capPreset?: VdzCaptionPreset;
+  capPosition?: VdzCaptionPosition;
+  /** Explicit vertical anchor (fraction 0..1); when set it always wins. */
+  y?: number;
+}
+
+/**
+ * The default text drop-shadow the preview/compiler already apply to every
+ * caption (mirrors `styles.previewText` / `clipBoxCss`). Exported so a preset
+ * that overrides the shadow (e.g. `shadow`, `outline`) can compose from a known
+ * baseline instead of a magic string.
+ */
+export const CAPTION_DEFAULT_TEXT_SHADOW = '0 2px 12px rgba(0,0,0,0.6)';
+
+/**
+ * Resolve a text clip's VERTICAL anchor fraction (0..1). An explicit `y` always
+ * wins; otherwise a `capPosition` preset maps to a sensible third — top ≈ 0.08,
+ * middle ≈ 0.5, lower ≈ 0.82 — and with neither we keep the legacy 0.5 center.
+ * Pure; shared by the preview and the compiler so positioning stays identical.
+ */
+export function captionAnchorY(clip: VdzCaptionInput): number {
+  if (typeof clip.y === 'number') return clip.y;
+  switch (clip.capPosition) {
+    case 'top':
+      return 0.08;
+    case 'middle':
+      return 0.5;
+    case 'lower':
+      return 0.82;
+    default:
+      return 0.5;
+  }
+}
+
+/**
+ * The extra CSS a caption preset contributes, split into two buckets because
+ * they live on different elements in the renderers:
+ *   · `wrap`  — declarations for the positioned TEXT WRAPPER (the element that
+ *               already carries left/top/transform): background pill, padding,
+ *               border-radius, and any text-shadow override.
+ *   · `text`  — declarations for the INNER text node: `-webkit-text-stroke`
+ *               for the `outline` ring.
+ * Both are plain `k:v;` declaration strings (possibly empty). `plain` yields
+ * empty strings so a caption without a preset renders byte-identically to
+ * before. Pure and shared, so the preview and export agree.
+ */
+export function captionPresetCss(clip: VdzCaptionInput): {
+  wrap: string;
+  text: string;
+} {
+  switch (clip.capPreset) {
+    case 'boxed':
+      // A rounded translucent slab behind the text.
+      return {
+        wrap:
+          'background:rgba(0,0,0,0.55);padding:0.28em 0.6em;' +
+          'border-radius:10px;',
+        text: '',
+      };
+    case 'pill':
+      // A tighter, fully-rounded pill with snug padding.
+      return {
+        wrap:
+          'background:rgba(0,0,0,0.6);padding:0.16em 0.7em;' +
+          'border-radius:999px;',
+        text: '',
+      };
+    case 'outline':
+      // A stroke ring around the glyphs; drop the soft shadow so the stroke
+      // reads cleanly. Both webkit + standard stroke props for broad support.
+      return {
+        wrap: `text-shadow:none;`,
+        text:
+          '-webkit-text-stroke:0.06em rgba(0,0,0,0.85);' +
+          'paint-order:stroke fill;',
+      };
+    case 'shadow':
+      // A stronger, softer drop shadow than the default.
+      return {
+        wrap: 'text-shadow:0 4px 18px rgba(0,0,0,0.85);',
+        text: '',
+      };
+    case 'plain':
+    default:
+      // No chrome — identical to pre-preset rendering.
+      return { wrap: '', text: '' };
+  }
 }

@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { memo, useCallback, useMemo, useState } from 'react';
 
 import type { VdzOp, VdzTimeline } from '../../../../modules/vdz';
@@ -22,6 +23,28 @@ import { VdzPanel } from './vdz-panel';
  * No state of its own beyond input drafts — the timeline is the truth, so
  * lane edits, AI ops and undo all reflect here instantly.
  */
+
+/**
+ * Caption presets/positions, mirroring the shared schema enums
+ * (`vdzTextClipSchema.capPreset` / `capPosition`). Kept as local label maps so
+ * the picker reads friendly ("Boxed", "Lower") while emitting the exact literal
+ * values the `setClipStyle` op validates against.
+ */
+const CAP_PRESETS = [
+  { value: 'plain', label: 'Plain' },
+  { value: 'boxed', label: 'Boxed' },
+  { value: 'outline', label: 'Outline' },
+  { value: 'shadow', label: 'Shadow' },
+  { value: 'pill', label: 'Pill' },
+] as const;
+type CapPreset = (typeof CAP_PRESETS)[number]['value'];
+
+const CAP_POSITIONS = [
+  { value: 'top', label: 'Top' },
+  { value: 'middle', label: 'Middle' },
+  { value: 'lower', label: 'Lower' },
+] as const;
+type CapPosition = (typeof CAP_POSITIONS)[number]['value'];
 
 interface TranscriptRowProps {
   line: VdzTranscriptLine;
@@ -88,6 +111,111 @@ const TranscriptRow = memo(function TranscriptRow({
   );
 });
 
+/**
+ * Compact "Caption style" bar: pick a preset + position and restyle EVERY
+ * caption/overlay-text line at once. Emits one
+ * `{ op:'setClipStyle', trackId, clipId, capPreset, capPosition }` per line
+ * (the exact caption clips {@link collectTranscriptLines} surfaces), preferring
+ * the batch `onOps` path so the whole restyle is a single undo entry — falling
+ * back to sequential `onOp` when the host doesn't expose a batch commit.
+ */
+const CaptionStyleBar = memo(function CaptionStyleBar({
+  lines,
+  onOp,
+  onOps,
+}: {
+  lines: readonly VdzTranscriptLine[];
+  onOp: (op: VdzOp) => void;
+  onOps?: (ops: VdzOp[]) => void;
+}) {
+  const [preset, setPreset] = useState<CapPreset>('boxed');
+  const [position, setPosition] = useState<CapPosition>('lower');
+
+  const disabled = lines.length === 0;
+
+  const applyToAll = useCallback(() => {
+    if (lines.length === 0) return;
+    const ops: VdzOp[] = lines.map(line => ({
+      op: 'setClipStyle',
+      trackId: line.trackId,
+      clipId: line.clipId,
+      capPreset: preset,
+      capPosition: position,
+    }));
+    // One history entry when the host offers a batch path; else sequential
+    // single-op commits (mirrors the Inspector's `onOps` convention).
+    if (onOps) onOps(ops);
+    else for (const op of ops) onOp(op);
+  }, [lines, preset, position, onOp, onOps]);
+
+  const selectStyle: CSSProperties = {
+    flex: '1 1 0',
+    minWidth: 0,
+    appearance: 'none',
+    borderRadius: 6,
+    border: '1px solid var(--vdz-border)',
+    background: 'var(--vdz-bg)',
+    color: 'var(--vdz-text)',
+    fontSize: 11,
+    padding: '3px 6px',
+    cursor: disabled ? 'default' : 'pointer',
+  };
+
+  return (
+    <div
+      className={tcs.styleBar}
+      data-testid="vdz-caption-style"
+      aria-label="Caption style"
+    >
+      <label className={tcs.styleBarLabel}>
+        <span className={tcs.styleBarLabelText}>Preset</span>
+        <select
+          style={selectStyle}
+          value={preset}
+          disabled={disabled}
+          aria-label="Caption preset"
+          onChange={e => setPreset(e.target.value as CapPreset)}
+        >
+          {CAP_PRESETS.map(p => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className={tcs.styleBarLabel}>
+        <span className={tcs.styleBarLabelText}>Position</span>
+        <select
+          style={selectStyle}
+          value={position}
+          disabled={disabled}
+          aria-label="Caption position"
+          onChange={e => setPosition(e.target.value as CapPosition)}
+        >
+          {CAP_POSITIONS.map(p => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="button"
+        className={tcs.styleBarApply}
+        onClick={applyToAll}
+        disabled={disabled}
+        title={
+          disabled
+            ? 'No captions to style yet'
+            : 'Apply this preset + position to every caption'
+        }
+      >
+        Apply to all captions
+      </button>
+    </div>
+  );
+});
+
 export interface TranscriptPanelProps {
   timeline: VdzTimeline;
   playheadSeconds: number;
@@ -98,6 +226,12 @@ export interface TranscriptPanelProps {
   onSelectClip: (clipId: string) => void;
   /** Emit one op through the host history path (setText / removeClip). */
   onOp: (op: VdzOp) => void;
+  /**
+   * Emit a batch of ops as ONE history entry (same path the Inspector uses).
+   * Optional: when absent, "Apply to all captions" falls back to sequential
+   * `onOp` calls (still correct, just one undo entry per caption).
+   */
+  onOps?: (ops: VdzOp[]) => void;
   onCollapse: () => void;
 }
 
@@ -108,6 +242,7 @@ export function TranscriptPanel({
   onSeek,
   onSelectClip,
   onOp,
+  onOps,
   onCollapse,
 }: TranscriptPanelProps) {
   const lines = useMemo(() => collectTranscriptLines(timeline), [timeline]);
@@ -153,24 +288,27 @@ export function TranscriptPanel({
           lands here, editable and clickable.
         </div>
       ) : (
-        <div className={tcs.list}>
-          {lines.map(line => (
-            <TranscriptRow
-              // Keyed by clip id + committed text so an external edit (undo,
-              // AI op, lane change) refreshes the row's local draft.
-              key={`${line.clipId}:${line.text}`}
-              line={line}
-              active={
-                playheadSeconds >= line.start &&
-                playheadSeconds < line.start + line.duration
-              }
-              selected={selectedIds.has(line.clipId)}
-              onJump={onJump}
-              onCommitText={onCommitText}
-              onDelete={onDelete}
-            />
-          ))}
-        </div>
+        <>
+          <CaptionStyleBar lines={lines} onOp={onOp} onOps={onOps} />
+          <div className={tcs.list}>
+            {lines.map(line => (
+              <TranscriptRow
+                // Keyed by clip id + committed text so an external edit (undo,
+                // AI op, lane change) refreshes the row's local draft.
+                key={`${line.clipId}:${line.text}`}
+                line={line}
+                active={
+                  playheadSeconds >= line.start &&
+                  playheadSeconds < line.start + line.duration
+                }
+                selected={selectedIds.has(line.clipId)}
+                onJump={onJump}
+                onCommitText={onCommitText}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        </>
       )}
     </VdzPanel>
   );

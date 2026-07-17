@@ -20,7 +20,8 @@ export type VdzPanelId =
   | 'inspector'
   | 'aiDock'
   | 'timeline'
-  | 'transcript';
+  | 'transcript'
+  | 'effects';
 
 export interface VdzPanelState {
   visible: boolean;
@@ -46,6 +47,10 @@ export const VDZ_PANEL_SPECS: Record<VdzPanelId, PanelSpec> = {
   // Hidden by default — opt-in via View menu / Cmd+5 (no layout shift for
   // existing workspaces; readLayout() merges the default for old storage).
   transcript: { size: 300, min: 240, max: 520, visible: false },
+  // Effects & Transitions — same opt-in story as transcript: hidden by default
+  // so existing workspaces don't shift, and readLayout() merges the default in
+  // for storage saved before it existed.
+  effects: { size: 320, min: 260, max: 560, visible: false },
 };
 
 export const VDZ_PANEL_IDS = Object.keys(VDZ_PANEL_SPECS) as VdzPanelId[];
@@ -70,6 +75,10 @@ function defaultLayout(): VdzLayout {
     transcript: {
       visible: VDZ_PANEL_SPECS.transcript.visible,
       size: VDZ_PANEL_SPECS.transcript.size,
+    },
+    effects: {
+      visible: VDZ_PANEL_SPECS.effects.visible,
+      size: VDZ_PANEL_SPECS.effects.size,
     },
   };
 }

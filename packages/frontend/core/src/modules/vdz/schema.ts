@@ -50,7 +50,13 @@ export const vdzAnimationSchema = z.object({
 });
 export type VdzAnimation = z.infer<typeof vdzAnimationSchema>;
 
-/** Visual filter effects applied to a clip, rendered as a CSS `filter`. */
+/**
+ * Visual effects applied to a clip. Most render as a CSS `filter` function;
+ * `vignette` is the exception — it darkens the frame edges via an overlay
+ * (an inset shadow / radial gradient), not a filter (see the page-level
+ * `anim.ts` effect helpers). OPTIONAL/additive: `vignette` was added after the
+ * others, so a timeline authored before it existed parses unchanged.
+ */
 export const vdzEffectKindSchema = z.enum([
   'blur',
   'brightness',
@@ -59,6 +65,7 @@ export const vdzEffectKindSchema = z.enum([
   'grayscale',
   'sepia',
   'glow',
+  'vignette',
 ]);
 export type VdzEffectKind = z.infer<typeof vdzEffectKindSchema>;
 
@@ -89,6 +96,19 @@ export const vdzClipBaseSchema = z.object({
   animation: vdzAnimationSchema.optional(),
   /** Optional visual filter stack (see {@link vdzEffectSchema}). */
   effects: z.array(vdzEffectSchema).optional(),
+  /**
+   * Static layer opacity, 0..1. MULTIPLIES with any animation/transition
+   * opacity in the preview (it never overwrites them). OPTIONAL/additive —
+   * omitted means fully opaque (1); a timeline authored before it existed
+   * parses unchanged. Not meaningful on audio clips.
+   */
+  opacity: z.number().min(0).max(1).optional(),
+  /**
+   * Static rotation in DEGREES, -180..180. Composes into the clip's transform
+   * around its center without clobbering animation transforms (see `anim.ts`).
+   * OPTIONAL/additive — omitted means no rotation. Not meaningful on audio.
+   */
+  rotation: z.number().min(-180).max(180).optional(),
 });
 export type VdzClipBase = z.infer<typeof vdzClipBaseSchema>;
 
@@ -142,6 +162,19 @@ export const vdzTextClipSchema = vdzClipBaseSchema.extend({
   /** Vertical anchor, fraction of canvas height (0..1). */
   y: z.number().optional(),
   align: z.enum(['left', 'center', 'right']).optional(),
+  /**
+   * Caption STYLE preset (text-clips only). Controls the chrome drawn around
+   * the text: `plain` (as before — no chrome), `boxed`/`pill` (a rounded
+   * background behind the text), `outline` (a stroke ring) or `shadow` (a soft
+   * drop shadow). OPTIONAL/additive — omitted renders exactly as before.
+   */
+  capPreset: z.enum(['plain', 'boxed', 'outline', 'shadow', 'pill']).optional(),
+  /**
+   * Caption vertical POSITION preset (text-clips only): `top`, `middle` or
+   * `lower`-third. Applies ONLY when `y` is not set explicitly (an explicit `y`
+   * always wins). OPTIONAL/additive — omitted keeps the default centering.
+   */
+  capPosition: z.enum(['top', 'middle', 'lower']).optional(),
 });
 export type VdzTextClip = z.infer<typeof vdzTextClipSchema>;
 
@@ -170,10 +203,17 @@ export const vdzClipSchema = z.discriminatedUnion('type', [
 ]);
 export type VdzClip = z.infer<typeof vdzClipSchema>;
 
-/** A transition applied on the boundary after a given clip. */
+/**
+ * A transition applied on the boundary after a given clip.
+ *
+ * `kind` was extended with `dissolve` (crossfade with a slight blur), `push`
+ * (the incoming clip shoves the outgoing one along x) and `iris` (a circular
+ * clip-path reveal). All three are ADDITIVE — a timeline authored with only
+ * the original `fade`/`slide`/`wipe` kinds parses unchanged.
+ */
 export const vdzTransitionSchema = z.object({
   id: z.string(),
-  kind: z.enum(['fade', 'slide', 'wipe']),
+  kind: z.enum(['fade', 'slide', 'wipe', 'dissolve', 'push', 'iris']),
   /** Clip after which this transition plays. */
   afterClipId: z.string(),
   /** Transition length in seconds. */
