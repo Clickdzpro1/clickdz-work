@@ -12,6 +12,7 @@ import { WorkspaceModule } from '../../core/workspaces';
 import { IndexerModule } from '../indexer';
 import { ClickDzBridgeController } from './clickdz-bridge.controller';
 import { ClickDzDataController } from './clickdz-data.controller';
+import { ClickDzIntegrationsController } from './clickdz-integrations.controller';
 import { ClickDzPulseController } from './clickdz-pulse.controller';
 import { ClickDzReleasesController } from './clickdz-releases.controller';
 import { ClickDzVdzController } from './clickdz-vdz.controller';
@@ -81,6 +82,7 @@ export class CopilotApiModule {}
     CopilotController,
     ClickDzBridgeController,
     ClickDzDataController,
+    ClickDzIntegrationsController,
     ClickDzPulseController,
     ClickDzReleasesController,
     ClickDzVdzController,

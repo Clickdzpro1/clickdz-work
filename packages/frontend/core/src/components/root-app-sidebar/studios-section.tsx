@@ -4,7 +4,7 @@
  */
 import { MenuLinkItem } from '@affine/core/modules/app-sidebar/views';
 import { WorkbenchService } from '@affine/core/modules/workbench';
-import { AiIcon, FrameIcon } from '@blocksuite/icons/rc';
+import { AiIcon, BlockLinkIcon, FrameIcon } from '@blocksuite/icons/rc';
 import { useLiveData, useService } from '@toeverything/infra';
 
 import { CollapsibleSection } from '../../desktop/components/navigation-panel';
@@ -26,6 +26,26 @@ const NewChip = () => (
     }}
   >
     NEW
+  </span>
+);
+
+// Same flat, borderless shape as NewChip but NEUTRAL (muted grey) — signals
+// "experimental" without competing with the accent NEW chip.
+const BetaChip = () => (
+  <span
+    style={{
+      fontSize: 10,
+      fontWeight: 700,
+      lineHeight: '15px',
+      padding: '0 6px',
+      borderRadius: 5,
+      letterSpacing: '0.05em',
+      color: 'var(--affine-text-secondary-color)',
+      backgroundColor:
+        'color-mix(in srgb, var(--affine-text-secondary-color) 16%, transparent)',
+    }}
+  >
+    béta
   </span>
 );
 
@@ -56,6 +76,16 @@ export const StudiosSection = () => {
         icon={<AiIcon />}
       >
         ClickDz Apps
+      </MenuLinkItem>
+      <MenuLinkItem
+        data-testid="slider-bar-integrations-button"
+        active={location.pathname.startsWith('/integrations')}
+        to={'/integrations'}
+        icon={<BlockLinkIcon />}
+        postfix={<BetaChip />}
+        postfixDisplay="always"
+      >
+        🔌 Integrations
       </MenuLinkItem>
     </CollapsibleSection>
   );
