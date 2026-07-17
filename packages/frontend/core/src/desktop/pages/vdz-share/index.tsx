@@ -28,7 +28,7 @@ import {
 } from '../workspace/vdz/audio-gain';
 import { formatTimecode } from '../workspace/vdz/constants';
 import * as styles from '../workspace/vdz/index.css';
-import { vdzTheme } from '../workspace/vdz/theme.css';
+import * as shareStyles from './share.css';
 
 /**
  * PUBLIC share viewer — `/vdz-share/:shareId`.
@@ -384,21 +384,7 @@ const SharedVdzPage = () => {
   }, [playheadSeconds]);
 
   return (
-    <div
-      className={vdzTheme}
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: 16,
-        padding: '32px 5vw 40px',
-        background: 'var(--vdz-bg, #0b0d12)',
-        color: 'var(--vdz-text, #e6e9f0)',
-        fontFamily:
-          'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      }}
-    >
+    <div className={shareStyles.page}>
       <div
         style={{
           width: 'min(960px, 100%)',
