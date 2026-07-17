@@ -3,6 +3,10 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { classMap } from 'lit/directives/class-map.js';
 
 // Studio v3 AI-editor modules (new sibling files).
+import {
+  artifactStore,
+  type CdzArtifactKind,
+} from '../../../../modules/ai-artifacts/store';
 import { cdzApiUrl } from '../../provider';
 import '../cdz-pulse-ticker'; // side-effect: registers <cdz-pulse-ticker>
 import './cdz-diff-view'; // side-effect: registers <cdz-diff-view>
@@ -172,6 +176,13 @@ const CDZ_HISTORY_TOTAL_CAP = 8_000;
 const CDZ_SELECTION_TEXT_CAP = 200;
 const CDZ_SELECTION_DESCRIPTOR_CAP = 500;
 const CDZ_DEFAULT_SUMMARY = 'Updated';
+
+// One-click Ready Shop: the template endpoint (mints a storefront + a linked
+// ERP dashboard sharing one storeSlug). Same fetch/auth conventions as the
+// generate/deploy calls above — same-origin, cookie auth, no auth header.
+const CDZ_TEMPLATE_ENDPOINT = '/api/v1/apps/template';
+// How long the ERP "created — find it in your apps" notice stays on screen.
+const CDZ_SHOP_NOTICE_MS = 6_000;
 
 @customElement('clickdz-builder-studio')
 export class ClickDzBuilderStudio extends LitElement {
@@ -1230,6 +1241,35 @@ export class ClickDzBuilderStudio extends LitElement {
       border-bottom: 1px solid rgba(242, 104, 107, 0.3);
       font-size: 12px;
     }
+
+    /* Ready-Shop success notice — accent-toned sibling of .cdz-topbar-err,
+       shown under the top bar after the ERP is created (auto-dismissing). */
+    .cdz-topbar-notice {
+      flex-shrink: 0;
+      padding: 7px 16px;
+      color: var(--cdz-accent);
+      background: rgba(16, 163, 127, 0.12);
+      border-bottom: 1px solid rgba(16, 163, 127, 0.32);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    /* Ready-Shop confirm dialog — reuses the .cdz-versions dialog chrome. */
+    .cdz-confirm .cdz-versions-body {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .cdz-confirm-text {
+      color: var(--cdz-text-2);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .cdz-confirm-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
   `;
 
   /* ─────────────────── public API ─────────────────── */
@@ -1285,6 +1325,18 @@ export class ClickDzBuilderStudio extends LitElement {
   @state()
   private accessor error = '';
 
+  // One-click Ready Shop: confirm-dialog visibility + in-flight guard for the
+  // storefront+ERP creation, plus a transient success notice (the ERP is saved
+  // to the shelf but not auto-opened, so we surface a toast-style banner).
+  @state()
+  private accessor showShopConfirm = false;
+
+  @state()
+  private accessor shopBusy = false;
+
+  @state()
+  private accessor shopNotice = '';
+
   // AI-dock conversation log (user prompts + system status lines). Renamed
   // from `history` in v1 so the name doesn't collide with the undo/redo
   // snapshot stack below (Feature B), which is the *document* history.
@@ -1336,6 +1388,8 @@ export class ClickDzBuilderStudio extends LitElement {
   private copiedTimer: ReturnType<typeof setTimeout> | null = null;
   private tokenTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingTokenEdits: Record<string, string> = {};
+  // Auto-dismiss timer for the Ready-Shop success notice.
+  private shopNoticeTimer: ReturnType<typeof setTimeout> | null = null;
 
   /* draft values for the floating edit panel */
   @state()
@@ -1429,6 +1483,10 @@ export class ClickDzBuilderStudio extends LitElement {
       clearTimeout(this.tokenTimer);
       this.tokenTimer = null;
     }
+    if (this.shopNoticeTimer !== null) {
+      clearTimeout(this.shopNoticeTimer);
+      this.shopNoticeTimer = null;
+    }
   }
 
   protected override willUpdate(changed: Map<PropertyKey, unknown>) {
@@ -1455,6 +1513,9 @@ export class ClickDzBuilderStudio extends LitElement {
       this.pendingTokenEdits = {};
       this.previewDevice = CDZ_DEFAULT_DEVICE;
       this.copied = false;
+      this.showShopConfirm = false;
+      this.shopBusy = false;
+      this.shopNotice = '';
       // Cancel any pending debounced work so a timer can't fire (and dispatch
       // studio-html-change) after the overlay has already closed.
       this.clearTimers();
@@ -2746,6 +2807,221 @@ export class ClickDzBuilderStudio extends LitElement {
     }
   }
 
+  /* ─────────────────── Ready Shop (one-click) ─────────────────── */
+
+  // Open the confirm mini-dialog (no-op while a creation is already running).
+  private openShopConfirm() {
+    if (this.shopBusy) return;
+    this.error = '';
+    this.showShopConfirm = true;
+  }
+
+  // Dismiss the confirm mini-dialog without creating anything.
+  private cancelShopConfirm() {
+    this.showShopConfirm = false;
+  }
+
+  /**
+   * One-click Ready Shop: create a storefront ('shop') from the template
+   * endpoint, save it to the shelf (with storeSlug + kind) and open it in this
+   * Studio like a generated app; then create the paired ERP ('erp', same
+   * storeSlug), save it as a second artifact WITHOUT opening, and notice it.
+   * Same fetch/auth as generate/deploy; 401 → friendly sign-in message.
+   */
+  private async createReadyShop() {
+    if (this.shopBusy) return;
+    this.showShopConfirm = false;
+    this.shopBusy = true;
+    this.error = '';
+    this.shopNotice = '';
+    try {
+      // 1) Storefront (Merchant template) — mints a fresh slug + data token.
+      const shop = await this.fetchTemplate({ kind: 'shop' });
+      const shopSlug = shop.slug;
+      const storeSlug = shopSlug;
+      const shopTitle = shop.title?.trim() || 'Boutique';
+
+      // Persist the storefront to the shelf (additive storeSlug + kind). Uses
+      // the canonical `app_<slug>` id so a later publish (host persistApp)
+      // updates THIS record instead of creating a duplicate.
+      this.saveAppArtifact({
+        slug: shopSlug,
+        title: shopTitle,
+        html: shop.html,
+        storeSlug,
+        kind: 'shop',
+        prompt: 'Ready Shop — boutique',
+      });
+
+      // Open it in the Studio exactly how a generated app opens (re-seed the
+      // working source, reset history baseline, rebuild preview, notify host).
+      this.loadGeneratedApp(shop.html, shopSlug, shopTitle);
+      this.chatLog = [
+        ...this.chatLog,
+        { role: 'system', text: `Boutique prête : ${shopTitle} ✓` },
+      ];
+
+      // 2) Paired ERP dashboard (Clerk template) — reuses storeSlug so the two
+      // apps share the same data store. Saved but intentionally NOT opened.
+      const erpTitle = `ERP — ${shopTitle}`;
+      try {
+        const erp = await this.fetchTemplate({ kind: 'erp', storeSlug });
+        this.saveAppArtifact({
+          slug: erp.slug,
+          title: erpTitle,
+          html: erp.html,
+          storeSlug,
+          kind: 'erp',
+          prompt: 'Ready Shop — ERP',
+        });
+        this.showShopNotice(
+          'ERP créé — retrouvez-le dans vos apps'
+        );
+      } catch (erpErr) {
+        // The storefront already succeeded and is open; surface the ERP
+        // failure as an error banner without unwinding the shop.
+        this.error =
+          erpErr instanceof Error
+            ? `Boutique créée, mais l'ERP a échoué : ${erpErr.message}`
+            : "Boutique créée, mais l'ERP a échoué.";
+      }
+    } catch (err) {
+      this.error =
+        err instanceof Error ? err.message : 'Création de la boutique échouée';
+    } finally {
+      this.shopBusy = false;
+    }
+  }
+
+  /**
+   * POST the template endpoint and return the storefront/ERP payload. Mirrors
+   * the generate/deploy error handling (typed-error `.error.message`, then
+   * `.message`, then a status fallback) and maps 401 to a sign-in prompt.
+   */
+  private async fetchTemplate(body: {
+    kind: CdzArtifactKind;
+    storeSlug?: string;
+  }): Promise<{ slug: string; html: string; summary?: string; title?: string }> {
+    const response = await fetch(cdzApiUrl(CDZ_TEMPLATE_ENDPOINT), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = (await response.json().catch(() => null)) as
+      | (CdzGenerateResponse & {
+          title?: string;
+          error?: { message?: string };
+          message?: string;
+        })
+      | null;
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('Connectez-vous pour créer une boutique.');
+      }
+      throw new Error(
+        data?.error?.message ||
+          data?.message ||
+          `Création échouée (${response.status})`
+      );
+    }
+    const html = typeof data?.html === 'string' ? data.html : '';
+    const slug = typeof data?.slug === 'string' ? data.slug : '';
+    if (!html || !slug) {
+      throw new Error('Réponse de template invalide.');
+    }
+    return {
+      slug,
+      html,
+      ...(data?.summary ? { summary: data.summary } : {}),
+      ...(data?.title ? { title: data.title } : {}),
+    };
+  }
+
+  /**
+   * Save an `app` artifact to the shared shelf, carrying the additive
+   * storeSlug + kind fields. Canonical `app_<slug>` id (matches
+   * clickdz-app-result's persistApp) so a repeat create / later publish upserts
+   * the same record rather than duplicating.
+   */
+  private saveAppArtifact(input: {
+    slug: string;
+    title: string;
+    html: string;
+    storeSlug: string;
+    kind: CdzArtifactKind;
+    prompt: string;
+  }) {
+    const id = `app_${input.slug}`;
+    const existing = artifactStore.get(id);
+    artifactStore.upsert({
+      ...(existing ?? {
+        id,
+        type: 'app',
+        sessionId: 'draft',
+        mimeType: 'text/html',
+        prompt: input.prompt,
+      }),
+      id,
+      type: 'app',
+      title: input.title,
+      payload: input.html,
+      slug: input.slug,
+      storeSlug: input.storeSlug,
+      kind: input.kind,
+    });
+  }
+
+  /**
+   * Adopt a freshly-created app as the Studio's live source — the same effect
+   * as opening a generated app: swap slug/title/workingHtml, reset the undo
+   * baseline to this snapshot, rebuild the preview, and tell the host card to
+   * adopt the new app's identity (studio-app-loaded).
+   *
+   * We emit `studio-app-loaded` rather than the studio-html/title-change pair
+   * on purpose: the host adopts slug+title+html atomically (so its .slug/.title/
+   * .html prop bindings follow the loaded app instead of re-pushing the ORIGINAL
+   * app and clobbering it), and it does NOT re-persist under the old `app_<slug>`
+   * id — the Ready-Shop apps are already saved to the shelf via saveAppArtifact.
+   * `lastEmittedHtml` is set so the host's echoed html prop isn't mistaken for a
+   * genuine external swap by willUpdate.
+   */
+  private loadGeneratedApp(html: string, slug: string, title: string) {
+    this.slug = slug;
+    if (title) this.title = title;
+    // Cancel any in-flight debounced work from the outgoing app.
+    this.clearTimers();
+    this.clearPending();
+    this.selected = null;
+    this.turnLog = [];
+    this.workingHtml = html;
+    this.lastEmittedHtml = html;
+    // Fresh undo baseline: drop the prior stack so undo can't reach the app we
+    // navigated away from, then seed the opening snapshot (mirrors
+    // willUpdate's first-open seeding + the close-reset).
+    this.history = [];
+    this.historyMeta = [];
+    this.historyIndex = -1;
+    this.pushHistory(html, makeMeta('baseline', 'Ready Shop'));
+    this.buildPreviewNow();
+    this.dispatchEvent(
+      new CustomEvent('studio-app-loaded', {
+        detail: { slug, title: this.title, html },
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  // Show a transient, auto-dismissing success notice (toast-style banner).
+  private showShopNotice(text: string) {
+    this.shopNotice = text;
+    if (this.shopNoticeTimer !== null) clearTimeout(this.shopNoticeTimer);
+    this.shopNoticeTimer = setTimeout(() => {
+      this.shopNoticeTimer = null;
+      this.shopNotice = '';
+    }, CDZ_SHOP_NOTICE_MS);
+  }
+
   /* ─────────────────── close / keyboard ─────────────────── */
 
   private close() {
@@ -3070,6 +3346,17 @@ export class ClickDzBuilderStudio extends LitElement {
             @click=${() => this.onCopy()}
           >
             ${this.copied ? CDZ_ICONS.check : CDZ_ICONS.copy}
+          </button>
+          <button
+            class="cdz-btn secondary"
+            ?disabled=${this.shopBusy || this.publishing}
+            title="Créer une boutique prête à l'emploi (boutique + tableau de bord ERP liés)"
+            aria-label="Ready Shop"
+            @click=${() => this.openShopConfirm()}
+          >
+            ${this.shopBusy
+              ? html`<span class="cdz-spinner"></span>Création…`
+              : html`${CDZ_ICONS.shop} 🛍️ Ready Shop`}
           </button>
           <button
             class="cdz-btn primary"
@@ -3634,6 +3921,52 @@ export class ClickDzBuilderStudio extends LitElement {
     </div>`;
   }
 
+  // Ready-Shop confirm mini-dialog — reuses the .cdz-versions dialog chrome.
+  private renderShopConfirmPanel() {
+    return html`<div
+      class="cdz-versions cdz-confirm"
+      role="dialog"
+      aria-label="Créer une boutique"
+      aria-modal="true"
+    >
+      <div class="cdz-versions-head">
+        <span>${CDZ_ICONS.shop} 🛍️ Ready Shop</span>
+        <button
+          class="cdz-btn ghost icon"
+          title="Annuler"
+          aria-label="Annuler"
+          @click=${() => this.cancelShopConfirm()}
+        >
+          ${CDZ_ICONS.close}
+        </button>
+      </div>
+      <div class="cdz-versions-body">
+        <div class="cdz-confirm-text">
+          Créer une boutique prête à l'emploi ? Boutique + tableau de bord ERP
+          liés.
+        </div>
+        <div class="cdz-confirm-actions">
+          <button
+            class="cdz-btn secondary"
+            ?disabled=${this.shopBusy}
+            @click=${() => this.cancelShopConfirm()}
+          >
+            Cancel
+          </button>
+          <button
+            class="cdz-btn primary"
+            ?disabled=${this.shopBusy}
+            @click=${() => this.createReadyShop()}
+          >
+            ${this.shopBusy
+              ? html`<span class="cdz-spinner"></span>Création…`
+              : html`${CDZ_ICONS.shop} Create`}
+          </button>
+        </div>
+      </div>
+    </div>`;
+  }
+
   private renderCenter() {
     if (this.view === 'code') {
       return html`<div class="cdz-center single">
@@ -3660,11 +3993,17 @@ export class ClickDzBuilderStudio extends LitElement {
         ${this.error
           ? html`<div class="cdz-topbar-err">${this.error}</div>`
           : nothing}
+        ${this.shopNotice
+          ? html`<div class="cdz-topbar-notice" role="status">
+              ${this.shopNotice}
+            </div>`
+          : nothing}
         <div class="cdz-body">${this.renderCenter()} ${this.renderDock()}</div>
         ${this.showVersions ? this.renderVersionsPanel() : nothing}
         ${this.showProblems ? this.renderProblemsPanel() : nothing}
         ${this.showImageGen ? this.renderImageGenPanel() : nothing}
         ${this.showTokens ? this.renderTokensPanel() : nothing}
+        ${this.showShopConfirm ? this.renderShopConfirmPanel() : nothing}
       </div>
     </div>`;
   }
@@ -4003,6 +4342,22 @@ const CDZ_ICONS = {
     aria-hidden="true"
   >
     <polyline points="20 6 9 17 4 12"></polyline>
+  </svg>`,
+  // shop — shopping bag (Ready Shop one-click)
+  shop: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+    <line x1="3" y1="6" x2="21" y2="6"></line>
+    <path d="M16 10a4 4 0 0 1-8 0"></path>
   </svg>`,
 } as const;
 

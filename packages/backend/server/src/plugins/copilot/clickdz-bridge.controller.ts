@@ -2,12 +2,15 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   HttpException,
   HttpStatus,
   Logger,
+  Param,
   PayloadTooLargeException,
   Post,
+  Query,
   Req,
   Res,
 } from '@nestjs/common';
@@ -15,10 +18,21 @@ import type { Request, Response } from 'express';
 // SECURITY: cryptographically strong randomness for unguessable auto-slugs.
 import { randomBytes } from 'node:crypto';
 
-import { Public } from '../../core/auth';
+// WS4 publish-cap: the global AuthGuard already authenticates these first-party
+// routes (no @Public / no bridge token). `CurrentUser` just RECEIVES the
+// already-verified session user so the per-owner cap can key on identity.
+import { CurrentUser } from '../../core/auth';
 // SECURITY: hard per-IP rate cap for cost/side-effecting routes (strict = 20/min).
 // AuthenticationRequired -> typed 401 (raw HttpException becomes a generic 500 here).
-import { AuthenticationRequired, Throttle } from '../../base';
+// WS4: BadRequest/NotFound are the typed 4xx (a raw HttpException becomes a
+// generic 500 through the global filter — see the vdz controller / LANDMINES).
+import { AuthenticationRequired, BadRequest, NotFound, Throttle } from '../../base';
+// WS4: per-owner published-apps set, mimicking the vdz controller's CacheRedis
+// pattern. RedisModule is @Global, so injecting it needs no module wiring.
+import { CacheRedis } from '../../base/redis';
+// WS4 premium gate (env-gated OFF by default): ModelsModule is @Global, so
+// `models.userFeature.has(userId, 'pro_plan_v1')` needs no module wiring.
+import { Models } from '../../models';
 import {
   buildEditContent,
   buildNewAppContent,
@@ -27,6 +41,13 @@ import {
 } from './clickdz-app-prompt';
 // SECURITY: constant-time token compare + per-slug Data API write tokens.
 import { dataWriteToken, safeEqual } from './cdz-data-token';
+// WS3 templates — COMPLETE single-file HTML apps authored in sibling files
+// (Merchant/Clerk own them, in parallel). We code against the export names; the
+// files may not exist locally yet. Each contains the SAME placeholder tokens the
+// generate path emits (__CLICKDZ_DATA_URL__ / __CLICKDZ_DATA_TOKEN__) plus
+// __CLICKDZ_SLUG__, which /apps/template substitutes with the real minted values.
+import { CLICKDZ_SHOP_TEMPLATE_HTML } from './clickdz-shop-template';
+import { CLICKDZ_ERP_TEMPLATE_HTML } from './clickdz-erp-template';
 
 // SECURITY: input caps for cost/side-effecting routes (images, apps, plan).
 // Non-breaking for normal use; reject oversized/abusive payloads early.
@@ -174,6 +195,41 @@ const CDZ_DIRECT_STREAM_MODELS = new Set([
 ]);
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
+
+// ---------------------------------------------------------------------------
+// WS4 — per-owner publish limits (Redis, keyed by the authenticated user id).
+// These routes are first-party (session cookie, real CurrentUser); the cap is
+// enforced at DEPLOY time (generate never publishes). Template deploys flow
+// through the same deploy path, so they count toward the cap automatically.
+// ---------------------------------------------------------------------------
+// Max distinct published slugs per owner (default '1'). Same-slug redeploy is
+// always allowed (it does not grow the set).
+const CDZ_PUBLISH_MAX_APPS = (() => {
+  const n = parseInt(process.env.CDZ_PUBLISH_MAX_APPS || '1', 10);
+  return Number.isFinite(n) && n >= 0 ? n : 1;
+})();
+// Premium gate. OFF by default: when '1', publishing requires a Pro/Lifetime
+// feature OR an allow-listed admin email; otherwise 402 upgrade_required.
+const CDZ_PUBLISH_REQUIRE_PRO = process.env.CDZ_PUBLISH_REQUIRE_PRO === '1';
+// CSV of admin emails (lowercased) that bypass the premium gate.
+const CDZ_PUBLISH_ADMIN_EMAILS = (process.env.CDZ_PUBLISH_ADMIN_EMAILS || '')
+  .split(',')
+  .map(e => e.trim().toLowerCase())
+  .filter(Boolean);
+// 90-day rolling TTL on the published-apps set (mirrors the vdz project store).
+const PUBLISHED_APPS_TTL_SECONDS = 90 * 24 * 60 * 60;
+// Redis SET of JSON records `{slug,url,createdAt}`, one entry per published slug.
+const publishedAppsKey = (ownerId: string) =>
+  `clickdz:apps:published:${ownerId}`;
+// Slug shape shared by generate/deploy (same as the SLUG_RE the data API uses).
+const APP_SLUG_RE = /^[a-z0-9-]{3,50}$/;
+
+/** A single published-app record stored in the per-owner Redis set. */
+interface PublishedAppRecord {
+  slug: string;
+  url: string;
+  createdAt: string;
+}
 
 // ClickDz Apps — the app-builder system prompt + message-content builders now
 // live in ./clickdz-app-prompt (imported above). buildAppHtml delegates to them.
@@ -679,6 +735,177 @@ function parsePlanClarification(raw: string): PlanClarification {
 @Controller()
 export class ClickDzBridgeController {
   private readonly logger = new Logger(ClickDzBridgeController.name);
+
+  // WS4: CacheRedis for the per-owner published-apps set (same injection style
+  // as clickdz-vdz.controller.ts), and Models for the optional premium gate.
+  // Both providers are @Global, so this adds no module wiring.
+  constructor(
+    private readonly redis: CacheRedis,
+    private readonly models: Models
+  ) {}
+
+  // WS4 — per-owner published-apps set (Redis). Mirrors the vdz controller's
+  // readOwnedIds / rolling-TTL idiom, but stores full {slug,url,createdAt}
+  // records so /apps/mine can return them directly.
+
+  /** Read the caller's published-app records (skips corrupt members). */
+  private async readPublishedApps(ownerId: string): Promise<PublishedAppRecord[]> {
+    const raw = await this.redis.smembers(publishedAppsKey(ownerId));
+    if (!Array.isArray(raw)) return [];
+    const out: PublishedAppRecord[] = [];
+    for (const entry of raw) {
+      try {
+        const rec = JSON.parse(entry) as PublishedAppRecord;
+        if (rec && typeof rec.slug === 'string') {
+          out.push({
+            slug: rec.slug,
+            url: typeof rec.url === 'string' ? rec.url : '',
+            createdAt:
+              typeof rec.createdAt === 'string'
+                ? rec.createdAt
+                : new Date().toISOString(),
+          });
+        }
+      } catch {
+        // ignore a corrupt member; it will be replaced on the next write
+      }
+    }
+    return out;
+  }
+
+  /** Remove every stored record for `slug` from the caller's set (any url). */
+  private async sremPublishedApp(ownerId: string, slug: string): Promise<void> {
+    const records = await this.readPublishedApps(ownerId);
+    const matches = records.filter(r => r.slug === slug);
+    if (matches.length) {
+      await this.redis.srem(
+        publishedAppsKey(ownerId),
+        ...matches.map(r => JSON.stringify(r))
+      );
+    }
+  }
+
+  /**
+   * Record a successful publish for `slug` (idempotent per slug): drop any prior
+   * record for the same slug, add the fresh one, and refresh the rolling TTL.
+   */
+  private async recordPublishedApp(
+    ownerId: string,
+    slug: string,
+    url: string
+  ): Promise<void> {
+    const existing = await this.readPublishedApps(ownerId);
+    const prior = existing.find(r => r.slug === slug);
+    // Replace the slug's record in place (keep original createdAt if present).
+    await this.sremPublishedApp(ownerId, slug);
+    const record: PublishedAppRecord = {
+      slug,
+      url,
+      createdAt: prior?.createdAt ?? new Date().toISOString(),
+    };
+    await this.redis.sadd(publishedAppsKey(ownerId), JSON.stringify(record));
+    await this.redis.expire(publishedAppsKey(ownerId), PUBLISHED_APPS_TTL_SECONDS);
+  }
+
+  /**
+   * WS4 premium gate. When CDZ_PUBLISH_REQUIRE_PRO is off (default) this is a
+   * no-op. When on: allow if the user has a Pro/Lifetime feature OR their email
+   * is allow-listed; otherwise emit a 402 upgrade_required and return false so
+   * the caller stops. Uses @Res passthrough (the exact contract body/status can
+   * only be produced by writing the response, not by a typed error's envelope).
+   */
+  private async assertCanPublish(
+    user: CurrentUser,
+    res: Response
+  ): Promise<boolean> {
+    if (!CDZ_PUBLISH_REQUIRE_PRO) return true;
+    const email = (user.email || '').toLowerCase();
+    if (email && CDZ_PUBLISH_ADMIN_EMAILS.includes(email)) return true;
+    try {
+      const [pro, lifetime] = await Promise.all([
+        this.models.userFeature.has(user.id, 'pro_plan_v1'),
+        this.models.userFeature.has(user.id, 'lifetime_pro_plan_v1'),
+      ]);
+      if (pro || lifetime) return true;
+    } catch (e) {
+      // On a feature-store hiccup, fail CLOSED for the paid gate (deny) — the
+      // gate exists to protect publishing. Log and treat as not-entitled.
+      this.logger.warn(
+        `[apps] premium-gate feature lookup failed for user=${user.id}: ${String(e)}`
+      );
+    }
+    res.status(HttpStatus.PAYMENT_REQUIRED).json({ error: 'upgrade_required' });
+    return false;
+  }
+
+  /**
+   * WS4 cap enforcement, folded into the deploy path. Returns true when the
+   * deploy may proceed. When a NEW slug would exceed the per-owner cap, writes
+   * the exact contract 409 body and returns false. Same-slug redeploy is always
+   * allowed. An optional body.replaceSlug is unpublished FIRST (freeing a slot).
+   */
+  private async assertUnderPublishCap(
+    ownerId: string,
+    slug: string,
+    replaceSlug: string | undefined,
+    res: Response
+  ): Promise<boolean> {
+    // replaceSlug: unpublish that slug first (Vercel delete + srem), freeing a
+    // slot before the cap check. Fail-soft on Vercel 404 (still srem).
+    if (replaceSlug && replaceSlug !== slug) {
+      await this.deleteAppFromVercel(replaceSlug);
+      await this.sremPublishedApp(ownerId, replaceSlug);
+    }
+    const existing = await this.readPublishedApps(ownerId);
+    // Same-slug redeploy never grows the set — always allowed.
+    if (existing.some(r => r.slug === slug)) return true;
+    if (existing.length >= CDZ_PUBLISH_MAX_APPS) {
+      res.status(HttpStatus.CONFLICT).json({
+        error: 'publish_limit_reached',
+        limit: CDZ_PUBLISH_MAX_APPS,
+        existing: existing.map(r => ({ slug: r.slug, url: r.url })),
+      });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Delete a deployed app's Vercel PROJECT (removes all its deployments +
+   * the <project>.vercel.app domain). Mirrors deployAppToVercel's project-name
+   * derivation, teamQuery builder and Bearer auth, using the v9 DELETE endpoint.
+   * FAIL-SOFT: a Vercel 404 (already gone) is treated as success so the caller
+   * still srem's the Redis record; other errors are logged, never thrown (the
+   * srem must still happen so the user isn't wedged over the cap).
+   */
+  private async deleteAppFromVercel(slug: string): Promise<void> {
+    if (!VERCEL_TOKEN) return;
+    const projectName = `clickdz-app-${slug}`.slice(0, 52);
+    const teamQuery = VERCEL_TEAM_ID
+      ? `?teamId=${encodeURIComponent(VERCEL_TEAM_ID)}`
+      : '';
+    try {
+      const res = await fetch(
+        `https://api.vercel.com/v9/projects/${encodeURIComponent(projectName)}${teamQuery}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+          signal: AbortSignal.timeout(15000),
+        }
+      );
+      // 200/204 = deleted; 404 = already absent (fail-soft). Anything else is
+      // logged but swallowed so the Redis bookkeeping still proceeds.
+      if (!res.ok && res.status !== 404) {
+        this.logger.warn(
+          `[apps] Vercel project delete for ${projectName} returned ${res.status}`
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `[apps] Vercel project delete for ${projectName} failed: ${String(e)}`
+      );
+    }
+  }
 
   /** bearer-token gate for external OpenAI-compatible clients */
   private assertBridgeToken(req: Request) {
@@ -1875,7 +2102,11 @@ export class ClickDzBridgeController {
   /** GENERATE ONLY — returns full HTML for instant preview; does NOT deploy */
   @Throttle('strict')
   @Post('/api/v1/apps/generate')
-  async generateApp(@Body() body: any) {
+  async generateApp(@CurrentUser() user: CurrentUser, @Body() body: any) {
+    // WS4: the global AuthGuard already authenticated this first-party route;
+    // we receive the user for observability/parity with deploy. Generate never
+    // publishes, so the per-owner publish cap is NOT enforced here (it is at
+    // deploy time, which template deploys also flow through).
     const startedAt = Date.now();
     const prompt = String(body?.prompt || '').trim();
     if (!prompt) {
@@ -1908,7 +2139,7 @@ export class ClickDzBridgeController {
         ? body.slug
         : slugifyAppName(prompt);
     this.logger.log(
-      `[apps] generate (${currentHtml ? 'edit' : 'new'}) slug=${slug} prompt=${prompt.slice(0, 80)}`
+      `[apps] generate (${currentHtml ? 'edit' : 'new'}) user=${user.id} slug=${slug} prompt=${prompt.slice(0, 80)}`
     );
     let html = await this.buildAppHtml(prompt, currentHtml, history, selection);
     // wire the app to its own Data API namespace so preview + live share state
@@ -1946,7 +2177,15 @@ export class ClickDzBridgeController {
   /** DEPLOY — takes reviewed HTML + slug, publishes to Vercel, returns URL */
   @Throttle('strict')
   @Post('/api/v1/apps/deploy')
-  async deployApp(@Body() body: any) {
+  async deployApp(
+    // WS4: global AuthGuard already authenticated this first-party route; we
+    // receive the user to key the per-owner publish cap. @Res passthrough lets
+    // us emit the EXACT contract 409/402 bodies (a typed error can only produce
+    // its own envelope) while the success path still returns normally.
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
     if (!VERCEL_TOKEN) {
       throw new HttpException(
         { error: { message: 'Vercel deployment is not configured', type: 'configuration_error', code: 'vercel_token_missing' } },
@@ -1978,13 +2217,139 @@ export class ClickDzBridgeController {
       typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
         ? body.slug
         : slugifyAppName('app');
+    // WS4 premium gate (env-gated OFF by default). On a 402 the response has
+    // already been written via passthrough — stop here.
+    if (!(await this.assertCanPublish(user, res))) return;
+    // WS4 publish cap. An optional body.replaceSlug (validated) is unpublished
+    // first to free a slot. A NEW slug over the cap writes the 409 body here.
+    const replaceSlug =
+      typeof body?.replaceSlug === 'string' && APP_SLUG_RE.test(body.replaceSlug)
+        ? body.replaceSlug
+        : undefined;
+    if (!(await this.assertUnderPublishCap(user.id, slug, replaceSlug, res))) {
+      return;
+    }
     if (!html.includes('Built with ClickDz') && html.includes('</body>')) {
       html = html.replace('</body>', `${CLICKDZ_APP_WATERMARK}</body>`);
     }
-    this.logger.log(`[apps] deploying ${html.length} chars as slug=${slug}`);
+    this.logger.log(
+      `[apps] deploying ${html.length} chars as slug=${slug} user=${user.id}`
+    );
     const deployed = await this.deployAppToVercel(slug, html);
     this.logger.log(`[apps] deployed: ${deployed.url} (${deployed.state})`);
+    // WS4: record the successful publish under the caller's set (idempotent per
+    // slug) so it counts toward the cap and appears in GET /apps/mine.
+    await this.recordPublishedApp(user.id, slug, deployed.url);
     return { ...deployed, bytes: html.length };
+  }
+
+  /**
+   * WS3 — TEMPLATE ENDPOINT. Loads a canned single-file HTML app (shop/erp),
+   * substitutes the SAME placeholder tokens the generate path injects, and
+   * returns the SAME response shape as generateApp (slug/html/data wiring).
+   * Does NOT deploy — the client stages it, then publishing flows through
+   * /apps/deploy (so template deploys count toward the publish cap too).
+   *
+   * storeSlug given → reuse that slug + its data token (pairing a shop with its
+   * ERP so they share one datastore); else mint a fresh slug (reusing the same
+   * minting code the generate path uses).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/template')
+  async templateApp(@CurrentUser() user: CurrentUser, @Body() body: any) {
+    const startedAt = Date.now();
+    const kind = String(body?.kind || '').trim().toLowerCase();
+    if (kind !== 'shop' && kind !== 'erp') {
+      throw new BadRequest('"kind" must be "shop" or "erp"');
+    }
+    // storeSlug: reuse for pairing (shop + its ERP share one datastore). Mint a
+    // new slug otherwise — SAME code path as generate/deploy.
+    const slug =
+      typeof body?.storeSlug === 'string' && APP_SLUG_RE.test(body.storeSlug)
+        ? body.storeSlug
+        : slugifyAppName(kind === 'shop' ? 'shop' : 'erp');
+    // Load the sibling-authored template HTML.
+    let html = kind === 'shop' ? CLICKDZ_SHOP_TEMPLATE_HTML : CLICKDZ_ERP_TEMPLATE_HTML;
+    // Compute the SAME real values the generate path injects.
+    const externalBase = (
+      process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+    ).replace(/\/+$/, '');
+    const dataUrl = `${externalBase}/api/v2/apps-data/${slug}`;
+    const dataToken = dataWriteToken(slug);
+    // Map the contract's placeholder tokens → real minted values. The generate
+    // path substitutes __CLICKDZ_DATA_URL__/__CLICKDZ_DATA_TOKEN__ with these
+    // exact values; templates additionally carry __CLICKDZ_SLUG__ (mapped to the
+    // bare slug). Using split/join keeps the mapping explicit and robust even if
+    // a token appears many times.
+    html = html
+      .split('__CLICKDZ_DATA_URL__')
+      .join(dataUrl)
+      .split('__CLICKDZ_DATA_TOKEN__')
+      .join(dataToken)
+      .split('__CLICKDZ_SLUG__')
+      .join(slug);
+    if (html.length > 400_000) html = html.slice(0, 400_000);
+    this.logger.log(
+      `[apps] template kind=${kind} user=${user.id} slug=${slug} bytes=${html.length}`
+    );
+    // SAME response shape as generateApp (slug/prompt/html/bytes/seconds), plus
+    // storeSlug so the client can pair the follow-up ERP to this shop.
+    return {
+      slug,
+      storeSlug: slug,
+      kind,
+      prompt: `ClickDz ${kind === 'shop' ? 'Ready Shop' : 'Manage (ERP)'} template`,
+      html,
+      bytes: html.length,
+      seconds: Math.round((Date.now() - startedAt) / 1000),
+    };
+  }
+
+  /**
+   * WS4 — GET /api/v1/apps/mine. The caller's published apps (auth'd).
+   * Prunes any malformed records lazily via readPublishedApps.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/mine')
+  async listMyApps(
+    @CurrentUser() user: CurrentUser
+  ): Promise<{ apps: PublishedAppRecord[] }> {
+    const records = await this.readPublishedApps(user.id);
+    records.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return {
+      apps: records.map(r => ({
+        slug: r.slug,
+        url: r.url,
+        createdAt: r.createdAt,
+      })),
+    };
+  }
+
+  /**
+   * WS4 — DELETE /api/v1/apps/:slug (auth'd). Unpublish one of the CALLER's own
+   * apps: only if the slug is in the caller's Redis set → delete the Vercel
+   * project (fail-soft on 404) + srem → { ok: true }. A slug the caller does not
+   * own is a 404 (never let a user delete another owner's project).
+   */
+  @Throttle('strict')
+  @Delete('/api/v1/apps/:slug')
+  async deleteApp(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string
+  ): Promise<{ ok: true }> {
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      throw new BadRequest('Invalid app slug');
+    }
+    const records = await this.readPublishedApps(user.id);
+    if (!records.some(r => r.slug === slug)) {
+      throw new NotFound('App not found');
+    }
+    // Vercel project deletion mirrors deployAppToVercel's conventions (v9 DELETE,
+    // same teamQuery/Bearer), fail-soft on 404 — then always srem.
+    await this.deleteAppFromVercel(slug);
+    await this.sremPublishedApp(user.id, slug);
+    this.logger.log(`[apps] unpublished slug=${slug} user=${user.id}`);
+    return { ok: true };
   }
 
   @Throttle('strict')
