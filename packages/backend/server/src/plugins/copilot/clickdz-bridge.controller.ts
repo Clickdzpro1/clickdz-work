@@ -1303,7 +1303,11 @@ export class ClickDzBridgeController {
    * webhook can't fetch a data: URL), then to empty context. Best-effort:
    * never blocks generation.
    */
-  private async describeImageContext(imageRef: string): Promise<string> {
+  private async describeImageContext(
+    imageRef: string,
+    // Fast mode passes ~6s; default preserves the original 15s budget.
+    timeoutMs = 15000
+  ): Promise<string> {
     if (!imageRef) return '';
     if (CDZ_AI_KEY) {
       try {
@@ -1329,7 +1333,7 @@ export class ClickDzBridgeController {
             ],
             max_tokens: clampMaxTokens(350, DEFAULT_MAX_TOKENS),
           }),
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         const data = (await response.json()) as any;
         const content = data?.choices?.[0]?.message?.content;
@@ -1386,7 +1390,9 @@ export class ClickDzBridgeController {
             // ~180-word prompt ceiling per the guidelines; clamp cost hard.
             max_tokens: clampMaxTokens(400, DEFAULT_MAX_TOKENS),
           }),
-          signal: AbortSignal.timeout(12000),
+          // Cap the primary cdz-flash call at 8s (was 12s) so a slow enhancer
+          // degrades to the Make fallback / raw prompt faster.
+          signal: AbortSignal.timeout(8000),
         });
         const data = (await response.json()) as any;
         const content = data?.choices?.[0]?.message?.content;
@@ -1515,6 +1521,11 @@ export class ClickDzBridgeController {
       ? (requestedMode ?? 'edit')
       : 'none';
 
+    // Fast mode (Bolt): additive, fail-open latency cut — skips prompt-pro,
+    // drops tier quality one notch (below), and runs reinterpret's vision pass
+    // on a ~6s budget folded into the raw prompt.
+    const fastMode = body?.fast === true;
+
     // ---- Prompt-pro (always on for tier/legacy/default requests) ---------
     // Raw-engine requests (OpenAI-compatible machine clients) keep their
     // prompt verbatim; `enhance: false` is the explicit opt-out for everyone.
@@ -1523,8 +1534,19 @@ export class ClickDzBridgeController {
     let prompt = String(body?.prompt || '');
     let enhancedPrompt: string | undefined;
     let ocrUsed = false;
-    const wantsEnhance = body?.enhance !== false && resolution.source !== 'raw-engine';
-    if (wantsEnhance && prompt) {
+    const wantsEnhance =
+      body?.enhance !== false && resolution.source !== 'raw-engine';
+    if (fastMode) {
+      // Skip prompt-pro; still fold a reinterpret reference in via a tightened
+      // (~6s) vision describe, falling open to the bare prompt on timeout.
+      if (wantsEnhance && prompt && i2iMode === 'reinterpret') {
+        const referenceContext = await this.describeImageContext(imageRef, 6000);
+        ocrUsed = !!referenceContext;
+        if (referenceContext) {
+          prompt = `${prompt}\n\nReference context: ${referenceContext}`;
+        }
+      }
+    } else if (wantsEnhance && prompt) {
       const referenceContext =
         i2iMode === 'reinterpret'
           ? await this.describeImageContext(imageRef)
@@ -1539,11 +1561,17 @@ export class ClickDzBridgeController {
     // (all CDZIMAGE engines are gpt-image-*, guard kept for safety.)
     const isGptImage = String(model).startsWith('gpt-image');
     // Per-tier quality default (2.0 high / 1.5 medium / 1.0 low); explicit
-    // body.quality wins when it's one of the valid knobs.
+    // body.quality wins when it's one of the valid knobs. Fast mode drops the
+    // resolved-tier default one notch (never the engine); body.quality wins.
+    const tierQuality = fastMode
+      ? ({ high: 'medium', medium: 'low', low: 'low' } as const)[
+          resolution.quality
+        ]
+      : resolution.quality;
     const requestedQuality = String(body?.quality || '');
     const quality = ['low', 'medium', 'high', 'auto'].includes(requestedQuality)
       ? requestedQuality
-      : resolution.quality;
+      : tierQuality;
     const finalPrompt = String(prompt || body?.prompt || '');
     const size = String(body?.size || '1024x1024');
 
@@ -1624,6 +1652,8 @@ export class ClickDzBridgeController {
       model_source: resolution.source,
       enhanced_prompt: enhancedPrompt,
       reference_ocr_used: ocrUsed,
+      fast: fastMode,
+      quality,
       ...(i2iMode !== 'none'
         ? {
             i2i: {

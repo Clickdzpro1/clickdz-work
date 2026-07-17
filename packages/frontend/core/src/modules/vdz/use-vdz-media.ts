@@ -328,6 +328,8 @@ export type CdzImageRefMode = 'edit' | 'reinterpret';
 export interface VdzGenerateImageOptions {
   tier?: CdzImageTier;
   reference?: { item: VdzMediaItem; mode: CdzImageRefMode };
+  /** Fast mode: skip prompt enhancement + lighter quality for lower latency. */
+  fast?: boolean;
 }
 
 /** Reference images bigger than this are rejected client-side (JSON weight). */
@@ -385,7 +387,8 @@ export interface UseVdzMedia {
    * surface that exposes the 1.0 economy tier). `options.reference` sends a
    * bin image as input — `mode: 'edit'` = true image-to-image (the engine
    * sees the pixels), `mode: 'reinterpret'` = "use as inspiration" (vision
-   * description feeds a fresh generation).
+   * description feeds a fresh generation). `options.fast` skips prompt
+   * enhancement and drops quality one notch for lower latency.
    */
   generateImages: (
     prompt: string,
@@ -536,6 +539,8 @@ export function useVdzMedia(): UseVdzMedia {
         prompt: trimmed,
         model: options?.tier ?? 'cdzimage-2.0',
       };
+      // Fast mode: server skips prompt-pro + drops quality one notch.
+      if (options?.fast) payload.fast = true;
       if (options?.reference) {
         payload.image = await resolveReferenceForApi(options.reference.item);
         payload.mode = options.reference.mode;

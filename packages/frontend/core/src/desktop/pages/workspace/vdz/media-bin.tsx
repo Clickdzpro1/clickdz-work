@@ -222,6 +222,8 @@ function AiImagesTab({ media }: { media: UseVdzMedia }) {
   // Optional bin reference: '' = none; otherwise a bin image item id.
   const [refId, setRefId] = useState('');
   const [refMode, setRefMode] = useState<CdzImageRefMode>('edit');
+  // Fast mode (Bolt): skip prompt enhancement + lighter quality. Default OFF.
+  const [fast, setFast] = useState(false);
 
   const referenceCandidates = media.items.filter(
     item => item.kind === 'image'
@@ -236,8 +238,9 @@ function AiImagesTab({ media }: { media: UseVdzMedia }) {
       reference: referenceItem
         ? { item: referenceItem, mode: refMode }
         : undefined,
+      fast,
     });
-  }, [prompt, media, tier, referenceItem, refMode]);
+  }, [prompt, media, tier, referenceItem, refMode, fast]);
 
   const selectStyle: React.CSSProperties = {
     flex: 1,
@@ -322,6 +325,34 @@ function AiImagesTab({ media }: { media: UseVdzMedia }) {
             <option value="reinterpret">✨ Inspire</option>
           </select>
         ) : null}
+        {/* Fast mode toggle (Bolt): skip prompt-pro + lighter quality. */}
+        <button
+          type="button"
+          onClick={() => setFast(f => !f)}
+          disabled={media.busy}
+          aria-label="Fast mode"
+          aria-pressed={fast}
+          title="Skip prompt enhancement + lighter quality for ~2x faster results"
+          style={{
+            ...selectStyle,
+            flex: '0 0 auto',
+            width: 'auto',
+            padding: '0 9px',
+            cursor: media.busy ? 'default' : 'pointer',
+            fontWeight: 600,
+            whiteSpace: 'nowrap',
+            border: fast
+              ? '1px solid var(--vdz-accent, #6ea8fe)'
+              : '1px solid var(--vdz-border, #262a35)',
+            background: fast
+              ? 'var(--vdz-accent, #6ea8fe)'
+              : 'var(--vdz-bg, #0b0d12)',
+            color: fast ? '#0b0d12' : 'var(--vdz-text, #e6e9f0)',
+            opacity: fast ? 1 : 0.85,
+          }}
+        >
+          ⚡ Fast
+        </button>
       </div>
 
       {media.busy ? (

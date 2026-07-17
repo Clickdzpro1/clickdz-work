@@ -1613,6 +1613,103 @@ export class AIChatInput extends SignalWatcher(
     .chat-input-footer-spacer {
       flex: 1;
     }
+
+    /* ===== Slash command palette (quick actions) =====
+       Compact overlay anchored above the composer input; shares the card
+       visual language with .cdz-plan-review (accent border, rounded corners,
+       clickdz-card-in entrance) but sits in its own muted/neutral accent so
+       it reads as a lightweight command menu rather than a plan card. */
+    .cdz-slash-palette {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: calc(100% + 6px);
+      z-index: 2200;
+      display: flex;
+      flex-direction: column;
+      max-height: 288px;
+      padding: 6px;
+      border: 1px solid color-mix(in srgb, #6e56cf 30%, transparent);
+      border-radius: 14px;
+      background: color-mix(
+        in srgb,
+        #6e56cf 5%,
+        var(--affine-v2-layer-background-primary)
+      );
+      box-shadow: 0 8px 26px color-mix(in srgb, #6e56cf 16%, transparent);
+      animation: clickdz-card-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+      overflow: hidden;
+    }
+    .cdz-slash-list {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .cdz-slash-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 7px 9px;
+      border: none;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--affine-v2-text-primary);
+      text-align: left;
+      cursor: pointer;
+      transition:
+        background-color 0.12s ease,
+        color 0.12s ease;
+    }
+    .cdz-slash-item:hover,
+    .cdz-slash-item.active {
+      background: color-mix(in srgb, #6e56cf 16%, transparent);
+    }
+    .cdz-slash-item-icon {
+      font-size: 15px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .cdz-slash-item-text {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 0;
+    }
+    .cdz-slash-item-name {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .cdz-slash-item-desc {
+      font-size: 11px;
+      line-height: 1.3;
+      color: var(--affine-v2-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .cdz-slash-empty {
+      padding: 12px 10px;
+      font-size: 12px;
+      color: var(--affine-v2-text-secondary);
+      text-align: center;
+    }
+    .cdz-slash-footer {
+      flex-shrink: 0;
+      margin-top: 4px;
+      padding: 6px 9px 3px;
+      border-top: 1px solid color-mix(in srgb, #6e56cf 18%, transparent);
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--affine-v2-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
   `;
 
   @property({ attribute: false })
@@ -1723,6 +1820,208 @@ export class AIChatInput extends SignalWatcher(
   // Monotonic id source for plan steps so checkbox/edit state stays stable
   // across re-renders even as steps are added, removed, or reordered.
   private _planStepSeq = 0;
+
+  // ===== Slash command palette (quick actions) =====
+  // Purely additive: opens ONLY when the textarea value starts with '/' at
+  // position 0. When closed it has zero effect on send/IME/shortcut behavior.
+  @state()
+  accessor _slashPaletteOpen = false;
+
+  // The text typed after the leading '/', lowercased, used to filter commands.
+  @state()
+  accessor _slashQuery = '';
+
+  // Highlighted command index for ArrowUp/Down + Enter selection.
+  @state()
+  accessor _slashActiveIndex = 0;
+
+  // Static quick-action catalog. `prefix` rewrites the input (caret at end);
+  // `togglePlan` items flip plan mode when a toggle exists instead of inserting
+  // text. Selecting a command NEVER auto-sends — it only rewrites the input.
+  private static readonly CDZ_SLASH_COMMANDS: ReadonlyArray<{
+    id: string;
+    label: string;
+    description: string;
+    emoji: string;
+    prefix?: string;
+    togglePlan?: boolean;
+  }> = [
+    {
+      id: 'image',
+      label: '/image',
+      description: 'Generate an image',
+      emoji: '🎨',
+      prefix: 'Create an image: ',
+    },
+    {
+      id: 'plan',
+      label: '/plan',
+      description: 'Plan before doing',
+      emoji: '🧭',
+      togglePlan: true,
+      prefix: 'Plan this out before doing anything: ',
+    },
+    {
+      id: 'app',
+      label: '/app',
+      description: 'Build a mini app',
+      emoji: '🚀',
+      prefix: 'Build me an app: ',
+    },
+    {
+      id: 'vdz',
+      label: '/vdz',
+      description: 'Video studio help',
+      emoji: '🎬',
+      prefix: 'In Vdz Studio, help me ',
+    },
+  ];
+
+  // Document-level outside-click closer for the slash palette. Registered on
+  // connect, torn down on disconnect (mirrors the window drag listeners below).
+  private readonly _handleSlashOutsidePointer = (event: PointerEvent) => {
+    if (!this._slashPaletteOpen) return;
+    const target = event.target as Node | null;
+    if (target && this.contains(target)) return;
+    this._closeSlashPalette();
+  };
+
+  // Commands matching the current query (prefix match on the label minus '/').
+  private get _filteredSlashCommands() {
+    const q = this._slashQuery;
+    const all = AIChatInput.CDZ_SLASH_COMMANDS;
+    if (!q) return all;
+    return all.filter(cmd => cmd.id.startsWith(q));
+  }
+
+  // Recompute palette visibility/query from the textarea value. Called from
+  // _handleInput. Palette shows ONLY when the value begins with '/' at index 0;
+  // any other leading text (including a space before '/') keeps it closed.
+  private _syncSlashPalette(rawValue: string) {
+    if (rawValue.startsWith('/')) {
+      const query = rawValue.slice(1).split(/\s/, 1)[0].toLowerCase();
+      const wasOpen = this._slashPaletteOpen;
+      const prevQuery = this._slashQuery;
+      this._slashPaletteOpen = true;
+      this._slashQuery = query;
+      // Reset the highlight when opening or when the filtered set shifts so the
+      // active index never points past the (possibly shorter) list.
+      if (!wasOpen || query !== prevQuery) {
+        this._slashActiveIndex = 0;
+      }
+    } else if (this._slashPaletteOpen) {
+      this._closeSlashPalette();
+    }
+  }
+
+  private _closeSlashPalette() {
+    this._slashPaletteOpen = false;
+    this._slashQuery = '';
+    this._slashActiveIndex = 0;
+  }
+
+  // Apply a selected command: rewrite the input and refocus. Never sends.
+  private _applySlashCommand(cmd: {
+    id: string;
+    prefix?: string;
+    togglePlan?: boolean;
+  }) {
+    this._closeSlashPalette();
+    // /plan prefers flipping the real plan-mode toggle when it's off; if it's
+    // already on we fall back to a planning phrasing prefix so the command
+    // still does something useful.
+    if (cmd.togglePlan && !this.planMode) {
+      this.planMode = true;
+      this.textarea.value = '';
+    } else {
+      this.textarea.value = cmd.prefix ?? '';
+    }
+    this.isInputEmpty = !this.textarea.value.trim();
+    // Resize + caret-to-end via the existing input pipeline, then focus.
+    void this._handleInput();
+    void this.updateComplete.then(() => {
+      const end = this.textarea.value.length;
+      this.textarea.focus();
+      this.textarea.setSelectionRange(end, end);
+    });
+  }
+
+  // Keyboard nav for the palette. Returns true when it consumed the event so
+  // the caller (_handleKeyDown) can bail before any send/shortcut logic runs.
+  private _slashPaletteKeyDown(evt: KeyboardEvent): boolean {
+    if (!this._slashPaletteOpen) return false;
+    const items = this._filteredSlashCommands;
+    if (evt.key === 'Escape') {
+      evt.preventDefault();
+      evt.stopPropagation();
+      this._closeSlashPalette();
+      return true;
+    }
+    if (!items.length) {
+      // Nothing to pick: let Escape close (handled above) but don't hijack
+      // Enter/arrows so the user can keep typing/deleting normally.
+      return false;
+    }
+    if (evt.key === 'ArrowDown') {
+      evt.preventDefault();
+      this._slashActiveIndex = (this._slashActiveIndex + 1) % items.length;
+      return true;
+    }
+    if (evt.key === 'ArrowUp') {
+      evt.preventDefault();
+      this._slashActiveIndex =
+        (this._slashActiveIndex - 1 + items.length) % items.length;
+      return true;
+    }
+    if (evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) {
+      const cmd = items[Math.min(this._slashActiveIndex, items.length - 1)];
+      if (cmd) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        this._applySlashCommand(cmd);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private _renderSlashPalette() {
+    if (!this._slashPaletteOpen) return nothing;
+    const items = this._filteredSlashCommands;
+    const activeIndex = Math.min(
+      this._slashActiveIndex,
+      Math.max(0, items.length - 1)
+    );
+    return html`<div class="cdz-slash-palette" data-testid="cdz-slash-palette">
+      <div class="cdz-slash-list">
+        ${items.length
+          ? repeat(
+              items,
+              cmd => cmd.id,
+              (cmd, index) => html`<button
+                type="button"
+                class="cdz-slash-item ${index === activeIndex ? 'active' : ''}"
+                data-testid="cdz-slash-item-${cmd.id}"
+                @pointerenter=${() => {
+                  this._slashActiveIndex = index;
+                }}
+                @mousedown=${(e: MouseEvent) => e.preventDefault()}
+                @click=${() => this._applySlashCommand(cmd)}
+              >
+                <span class="cdz-slash-item-icon">${cmd.emoji}</span>
+                <span class="cdz-slash-item-text">
+                  <span class="cdz-slash-item-name">${cmd.label}</span>
+                  <span class="cdz-slash-item-desc">${cmd.description}</span>
+                </span>
+              </button>`
+            )
+          : html`<div class="cdz-slash-empty">No matching commands</div>`}
+      </div>
+      <div class="cdz-slash-footer">
+        ⚡ Try: /image · /plan · /app — CDZIMAGE 2.0, plan mode &amp; more
+      </div>
+    </div>`;
+  }
 
   // Persistent artifact shelf: generated images/apps survive panel close.
   @state()
@@ -2655,6 +2954,11 @@ export class AIChatInput extends SignalWatcher(
     window.addEventListener('dragleave', this._handleWindowDragLeave);
     window.addEventListener('drop', this._resetDragState);
     window.addEventListener('dragend', this._resetDragState);
+    // Close the slash palette when the user clicks anywhere outside this
+    // composer (capture phase so we see the click before it's swallowed).
+    document.addEventListener('pointerdown', this._handleSlashOutsidePointer, {
+      capture: true,
+    });
   }
 
   protected override firstUpdated(changedProperties: PropertyValues): void {
@@ -2677,6 +2981,11 @@ export class AIChatInput extends SignalWatcher(
     window.removeEventListener('dragleave', this._handleWindowDragLeave);
     window.removeEventListener('drop', this._resetDragState);
     window.removeEventListener('dragend', this._resetDragState);
+    document.removeEventListener(
+      'pointerdown',
+      this._handleSlashOutsidePointer,
+      { capture: true }
+    );
   }
 
   private _trackDragDrop(method: EventArgs['addEmbeddingDoc']['method']) {
@@ -2810,6 +3119,7 @@ export class AIChatInput extends SignalWatcher(
         : nothing}
       ${this.workersOpen ? this._renderWorkersOverlay() : nothing}
       ${this.artifactShelfOpen ? this._renderArtifactShelf() : nothing}
+      ${this._renderSlashPalette()}
       ${this.composerStudioApp
         ? html`<clickdz-builder-studio
             .open=${this.composerStudioOpen}
@@ -3031,6 +3341,11 @@ export class AIChatInput extends SignalWatcher(
     const value = textarea.value.trim();
     this.isInputEmpty = !value;
 
+    // Slash palette reacts to the RAW (untrimmed) value so a leading space
+    // before '/' correctly keeps the palette closed. Purely additive — no
+    // effect unless the value starts with '/'.
+    this._syncSlashPalette(textarea.value);
+
     textarea.style.height = 'auto';
     textarea.style.height = textarea.scrollHeight + 'px';
     let imagesHeight = this.imagePreviewGrid?.scrollHeight ?? 0;
@@ -3048,6 +3363,12 @@ export class AIChatInput extends SignalWatcher(
   };
 
   private readonly _handleKeyDown = async (evt: KeyboardEvent) => {
+    // When the slash palette is open it owns ArrowUp/Down/Enter/Escape and
+    // consumes them; if it handled the event we bail so the normal
+    // Enter-to-send path never runs. When the palette is closed this is a
+    // no-op and all existing keyboard behavior (Enter, IME, Shift+Enter) is
+    // completely unaffected.
+    if (this._slashPaletteKeyDown(evt)) return;
     if (evt.key === 'Enter' && !evt.shiftKey && !evt.isComposing) {
       await this._onTextareaSend(evt);
     }
