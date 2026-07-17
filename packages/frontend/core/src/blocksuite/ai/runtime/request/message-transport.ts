@@ -2,6 +2,7 @@ import type { AIToolsConfig } from '@affine/core/modules/ai-button';
 import { partition } from 'lodash-es';
 
 import { toTextStream } from '../../provider/event-source';
+import { getPreferredImageModel } from '../../utils/image-model-preference';
 import { createWorkspaceByokLocalLease } from './byok-local-lease';
 import { type CopilotClient, Endpoint } from './copilot-client';
 
@@ -289,7 +290,12 @@ export function toImage({
   actionVersion,
   runId,
   client,
+  modelId,
 }: ToImageOptions) {
+  // CDZIMAGE (WS1 PR5): every native image request carries an explicit
+  // engine — the caller's override when given, else the user's Image-model
+  // preference (2.0 default). Overrides the prompt's server-side default.
+  const effectiveImageModelId = modelId ?? getPreferredImageModel();
   let messageId: string | undefined;
   return {
     [Symbol.asyncIterator]: async function* () {
@@ -325,6 +331,7 @@ export function toImage({
                 runId,
                 retry,
                 byokLeaseId,
+                modelId: effectiveImageModelId,
               },
               Endpoint.Action
             )
@@ -333,7 +340,8 @@ export function toImage({
               messageId,
               seed,
               endpoint,
-              byokLeaseId
+              byokLeaseId,
+              effectiveImageModelId
             );
 
       for await (const event of toTextStream(eventSource, {
