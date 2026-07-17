@@ -15,7 +15,7 @@ import { randomBytes } from 'node:crypto';
 // (a raw @nestjs/common HttpException is turned into a generic 500 here).
 import { BadRequest, InternalServerError, NotFound, Throttle } from '../../base';
 import { CacheRedis } from '../../base/redis';
-import { CurrentUser } from '../../core/auth';
+import { CurrentUser, Public } from '../../core/auth';
 import {
   buildVdzContextTurn,
   buildVdzModeInstruction,
@@ -106,6 +106,30 @@ const projectIndexKey = (ownerId: string) =>
   `clickdz:vdz:project-index:${ownerId}`;
 
 const PROJECT_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+// ---------------------------------------------------------------------------
+// Public share links. A share is a SELF-CONTAINED SNAPSHOT (the client inlines
+// workspace media as data: URIs before upload — vdz-blob: handles mean nothing
+// to a signed-out viewer). Uploaded as RAW bytes through the 100MB raw parser
+// (same pattern as /transcribe; a media-inlined timeline routinely exceeds the
+// express json limit). One share per project, reused/updated on re-share.
+// ---------------------------------------------------------------------------
+const MAX_SHARE_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+const SHARE_TTL_SECONDS = PROJECT_TTL_SECONDS;
+const SHARE_ID_RE = /^[a-zA-Z0-9_-]{10,64}$/;
+const shareKey = (shareId: string) => `clickdz:vdz:share:${shareId}`;
+const shareOfProjectKey = (ownerId: string, projectId: string) =>
+  `clickdz:vdz:share-of:${ownerId}:${projectId}`;
+
+/** A stored public share document. `timeline` is the inlined snapshot. */
+interface VdzShareDoc {
+  shareId: string;
+  ownerId: string;
+  projectId: string;
+  name: string;
+  timeline: unknown;
+  sharedAt: string;
+}
 
 /** A stored project document. `timeline` is opaque JSON (validated by size). */
 interface VdzProjectDoc {
@@ -772,6 +796,146 @@ export class ClickDzVdzController {
     await this.redis.srem(projectIndexKey(user.id), id);
     return { deleted: removed > 0 };
   }
+
+  /**
+   * POST /api/v1/vdz/projects/:id/share — create or update the public share
+   * for an owned project. BODY: raw bytes of the snapshot JSON
+   * `{ name, timeline }` with media already inlined client-side
+   * (`Content-Type: application/octet-stream`). Re-sharing the same project
+   * reuses its shareId — the public link stays stable while its content
+   * updates.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/vdz/projects/:id/share')
+  async shareProject(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() body: unknown
+  ): Promise<{ shareId: string; path: string }> {
+    if (!PROJECT_ID_RE.test(id)) {
+      throw new BadRequest('Invalid project id');
+    }
+    // Only an existing, owned project can be shared.
+    const project = await this.readProject(user.id, id);
+    if (!project) {
+      throw new NotFound('Project not found');
+    }
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      throw new BadRequest(
+        'Send the snapshot JSON as raw bytes with Content-Type: application/octet-stream'
+      );
+    }
+    if (body.length > MAX_SHARE_SNAPSHOT_BYTES) {
+      throw new BadRequest(
+        `Share snapshot too large (max ${Math.floor(
+          MAX_SHARE_SNAPSHOT_BYTES / (1024 * 1024)
+        )}MB) — heavy media stays workspace-only`
+      );
+    }
+    let snapshot: { name?: unknown; timeline?: unknown };
+    try {
+      snapshot = JSON.parse(body.toString('utf8')) as typeof snapshot;
+    } catch {
+      throw new BadRequest('Snapshot is not valid JSON');
+    }
+    if (
+      !snapshot ||
+      typeof snapshot !== 'object' ||
+      typeof snapshot.timeline !== 'object' ||
+      snapshot.timeline === null
+    ) {
+      throw new BadRequest('Snapshot must contain a "timeline" object');
+    }
+    const name =
+      typeof snapshot.name === 'string' && snapshot.name.trim()
+        ? snapshot.name.trim().slice(0, MAX_PROJECT_NAME_CHARS)
+        : project.name;
+
+    // Reuse the project's existing share id so the public URL is stable.
+    const existingShareId = await this.redis.get(
+      shareOfProjectKey(user.id, id)
+    );
+    const shareId =
+      existingShareId && SHARE_ID_RE.test(existingShareId)
+        ? existingShareId
+        : randomShareId();
+
+    const doc: VdzShareDoc = {
+      shareId,
+      ownerId: user.id,
+      projectId: id,
+      name,
+      timeline: snapshot.timeline,
+      sharedAt: new Date().toISOString(),
+    };
+    await this.redis.set(
+      shareKey(shareId),
+      JSON.stringify(doc),
+      'EX',
+      SHARE_TTL_SECONDS
+    );
+    await this.redis.set(
+      shareOfProjectKey(user.id, id),
+      shareId,
+      'EX',
+      SHARE_TTL_SECONDS
+    );
+    this.logger.log(
+      `[vdz] share upsert user=${user.id} project=${id} share=${shareId} bytes=${body.length}`
+    );
+    return { shareId, path: `/vdz-share/${shareId}` };
+  }
+
+  /** DELETE /api/v1/vdz/projects/:id/share — revoke the public link. */
+  @Throttle('strict')
+  @Delete('/api/v1/vdz/projects/:id/share')
+  async revokeShare(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string
+  ): Promise<{ revoked: boolean }> {
+    if (!PROJECT_ID_RE.test(id)) {
+      throw new BadRequest('Invalid project id');
+    }
+    const mappingKey = shareOfProjectKey(user.id, id);
+    const shareId = await this.redis.get(mappingKey);
+    if (!shareId) {
+      return { revoked: false };
+    }
+    await this.redis.del(shareKey(shareId));
+    await this.redis.del(mappingKey);
+    this.logger.log(
+      `[vdz] share revoke user=${user.id} project=${id} share=${shareId}`
+    );
+    return { revoked: true };
+  }
+
+  /**
+   * GET /api/v1/vdz/shared/:shareId — the PUBLIC read side. Deliberately
+   * `@Public()` (the only vdz route that is): the share id is the capability
+   * (crypto-strong, unguessable), mirroring doc share links. Returns only the
+   * snapshot fields — never the owner id.
+   */
+  @Public()
+  @Throttle('strict')
+  @Get('/api/v1/vdz/shared/:shareId')
+  async getSharedTimeline(
+    @Param('shareId') shareId: string
+  ): Promise<{ name: string; timeline: unknown; sharedAt: string }> {
+    if (!SHARE_ID_RE.test(shareId)) {
+      throw new BadRequest('Invalid share id');
+    }
+    const raw = await this.redis.get(shareKey(shareId));
+    if (!raw) {
+      throw new NotFound('This share link does not exist or was revoked');
+    }
+    let doc: VdzShareDoc;
+    try {
+      doc = JSON.parse(raw) as VdzShareDoc;
+    } catch {
+      throw new InternalServerError('Stored share is corrupt');
+    }
+    return { name: doc.name, timeline: doc.timeline, sharedAt: doc.sharedAt };
+  }
 }
 
 /**
@@ -780,4 +944,12 @@ export class ClickDzVdzController {
  */
 function randomProjectId(): string {
   return randomBytes(8).toString('hex');
+}
+
+/**
+ * Crypto-strong share id (the capability itself — must be unguessable).
+ * 12 bytes → 16 url-safe chars, within SHARE_ID_RE.
+ */
+function randomShareId(): string {
+  return randomBytes(12).toString('base64url');
 }
