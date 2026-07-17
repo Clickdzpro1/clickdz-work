@@ -26,6 +26,11 @@ a later PR). The workbench shell that consumes this lives at
       glow` and `amount` is a normalized `0..1` knob (0.5 is neutral for
       brightness/contrast). Rendered as a CSS `filter`.
     Timelines authored before these existed parse unchanged (both optional).
+  - AUDIO clips additionally carry three OPTIONAL mix fields: `fadeIn` /
+    `fadeOut` (seconds ramping from/to silence at the clip edges, clamped to
+    the clip's duration at playback) and `duck` (when `true`, every OTHER
+    audio clip dips to ~30% while this clip plays — mark a voiceover with
+    `duck` so music sits under it). Same backward-compat rule: all optional.
 - **`ops.ts`** — the edit contract. Every mutation is a `VdzOp` (a discriminated
   union on `op`) applied through `applyOp(timeline, op)` or
   `applyOps(timeline, ops)`. Both are **pure** (never mutate the input) and
@@ -40,7 +45,7 @@ a later PR). The workbench shell that consumes this lives at
 
 Ops: `addTrack`, `addClip`, `removeClip`, `moveClip`, `trimClip`, `splitClip`,
 `rippleDelete`, `nudgeClip`, `setText`, `applyTransition`, `removeTransition`,
-`setAnimation`, `setEffects`, `updateClip`, `renameTimeline`.
+`setAnimation`, `setEffects`, `updateClip`, `setAudioMix`, `renameTimeline`.
 
 - `addTrack` `{track}` — append a whole new track (a full `VdzTrack`; its
   `clips` array is normally empty, since clips are added with `addClip`).
@@ -65,6 +70,10 @@ Ops: `addTrack`, `addClip`, `removeClip`, `moveClip`, `trimClip`, `splitClip`,
   `fit`, `volume`). Patch keys are validated against the clip's `type`
   (e.g. `fontSize` is rejected on a shape), and structural/time fields have
   their own dedicated ops.
+- `setAudioMix` `{trackId, clipId, fadeIn?, fadeOut?, duck?}` — set an AUDIO
+  clip's mix fields. Tri-state per field: omit = leave unchanged, `null` =
+  clear, value = set (`duck: false` clears like `null`). Rejected on non-audio
+  clips.
 
 **AI edits arrive as `VdzOp[]`** — the model proposes a batch of ops, they run
 through `applyOps`, and only a fully valid result is committed. See
