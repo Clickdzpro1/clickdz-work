@@ -5,6 +5,14 @@
 
 export type CdzArtifactType = 'image' | 'app' | 'doc' | 'code' | 'file';
 
+/**
+ * Kind of an `app` artifact created by the one-click Ready Shop flow. Plain
+ * app-builder outputs leave this undefined; only the paired shop/ERP apps set
+ * it so the shelf can label/group them ("shop" is the storefront, "erp" the
+ * linked back-office dashboard).
+ */
+export type CdzArtifactKind = 'shop' | 'erp';
+
 export type CdzArtifact = {
   id: string;
   type: CdzArtifactType;
@@ -18,6 +26,15 @@ export type CdzArtifact = {
   /** App-specific identity and published URL, when applicable. */
   slug?: string;
   url?: string;
+  /**
+   * Shared storefront slug that pairs a Ready-Shop storefront with its linked
+   * ERP dashboard (both carry the same `storeSlug`). Absent on plain apps and
+   * on records written before the Ready Shop flow shipped (back-compat: these
+   * legacy records simply parse with `storeSlug === undefined`).
+   */
+  storeSlug?: string;
+  /** Ready-Shop role of this app artifact; see {@link CdzArtifactKind}. */
+  kind?: CdzArtifactKind;
   createdAt: number;
   updatedAt: number;
 };

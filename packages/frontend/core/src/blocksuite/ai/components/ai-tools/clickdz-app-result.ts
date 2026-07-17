@@ -155,6 +155,14 @@ export class ClickDzAppResultCard extends ShadowlessElement {
   @state()
   private accessor liveTitle = '';
 
+  // When the studio's one-click Ready Shop loads a freshly-created app in place,
+  // it becomes the studio's live source under a NEW slug. We adopt that slug
+  // here (parallels liveHtml/liveTitle) so this card's studio prop bindings
+  // (.slug/.title/.html) and publish/persist target the loaded app instead of
+  // fighting it. Empty = fall back to the original result slug.
+  @state()
+  private accessor liveSlug = '';
+
   private get result(): ClickDzAppResult | null {
     if (
       this.data.type !== 'tool-result' ||
@@ -178,11 +186,17 @@ export class ClickDzAppResultCard extends ShadowlessElement {
     return this.liveTitle || this.result?.title || 'App';
   }
 
+  /** The current slug: a Ready-Shop in-place load wins over the result slug. */
+  private get effectiveSlug(): string {
+    return this.liveSlug || this.result?.slug || '';
+  }
+
   /** Persist the working HTML (and any URL) so the composer + shelf stay in sync. */
   private persistApp(url?: string) {
     const result = this.result;
     if (!result) return;
-    const id = `app_${result.slug}`;
+    const slug = this.effectiveSlug;
+    const id = `app_${slug}`;
     const existing = artifactStore.get(id);
     artifactStore.upsert({
       ...(existing ?? {
@@ -191,7 +205,7 @@ export class ClickDzAppResultCard extends ShadowlessElement {
         title: result.title,
         prompt: result.title,
         sessionId: 'draft',
-        slug: result.slug,
+        slug,
         mimeType: 'text/html',
       }),
       // Always reflect the latest (possibly renamed) title.
@@ -282,7 +296,7 @@ export class ClickDzAppResultCard extends ShadowlessElement {
       ${this.error ? html`<div class="app-error">${this.error}</div>` : nothing}
       <clickdz-builder-studio
         .open=${this.studioOpen}
-        .slug=${result.slug}
+        .slug=${this.effectiveSlug}
         .title=${this.effectiveTitle}
         .html=${currentHtml}
         .publishedUrl=${url ?? ''}
@@ -294,6 +308,18 @@ export class ClickDzAppResultCard extends ShadowlessElement {
         @studio-html-change=${(event: CustomEvent<{ html: string }>) => {
           this.liveHtml = event.detail.html;
           this.persistApp();
+        }}
+        @studio-app-loaded=${(
+          event: CustomEvent<{ slug: string; title: string; html: string }>
+        ) => {
+          // Ready Shop loaded a new app in place: adopt its identity so our
+          // studio bindings + publish/persist follow the loaded app. The app
+          // itself is already saved to the shelf by the studio; a fresh URL is
+          // minted only when the user publishes it.
+          this.liveSlug = event.detail.slug;
+          this.liveTitle = event.detail.title;
+          this.liveHtml = event.detail.html;
+          this.publishedUrl = '';
         }}
         @studio-published=${(event: CustomEvent<{ url: string }>) => {
           this.publishedUrl = event.detail.url;
