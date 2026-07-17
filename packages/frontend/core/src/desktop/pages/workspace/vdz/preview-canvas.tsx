@@ -6,6 +6,9 @@ import {
   captionAnchorY,
   captionPresetCss,
   computePreviewFrame,
+  karaokeProgress,
+  karaokeTokens,
+  karaokeWordCss,
   type VdzCaptionInput,
   type VdzPreviewItem,
   resolveItemRender,
@@ -139,14 +142,42 @@ const PreviewClipContent = memo(function PreviewClipContent({
 }) {
   switch (clip.type) {
     case 'text': {
+      const capClip = clip as unknown as VdzCaptionInput;
       // `outline` caption preset draws a stroke ring on the glyphs.
       const stroke =
-        (clip as unknown as VdzCaptionInput).capPreset === 'outline'
+        capClip.capPreset === 'outline'
           ? {
               WebkitTextStroke: '0.06em rgba(0,0,0,0.85)',
               paintOrder: 'stroke fill' as const,
             }
           : undefined;
+      // Karaoke: when the clip is the `karaoke` preset AND carries word
+      // timings, render per-word <span>s driven by the clip-relative playhead
+      // (spoken = full colour, active = accent pill + slight scale + underline,
+      // upcoming = dimmed). tRel is computed from the SAME clip timing the rest
+      // of this component uses (playhead − clip.start). Missing words → falls
+      // through to the plain single-node render (degrades to the boxed look).
+      const tokens =
+        capClip.capPreset === 'karaoke' ? karaokeTokens(capClip) : null;
+      const inner =
+        tokens && tokens.length > 0 ? (
+          (() => {
+            const tRel = playheadSeconds - clip.start;
+            const { state } = karaokeProgress(capClip, tRel);
+            return tokens.map((tok, i) => (
+              <span
+                // Index-keyed: token order is stable for a given clip.
+                key={i}
+                style={parseCssBlock(karaokeWordCss(state(i)))}
+              >
+                {tok.w}
+                {i < tokens.length - 1 ? ' ' : ''}
+              </span>
+            ));
+          })()
+        ) : (
+          clip.text
+        );
       return (
         <div
           style={{
@@ -158,7 +189,7 @@ const PreviewClipContent = memo(function PreviewClipContent({
             ...stroke,
           }}
         >
-          {clip.text}
+          {inner}
         </div>
       );
     }

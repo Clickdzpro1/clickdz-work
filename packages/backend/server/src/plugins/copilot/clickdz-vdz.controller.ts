@@ -578,7 +578,14 @@ export class ClickDzVdzController {
     @Query('name') name?: string
   ): Promise<{
     text: string;
-    segments: Array<{ start: number; end: number; text: string }>;
+    segments: Array<{
+      start: number;
+      end: number;
+      text: string;
+      // Per-word timings (absolute audio seconds), present when Whisper aligned
+      // words for this segment. ADDITIVE — old clients ignore the extra field.
+      words?: Array<{ w: string; t0: number; t1: number }>;
+    }>;
   }> {
     if (!OPENAI_AUDIO_API_KEY) {
       throw new InternalServerError(
@@ -615,6 +622,13 @@ export class ClickDzVdzController {
     );
     form.append('model', 'whisper-1');
     form.append('response_format', 'verbose_json');
+    // Request BOTH word- and segment-level timestamps. Whisper's multipart API
+    // takes a repeated `timestamp_granularities[]` field (one append per value).
+    // `word` populates a top-level `words:[{word,start,end}]` array (absolute
+    // audio seconds) that we distribute back onto segments below; `segment`
+    // keeps the segment list we already relied on. Word timing adds a little
+    // latency but no cost, and old behaviour (segments) is unchanged.
+    form.append('timestamp_granularities[]', 'word');
     form.append('timestamp_granularities[]', 'segment');
 
     const res = await fetch(OPENAI_TRANSCRIBE_URL, {
@@ -644,24 +658,53 @@ export class ClickDzVdzController {
     const data = (await res.json().catch(() => null)) as {
       text?: unknown;
       segments?: unknown;
+      words?: unknown;
     } | null;
     if (!data) {
       throw new InternalServerError('Transcription returned malformed JSON');
     }
     const text = typeof data.text === 'string' ? data.text.trim() : '';
+
+    // Word timestamps arrive as a TOP-LEVEL `words:[{word,start,end}]` array
+    // (verbose_json + timestamp_granularities['word']), NOT nested per segment.
+    // Normalize them to `{ w, t0, t1 }` (absolute audio seconds) once, then
+    // distribute each onto the segment whose window contains its MIDPOINT (so a
+    // word lands in exactly one segment even at a boundary). Absent/empty on an
+    // engine that didn't align words → segments simply carry no `words`.
+    const allWords = (Array.isArray(data.words) ? data.words : [])
+      .map(raw => {
+        const w = (raw ?? {}) as Record<string, unknown>;
+        return {
+          w: typeof w.word === 'string' ? w.word : '',
+          t0: Number(w.start) || 0,
+          t1: Number(w.end) || 0,
+        };
+      })
+      .filter(w => w.w.trim().length > 0);
+
     const segments = (Array.isArray(data.segments) ? data.segments : [])
       .map(raw => {
         const s = (raw ?? {}) as Record<string, unknown>;
+        const start = Number(s.start) || 0;
+        const end = Number(s.end) || 0;
+        // Collect the words whose midpoint falls inside this segment window.
+        const words = allWords.filter(w => {
+          const mid = (w.t0 + w.t1) / 2;
+          return mid >= start && mid < end;
+        });
         return {
-          start: Number(s.start) || 0,
-          end: Number(s.end) || 0,
+          start,
+          end,
           text: typeof s.text === 'string' ? s.text.trim() : '',
+          // Only attach when non-empty so a segment stays byte-identical when
+          // there are no aligned words (fully additive for old clients).
+          ...(words.length > 0 ? { words } : {}),
         };
       })
       .filter(s => s.text.length > 0 && s.end > s.start);
 
     this.logger.log(
-      `[vdz] transcribe user=${user.id} bytes=${body.length} segments=${segments.length}`
+      `[vdz] transcribe user=${user.id} bytes=${body.length} segments=${segments.length} words=${allWords.length}`
     );
     return { text, segments };
   }

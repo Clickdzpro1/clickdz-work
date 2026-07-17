@@ -11,11 +11,29 @@ import type { VdzOp, VdzTimeline } from '../../../../modules/vdz';
  * network half lives in use-vdz-captions.ts.
  */
 
+/**
+ * One word timing inside a transcript segment — seconds relative to the AUDIO
+ * HEAD (the same frame as the segment's `start`/`end`), exactly as the vdz
+ * transcribe route returns them. `w` is the word text. OPTIONAL/additive on the
+ * segment: an old server (or a segment Whisper couldn't align) simply omits it.
+ */
+export interface VdzTranscriptWord {
+  w: string;
+  t0: number;
+  t1: number;
+}
+
 /** One transcript segment, seconds relative to the AUDIO HEAD. */
 export interface VdzTranscriptSegment {
   start: number;
   end: number;
   text: string;
+  /**
+   * Per-word timings for this segment (absolute audio seconds). Present only
+   * when the server requested word-level timestamps; used to attach clip-
+   * relative karaoke `words` to the caption clip. Absent = no karaoke data.
+   */
+  words?: VdzTranscriptWord[];
 }
 
 /**
@@ -41,8 +59,58 @@ export const CAPTION_STYLE = {
 const MIN_CAPTION_SECONDS = 0.5;
 /** Whisper can emit paragraph-length segments; keep captions subtitle-sized. */
 const MAX_CAPTION_CHARS = 160;
+/**
+ * Hard cap on karaoke `words` per caption clip — matches the schema's `.max(600)`
+ * so a rebased array always parses. A real subtitle line is a handful of words;
+ * this only bounds a pathological transcript so the whole op batch never fails
+ * re-validation on an over-long array.
+ */
+const MAX_CAPTION_WORDS = 600;
 
 const round3 = (v: number) => Math.round(v * 1000) / 1000;
+
+/**
+ * Rebase a segment's absolute-audio word timings onto a caption CLIP whose
+ * on-timeline window is `[clipStart, clipStart + clipDuration)` and whose head
+ * corresponds to audio time `segStart`. Returns clip-relative `{ w, t0, t1 }`
+ * (seconds from the clip's start), or `undefined` when there is nothing usable.
+ *
+ * - A word's clip-relative time is `wordAudio - segStart` (the clip's start IS
+ *   `segStart` in audio time).
+ * - Each word is clamped into `[0, clipDuration]` and rounded; words that fall
+ *   entirely outside the clip window are dropped (defensive — Whisper words sit
+ *   inside their segment, but a stretched MIN_CAPTION_SECONDS clip can be a hair
+ *   shorter than the spoken span).
+ * - Empty word text is skipped; the array is capped at {@link MAX_CAPTION_WORDS}.
+ * Pure and node-testable.
+ */
+export function clipRelativeWords(
+  words: VdzTranscriptWord[] | undefined,
+  segStart: number,
+  clipDuration: number
+): { w: string; t0: number; t1: number }[] | undefined {
+  if (!Array.isArray(words) || words.length === 0) return undefined;
+  const out: { w: string; t0: number; t1: number }[] = [];
+  for (const raw of words) {
+    if (out.length >= MAX_CAPTION_WORDS) break;
+    const text = (raw?.w ?? '').trim();
+    if (!text) continue;
+    const a = Number(raw?.t0);
+    const b = Number(raw?.t1);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    // Rebase to clip-relative, then clamp into the clip window.
+    let t0 = a - segStart;
+    let t1 = b - segStart;
+    // Drop words wholly outside the clip window (t1<=0 or t0>=duration).
+    if (t1 <= 0 || t0 >= clipDuration) continue;
+    t0 = Math.max(0, Math.min(clipDuration, t0));
+    t1 = Math.max(0, Math.min(clipDuration, t1));
+    // A zero/negative span after clamping still parses (min(0)); keep it — it
+    // just never becomes the active word. Round for compact, stable output.
+    out.push({ w: text, t0: round3(t0), t1: round3(t1) });
+  }
+  return out.length > 0 ? out : undefined;
+}
 
 /**
  * Build the op batch that lands one text clip per transcript segment on the
@@ -66,6 +134,9 @@ export function captionOpsForSegments(
       start: Number(seg.start) || 0,
       end: Number(seg.end) || 0,
       text: (seg.text ?? '').trim(),
+      // Carry word timings through cleaning so karaoke data survives to the
+      // clip build. Absent on old-server responses → stays undefined.
+      words: Array.isArray(seg.words) ? seg.words : undefined,
     }))
     .filter(seg => seg.text.length > 0 && seg.end > seg.start)
     .sort((a, b) => a.start - b.start);
@@ -82,6 +153,11 @@ export function captionOpsForSegments(
   }
 
   for (const seg of cleaned) {
+    const duration = round3(Math.max(MIN_CAPTION_SECONDS, seg.end - seg.start));
+    // Rebase this segment's words onto the clip window (clip-relative seconds),
+    // clamped + capped. `undefined` when the segment carried no word timings —
+    // then the clip is a plain caption exactly as before (fully additive).
+    const words = clipRelativeWords(seg.words, seg.start, duration);
     ops.push({
       op: 'addClip',
       trackId,
@@ -90,11 +166,11 @@ export function captionOpsForSegments(
         type: 'text',
         name: 'Caption',
         start: round3(Math.max(0, offsetSeconds + seg.start)),
-        duration: round3(
-          Math.max(MIN_CAPTION_SECONDS, seg.end - seg.start)
-        ),
+        duration,
         text: clampCaptionText(seg.text),
         ...CAPTION_STYLE,
+        // Only attach when present so a plain caption's clip stays byte-identical.
+        ...(words ? { words } : {}),
       },
     });
   }

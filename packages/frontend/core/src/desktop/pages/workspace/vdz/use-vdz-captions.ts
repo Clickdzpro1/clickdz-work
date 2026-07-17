@@ -120,6 +120,11 @@ export function useVdzCaptions(
       if (!res.ok) {
         throw new Error(await readError(res));
       }
+      // `VdzTranscriptSegment` now carries an OPTIONAL per-segment `words`
+      // array (absolute audio seconds) when the server returned word-level
+      // timestamps. It rides through untouched — `captionOpsForSegments`
+      // rebases it to clip-relative karaoke `words`; an old server omits it and
+      // captions are built exactly as before.
       const data = (await res.json()) as {
         segments?: VdzTranscriptSegment[];
       };

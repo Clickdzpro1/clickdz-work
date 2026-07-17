@@ -191,7 +191,13 @@ export const vdzOpSchema = z.discriminatedUnion('op', [
      */
     opacity: z.number().min(0).max(1).optional(),
     rotation: z.number().min(-180).max(180).optional(),
-    capPreset: z.enum(['plain', 'boxed', 'outline', 'shadow', 'pill']).optional(),
+    // Kept in lock-step with vdzTextClipSchema.capPreset (schema.ts) — `karaoke`
+    // is the per-word-highlight preset; setting it here never touches `words`
+    // (those are attached by the caption builder), so a karaoke preset with no
+    // words simply renders the boxed look.
+    capPreset: z
+      .enum(['plain', 'boxed', 'outline', 'shadow', 'pill', 'karaoke'])
+      .optional(),
     capPosition: z.enum(['top', 'middle', 'lower']).optional(),
   }),
 ]);
