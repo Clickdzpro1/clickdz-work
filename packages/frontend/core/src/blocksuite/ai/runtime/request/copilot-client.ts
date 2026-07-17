@@ -515,13 +515,17 @@ export class CopilotClient {
     messageId?: string,
     seed?: string,
     endpoint = Endpoint.Images,
-    byokLeaseId?: string
+    byokLeaseId?: string,
+    // CDZIMAGE (WS1 PR5): per-request engine override (gpt-image-2 / 1.5);
+    // the orchestrator parses the query like the chat stream's modelId.
+    modelId?: string
   ) {
     let url = `/api/copilot/chat/${sessionId}/${endpoint}`;
     const queryString = this.paramsToQueryString({
       messageId,
       seed,
       byokLeaseId,
+      modelId,
     });
     if (queryString) {
       url += `?${queryString}`;

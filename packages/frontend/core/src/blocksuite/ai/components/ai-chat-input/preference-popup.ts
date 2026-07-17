@@ -37,6 +37,12 @@ import { computed } from '@preact/signals-core';
 import { css, html } from 'lit';
 import { property } from 'lit/decorators.js';
 
+import {
+  CDZ_IMAGE_MODEL_OPTIONS,
+  getPreferredImageModel,
+  setPreferredImageModel,
+} from '../../utils/image-model-preference';
+
 const modelSubMenuMiddleware = [
   autoPlacement({ allowedPlacements: ['right-start', 'left-start'] }),
   offset({ mainAxis: 4, crossAxis: 0 }),
@@ -573,6 +579,47 @@ export class ChatInputPreference extends SignalWatcher(
 
     // when the model sub-menu opens, bring the selected model into view
     this.watchModelSubMenuOpen();
+
+    // CDZIMAGE (WS1 PR5): which engine the NATIVE image actions use —
+    // Generate image, the style filters, upscale, remove-background — on
+    // both the AI box and the Whiteboard. These surfaces offer 2.0/1.5 only
+    // (the economy 1.0 tier is a Vdz-only offering by policy). The choice is
+    // read as the modelId fallback by the image transport on every request.
+    const preferredImageModel = getPreferredImageModel();
+    const activeImageOption =
+      CDZ_IMAGE_MODEL_OPTIONS.find(
+        option => option.id === preferredImageModel
+      ) ?? CDZ_IMAGE_MODEL_OPTIONS[0];
+    modelItems.push(
+      menu.subMenu({
+        name: 'Image model',
+        prefix: AiOutlineIcon(),
+        middleware: modelSubMenuMiddleware,
+        postfix: html`
+          <span class="ai-active-model-name">
+            ${activeImageOption.label.split(' · ')[0]}
+          </span>
+        `,
+        options: {
+          items: CDZ_IMAGE_MODEL_OPTIONS.map(option =>
+            menu.action({
+              name: option.label,
+              class: {
+                'ai-model-item': true,
+                'ai-model-selected': option.id === preferredImageModel,
+              },
+              postfix:
+                option.id === preferredImageModel
+                  ? html`<span class="ai-model-check">${DoneIcon()}</span>`
+                  : undefined,
+              select: () => {
+                setPreferredImageModel(option.id);
+              },
+            })
+          ),
+        },
+      })
+    );
 
     // NOTE: the council roster is fixed server-side (CDZ Council fans out to
     // three frontier models + synthesis inside CDZ AI), so there is no
