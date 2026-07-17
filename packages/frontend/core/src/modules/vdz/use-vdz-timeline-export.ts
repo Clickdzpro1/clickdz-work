@@ -2,10 +2,10 @@ import { WorkspaceService } from '@affine/core/modules/workspace';
 import { useService } from '@toeverything/infra';
 import { useCallback, useMemo, useState } from 'react';
 
-import {
-  compileTimelineToHtml,
-  type CompileTimelineResult,
-} from './compile-timeline';
+// Type-only: the compiler implementation is LAZY-imported inside `start()` so
+// the (sizeable) compile+inline pipeline stays out of the editor's initial
+// chunk — it loads on the first Export click (C3 chunk diet).
+import type { CompileTimelineResult } from './compile-timeline';
 import type { VdzTimeline } from './schema';
 import { useVdzExport, type UseVdzExport } from './use-vdz-export';
 import { blobIdFromSrc, isVdzBlobSrc } from './use-vdz-media';
@@ -161,6 +161,11 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
       setPreparing(true);
       setSkippedMedia([]);
       try {
+        // Code-split: the compiler only exists in memory once an export is
+        // actually requested. Parallel to the media resolution below in
+        // effect, but sequenced for simplicity — the fetch is cached by the
+        // bundler after the first click.
+        const { compileTimelineToHtml } = await import('./compile-timeline');
         const blobSync = workspaceService.workspace.docCollection.blobSync;
         const { resolveSrc, skipped } = await resolveTimelineMedia(
           timeline,

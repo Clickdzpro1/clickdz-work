@@ -5,7 +5,15 @@ import {
   ViewTitle,
 } from '@affine/core/modules/workbench';
 import { nanoid } from 'nanoid';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   computeTimelineDuration,
@@ -28,7 +36,6 @@ import {
   trackKindForMedia,
   type VdzMediaDragPayload,
 } from './constants';
-import { VdzGeneratePanel } from './generate-panel';
 import * as styles from './index.css';
 import { Inspector } from './inspector';
 import { MediaBin } from './media-bin';
@@ -36,7 +43,6 @@ import { PreviewCanvas } from './preview-canvas';
 import { ProjectBar } from './project-bar';
 import { TimelineLanes } from './timeline-lanes';
 import { Toolbar } from './toolbar';
-import { TranscriptPanel } from './transcript-panel';
 import { useVdzHistory } from './use-vdz-history';
 import {
   type VdzPanelId,
@@ -48,6 +54,19 @@ import {
   VdzResizeHandle,
   VdzViewMenu,
 } from './vdz-panel';
+
+// ---- C3 chunk diet: lazy panels ------------------------------------------
+// The Generate surface and the Transcript panel are NOT part of the editor's
+// first paint (Generate is a mode switch; Transcript is hidden by default), so
+// they load on demand instead of riding in the vdz route chunk. Suspense
+// fallbacks are null — both mount into an already-styled slot, so a brief
+// empty slot beats a mismatched spinner.
+const VdzGeneratePanel = lazy(() =>
+  import('./generate-panel').then(m => ({ default: m.VdzGeneratePanel }))
+);
+const TranscriptPanel = lazy(() =>
+  import('./transcript-panel').then(m => ({ default: m.TranscriptPanel }))
+);
 
 /** Which top-level surface the page is showing. */
 type VdzMode = 'edit' | 'generate';
@@ -720,7 +739,9 @@ const VdzStudioPage = () => {
       <ViewBody>
         {mode === 'generate' ? (
           <div className={styles.generateHost}>
-            <VdzGeneratePanel onGenerateInEditor={onGenerateInEditor} />
+            <Suspense fallback={null}>
+              <VdzGeneratePanel onGenerateInEditor={onGenerateInEditor} />
+            </Suspense>
           </div>
         ) : (
           <div
@@ -904,17 +925,19 @@ const VdzStudioPage = () => {
                         className={styles.sidePanelSlot}
                         style={{ width: layout.transcript.size }}
                       >
-                        <TranscriptPanel
-                          timeline={timeline}
-                          playheadSeconds={playheadSeconds}
-                          selectedIds={selectedIds}
-                          onSeek={scrubTo}
-                          onSelectClip={clipId => selectClip(clipId, false)}
-                          onOp={commitLaneOp}
-                          onCollapse={() =>
-                            setPanelVisible('transcript', false)
-                          }
-                        />
+                        <Suspense fallback={null}>
+                          <TranscriptPanel
+                            timeline={timeline}
+                            playheadSeconds={playheadSeconds}
+                            selectedIds={selectedIds}
+                            onSeek={scrubTo}
+                            onSelectClip={clipId => selectClip(clipId, false)}
+                            onOp={commitLaneOp}
+                            onCollapse={() =>
+                              setPanelVisible('transcript', false)
+                            }
+                          />
+                        </Suspense>
                       </div>
                     </>
                   ) : null}
