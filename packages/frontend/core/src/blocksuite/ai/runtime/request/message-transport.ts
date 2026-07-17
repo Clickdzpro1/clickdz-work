@@ -2,6 +2,7 @@ import type { AIToolsConfig } from '@affine/core/modules/ai-button';
 import { partition } from 'lodash-es';
 
 import { toTextStream } from '../../provider/event-source';
+import { getContextMode } from '../../utils/context-mode-preference';
 import { getPreferredImageModel } from '../../utils/image-model-preference';
 import { createWorkspaceByokLocalLease } from './byok-local-lease';
 import { type CopilotClient, Endpoint } from './copilot-client';
@@ -132,6 +133,12 @@ export function textToText({
   toolsConfig,
 }: TextToTextOptions) {
   let messageId: string | undefined;
+  // WS2 — if the user picked a different model mid-conversation and chose to
+  // keep the thread, that per-session choice ('recent' | 'compact' | 'fresh')
+  // rides this send as `?contextMode=`. Unset → undefined → dropped from the
+  // query string, so requests are byte-identical to today's behavior. Read
+  // exactly like the image transport reads its Image-model preference.
+  const contextMode = getContextMode(sessionId);
 
   if (stream) {
     return {
@@ -169,6 +176,7 @@ export function textToText({
             runId,
             retry,
             byokLeaseId,
+            contextMode,
           },
           endpoint
         );
@@ -237,6 +245,7 @@ export function textToText({
           runId,
           retry,
           byokLeaseId,
+          contextMode,
         },
         endpoint
       );

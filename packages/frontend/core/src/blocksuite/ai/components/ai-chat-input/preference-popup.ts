@@ -42,12 +42,22 @@ import {
   getPreferredImageModel,
   setPreferredImageModel,
 } from '../../utils/image-model-preference';
+import {
+  type CdzContextMode,
+  getContextMode,
+  setContextMode,
+} from '../../utils/context-mode-preference';
 
 const modelSubMenuMiddleware = [
   autoPlacement({ allowedPlacements: ['right-start', 'left-start'] }),
   offset({ mainAxis: 4, crossAxis: 0 }),
   shift({ crossAxis: true, padding: 8 }),
 ];
+
+// WS2 — model-switch context handoff. A thread longer than this many user
+// turns is compacted (leading summary + tail) rather than sent recent-window
+// whole; matches the server's contextMode='compact' contract.
+const CDZ_LONG_THREAD_TURNS = 12;
 
 export class ChatInputPreference extends SignalWatcher(
   WithDisposable(ShadowlessElement)
@@ -425,6 +435,44 @@ export class ChatInputPreference extends SignalWatcher(
     return activeModel || defaultModel;
   });
 
+  // WS2 — how many real conversation turns the bound session already holds.
+  // Reachable cheaply straight off the CopilotChatHistory fragment
+  // (`session.messages`, RECON G): count user-role messages = turns. If the
+  // roles are somehow unreadable but messages exist, fall back to the raw
+  // message count so a bound-but-opaque session still counts as ≥1.
+  private get sessionTurnCount(): number {
+    const messages = this.session?.messages;
+    if (!messages || messages.length === 0) return 0;
+    const userTurns = messages.filter(
+      message => message.role === 'user'
+    ).length;
+    return userTurns > 0 ? userTurns : messages.length;
+  }
+
+  // The context handoff only makes sense once there is at least one turn for
+  // a newly-picked model to read (or discard).
+  private get hasHandoffContext(): boolean {
+    return !!this.session?.sessionId && this.sessionTurnCount >= 1;
+  }
+
+  // Keep-context default: 'recent' for short threads, 'compact' once the
+  // thread is long (>12 turns) so the new model gets a summary + tail instead
+  // of a truncated recent window.
+  private get defaultKeepMode(): CdzContextMode {
+    return this.sessionTurnCount > CDZ_LONG_THREAD_TURNS
+      ? 'compact'
+      : 'recent';
+  }
+
+  // Store the keep-context choice for the current session. Called both when a
+  // different model is picked (default keep) and from the explicit second-step
+  // row, so the chosen mode rides subsequent sends via the transport.
+  private keepContextForSwitch() {
+    const sessionId = this.session?.sessionId;
+    if (!sessionId) return;
+    setContextMode(sessionId, this.defaultKeepMode);
+  }
+
   private watchModelSubMenuOpen() {
     // the menu system has no onOpen hook for sub-menus, so watch the DOM:
     // when the model list mounts, center the currently selected model
@@ -526,7 +574,15 @@ export class ChatInputPreference extends SignalWatcher(
             );
             return;
           }
+          // WS2 — switching to a DIFFERENT model on a session that already has
+          // ≥1 turn stages the context handoff. The default is keep-context
+          // (the second-step row below lets the user review it in the same
+          // visual language); the stored mode then rides subsequent sends.
+          const isDifferent = model.id !== this.model.value?.id;
           this.aiModelService.setModel(model.id);
+          if (isDifferent && this.hasHandoffContext) {
+            this.keepContextForSwitch();
+          }
         },
       });
     };
@@ -579,6 +635,65 @@ export class ChatInputPreference extends SignalWatcher(
 
     // when the model sub-menu opens, bring the selected model into view
     this.watchModelSubMenuOpen();
+
+    // WS2 — model-switch context handoff (inline second step). Only shown
+    // when the bound session already has ≥1 turn, so a newly-picked model has
+    // something to read. Same visual language as the Image-model submenu
+    // (identical `.ai-model-item` rows + check badge). Picking a different
+    // model above already stores the keep-context default; this row surfaces
+    // that decision and lets the user re-affirm it.
+    //
+    // "Nouvelle discussion" (fresh start) is intentionally absent: while the
+    // fork mutation is client-wired (copilot-client.forkSession), starting a
+    // clean thread also needs a UI session-swap + navigation that this popup
+    // has no handle on (no CopilotClient / no fork or new-session callback is
+    // passed in by the chat-input host — RECON F.4 / G). Firing the mutation
+    // here alone would strand an orphan session, so the button is omitted.
+    if (this.hasHandoffContext) {
+      const sessionId = this.session?.sessionId ?? '';
+      const storedMode = getContextMode(sessionId);
+      const keepMode = this.defaultKeepMode;
+      // Keep-context is the effective/highlighted choice whenever the stored
+      // mode is a context-carrying one (recent | compact) — which is exactly
+      // what a model switch stores by default.
+      const keepSelected = storedMode === 'recent' || storedMode === 'compact';
+      const keepLabel =
+        keepMode === 'compact'
+          ? '🧠 Garder le contexte (résumé)'
+          : '🧠 Garder le contexte';
+      modelItems.push(
+        menu.subMenu({
+          name: 'Contexte du modèle',
+          prefix: AiOutlineIcon(),
+          middleware: modelSubMenuMiddleware,
+          postfix: html`
+            <span class="ai-active-model-name">
+              ${keepSelected ? 'Conservé' : 'Auto'}
+            </span>
+          `,
+          options: {
+            items: [
+              renderGroupHeader(
+                'Le nouveau modèle doit-il lire la conversation ?'
+              ),
+              menu.action({
+                name: keepLabel,
+                class: {
+                  'ai-model-item': true,
+                  'ai-model-selected': keepSelected,
+                },
+                postfix: keepSelected
+                  ? html`<span class="ai-model-check">${DoneIcon()}</span>`
+                  : undefined,
+                select: () => {
+                  this.keepContextForSwitch();
+                },
+              }),
+            ],
+          },
+        })
+      );
+    }
 
     // CDZIMAGE (WS1 PR5): which engine the NATIVE image actions use —
     // Generate image, the style filters, upscale, remove-background — on

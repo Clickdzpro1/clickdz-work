@@ -14,6 +14,10 @@ import {
 } from '../../core';
 import type { PromptParams } from '../../providers/types';
 import { ChatSession, ChatSessionService } from '../../session';
+import {
+  CompactSummaryService,
+  maybeTriggerCompactSummary,
+} from '../../conversation/compact';
 import { ChatQuerySchema } from '../../types';
 
 export type PreparedConversationTurn = {
@@ -35,7 +39,8 @@ export class ConversationHost {
     private readonly sessions: ChatSessionService,
     private readonly submissions: CompatSubmissionStore,
     private readonly mutex: Mutex,
-    private readonly access: CopilotAccessPolicy
+    private readonly access: CopilotAccessPolicy,
+    private readonly compact: CompactSummaryService
   ) {}
 
   private async loadAcceptedTurn(
@@ -211,6 +216,9 @@ export class ConversationHost {
       turnId: turn.id ?? '',
     });
     session.pushPersistedTurn(turn);
+    // WS2: fire-and-forget compact summary every 6th user message (env-gated,
+    // never awaited, never throws).
+    maybeTriggerCompactSummary(this.compact, sessionId, session.userTurnCount);
     return {
       turn,
       quotaBackedRoutesAllowed: routeAccess.quotaBackedRoutesAllowed,
@@ -224,7 +232,7 @@ export class ConversationHost {
   ): Promise<PreparedConversationTurn> {
     const { messageId, retry, params, byokLeaseId } =
       ChatQuerySchema.parse(query);
-    const session = await this.sessions.get(sessionId);
+    const session = await this.sessions.get(sessionId, params?.contextMode);
     if (!session || session.config.userId !== userId) {
       throw new CopilotSessionNotFound();
     }
