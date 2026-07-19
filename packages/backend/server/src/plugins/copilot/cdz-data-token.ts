@@ -48,3 +48,55 @@ export function verifyDataToken(slug: string, token: string): boolean {
   if (!expected || !token) return false;
   return safeEqual(expected, token);
 }
+
+// ---------------------------------------------------------------------------
+// Vdz signed blob token (C3 — worker→app blob serve).
+//
+// A stateless, EXPIRING variant of the data token above. It gates the @Public()
+// `GET /api/v1/vdz/blob/:workspaceId/:blobId` route so the Remotion worker
+// (which has NO app cookie/session) can fetch uploaded workspace blobs over
+// HTTPS using only a signed, short-lived URL. The `exp` timestamp is folded
+// INTO the signed payload (unlike the data token, which never expires), so a
+// leaked URL dies on its own and cannot be replayed past its window.
+//
+// Same secret + constant-time compare as the data token (reuses safeEqual),
+// so this works in production without provisioning a new env var. `exp` is a
+// millisecond epoch (Date.now() domain) to match the `exp < Date.now()` check.
+// ---------------------------------------------------------------------------
+
+/**
+ * Sign a `(workspaceId, blobId, exp)` triple → base64url HMAC-SHA256 signature.
+ * `exp` is an absolute expiry as a millisecond epoch (`Date.now()` domain); the
+ * caller owns choosing it (e.g. now + 45min). Returns '' when no secret is
+ * configured — the verifier treats an empty expected/candidate sig as invalid,
+ * so an unconfigured deployment fails closed rather than serving unsigned URLs.
+ */
+export function signBlobToken(
+  workspaceId: string,
+  blobId: string,
+  exp: number
+): string {
+  if (!DATA_SECRET) return '';
+  return createHmac('sha256', DATA_SECRET)
+    .update(`blob:${workspaceId}:${blobId}:${exp}`)
+    .digest('base64url');
+}
+
+/**
+ * Verify a caller-supplied blob token (constant-time) AND that it has not
+ * expired. Returns false when the secret is unset, the sig is missing/empty,
+ * `exp` is not a finite timestamp, `exp` is already in the past, or the sig does
+ * not match the re-derived expected value. Never throws (so the route maps a
+ * false result to a typed 401/403 rather than a raw 500).
+ */
+export function verifyBlobToken(
+  workspaceId: string,
+  blobId: string,
+  exp: number,
+  sig: string
+): boolean {
+  if (!Number.isFinite(exp) || exp < Date.now()) return false;
+  const expected = signBlobToken(workspaceId, blobId, exp);
+  if (!expected || !sig) return false;
+  return safeEqual(expected, sig);
+}

@@ -1,6 +1,14 @@
 import { Readable } from 'node:stream';
 
-import { Body, Controller, Get, Param, Post, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  Res,
+} from '@nestjs/common';
 import type { Response } from 'express';
 
 // SECURITY: typed AFFiNE errors so the global exception filter emits proper
@@ -10,8 +18,25 @@ import type { Response } from 'express';
 //  · CopilotProviderSideError -> render-service (upstream) failure, typed as a
 //    provider error rather than a bare 502; kind:'not_configured' is the same
 //    signal the compose controller uses when its engine env is unset.
+//  · AuthenticationRequired   -> 401 (missing/invalid signed-blob token)
+//  · AccessDenied             -> 403 (expired/mismatched signed-blob token)
+//  · BlobNotFound             -> 404 (signed URL valid but the blob is gone)
 // Throttle('strict') is the same hard per-IP cap the paid /apps + compose routes use.
-import { BadRequest, CopilotProviderSideError, Throttle } from '../../base';
+// URLHelper mints ABSOLUTE, worker-fetchable urls from AFFINE_SERVER_EXTERNAL_URL
+// (same idiom WorkspaceBlobStorage uses for avatar links).
+import {
+  AccessDenied,
+  AuthenticationRequired,
+  BadRequest,
+  BlobNotFound,
+  CopilotProviderSideError,
+  Throttle,
+  URLHelper,
+} from '../../base';
+import { CurrentUser, Public } from '../../core/auth';
+import { PermissionAccess } from '../../core/permission';
+import { WorkspaceBlobStorage } from '../../core/storage';
+import { signBlobToken, verifyBlobToken } from './cdz-data-token';
 
 // ---------------------------------------------------------------------------
 // CDZ Render service wiring. The render service (cdz-render/, a standalone
@@ -58,6 +83,40 @@ const DEFAULT_FPS = 30;
 // round (cdz-render's MAX_DURATION_S is raised to match). Over this we reject at
 // the edge with the C2 duration_cap body BEFORE round-tripping to cdz-render.
 const CLASSIC_MAX_SEC = 300;
+
+// ---------------------------------------------------------------------------
+// C3 — signed-URL blob export (worker→app). The Remotion worker has NO app
+// cookie/session, so it cannot use the permission-gated
+// `GET /api/workspaces/:id/blobs/:name` route. Instead the FE mints short-lived
+// signed URLs here (session-authed, Workspace.Read asserted) and the worker
+// fetches them from the @Public() serve route below (HMAC + expiry gated).
+// ---------------------------------------------------------------------------
+// How long a minted blob URL stays valid. A render runs minutes and Chromium
+// may re-fetch/seek media late in the render, so 45min gives ample slack over
+// the ~10min FE poll ceiling + worker render time while dying well before a
+// leaked URL could persist. Milliseconds (Date.now() domain), matching the
+// token's `exp < Date.now()` check.
+const BLOB_URL_TTL_MS = 45 * 60 * 1000;
+// Defensive cap on a single mint request so one call can't sign an unbounded
+// list. A timeline with hundreds of distinct media clips is already extreme.
+const MAX_BLOB_IDS = 200;
+
+// Caps mirror the render service's own validation (server.mjs) so we reject
+// oversized/short payloads at the edge instead of round-tripping them.
+const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB
+// A render manifest is JSON (not a 2 MB HTML blob) but can carry many clips +
+// karaoke words; cap generously to reject a pathological payload at the edge
+// (the worker validates the manifest shape itself and returns typed errors).
+const MAX_MANIFEST_BYTES = 4 * 1024 * 1024; // 4 MB
+// A render can take minutes; the proxy calls are quick (enqueue / status /
+// stream), so a generous-but-bounded timeout guards against a hung upstream.
+const PROXY_TIMEOUT_MS = 30_000;
+// The file stream can be large and slow; give it its own longer ceiling.
+const FILE_PROXY_TIMEOUT_MS = 180_000;
+// The Remotion worker's enqueue round-trip; 120s matches the track spec —
+// generous for a large manifest POST, bounded against a hung worker. Status and
+// file polling reuse the HTML tier's PROXY_/FILE_PROXY_ timeouts.
+const REMOTION_PROXY_TIMEOUT_MS = 120_000;
 
 /**
  * Parse an optional integer dimension (width/height) from the request body.
@@ -107,38 +166,37 @@ function parseDurationSec(value: unknown): number | null {
   return n;
 }
 
-// Caps mirror the render service's own validation (server.mjs) so we reject
-// oversized/short payloads at the edge instead of round-tripping them.
-const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB
-// A render manifest is JSON (not a 2 MB HTML blob) but can carry many clips +
-// karaoke words; cap generously to reject a pathological payload at the edge
-// (the worker validates the manifest shape itself and returns typed errors).
-const MAX_MANIFEST_BYTES = 4 * 1024 * 1024; // 4 MB
-// A render can take minutes; the proxy calls are quick (enqueue / status /
-// stream), so a generous-but-bounded timeout guards against a hung upstream.
-const PROXY_TIMEOUT_MS = 30_000;
-// The file stream can be large and slow; give it its own longer ceiling.
-const FILE_PROXY_TIMEOUT_MS = 180_000;
-// The Remotion worker's enqueue round-trip; 120s matches the track spec —
-// generous for a large manifest POST, bounded against a hung worker. Status and
-// file polling reuse the HTML tier's PROXY_/FILE_PROXY_ timeouts.
-const REMOTION_PROXY_TIMEOUT_MS = 120_000;
-
 /**
  * ClickDz Vdz Studio — the MP4 export proxy.
  *
- * Three routes, session-authed (no @Public — the global guard applies, exactly
+ * Session-authed render routes (no @Public — the global guard applies, exactly
  * like the sibling compose controller), Throttle('strict'), typed errors:
  *   · POST /api/v1/vdz/render            {html}   -> {jobId}
  *   · GET  /api/v1/vdz/render/:jobId              -> {status, progress, ...}
  *   · GET  /api/v1/vdz/render/:jobId/file         -> streams the MP4 (video/mp4)
  *
- * All three forward to CDZ_RENDER_URL with the CDZ_RENDER_TOKEN header. When
- * CDZ_RENDER_URL is unset the routes fail with a typed 4xx ("not configured")
- * so the UI can degrade gracefully instead of hanging.
+ * Plus the C3 signed-blob-export pair (see the two handlers at the bottom):
+ *   · POST /api/v1/vdz/blob-urls                  -> { urls } (session-authed)
+ *   · GET  /api/v1/vdz/blob/:workspaceId/:blobId  -> @Public() HMAC+expiry serve
+ *
+ * The render routes forward to CDZ_RENDER_URL with the CDZ_RENDER_TOKEN header.
+ * When CDZ_RENDER_URL is unset the routes fail with a typed 4xx ("not
+ * configured") so the UI can degrade gracefully instead of hanging.
  */
 @Controller()
 export class ClickDzVdzRenderController {
+  // C3 DI: WorkspaceBlobStorage reads blob bytes by (workspaceId, blobId);
+  // URLHelper mints absolute worker-fetchable urls from the server externalUrl;
+  // PermissionAccess asserts the caller may read the workspace before signing.
+  // WorkspaceBlobStorage + PermissionAccess are made resolvable for this
+  // controller by adding StorageModule + PermissionModule to CopilotModule's
+  // imports (see NOTES-index.md); URLHelper is @Global() (base HelpersModule).
+  constructor(
+    private readonly blobStorage: WorkspaceBlobStorage,
+    private readonly url: URLHelper,
+    private readonly ac: PermissionAccess
+  ) {}
+
   private assertRenderReady() {
     if (!RENDER_URL || !RENDER_TOKEN) {
       // A typed 4xx (not a 500): the render service simply is not wired up on
@@ -538,5 +596,152 @@ export class ClickDzVdzRenderController {
       res.end();
     });
     nodeStream.pipe(res);
+  }
+
+  // -------------------------------------------------------------------------
+  // C3 — signed blob export (worker→app). Two routes:
+  //   · POST /api/v1/vdz/blob-urls  — session-authed MINT (cookie). Asserts the
+  //     caller can read the workspace, then signs a short-lived absolute URL per
+  //     blobId. Returns { urls: { [blobId]: absoluteUrl } }.
+  //   · @Public() GET /api/v1/vdz/blob/:workspaceId/:blobId — the WORKER fetches
+  //     this (NO cookie); it is gated ONLY by the HMAC sig + exp, then streams
+  //     the blob bytes. The Remotion worker passes the signed URL straight into
+  //     <OffthreadVideo>/<Img>/<Audio> — zero worker changes required.
+  // -------------------------------------------------------------------------
+
+  /**
+   * POST /api/v1/vdz/blob-urls — mint short-lived signed URLs for uploaded
+   * workspace blobs so the cookie-less Remotion worker can fetch them over HTTPS.
+   *
+   * Session-authed (global guard; no @Public), Workspace.Read asserted on the
+   * caller so a user can only sign blobs of a workspace they can read — mirrors
+   * the ACL on the existing WorkspacesController.blob route. Typed errors only.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/vdz/blob-urls')
+  async blobUrls(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any
+  ): Promise<{ urls: Record<string, string> }> {
+    const workspaceId = String(body?.workspaceId || '');
+    if (!workspaceId) {
+      throw new BadRequest('"workspaceId" is required');
+    }
+    const rawIds = body?.blobIds;
+    if (!Array.isArray(rawIds)) {
+      throw new BadRequest('"blobIds" must be an array of blob ids');
+    }
+    if (rawIds.length > MAX_BLOB_IDS) {
+      throw new BadRequest(`Too many blobIds (max ${MAX_BLOB_IDS})`);
+    }
+
+    // Only sign blobs of a workspace the caller can actually read. `assert`
+    // throws a typed permission error (mapped to 403) when the check fails.
+    await this.ac.user(user.id).workspace(workspaceId).assert('Workspace.Read');
+
+    // Normalize + de-dupe the ids (a timeline may reference the same source
+    // many times). Reject non-string / empty entries defensively.
+    const blobIds = Array.from(
+      new Set(
+        rawIds.map(id => {
+          if (typeof id !== 'string' || !id) {
+            throw new BadRequest('Each blobId must be a non-empty string');
+          }
+          return id;
+        })
+      )
+    );
+
+    const exp = Date.now() + BLOB_URL_TTL_MS;
+    const urls: Record<string, string> = {};
+    for (const blobId of blobIds) {
+      const sig = signBlobToken(workspaceId, blobId, exp);
+      // Absolute, worker-fetchable url from AFFINE_SERVER_EXTERNAL_URL (the same
+      // URLHelper.link idiom WorkspaceBlobStorage uses for avatar links). The
+      // path segments are encoded; exp/sig ride as query params.
+      urls[blobId] = this.url.link(
+        `/api/v1/vdz/blob/${encodeURIComponent(workspaceId)}/${encodeURIComponent(blobId)}`,
+        { exp, sig }
+      );
+    }
+    return { urls };
+  }
+
+  /**
+   * GET /api/v1/vdz/blob/:workspaceId/:blobId?exp=&sig= — @Public() blob serve.
+   *
+   * The Remotion worker calls this WITHOUT a cookie, so it MUST be @Public();
+   * access is instead gated by the HMAC `sig` + `exp` (verifyBlobToken). On a
+   * bad/expired/missing token we throw a TYPED AuthenticationRequired (401) /
+   * AccessDenied (403) — never a raw HttpException (which the global filter would
+   * coerce to 500). We NEVER log the sig or secret.
+   *
+   * Streaming: WorkspaceBlobStorage.get(..., true) returns a presigned
+   * redirectUrl on R2 (Chromium follows it; the S3 url supports native range —
+   * ideal for <OffthreadVideo>). Otherwise we set content-type/length +
+   * `accept-ranges: bytes` and pipe the Readable straight to the response
+   * (never buffering the whole blob into memory), mirroring the existing public
+   * blob route. @Res() opts out of Nest's serializer so we own the response.
+   */
+  @Public()
+  @Throttle('strict')
+  @Get('/api/v1/vdz/blob/:workspaceId/:blobId')
+  async serveBlob(
+    @Param('workspaceId') workspaceId: string,
+    @Param('blobId') blobId: string,
+    @Query('exp') expRaw: string | undefined,
+    @Query('sig') sig: string | undefined,
+    @Res() res: Response
+  ): Promise<void> {
+    const exp = Number(expRaw);
+    // Missing/malformed signature material → 401 (authentication is required
+    // and was not validly supplied). Note: no logging of sig/secret anywhere.
+    if (!sig || !Number.isFinite(exp)) {
+      throw new AuthenticationRequired('A valid signed blob url is required');
+    }
+    // Valid-shape but wrong/expired token → 403 (the request was authenticated-
+    // shaped but is not allowed). verifyBlobToken also rejects exp < now.
+    if (!verifyBlobToken(workspaceId, blobId, exp, sig)) {
+      throw new AccessDenied('This blob url is invalid or has expired');
+    }
+
+    // Prefer a provider-presigned redirect (R2) — native range, no bytes through
+    // this process. Falls back to a streamed object otherwise.
+    const { body, metadata, redirectUrl } = await this.blobStorage.get(
+      workspaceId,
+      blobId,
+      true
+    );
+
+    if (redirectUrl) {
+      // Chromium (the worker's fetcher) follows the 302 to the signed S3 url.
+      res.redirect(redirectUrl);
+      return;
+    }
+
+    if (!body) {
+      throw new BlobNotFound({ spaceId: workspaceId, blobId });
+    }
+
+    if (metadata) {
+      res.setHeader('content-type', metadata.contentType);
+      res.setHeader('last-modified', metadata.lastModified.toUTCString());
+      res.setHeader('content-length', metadata.contentLength);
+    }
+    // Advertise range support so <OffthreadVideo>'s seeks are well-behaved; the
+    // object stream itself is delivered as a full 200 body (we do not slice a
+    // Range here — that would require a range-capable source or buffering the
+    // whole blob; Chromium re-fetches as needed and the R2 path above already
+    // hands off to a natively range-capable presigned url).
+    res.setHeader('accept-ranges', 'bytes');
+    // Private + short cache: signed urls are per-render and expire; do not let a
+    // shared cache serve them to another principal.
+    res.setHeader('cache-control', 'private, max-age=3600');
+
+    body.on('error', () => {
+      if (!res.headersSent) res.status(502);
+      res.end();
+    });
+    body.pipe(res);
   }
 }
