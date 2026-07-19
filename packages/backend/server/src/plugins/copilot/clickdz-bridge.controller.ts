@@ -195,6 +195,12 @@ const OPENAI_SPEECH_URL = 'https://api.openai.com/v1/audio/speech';
 const MAX_VOICE_TRANSCRIBE_BYTES = 24 * 1024 * 1024;
 const VOICE_TRANSCRIBE_TIMEOUT_MS = 180_000;
 const VOICE_TTS_TIMEOUT_MS = 60_000;
+// CDZIMAGE fast mode (Bolt): the normal upstream abort budget for
+// /v1/images/edits and /v1/images/generations is 180s. Fast-mode requests
+// already trade quality for speed (prompt-pro skipped, tier dropped a notch —
+// see `fastMode` below), so give them a tighter upstream budget too. Gated
+// strictly on `fastMode`; non-fast requests are UNCHANGED at 180s.
+const FAST_IMAGE_TIMEOUT_MS = 60_000;
 // Deepgram Aura-2 TTS voices this route accepts (the working provider's
 // supported set). The frontend renders exactly these for the Deepgram card.
 // Unknown/empty -> the historical default so old callers stay byte-identical.
@@ -2116,7 +2122,9 @@ export class ClickDzBridgeController {
         method: 'POST',
         headers: { Authorization: `Bearer ${OPENAI_IMAGE_API_KEY}` },
         body: form,
-        signal: AbortSignal.timeout(180000),
+        signal: AbortSignal.timeout(
+          fastMode ? FAST_IMAGE_TIMEOUT_MS : 180000
+        ),
       });
     } else {
       const payload: Record<string, unknown> = {
@@ -2140,7 +2148,9 @@ export class ClickDzBridgeController {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(180000),
+          signal: AbortSignal.timeout(
+            fastMode ? FAST_IMAGE_TIMEOUT_MS : 180000
+          ),
         }
       );
     }
