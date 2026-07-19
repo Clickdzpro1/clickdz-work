@@ -1,4 +1,6 @@
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
+import { PlatformNotifyService } from '@affine/core/modules/platform-notify';
+import { useServiceOptional } from '@toeverything/infra';
 import { useCallback, useRef, useState } from 'react';
 
 import * as api from './api';
@@ -188,6 +190,11 @@ export function useAgentStream(
   onEventRef.current = onEvent;
   // The active run's threadId, readable synchronously inside stop().
   const threadIdRef = useRef<string | null>(null);
+  // Optional platform-notifications hub: undefined when not mounted, so the
+  // emit below stays additive + never throws.
+  const platformNotify = useServiceOptional(PlatformNotifyService);
+  const platformNotifyRef = useRef(platformNotify);
+  platformNotifyRef.current = platformNotify;
 
   /**
    * Apply one parsed event to state. Kept as a plain function (not memoized)
@@ -298,6 +305,15 @@ export function useAgentStream(
           });
           // A completed turn clears any lingering approval prompt.
           setPendingApproval(null);
+          try {
+            platformNotifyRef.current?.notify({
+              studio: agent,
+              title: 'Run complete',
+              action: { label: 'View', route: '/' + agent },
+            });
+          } catch {
+            // a notify failure must never break the agent stream
+          }
           break;
         }
         case 'error': {

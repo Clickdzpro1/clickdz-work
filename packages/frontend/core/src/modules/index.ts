@@ -52,6 +52,7 @@ import { configurePDFModule } from './pdf';
 import { configurePeekViewModule } from './peek-view';
 import { configurePermissionsModule } from './permissions';
 import { configureQuickSearchModule } from './quicksearch';
+import { configurePlatformContextModule } from './platform-context';
 import { configSearchMenuModule } from './search-menu';
 import { configureShareDocsModule } from './share-doc';
 import { configureShareSettingModule } from './share-setting';
@@ -59,12 +60,14 @@ import {
   configureCommonGlobalStorageImpls,
   configureStorageModule,
 } from './storage';
+import { configureStudioModule } from './studio';
 import { configureSystemFontFamilyModule } from './system-font-family';
 import { configureTagModule } from './tag';
 import { configureTelemetryModule } from './telemetry';
 import { configureTemplateDocModule } from './template-doc';
 import { configureAppThemeModule } from './theme';
 import { configureThemeEditorModule } from './theme-editor';
+import { configurePlatformNotifyModule } from './platform-notify';
 import { configureUrlModule } from './url';
 import { configureUserspaceModule } from './userspace';
 import { configureWorkspaceModule } from './workspace';
@@ -95,6 +98,8 @@ export function configureCommonModules(framework: Framework) {
   configureExplorerIconModule(framework);
   configureDocDisplayMetaModule(framework);
   configureQuickSearchModule(framework);
+  configureStudioModule(framework);
+  configurePlatformContextModule(framework);
   configureDocsSearchModule(framework);
   configureDocLinksModule(framework);
   configureOrganizeModule(framework);
@@ -112,6 +117,7 @@ export function configureCommonModules(framework: Framework) {
   configureUrlModule(framework);
   configureAppThemeModule(framework);
   configureClickDzThemeModule(framework);
+  configurePlatformNotifyModule(framework);
   configureDialogModule(framework);
   configureDocInfoModule(framework);
   configureOpenInApp(framework);

@@ -3,8 +3,11 @@
  * Renders as a collapsible section at the top of the scrollable sidebar area.
  */
 import { MenuLinkItem } from '@affine/core/modules/app-sidebar/views';
+import {
+  RecentStudiosService,
+  STUDIOS,
+} from '@affine/core/modules/studio';
 import { WorkbenchService } from '@affine/core/modules/workbench';
-import { AiIcon, BlockLinkIcon, ChatWithAiIcon, FrameIcon, KeyboardIcon, VoiceIcon } from '@blocksuite/icons/rc';
 import { useLiveData, useService } from '@toeverything/infra';
 
 import { CollapsibleSection } from '../../desktop/components/navigation-panel';
@@ -51,6 +54,7 @@ const BetaChip = () => (
 
 export const StudiosSection = () => {
   const workbench = useService(WorkbenchService).workbench;
+  const recentStudios = useService(RecentStudiosService);
   const location = useLiveData(workbench.location$);
 
   return (
@@ -59,74 +63,28 @@ export const StudiosSection = () => {
       title="Studios"
       contentStyle={{ padding: '6px 8px 0 8px' }}
     >
-      <MenuLinkItem
-        data-testid="slider-bar-vdz-studio-button"
-        active={location.pathname.startsWith('/vdz')}
-        to={'/vdz'}
-        icon={<FrameIcon />}
-        postfix={<NewChip />}
-        postfixDisplay="always"
-      >
-        Vdz Studio
-      </MenuLinkItem>
-      <MenuLinkItem
-        data-testid="slider-bar-clickdz-apps-button"
-        active={location.pathname.startsWith('/chat')}
-        to={'/chat'}
-        icon={<AiIcon />}
-      >
-        ClickDz Apps
-      </MenuLinkItem>
-      <MenuLinkItem
-        data-testid="slider-bar-integrations-button"
-        active={location.pathname.startsWith('/integrations')}
-        to={'/integrations'}
-        icon={<BlockLinkIcon />}
-        postfix={<BetaChip />}
-        postfixDisplay="always"
-      >
-        🔌 Integrations
-      </MenuLinkItem>
-      <MenuLinkItem
-        data-testid="slider-bar-shoperp-button"
-        active={location.pathname.startsWith('/shoperp')}
-        to={'/shoperp'}
-        icon={<BlockLinkIcon />}
-        postfix={<BetaChip />}
-        postfixDisplay="always"
-      >
-        🛍️ Shop ERP
-      </MenuLinkItem>
-      <MenuLinkItem
-        data-testid="slider-bar-voice-studio-button"
-        active={location.pathname.startsWith('/voice')}
-        to={'/voice'}
-        icon={<VoiceIcon />}
-        postfix={<BetaChip />}
-        postfixDisplay="always"
-      >
-        Voice Studio
-      </MenuLinkItem>
-      <MenuLinkItem
-        data-testid="slider-bar-hermes-button"
-        active={location.pathname.startsWith('/hermes')}
-        to={'/hermes'}
-        icon={<ChatWithAiIcon />}
-        postfix={<BetaChip />}
-        postfixDisplay="always"
-      >
-        Hermes
-      </MenuLinkItem>
-      <MenuLinkItem
-        data-testid="slider-bar-openclaw-button"
-        active={location.pathname.startsWith('/openclaw')}
-        to={'/openclaw'}
-        icon={<KeyboardIcon />}
-        postfix={<BetaChip />}
-        postfixDisplay="always"
-      >
-        OpenClaw
-      </MenuLinkItem>
+      {STUDIOS.map(studio => {
+        const postfix =
+          studio.id === 'vdz' ? (
+            <NewChip />
+          ) : studio.beta ? (
+            <BetaChip />
+          ) : undefined;
+        return (
+          <MenuLinkItem
+            key={studio.id}
+            data-testid={studio.testId}
+            active={location.pathname.startsWith(studio.route)}
+            to={studio.route}
+            icon={studio.icon()}
+            postfix={postfix}
+            postfixDisplay={postfix ? 'always' : undefined}
+            onClick={() => recentStudios.add(studio.id)}
+          >
+            {studio.label}
+          </MenuLinkItem>
+        );
+      })}
     </CollapsibleSection>
   );
 };

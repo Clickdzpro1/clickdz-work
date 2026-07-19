@@ -29,6 +29,7 @@ import {
   registerAffineNavigationCommands,
   registerAffineSettingsCommands,
   registerAffineUpdatesCommands,
+  registerClickDzStudioCommands,
 } from '../../commands';
 import { EditorSettingService } from '../../modules/editor-setting';
 import { CMDKQuickSearchService } from '../../modules/quicksearch/services/cmdk';
@@ -128,6 +129,23 @@ export function useRegisterWorkspaceCommands() {
     workspaceDialogService,
     workbenchService,
   ]);
+
+  // register ClickDzStudioCommands
+  useEffect(() => {
+    if (!workbenchService) {
+      return;
+    }
+
+    const unsub = registerClickDzStudioCommands({
+      t,
+      workbenchService,
+      store,
+    });
+
+    return () => {
+      unsub();
+    };
+  }, [t, workbenchService, store]);
 
   // register AffineSettingsCommands
   useEffect(() => {
