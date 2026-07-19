@@ -282,6 +282,11 @@ export interface ErpSettings {
   font?: string;
   /** Compact CSV of enabled section ids, e.g. 'hero,trust,categories'. */
   sections?: string;
+  // C6 online-payments flag — NON-sensitive (the Chargily SECRET lives in a
+  // private Redis store, never here). When true the deployed storefront shows a
+  // "Payer en ligne" option (SHOPTPL gates on this); the bridge allowlist
+  // (normalizeErpSettings) validates it. Unset/false = cash-on-delivery only.
+  onlinePay?: boolean;
 }
 
 export interface ErpOrderItem {
@@ -769,6 +774,509 @@ export async function republishShop(input: {
   if (outcome.status === 'cap') return { status: 'cap' };
   if (outcome.status === 'upgrade') return { status: 'upgrade' };
   return { status: 'error', message: outcome.message };
+}
+
+// ---------------------------------------------------------------------------
+// C4 INVENTORY v2 — multi-warehouse stock on the data API. The bridge exposes
+// authed owner-only routes that read/merge the monthly-partitioned `movements`
+// ledger + the `warehouses` collection server-side and roll up per-(product,
+// warehouse) balances. Shapes below mirror the C4 contract EXACTLY:
+//   GET  /api/v1/apps/:slug/erp/inventory
+//        → { warehouses, stockByProduct:{[productKey]:{[warehouseId]:qty,total}}, lowStock }
+//   POST /api/v1/apps/:slug/erp/inventory/movement
+//        { productKey, warehouseId, delta, reason, ref? } → { ok, stock }
+//   POST   /api/v1/apps/:slug/erp/warehouse   { name, location? }
+//   DELETE /api/v1/apps/:slug/erp/warehouse/:id
+// All via cdzApiUrl + credentials:'include' (first-party session cookie). When
+// no warehouse exists yet the table degrades to the product.stock roll-up.
+// ---------------------------------------------------------------------------
+
+export interface Warehouse {
+  id: string;
+  name: string;
+  location?: string;
+  createdAt?: string;
+}
+
+/** The five ledger reasons — byte-exact with the C4 backend movement contract. */
+export const MOVEMENT_REASONS = [
+  'purchase',
+  'sale',
+  'adjust',
+  'return',
+  'transfer',
+] as const;
+export type MovementReason = (typeof MOVEMENT_REASONS)[number];
+
+/** French labels for the reasons (this surface is French where the shop is). */
+export const MOVEMENT_REASON_LABELS: Record<MovementReason, string> = {
+  purchase: 'Achat (entrée)',
+  sale: 'Vente (sortie)',
+  adjust: 'Ajustement',
+  return: 'Retour',
+  transfer: 'Transfert',
+};
+
+/** Per-warehouse quantities for one product + the rolled-up total. */
+export interface ProductStock {
+  total: number;
+  [warehouseId: string]: number;
+}
+
+/** GET /erp/inventory response (C4 contract). */
+export interface ErpInventory {
+  warehouses: Warehouse[];
+  stockByProduct: Record<string, ProductStock>;
+  lowStock: ErpProduct[];
+}
+
+export type ErpInventoryOutcome =
+  | { status: 'ok'; inventory: ErpInventory }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** Coerce the raw stockByProduct map into a well-typed, numeric structure. */
+function normalizeStockByProduct(
+  raw: unknown
+): Record<string, ProductStock> {
+  const out: Record<string, ProductStock> = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (!val || typeof val !== 'object') continue;
+    const entry: ProductStock = { total: 0 };
+    for (const [wid, qty] of Object.entries(val as Record<string, unknown>)) {
+      entry[wid] = num(qty);
+    }
+    entry.total = num((val as Record<string, unknown>).total);
+    out[key] = entry;
+  }
+  return out;
+}
+
+/** GET the authed per-shop inventory (warehouses + per-warehouse balances). */
+export async function fetchErpInventory(
+  slug: string
+): Promise<ErpInventoryOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/inventory`),
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
+    );
+  } catch {
+    return {
+      status: 'error',
+      message: 'Network error while loading inventory.',
+    };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<ErpInventory> & { error?: unknown; message?: unknown })
+    | null;
+  // The route may not exist on an older server, or writes may be unavailable —
+  // treat both as a graceful "degrade to product.stock totals" signal.
+  if (
+    data?.error === 'admin_writes_unavailable' ||
+    data?.error === 'inventory_unavailable'
+  ) {
+    return { status: 'unavailable' };
+  }
+  if (res.status === 404) {
+    // Ambiguous: could be the app OR the route missing. Let the caller fall
+    // back to the product.stock roll-up rather than hard-failing.
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in to view inventory.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Could not load inventory (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return {
+    status: 'ok',
+    inventory: {
+      warehouses: Array.isArray(data?.warehouses)
+        ? (data.warehouses as unknown[])
+            .map(w => w as Partial<Warehouse>)
+            .filter(w => w && typeof w.id === 'string' && w.id)
+            .map(w => ({
+              id: String(w.id),
+              name: String(w.name || w.id),
+              ...(w.location ? { location: String(w.location) } : {}),
+              ...(w.createdAt ? { createdAt: String(w.createdAt) } : {}),
+            }))
+        : [],
+      stockByProduct: normalizeStockByProduct(data?.stockByProduct),
+      lowStock: Array.isArray(data?.lowStock)
+        ? (data.lowStock as ErpProduct[])
+        : [],
+    },
+  };
+}
+
+/**
+ * POST /erp/inventory/movement — append one ledger entry (delta ±) for a
+ * (product, warehouse) pair and roll the product.stock total forward. Returns
+ * the updated stock snapshot the backend recomputed.
+ */
+export async function postErpMovement(
+  slug: string,
+  body: {
+    productKey: string;
+    warehouseId: string;
+    delta: number;
+    reason: MovementReason;
+    ref?: string;
+  }
+): Promise<ErpMutateOutcome<{ ok?: boolean; stock?: ProductStock }>> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/inventory/movement`
+      ),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was changed.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in again.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : res.status === 404
+            ? 'Not found — refresh and retry.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `The movement failed (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return {
+    status: 'ok',
+    data: data as { ok?: boolean; stock?: ProductStock },
+  };
+}
+
+/** POST /erp/warehouse — create a warehouse (name + optional location). */
+export async function postErpWarehouse(
+  slug: string,
+  body: { name: string; location?: string }
+): Promise<ErpMutateOutcome<{ ok?: boolean; warehouse?: Warehouse }>> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/warehouse`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was changed.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in again.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Could not add the warehouse (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return {
+    status: 'ok',
+    data: data as { ok?: boolean; warehouse?: Warehouse },
+  };
+}
+
+/** DELETE /erp/warehouse/:id — remove a warehouse by id. */
+export async function deleteErpWarehouse(
+  slug: string,
+  warehouseId: string
+): Promise<ErpMutateOutcome<{ ok?: boolean }>> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/warehouse/${encodeURIComponent(warehouseId)}`
+      ),
+      {
+        method: 'DELETE',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was changed.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  // 404 = already gone → converge (the row disappears either way).
+  if (!res.ok && res.status !== 404) {
+    const message =
+      res.status === 401
+        ? 'Please sign in again.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Could not remove the warehouse (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: { ok: true } };
+}
+
+// ---------------------------------------------------------------------------
+// C5 PIM AI descriptions — the bridge grounds a cdz-flash prompt strictly in a
+// product's canonical attributes and returns copy the owner previews + applies.
+//   POST /api/v1/apps/:slug/erp/describe { productKey, tone?, lang? }
+//        → { description, bullets? }
+// Fail-closed: a planner-down 502 surfaces as an error state; the caller keeps
+// the manual description editor fully usable.
+// ---------------------------------------------------------------------------
+
+export interface DescribeResult {
+  description: string;
+  bullets?: string[];
+}
+
+export type DescribeOutcome =
+  | { status: 'ok'; result: DescribeResult }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** POST /erp/describe — generate a grounded product description + bullets. */
+export async function postErpDescribe(
+  slug: string,
+  body: { productKey: string; tone?: string; lang?: string }
+): Promise<DescribeOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/describe`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return {
+      status: 'error',
+      message: 'Network error while generating the description.',
+    };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<DescribeResult> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    // 502 = the AI planner is down/misbehaving → a soft, retryable message.
+    const message =
+      res.status === 502
+        ? 'The description generator is unavailable right now — please try again in a moment.'
+        : res.status === 401
+          ? 'Please sign in again.'
+          : res.status === 403
+            ? 'This shop belongs to another account.'
+            : res.status === 404
+              ? 'That product was not found — refresh and retry.'
+              : typeof data?.message === 'string'
+                ? (data.message as string)
+                : `Could not generate a description (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const description =
+    typeof data?.description === 'string' ? data.description : '';
+  if (!description) {
+    return {
+      status: 'error',
+      message: 'The generator returned an empty description — please retry.',
+    };
+  }
+  return {
+    status: 'ok',
+    result: {
+      description,
+      ...(Array.isArray(data?.bullets)
+        ? { bullets: data.bullets.map(b => String(b)).filter(Boolean) }
+        : {}),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// C6 CHARGILY payments — merchant secret lives in a PRIVATE Redis store (never
+// the public settings singleton); the FE only ever sees a masked view. Routes:
+//   PUT /api/v1/apps/:slug/pay/chargily { apiSecret, mode:'test'|'live', enabled }
+//   GET /api/v1/apps/:slug/pay/chargily → { configured, mode, enabled, maskedKey }
+// The "Accept online payments" toggle is a NON-sensitive flag → it rides the
+// EXISTING erp/settings route as settings.onlinePay (postErpSettings). When
+// Chargily is not configured the storefront simply stays cash-on-delivery only.
+// ---------------------------------------------------------------------------
+
+export type ChargilyMode = 'test' | 'live';
+
+/** GET /pay/chargily response — masked-only, never the full secret. */
+export interface ChargilyStatus {
+  configured: boolean;
+  mode: ChargilyMode;
+  enabled: boolean;
+  maskedKey: string;
+}
+
+export type ChargilyStatusOutcome =
+  | { status: 'ok'; chargily: ChargilyStatus }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** GET the masked Chargily configuration state for this shop. */
+export async function fetchChargilyStatus(
+  slug: string
+): Promise<ChargilyStatusOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/pay/chargily`),
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
+    );
+  } catch {
+    return {
+      status: 'error',
+      message: 'Network error while loading payment settings.',
+    };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<ChargilyStatus> & { error?: unknown; message?: unknown })
+    | null;
+  if (res.status === 404) {
+    // Route not present on this server → treat as "not available", COD only.
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in to view payment settings.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Could not load payment settings (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const mode: ChargilyMode = data?.mode === 'live' ? 'live' : 'test';
+  return {
+    status: 'ok',
+    chargily: {
+      configured: data?.configured === true,
+      mode,
+      enabled: data?.enabled === true,
+      maskedKey: typeof data?.maskedKey === 'string' ? data.maskedKey : '',
+    },
+  };
+}
+
+/**
+ * PUT /pay/chargily — store/update the merchant secret + mode + enabled flag.
+ * `apiSecret` is optional on an UPDATE (omit to keep the stored key while just
+ * flipping mode/enabled); the backend keeps it private and echoes masked only.
+ */
+export async function putChargily(
+  slug: string,
+  body: { apiSecret?: string; mode: ChargilyMode; enabled: boolean }
+): Promise<ChargilyStatusOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/pay/chargily`),
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return {
+      status: 'error',
+      message: 'Network error — payment settings were not saved.',
+    };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<ChargilyStatus> & { error?: unknown; message?: unknown })
+    | null;
+  if (res.status === 404) {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 400
+        ? typeof data?.message === 'string'
+          ? (data.message as string)
+          : 'That API secret looks invalid — please check it and try again.'
+        : res.status === 401
+          ? 'Please sign in again.'
+          : res.status === 403
+            ? 'This shop belongs to another account.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `Could not save payment settings (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const mode: ChargilyMode = data?.mode === 'live' ? 'live' : body.mode;
+  return {
+    status: 'ok',
+    chargily: {
+      configured:
+        data?.configured === true ||
+        (!!body.apiSecret && body.apiSecret.trim().length > 0),
+      mode,
+      enabled: data?.enabled === true ? true : body.enabled,
+      maskedKey: typeof data?.maskedKey === 'string' ? data.maskedKey : '',
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

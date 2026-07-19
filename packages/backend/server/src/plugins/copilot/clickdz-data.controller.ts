@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpStatus,
   Options,
   Param,
   Post,
@@ -37,8 +38,17 @@ const MAX_RECORDS_PER_COLLECTION = 500;
 const MAX_LIST_LIMIT = 500;
 const DATA_TTL_SECONDS = 90 * 24 * 60 * 60;
 
+// Per-slug write rate limit: a coarse fixed-window counter over the current
+// epoch-minute. Cheap (one INCR + one EXPIRE), self-cleaning (short TTL), and
+// only touches WRITE paths (POST/DELETE) — reads (list) are never limited.
+const RL_MAX_WRITES_PER_MIN = 60;
+const RL_TTL_SECONDS = 120;
+
 const dataKey = (slug: string, collection: string) =>
   `clickdz:appdata:${slug}:${collection}`;
+
+const rateLimitKey = (slug: string, epochMinute: number) =>
+  `clickdz:rl:${slug}:${epochMinute}`;
 
 function setCors(res: Response) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -77,6 +87,33 @@ export class ClickDzDataController {
     }
   }
 
+  // Sliding-window TTL refresh: keep the same DATA_TTL_SECONDS create() uses,
+  // but re-arm it on EVERY access (read + write) so a live-but-static shop's
+  // collection never silently expires at 90d after its last write. One EXPIRE
+  // per request, scoped to the single collection key the route touched.
+  private async touchTtl(key: string) {
+    await this.redis.expire(key, DATA_TTL_SECONDS);
+  }
+
+  // Per-slug write rate limit. Returns true when the request is OVER the cap
+  // (caller emits a typed 429 via passthrough res). Increments a per-minute
+  // counter; the first hit of a window arms a short TTL so buckets self-expire.
+  // Reads never call this. Fail-open on Redis hiccups (a limiter must not take
+  // down legitimate writes).
+  private async isRateLimited(slug: string): Promise<boolean> {
+    try {
+      const epochMinute = Math.floor(Date.now() / 60000);
+      const key = rateLimitKey(slug, epochMinute);
+      const count = await this.redis.incr(key);
+      if (count === 1) {
+        await this.redis.expire(key, RL_TTL_SECONDS);
+      }
+      return count > RL_MAX_WRITES_PER_MIN;
+    } catch {
+      return false;
+    }
+  }
+
   @Options([
     '/api/apps-data/:slug/:collection',
     '/api/apps-data/:slug/:collection/:id',
@@ -100,7 +137,11 @@ export class ClickDzDataController {
   ) {
     setCors(res);
     this.assertNames(slug, collection);
-    const raw = await this.redis.hgetall(dataKey(slug, collection));
+    const key = dataKey(slug, collection);
+    const raw = await this.redis.hgetall(key);
+    // Reads slide the expiry window forward: a shop that only serves reads
+    // (no new orders/products) keeps its data alive. Cheap, per-collection.
+    await this.touchTtl(key);
     const records = Object.values(raw)
       .map(value => {
         try {
@@ -134,6 +175,12 @@ export class ClickDzDataController {
     setCors(res);
     this.assertNames(slug, collection);
     if (this.isV2(req)) this.requireWriteToken(req, slug);
+    // Per-slug write throttle (typed 429, never a raw HttpException). Applied
+    // after name/token checks so bad input still gets its precise 4xx.
+    if (await this.isRateLimited(slug)) {
+      res.status(HttpStatus.TOO_MANY_REQUESTS).json({ error: 'rate_limited' });
+      return;
+    }
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
       badRequest('Record must be a JSON object');
     }
@@ -173,7 +220,16 @@ export class ClickDzDataController {
     setCors(res);
     this.assertNames(slug, collection);
     if (this.isV2(req)) this.requireWriteToken(req, slug);
-    const removed = await this.redis.hdel(dataKey(slug, collection), id);
+    // Per-slug write throttle (typed 429 via passthrough — never raw).
+    if (await this.isRateLimited(slug)) {
+      res.status(HttpStatus.TOO_MANY_REQUESTS).json({ error: 'rate_limited' });
+      return;
+    }
+    const key = dataKey(slug, collection);
+    const removed = await this.redis.hdel(key, id);
+    // Deletes also slide the window: touching a collection (even to remove a
+    // record) counts as activity, so the rest of the collection stays alive.
+    await this.touchTtl(key);
     return { deleted: removed > 0 };
   }
 

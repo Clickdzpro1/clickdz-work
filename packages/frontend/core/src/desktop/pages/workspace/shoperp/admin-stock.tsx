@@ -9,17 +9,20 @@ import {
   Banner,
   btnStyle,
   C,
+  type DescribeResult,
   EmptyNote,
   type ErpProduct,
   fetchErpCollection,
   Field,
   fmtDZD,
+  hintStyle,
   inputStyle,
   isLowStock,
   linkBtnStyle,
   miniBtnStyle,
   num,
   Panel,
+  postErpDescribe,
   postErpProduct,
   productTitle,
   Spinner,
@@ -58,6 +61,24 @@ function productKey(p: ErpProduct): string {
   return String(p.sku || p.title || p.name || p.id || '');
 }
 
+// The product model carries a single `description` field (bridge caps it at
+// ~900 chars). Fold any generated bullets into the body as a plain "• " list so
+// the whole result is preserved when written via the existing erp/product
+// route. Trimmed to a safe length client-side (the server re-clamps anyway).
+const DESC_MAX = 900;
+function composeDescription(result: DescribeResult): string {
+  const parts: string[] = [];
+  const body = String(result.description || '').trim();
+  if (body) parts.push(body);
+  const bullets = Array.isArray(result.bullets)
+    ? result.bullets.map(b => String(b).trim()).filter(Boolean)
+    : [];
+  if (bullets.length) {
+    parts.push(bullets.map(b => `• ${b}`).join('\n'));
+  }
+  return parts.join('\n\n').slice(0, DESC_MAX);
+}
+
 export const StockAdmin = ({
   slug,
   currency,
@@ -79,6 +100,9 @@ export const StockAdmin = ({
     text: string;
   } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  // The product whose AI description is being generated/previewed (C5).
+  const [describeFor, setDescribeFor] = useState<ErpProduct | null>(null);
+  const [applying, setApplying] = useState(false);
 
   const load = useCallback(
     async (soft = false) => {
@@ -178,6 +202,26 @@ export const StockAdmin = ({
       return ok;
     },
     [readOnly, busyKey, submitProduct]
+  );
+
+  // Apply a generated description to the product (writes via the EXISTING
+  // erp/product route). The product model has a single `description` field, so
+  // any bullets are folded into the body as a bullet list on write.
+  const applyDescription = useCallback(
+    async (product: ErpProduct, result: DescribeResult): Promise<boolean> => {
+      if (readOnly || applying) return false;
+      setApplying(true);
+      setNotice(null);
+      const description = composeDescription(result);
+      const ok = await submitProduct(
+        { ...product, description },
+        `${productTitle(product)} — description updated.`
+      );
+      setApplying(false);
+      if (ok) setDescribeFor(null);
+      return ok;
+    },
+    [readOnly, applying, submitProduct]
   );
 
   if (phase === 'loading') {
@@ -283,6 +327,7 @@ export const StockAdmin = ({
                     busy={busyKey === productKey(p)}
                     anyBusy={busyKey !== null}
                     onSave={saveRow}
+                    onDescribe={() => setDescribeFor(p)}
                   />
                 ))}
               </tbody>
@@ -290,6 +335,21 @@ export const StockAdmin = ({
           </div>
         )}
       </Panel>
+
+      {/* AI description generator + preview (C5) */}
+      {describeFor ? (
+        <DescribeModal
+          key={productKey(describeFor)}
+          slug={slug}
+          product={describeFor}
+          applying={applying}
+          onClose={() => {
+            if (!applying) setDescribeFor(null);
+          }}
+          onApply={applyDescription}
+          onWritesBlocked={onWritesBlocked}
+        />
+      ) : null}
     </div>
   );
 };
@@ -305,6 +365,7 @@ const ProductRow = ({
   busy,
   anyBusy,
   onSave,
+  onDescribe,
 }: {
   product: ErpProduct;
   currency: string;
@@ -312,6 +373,7 @@ const ProductRow = ({
   busy: boolean;
   anyBusy: boolean;
   onSave: (p: ErpProduct, stock: number, reorderAt: number) => Promise<void>;
+  onDescribe: () => void;
 }) => {
   const [stock, setStock] = useState(String(num(p.stock)));
   const [reorder, setReorder] = useState(String(num(p.reorderAt)));
@@ -414,15 +476,36 @@ const ProductRow = ({
           >
             <Spinner /> Saving…
           </span>
-        ) : dirty && !readOnly ? (
-          <button
-            style={miniBtnStyle('primary', anyBusy)}
-            disabled={anyBusy}
-            onClick={() => void onSave(p, stockN, reorderN)}
+        ) : (
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              justifyContent: 'flex-end',
+            }}
           >
-            Save
-          </button>
-        ) : null}
+            {!readOnly ? (
+              <button
+                style={miniBtnStyle('secondary', anyBusy)}
+                disabled={anyBusy}
+                title="Generate an AI product description"
+                onClick={onDescribe}
+              >
+                ✨ Describe
+              </button>
+            ) : null}
+            {dirty && !readOnly ? (
+              <button
+                style={miniBtnStyle('primary', anyBusy)}
+                disabled={anyBusy}
+                onClick={() => void onSave(p, stockN, reorderN)}
+              >
+                Save
+              </button>
+            ) : null}
+          </div>
+        )}
       </td>
     </tr>
   );
@@ -557,6 +640,356 @@ const AddProductForm = ({
         >
           Cancel
         </button>
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Describe modal (C5) — generates a grounded AI description for one product and
+// previews it (description + bullets) before the owner applies it. On open it
+// POSTs /erp/describe {productKey, tone?, lang?}; the owner can pick a tone /
+// language and Regenerate. Apply writes the product via the EXISTING erp/product
+// route (postErpProduct, in the parent). Degrades gracefully:
+//   • 502 (planner down) → a soft, retryable error message.
+//   • admin_writes_unavailable → bubbles to onWritesBlocked (read-only).
+// The current description is shown for comparison; nothing is written until Apply.
+// ---------------------------------------------------------------------------
+
+const TONES: Array<{ id: string; label: string }> = [
+  { id: 'friendly', label: 'Friendly' },
+  { id: 'professional', label: 'Professional' },
+  { id: 'punchy', label: 'Punchy' },
+  { id: 'luxury', label: 'Luxury' },
+];
+
+const LANGS: Array<{ id: string; label: string }> = [
+  { id: 'fr', label: 'Français' },
+  { id: 'ar', label: 'العربية' },
+  { id: 'en', label: 'English' },
+];
+
+const overlayStyle: CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  zIndex: 1000,
+  background: 'rgba(0,0,0,0.55)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 16,
+};
+
+const modalStyle: CSSProperties = {
+  width: 'min(560px, 96vw)',
+  maxHeight: '90vh',
+  overflowY: 'auto',
+  background: C.panel,
+  border: `1px solid ${C.border}`,
+  borderRadius: 14,
+  boxShadow: '0 18px 48px rgba(0,0,0,0.45)',
+  display: 'flex',
+  flexDirection: 'column',
+};
+
+const selectStyle: CSSProperties = {
+  ...inputStyle,
+  padding: '7px 9px',
+  fontSize: 12.5,
+  cursor: 'pointer',
+};
+
+const DescribeModal = ({
+  slug,
+  product,
+  applying,
+  onClose,
+  onApply,
+  onWritesBlocked,
+}: {
+  slug: string;
+  product: ErpProduct;
+  applying: boolean;
+  onClose: () => void;
+  onApply: (product: ErpProduct, result: DescribeResult) => Promise<boolean>;
+  onWritesBlocked: () => void;
+}) => {
+  const [tone, setTone] = useState('friendly');
+  const [lang, setLang] = useState('fr');
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [errMsg, setErrMsg] = useState('');
+  const [result, setResult] = useState<DescribeResult | null>(null);
+
+  const key = String(product.sku || product.title || product.name || product.id || '');
+
+  const generate = useCallback(async () => {
+    setPhase('loading');
+    setErrMsg('');
+    const out = await postErpDescribe(slug, {
+      productKey: key,
+      tone,
+      lang,
+    });
+    if (out.status === 'ok') {
+      setResult(out.result);
+      setPhase('ready');
+    } else if (out.status === 'unavailable') {
+      onWritesBlocked();
+      onClose();
+    } else {
+      setErrMsg(out.message);
+      setPhase('error');
+    }
+  }, [slug, key, tone, lang, onWritesBlocked, onClose]);
+
+  // Generate once on open. Regenerate is manual (button) so tone/lang changes
+  // are intentional, not a fetch per keystroke.
+  useEffect(() => {
+    void generate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const busy = phase === 'loading' || applying;
+
+  return (
+    <div
+      style={overlayStyle}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Generate product description"
+      onClick={() => {
+        if (!busy) onClose();
+      }}
+    >
+      <div style={modalStyle} onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '12px 16px',
+            borderBottom: `1px solid ${C.border}`,
+            background: C.panel2,
+            borderTopLeftRadius: 14,
+            borderTopRightRadius: 14,
+          }}
+        >
+          <span aria-hidden>✨</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>
+              AI description
+            </div>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: C.muted,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={productTitle(product)}
+            >
+              {productTitle(product)}
+              {product.category ? ` · ${product.category}` : ''}
+            </div>
+          </div>
+          <button
+            style={{ ...linkBtnStyle, color: C.muted, textDecoration: 'none' }}
+            aria-label="Close"
+            onClick={onClose}
+            disabled={busy}
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Body */}
+        <div
+          style={{
+            padding: 16,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 14,
+          }}
+        >
+          {/* Tone + language controls */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 10,
+            }}
+          >
+            <Field label="Tone">
+              <select
+                style={selectStyle}
+                value={tone}
+                disabled={busy}
+                onChange={e => setTone(e.target.value)}
+              >
+                {TONES.map(t => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Language">
+              <select
+                style={selectStyle}
+                value={lang}
+                disabled={busy}
+                onChange={e => setLang(e.target.value)}
+              >
+                {LANGS.map(l => (
+                  <option key={l.id} value={l.id}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <div style={hintStyle}>
+            Grounded only in this product’s title, category and price — no
+            invented facts.
+          </div>
+
+          {/* Preview / states */}
+          {phase === 'loading' ? (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '20px 4px',
+                color: C.muted,
+              }}
+            >
+              <Spinner /> Generating a description…
+            </div>
+          ) : phase === 'error' ? (
+            <Banner tone="error">
+              {errMsg}{' '}
+              <button style={linkBtnStyle} onClick={() => void generate()}>
+                Retry
+              </button>
+            </Banner>
+          ) : result ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <div style={{ ...hintStyle, marginBottom: 4 }}>Preview</div>
+                <div
+                  style={{
+                    whiteSpace: 'pre-wrap',
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                    color: C.text,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    background: C.bg,
+                    border: `1px solid ${C.border}`,
+                  }}
+                >
+                  {result.description}
+                </div>
+              </div>
+              {result.bullets && result.bullets.length > 0 ? (
+                <div>
+                  <div style={{ ...hintStyle, marginBottom: 4 }}>
+                    Key points
+                  </div>
+                  <ul
+                    style={{
+                      margin: 0,
+                      paddingLeft: 20,
+                      fontSize: 12.5,
+                      lineHeight: 1.6,
+                      color: C.text,
+                    }}
+                  >
+                    {result.bullets.map((b, i) => (
+                      <li key={i}>{b}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {/* Current description, for comparison */}
+              {product.description && product.description.trim() ? (
+                <details>
+                  <summary
+                    style={{
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      color: C.muted,
+                      userSelect: 'none',
+                    }}
+                  >
+                    Current description
+                  </summary>
+                  <div
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      fontSize: 12.5,
+                      lineHeight: 1.6,
+                      color: C.muted,
+                      marginTop: 6,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: `1px dashed ${C.border}`,
+                    }}
+                  >
+                    {product.description}
+                  </div>
+                </details>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        {/* Footer */}
+        <div
+          style={{
+            display: 'flex',
+            gap: 10,
+            padding: '12px 16px',
+            borderTop: `1px solid ${C.border}`,
+            flexWrap: 'wrap',
+          }}
+        >
+          <button
+            style={btnStyle('primary', busy || !result)}
+            disabled={busy || !result}
+            onClick={() => {
+              if (result) void onApply(product, result);
+            }}
+          >
+            {applying ? (
+              <>
+                <Spinner dark /> Applying…
+              </>
+            ) : (
+              'Apply to product'
+            )}
+          </button>
+          <button
+            style={btnStyle('secondary', busy)}
+            disabled={busy}
+            onClick={() => void generate()}
+            title="Generate a new variation"
+          >
+            ↻ Regenerate
+          </button>
+          <button
+            style={{ ...btnStyle('secondary', applying), marginLeft: 'auto' }}
+            disabled={applying}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   );

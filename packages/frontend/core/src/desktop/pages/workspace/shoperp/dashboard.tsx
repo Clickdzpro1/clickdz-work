@@ -23,6 +23,7 @@ import { ClientsAdmin } from './admin-clients';
 import { OrdersAdmin } from './admin-orders';
 import { SettingsAdmin } from './admin-settings';
 import { StockAdmin } from './admin-stock';
+import { Inventory } from './inventory';
 import { ShopAppearance } from './shop-appearance';
 import {
   Banner,
@@ -67,6 +68,7 @@ export type DashboardSection =
   | 'overview'
   | 'orders'
   | 'stock'
+  | 'inventory'
   | 'clients'
   | 'settings'
   | 'appearance';
@@ -75,6 +77,7 @@ const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'overview', label: 'Overview', icon: '📊' },
   { id: 'orders', label: 'Orders', icon: '📦' },
   { id: 'stock', label: 'Stock', icon: '🏷️' },
+  { id: 'inventory', label: 'Inventory', icon: '🏬' },
   { id: 'clients', label: 'Clients', icon: '👥' },
   { id: 'appearance', label: 'Appearance', icon: '🎨' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
@@ -302,6 +305,14 @@ export const ErpDashboard = ({
           />
         ) : section === 'stock' ? (
           <StockAdmin
+            slug={slug}
+            currency={currency}
+            readOnly={writesBlocked}
+            onWritesBlocked={handleWritesBlocked}
+            onMutated={refetch}
+          />
+        ) : section === 'inventory' ? (
+          <Inventory
             slug={slug}
             currency={currency}
             readOnly={writesBlocked}

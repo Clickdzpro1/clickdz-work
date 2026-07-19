@@ -630,6 +630,25 @@ function updateCartCount() {
 function orderRef() {
   return 'CMD-' + Date.now().toString(36).toUpperCase();
 }
+/* Online-payment (Chargily) feature flag — merchant opt-in via the settings
+   singleton. Strictly === true so any legacy/absent settings keep COD-only. */
+function onlinePayEnabled(s) {
+  s = s || store.settings || {};
+  return s.onlinePay === true;
+}
+/* The published-app base URL, derived from the SAME wiring the Data API uses.
+   DATA_URL is '<appBase>/api/v2/apps-data/<slug>'; strip that suffix to recover
+   '<appBase>', then the pay endpoint lives at '<appBase>/api/v1/apps/<slug>/...'.
+   Reusing DATA_URL guarantees the checkout call hits the exact same origin. */
+function payCheckoutUrl() {
+  var suffix = '/api/v2/apps-data/' + SLUG;
+  var base = DATA_URL;
+  var i = base.indexOf(suffix);
+  if (i >= 0) base = base.slice(0, i);
+  else base = base.replace(/\/api\/v2\/apps-data\/[^/]*\/?$/, '');
+  base = base.replace(/\/+$/, '');
+  return base + '/api/v1/apps/' + encodeURIComponent(SLUG) + '/pay/checkout';
+}
 function accent() { return (store.settings && store.settings.accent) || '__CLICKDZ_ACCENT__'; }
 function shopName() { return (store.settings && store.settings.shopName) || '__CLICKDZ_STORE_NAME__'; }
 
@@ -1260,6 +1279,15 @@ function viewCheckout() {
     return '<div class="line"><span>' + esc(p.title) + ' × ' + l.qty + '</span><span>' + money((Number(p.price) || 0) * l.qty) + ' DZD</span></div>';
   }).join('');
 
+  /* Online payment (Chargily) — additive, shown ONLY when the merchant enabled
+     settings.onlinePay. When off, onlineBtn is '' so the checkout markup below is
+     byte-identical to the cash-on-delivery-only storefront. */
+  var onlineBtn = onlinePayEnabled(s)
+    ? '<div style="display:flex;align-items:center;gap:10px;margin:14px 0 2px;color:var(--ink-mute);font-size:12.5px"><span style="flex:1;height:1px;background:var(--line)"></span>ou<span style="flex:1;height:1px;background:var(--line)"></span></div>' +
+      '<button class="btn primary lg block" id="pay-online" type="button">💳 Payer en ligne (' + money(total) + ' DZD)</button>' +
+      '<p style="text-align:center;color:var(--ink-mute);font-size:12.5px;margin-top:10px">Paiement sécurisé par carte CIB / Edahabia. Vous serez redirigé vers une page de paiement.</p>'
+    : '';
+
   return '<div class="wrap">' +
     '<a class="back-link" href="#/cart"><span class="arw">←</span> Retour au panier</a>' +
     '<div class="section-head"><h2>Finaliser la commande</h2></div>' +
@@ -1298,6 +1326,7 @@ function viewCheckout() {
           '<div class="callout" style="margin-top:12px"><span class="ic">💵</span><div><strong>Paiement à la livraison.</strong> Aucun paiement en ligne. Vous réglez en espèces à la réception.</div></div>' +
           '<button class="btn primary lg block" style="margin-top:14px" id="place-order" type="button">✅ Confirmer la commande (' + money(total) + ' DZD)</button>' +
           '<p style="text-align:center;color:var(--ink-mute);font-size:12.5px;margin-top:10px">En confirmant, vous serez redirigé pour envoyer votre commande via WhatsApp.</p>' +
+          onlineBtn +
         '</div>' +
       '</div>' +
     '</div>' +
@@ -1309,9 +1338,13 @@ function validatePhone(v) {
   return /^0(5|6|7)[0-9]{8}$/.test(d);
 }
 
-function placeOrder() {
+/* Validate the checkout form + build the order object. Returns { order, items }
+   on success, or null (after painting inline errors) on validation failure.
+   Shared by the cash-on-delivery flow (placeOrder) and the online-pay flow
+   (payOnline) so both produce the byte-identical order shape & French errors. */
+function readCheckoutOrder() {
   var form = document.getElementById('checkout-form');
-  if (!form) return;
+  if (!form) return null;
   var data = {
     nom: form.nom.value.trim(),
     tel: form.tel.value.trim(),
@@ -1343,7 +1376,7 @@ function placeOrder() {
     toast('Veuillez corriger les champs en rouge', 'err');
     var firstBad = form.querySelector('.control.err');
     if (firstBad) firstBad.focus();
-    return;
+    return null;
   }
 
   var s = store.settings || defaultSettings();
@@ -1371,6 +1404,16 @@ function placeOrder() {
     total: total
   };
 
+  return { order: order, items: items };
+}
+
+function placeOrder() {
+  var built = readCheckoutOrder();
+  if (!built) return;
+  var order = built.order;
+  var items = built.items;
+  var ref = order.ref;
+
   var btn = document.getElementById('place-order');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:18px;height:18px;border-width:2px"></span> Envoi…'; }
 
@@ -1388,6 +1431,65 @@ function placeOrder() {
       clearCart();
       toast('Commande enregistrée — envoyez-la via WhatsApp', 'ok');
       go('#/success/' + encodeURIComponent(ref));
+    });
+}
+
+/* Online payment (Chargily) — same validation + order creation as the COD flow,
+   then hand the buyer off to a hosted checkout. On ANY failure (endpoint not
+   configured, network, non-2xx, missing checkout_url) we degrade gracefully to
+   the exact wa.me cash-on-delivery success/receipt flow so checkout never breaks. */
+function payOnline() {
+  var built = readCheckoutOrder();
+  if (!built) return;
+  var order = built.order;
+  var items = built.items;
+  var ref = order.ref;
+
+  var payBtn = document.getElementById('pay-online');
+  var codBtn = document.getElementById('place-order');
+  var payLabel = payBtn ? payBtn.innerHTML : '';
+  if (payBtn) { payBtn.disabled = true; payBtn.innerHTML = '<span class="spinner" style="width:18px;height:18px;border-width:2px"></span> Redirection…'; }
+  if (codBtn) codBtn.disabled = true;
+
+  /* Fall back to the intact COD + WhatsApp flow. The order is already persisted
+     (or attempted) exactly as COD does, so the merchant still receives it. */
+  function fallbackToCod(reason) {
+    lastSuccess = order;
+    clearCart();
+    toast(reason || 'Paiement en ligne indisponible — envoyez votre commande via WhatsApp', 'ok');
+    go('#/success/' + encodeURIComponent(ref));
+  }
+
+  /* Step 1. create/get the order ref (same write as the wa.me flow) */
+  api.create('orders', order)
+    .then(function (created) {
+      lastSuccess = Object.assign({}, order, created || {});
+      decrementStock(items);
+      /* Step 2. ask the app to open a Chargily checkout for this order */
+      return fetch(payCheckoutUrl(), {
+        method: 'POST',
+        headers: api.headers(true),
+        body: JSON.stringify({ orderRef: ref, amount: order.total, dataToken: DATA_TOKEN })
+      });
+    })
+    .then(function (r) {
+      return r.json().then(function (body) { return { ok: r.ok, body: body || {} }; }, function () { return { ok: false, body: {} }; });
+    })
+    .then(function (res) {
+      /* Step 3a. success → redirect the buyer to the hosted checkout page */
+      if (res.ok && res.body && res.body.checkout_url) {
+        clearCart();
+        window.location.href = res.body.checkout_url;
+        return;
+      }
+      /* Step 3b. pay_not_configured or any other error → graceful COD fallback */
+      fallbackToCod();
+    })
+    .catch(function () {
+      /* network / unexpected failure → never break checkout, fall back to COD */
+      if (payBtn) { payBtn.disabled = false; payBtn.innerHTML = payLabel; }
+      if (codBtn) codBtn.disabled = false;
+      fallbackToCod();
     });
 }
 
@@ -1496,6 +1598,8 @@ function bindStorefront(route) {
     }
     var po = e.target.closest('#place-order');
     if (po) { placeOrder(); return; }
+    var pay = e.target.closest('#pay-online');
+    if (pay) { payOnline(); return; }
   });
 }
 
