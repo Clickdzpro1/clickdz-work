@@ -9,6 +9,14 @@ import { type CSSProperties, useCallback, useEffect, useState } from 'react';
 // with the exact same metrics, and simply swap in the highlighted HTML.
 // shiki escapes the code content itself, so dangerouslySetInnerHTML is safe.
 // No new .css.ts (inline styles + one scoped <style> tag, per house rules).
+//
+// WS12 upgrade (CLAWF2): the streaming console reuses this component inside the
+// workspace CodeViewer panel, where the code area should fill the panel rather
+// than cap at 420px. Two small ADDITIVE props keep every existing caller
+// unchanged: `maxHeight` (override the 420px body cap; 'none' = fill) and
+// `dense` (a tighter header + no rounded corners for a flush panel fit). The
+// shiki dynamic-import boot-safety is untouched — this is still the one and
+// only code highlighter, and it still can never break page mount.
 // ---------------------------------------------------------------------------
 
 // Languages we allow through to shiki. Anything else falls back to plaintext
@@ -16,20 +24,29 @@ import { type CSSProperties, useCallback, useEffect, useState } from 'react';
 const LANG_ALIASES: Record<string, string> = {
   javascript: 'javascript',
   js: 'javascript',
+  jsx: 'javascript',
   node: 'javascript',
   nodejs: 'javascript',
   mjs: 'javascript',
   cjs: 'javascript',
   typescript: 'typescript',
   ts: 'typescript',
+  tsx: 'typescript',
   python: 'python',
   py: 'python',
   python3: 'python',
   json: 'json',
+  jsonc: 'json',
   bash: 'bash',
   sh: 'bash',
   shell: 'bash',
   zsh: 'bash',
+  yaml: 'yaml',
+  yml: 'yaml',
+  html: 'html',
+  css: 'css',
+  md: 'markdown',
+  markdown: 'markdown',
   text: 'text',
   txt: 'text',
   plaintext: 'text',
@@ -38,6 +55,17 @@ const LANG_ALIASES: Record<string, string> = {
 export function resolveShikiLang(language?: string): string {
   const key = (language ?? '').toLowerCase().trim();
   return LANG_ALIASES[key] ?? 'text';
+}
+
+// Map a filename extension → a shiki language, so a file opened in the viewer
+// highlights even when the backend didn't tag a language on the `file` event.
+export function languageFromPath(path?: string): string | undefined {
+  if (!path) return undefined;
+  const base = path.split('/').pop() ?? path;
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return undefined;
+  const ext = base.slice(dot + 1).toLowerCase();
+  return LANG_ALIASES[ext];
 }
 
 // Don't feed pathological payloads to the highlighter.
@@ -57,34 +85,47 @@ const K = {
 const monoFamily =
   'var(--affine-font-code-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)';
 
-const plainPreStyle: CSSProperties = {
-  margin: 0,
-  padding: '14px 16px',
-  overflow: 'auto',
-  maxHeight: 420,
-  fontFamily: monoFamily,
-  fontSize: 12.5,
-  lineHeight: 1.65,
-  color: K.text,
-  whiteSpace: 'pre',
-};
-
 export const CodeBlock = ({
   code,
   language,
   filename,
   notExecuted,
+  maxHeight,
+  dense,
 }: {
   code: string;
   language?: string;
   filename?: string;
   notExecuted?: boolean;
+  /** Override the default 420px body cap. A number = px; 'none' = fill parent. */
+  maxHeight?: number | 'none';
+  /** Flush panel fit: square corners + tighter header (for the workspace panel). */
+  dense?: boolean;
 }) => {
   const [html, setHtml] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>(
     'idle'
   );
   const lang = resolveShikiLang(language);
+
+  // Resolve the body height cap once so the plain <pre> fallback and the shiki
+  // HTML share identical metrics (no layout jump when highlighting swaps in).
+  const bodyMaxHeight: number | string =
+    maxHeight === 'none' ? 'none' : (maxHeight ?? 420);
+
+  const plainPreStyle: CSSProperties = {
+    margin: 0,
+    padding: '14px 16px',
+    overflow: 'auto',
+    maxHeight: bodyMaxHeight,
+    height: maxHeight === 'none' ? '100%' : undefined,
+    boxSizing: 'border-box',
+    fontFamily: monoFamily,
+    fontSize: 12.5,
+    lineHeight: 1.65,
+    color: K.text,
+    whiteSpace: 'pre',
+  };
 
   useEffect(() => {
     let alive = true;
@@ -126,13 +167,26 @@ export const CodeBlock = ({
     })().catch(() => {});
   }, [code]);
 
+  // A stable class hook so the scoped <style> can size the shiki <pre> to match
+  // the same body cap the plain fallback uses (via CSS custom property).
+  const shikiVars = {
+    // CSS var consumed by the scoped rule below.
+    ['--cdz-code-max' as any]:
+      bodyMaxHeight === 'none' ? 'none' : `${bodyMaxHeight}px`,
+    ['--cdz-code-h' as any]: maxHeight === 'none' ? '100%' : 'auto',
+  } as CSSProperties;
+
   return (
     <div
       style={{
-        borderRadius: 10,
+        borderRadius: dense ? 0 : 10,
         overflow: 'hidden',
-        border: `1px solid ${K.border}`,
+        border: dense ? 'none' : `1px solid ${K.border}`,
         background: K.bg,
+        display: 'flex',
+        flexDirection: 'column',
+        height: maxHeight === 'none' ? '100%' : undefined,
+        minHeight: 0,
       }}
     >
       {/* Card header: language + optional filename / not-executed badge + Copy */}
@@ -141,9 +195,10 @@ export const CodeBlock = ({
           display: 'flex',
           alignItems: 'center',
           gap: 10,
-          padding: '8px 12px',
+          padding: dense ? '6px 12px' : '8px 12px',
           background: K.headerBg,
           borderBottom: `1px solid ${K.border}`,
+          flexShrink: 0,
         }}
       >
         <span
@@ -218,6 +273,12 @@ export const CodeBlock = ({
       {html ? (
         <div
           className="cdz-openclaw-shiki cdz-openclaw-codefade"
+          style={{
+            ...shikiVars,
+            flex: maxHeight === 'none' ? 1 : undefined,
+            minHeight: 0,
+            overflow: 'auto',
+          }}
           // shiki output: escaped code wrapped in <pre>/<span> tokens only.
           dangerouslySetInnerHTML={{ __html: html }}
         />
@@ -227,7 +288,7 @@ export const CodeBlock = ({
 
       <style>
         {`
-.cdz-openclaw-shiki pre{margin:0;padding:14px 16px;background:transparent !important;overflow:auto;max-height:420px;font-family:${'var(--affine-font-code-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)'};font-size:12.5px;line-height:1.65;}
+.cdz-openclaw-shiki pre{margin:0;padding:14px 16px;background:transparent !important;overflow:auto;max-height:var(--cdz-code-max, 420px);height:var(--cdz-code-h, auto);box-sizing:border-box;font-family:${'var(--affine-font-code-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)'};font-size:12.5px;line-height:1.65;}
 .cdz-openclaw-shiki code{font-family:inherit;background:transparent;}
 @keyframes cdz-openclaw-codefade{from{opacity:0}to{opacity:1}}
 .cdz-openclaw-codefade{animation:cdz-openclaw-codefade .18s ease both}
