@@ -56,6 +56,46 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
       display: contents;
     }
 
+    /*
+     * Message entrance motion.
+     *
+     * The <chat-message-*> hosts are shadowless (light DOM) with 'display:
+     * contents' semantics, so the transform is applied to their real content
+     * boxes instead of the host. The parent stamps [data-cdz-enter] on a
+     * message host ONLY the render cycle it is first appended (see the key
+     * diff in render()); it is never set on the initial history batch, so a
+     * freshly-opened conversation paints instantly with no motion. Because the
+     * flag rides a per-message key that stays stable while tokens stream, the
+     * entrance fires exactly once per message and streaming never re-triggers
+     * it. Assistant boxes lag the user bubble slightly for a conversational
+     * call-and-response rhythm.
+     */
+    chat-message-user[data-cdz-enter] .chat-message-user {
+      animation: cdz-msg-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    chat-message-assistant[data-cdz-enter] .user-info,
+    chat-message-assistant[data-cdz-enter] .item-wrapper {
+      animation: cdz-msg-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      animation-delay: 60ms;
+    }
+    @keyframes cdz-msg-in {
+      from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.99);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      chat-message-user[data-cdz-enter] .chat-message-user,
+      chat-message-assistant[data-cdz-enter] .user-info,
+      chat-message-assistant[data-cdz-enter] .item-wrapper {
+        animation: none;
+      }
+    }
+
     .user-info {
       display: flex;
       align-items: center;
@@ -299,6 +339,31 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
 
   private _lastObservedScrollTop = 0;
 
+  // Keys rendered in prior cycles + a first-paint guard, used to animate ONLY
+  // newly appended messages (not the initial history batch). See render().
+  private _seenMessageKeys = new Set<string>();
+
+  private _hasRenderedMessages = false;
+
+  // Keys that are entering THIS render cycle (get [data-cdz-enter]).
+  private _enteringKeys = new Set<string>();
+
+  // A single user turn appends at most a user + assistant message; a larger
+  // batch of new keys means a history/session load, which should not animate.
+  private static readonly ENTRANCE_BATCH_LIMIT = 2;
+
+  // Live reduced-motion preference so scrollToEnd() can pick instant vs. smooth
+  // scrolling (CSS @media can't reach the scrollTo behavior option). Queried on
+  // demand so an OS-level toggle mid-session is honored; guarded for non-DOM
+  // (SSR/test) environments where matchMedia is unavailable.
+  private get _prefersReducedMotion() {
+    return (
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+  }
+
   private get chatStatus() {
     return this.runtimeSnapshot?.status ?? this.chatContextValue.status;
   }
@@ -392,11 +457,45 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
     return `${tabKey}:${index}`;
   }
 
+  // Diff the current message keys against those seen in prior render cycles to
+  // find genuinely new (appended) messages. Runs each render, before the list
+  // is emitted, and folds the current keys into the seen-set afterwards.
+  //  - First population is never animated (initial history batch).
+  //  - A large jump in new keys (session switch / history load) is treated as
+  //    a batch and skipped; only a normal 1–2 message append animates.
+  private _computeEnteringKeys(items: HistoryMessage[]) {
+    const currentKeys = items.map((item, index) =>
+      this._getMessageKey(item, index)
+    );
+
+    const entering = new Set<string>();
+    if (this._hasRenderedMessages) {
+      for (const key of currentKeys) {
+        if (!this._seenMessageKeys.has(key)) {
+          entering.add(key);
+        }
+      }
+    }
+
+    // Batch loads (history/session switch) — don't stagger a whole transcript.
+    if (entering.size > AIChatMessages.ENTRANCE_BATCH_LIMIT) {
+      entering.clear();
+    }
+
+    this._enteringKeys = entering;
+    this._seenMessageKeys = new Set(currentKeys);
+    if (items.length > 0) {
+      this._hasRenderedMessages = true;
+    }
+  }
+
   protected override render() {
     const status = this.chatStatus;
     const error = this.chatError;
     const { isHistoryLoading } = this;
     const filteredItems = this.messages;
+
+    this._computeEnteringKeys(filteredItems);
 
     const showDownIndicator = this.canScrollDown && filteredItems.length > 0;
 
@@ -440,8 +539,14 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
               (item, index) => this._getMessageKey(item, index),
               (item, index) => {
                 const isLast = index === filteredItems.length - 1;
+                // Entrance flag: true only on the cycle this key first appears
+                // (never on initial history / batch loads — see render()).
+                const isEntering = this._enteringKeys.has(
+                  this._getMessageKey(item, index)
+                );
                 if (isChatMessage(item) && item.role === 'user') {
                   return html`<chat-message-user
+                    ?data-cdz-enter=${isEntering}
                     .item=${item}
                   ></chat-message-user>`;
                 } else if (isChatMessage(item) && item.role === 'assistant') {
@@ -459,6 +564,7 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
                     }
                   }
                   return html`<chat-message-assistant
+                    ?data-cdz-enter=${isEntering}
                     .host=${this.host}
                     .session=${this.session}
                     .item=${item}
@@ -581,10 +687,15 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
   }
 
   scrollToEnd() {
+    // Smooth-pin to the bottom while pinned; fall back to an instant jump when
+    // the reader prefers reduced motion (CSS can't reach scrollTo's behavior).
+    const behavior: ScrollBehavior = this._prefersReducedMotion
+      ? 'auto'
+      : 'smooth';
     requestAnimationFrame(() => {
       this.scrollTo({
         top: this.scrollHeight,
-        behavior: 'smooth',
+        behavior,
       });
     });
   }
