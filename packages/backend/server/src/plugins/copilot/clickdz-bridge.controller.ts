@@ -170,6 +170,58 @@ const OPENAI_IMAGE_API_KEY =
   process.env.OPENAI_API_KEY ||
   '';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
+// P5 (VOICE STUDIO): OpenAI as a SECOND voice provider (STT via Whisper + TTS
+// via /v1/audio/speech). Key cascade mirrors the vdz controller's AUDIO cascade
+// (a dedicated voice key first, then the app's canonical OPEN_AI present on
+// prod, then the generic fallbacks — falling all the way through to the image
+// key as a last resort, exactly like clickdz-vdz.controller.ts does). This is
+// the ONLY new env this feature introduces; everything else reuses existing
+// keys. No key set on any hop -> the OpenAI provider reports unavailable and
+// the frontend disables it (never a crash).
+const OPENAI_VOICE_API_KEY =
+  process.env.OPENAI_VOICE_API_KEY ||
+  process.env.OPENAI_AUDIO_API_KEY ||
+  process.env.OPEN_AI ||
+  process.env.OPENAI_API_KEY ||
+  process.env.OPENAI_IMAGE_API_KEY ||
+  '';
+const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions';
+const OPENAI_SPEECH_URL = 'https://api.openai.com/v1/audio/speech';
+// Whisper's own hard cap is 25MB; reject just under it. Voice-Studio audio
+// arrives as RAW bytes (application/octet-stream) through the app's 100MB raw
+// body parser — identical stance to /api/v1/vdz/transcribe (base64-in-JSON
+// would bloat ~33% and risk the 20MB json ceiling). Timeout matches vdz.
+const MAX_VOICE_TRANSCRIBE_BYTES = 24 * 1024 * 1024;
+const VOICE_TRANSCRIBE_TIMEOUT_MS = 180_000;
+const VOICE_TTS_TIMEOUT_MS = 60_000;
+// Deepgram Aura-2 TTS voices this route accepts (the working provider's
+// supported set). The frontend renders exactly these for the Deepgram card.
+// Unknown/empty -> the historical default so old callers stay byte-identical.
+const DEEPGRAM_TTS_DEFAULT_VOICE = 'aura-2-thalia-en';
+const DEEPGRAM_TTS_VOICES = [
+  'aura-2-thalia-en',
+  'aura-2-andromeda-en',
+  'aura-2-helena-en',
+  'aura-2-apollo-en',
+  'aura-2-arcas-en',
+  'aura-2-aries-en',
+  'aura-2-luna-en',
+  'aura-2-orion-en',
+  'aura-2-orpheus-en',
+  'aura-2-zeus-en',
+] as const;
+// OpenAI /v1/audio/speech voices (tts-1). The frontend renders exactly these
+// for the OpenAI card. Unknown/empty -> 'alloy'. `speed` is clamped 0.25–4.0
+// per the OpenAI contract; Deepgram has no speed knob so it is ignored there.
+const OPENAI_TTS_DEFAULT_VOICE = 'alloy';
+const OPENAI_TTS_VOICES = [
+  'alloy',
+  'echo',
+  'fable',
+  'onyx',
+  'nova',
+  'shimmer',
+] as const;
 const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
 const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
 const MAKE_BUILDER_AGENT_ID = process.env.MAKE_BUILDER_AGENT_ID || '';
@@ -224,11 +276,109 @@ const publishedAppsKey = (ownerId: string) =>
 // Slug shape shared by generate/deploy (same as the SLUG_RE the data API uses).
 const APP_SLUG_RE = /^[a-z0-9-]{3,50}$/;
 
-/** A single published-app record stored in the per-owner Redis set. */
+// ---------------------------------------------------------------------------
+// C5 — TEMPLATE SETTINGS (SOUK/P4 ShopERP). /apps/template accepts an optional
+// `settings` object that customizes the shop/erp templates at CREATION time by
+// substituting four tokens the template files now carry. The DEFAULTS below are
+// byte-for-byte the values that used to be hardcoded in those templates, so a
+// template minted WITHOUT settings is byte-identical to the pre-C5 output.
+// ---------------------------------------------------------------------------
+const CDZ_TPL_DEFAULT_STORE_NAME = 'Ma Boutique';
+const CDZ_TPL_DEFAULT_WHATSAPP = '213600000000';
+const CDZ_TPL_DEFAULT_ACCENT = '#0f766e';
+const CDZ_TPL_DEFAULT_ERP_ACCENT = '#2f6bff';
+const CDZ_TPL_DEFAULT_PIN = '1234';
+// WhatsApp: digits only, no leading '+', 8–15 digits (E.164-ish, no separators).
+const CDZ_WHATSAPP_RE = /^[0-9]{8,15}$/;
+// Accent: strict #RRGGBB (6 hex digits, leading '#').
+const CDZ_ACCENT_RE = /^#[0-9a-fA-F]{6}$/;
+// Admin PIN: 4–8 digits.
+const CDZ_PIN_RE = /^[0-9]{4,8}$/;
+
+/** The four token replacements a validated `settings` object resolves to. */
+interface TemplateTokens {
+  storeName: string;
+  whatsapp: string;
+  accent: string;
+  pin: string;
+}
+
+/**
+ * C5 validation. Parses/validates the optional `settings` object from an
+ * /apps/template body. Every field is OPTIONAL; an omitted field keeps the
+ * template's original hardcoded default (so no-settings == byte-identical).
+ * `erpAccentDefault` differs from the shop accent (the ERP's --brand hue), so
+ * the correct per-kind default is used when accentColor is omitted.
+ *
+ * Returns `{ ok:true, tokens }` on success, or `{ ok:false, field }` naming the
+ * FIRST offending field (the exact `field` the 400 body must carry). The caller
+ * writes the 400 via passthrough res — a typed error can't carry this body.
+ */
+function parseTemplateSettings(
+  raw: unknown,
+  accentDefault: string
+): { ok: true; tokens: TemplateTokens } | { ok: false; field: string } {
+  const tokens: TemplateTokens = {
+    storeName: CDZ_TPL_DEFAULT_STORE_NAME,
+    whatsapp: CDZ_TPL_DEFAULT_WHATSAPP,
+    accent: accentDefault,
+    pin: CDZ_TPL_DEFAULT_PIN,
+  };
+  // No settings at all → all defaults (byte-identical output). null/undefined ok.
+  if (raw == null) return { ok: true, tokens };
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, field: 'settings' };
+  }
+  const s = raw as Record<string, unknown>;
+
+  // storeName: trim, non-empty after trim, ≤60 chars.
+  if (s.storeName !== undefined && s.storeName !== null) {
+    if (typeof s.storeName !== 'string') return { ok: false, field: 'storeName' };
+    const name = s.storeName.trim();
+    if (name.length === 0 || name.length > 60) {
+      return { ok: false, field: 'storeName' };
+    }
+    tokens.storeName = name;
+  }
+
+  // whatsapp: digits only, 8–15, no '+'.
+  if (s.whatsapp !== undefined && s.whatsapp !== null) {
+    if (typeof s.whatsapp !== 'string' || !CDZ_WHATSAPP_RE.test(s.whatsapp)) {
+      return { ok: false, field: 'whatsapp' };
+    }
+    tokens.whatsapp = s.whatsapp;
+  }
+
+  // accentColor: strict #RRGGBB.
+  if (s.accentColor !== undefined && s.accentColor !== null) {
+    if (typeof s.accentColor !== 'string' || !CDZ_ACCENT_RE.test(s.accentColor)) {
+      return { ok: false, field: 'accentColor' };
+    }
+    tokens.accent = s.accentColor;
+  }
+
+  // adminPin: 4–8 digits.
+  if (s.adminPin !== undefined && s.adminPin !== null) {
+    if (typeof s.adminPin !== 'string' || !CDZ_PIN_RE.test(s.adminPin)) {
+      return { ok: false, field: 'adminPin' };
+    }
+    tokens.pin = s.adminPin;
+  }
+
+  return { ok: true, tokens };
+}
+
+/**
+ * A single published-app record stored in the per-owner Redis set.
+ * C5: `kind`/`storeSlug` are OPTIONAL — legacy records written before this
+ * change (and non-shop generated apps) have neither; readers must be null-safe.
+ */
 interface PublishedAppRecord {
   slug: string;
   url: string;
   createdAt: string;
+  kind?: 'shop' | 'erp' | 'app';
+  storeSlug?: string;
 }
 
 // ClickDz Apps — the app-builder system prompt + message-content builders now
@@ -757,6 +907,16 @@ export class ClickDzBridgeController {
       try {
         const rec = JSON.parse(entry) as PublishedAppRecord;
         if (rec && typeof rec.slug === 'string') {
+          // C5: carry kind/storeSlug when present (null-safe for legacy rows
+          // written before this change — those simply omit the fields).
+          const kind =
+            rec.kind === 'shop' || rec.kind === 'erp' || rec.kind === 'app'
+              ? rec.kind
+              : undefined;
+          const storeSlug =
+            typeof rec.storeSlug === 'string' && rec.storeSlug
+              ? rec.storeSlug
+              : undefined;
           out.push({
             slug: rec.slug,
             url: typeof rec.url === 'string' ? rec.url : '',
@@ -764,6 +924,8 @@ export class ClickDzBridgeController {
               typeof rec.createdAt === 'string'
                 ? rec.createdAt
                 : new Date().toISOString(),
+            ...(kind ? { kind } : {}),
+            ...(storeSlug ? { storeSlug } : {}),
           });
         }
       } catch {
@@ -792,16 +954,25 @@ export class ClickDzBridgeController {
   private async recordPublishedApp(
     ownerId: string,
     slug: string,
-    url: string
+    url: string,
+    // C5: optional pairing metadata persisted alongside the publish record so
+    // GET /apps/mine can label Shop/ERP/App and thread the storeSlug pairing.
+    meta?: { kind?: 'shop' | 'erp' | 'app'; storeSlug?: string }
   ): Promise<void> {
     const existing = await this.readPublishedApps(ownerId);
     const prior = existing.find(r => r.slug === slug);
     // Replace the slug's record in place (keep original createdAt if present).
     await this.sremPublishedApp(ownerId, slug);
+    // Prefer freshly-supplied meta; otherwise preserve whatever the prior record
+    // carried (a same-slug redeploy without meta must not drop its kind/store).
+    const kind = meta?.kind ?? prior?.kind;
+    const storeSlug = meta?.storeSlug ?? prior?.storeSlug;
     const record: PublishedAppRecord = {
       slug,
       url,
       createdAt: prior?.createdAt ?? new Date().toISOString(),
+      ...(kind ? { kind } : {}),
+      ...(storeSlug ? { storeSlug } : {}),
     };
     await this.redis.sadd(publishedAppsKey(ownerId), JSON.stringify(record));
     await this.redis.expire(publishedAppsKey(ownerId), PUBLISHED_APPS_TTL_SECONDS);
@@ -2229,6 +2400,16 @@ export class ClickDzBridgeController {
     if (!(await this.assertUnderPublishCap(user.id, slug, replaceSlug, res))) {
       return;
     }
+    // C5: optional pairing metadata. A ShopERP deploy passes kind ('shop'|'erp')
+    // and the shared storeSlug so GET /apps/mine can label + pair them. Both are
+    // validated/normalized and simply omitted when absent (legacy/plain apps).
+    const kindRaw = String(body?.kind || '').trim().toLowerCase();
+    const kind: 'shop' | 'erp' | undefined =
+      kindRaw === 'shop' || kindRaw === 'erp' ? kindRaw : undefined;
+    const storeSlug =
+      typeof body?.storeSlug === 'string' && APP_SLUG_RE.test(body.storeSlug)
+        ? body.storeSlug
+        : undefined;
     if (!html.includes('Built with ClickDz') && html.includes('</body>')) {
       html = html.replace('</body>', `${CLICKDZ_APP_WATERMARK}</body>`);
     }
@@ -2239,7 +2420,10 @@ export class ClickDzBridgeController {
     this.logger.log(`[apps] deployed: ${deployed.url} (${deployed.state})`);
     // WS4: record the successful publish under the caller's set (idempotent per
     // slug) so it counts toward the cap and appears in GET /apps/mine.
-    await this.recordPublishedApp(user.id, slug, deployed.url);
+    await this.recordPublishedApp(user.id, slug, deployed.url, {
+      kind,
+      storeSlug,
+    });
     return { ...deployed, bytes: html.length };
   }
 
@@ -2253,15 +2437,41 @@ export class ClickDzBridgeController {
    * storeSlug given → reuse that slug + its data token (pairing a shop with its
    * ERP so they share one datastore); else mint a fresh slug (reusing the same
    * minting code the generate path uses).
+   *
+   * C5: an optional `settings` object customizes the template at CREATION time
+   * (store name / WhatsApp / accent / admin PIN). Invalid settings → 400
+   * `{error:'invalid_settings', field}` via passthrough res (a typed error can't
+   * carry the `field`). Omitted fields keep the template defaults, so a request
+   * with no `settings` produces byte-identical output to the pre-C5 path.
    */
   @Throttle('strict')
   @Post('/api/v1/apps/template')
-  async templateApp(@CurrentUser() user: CurrentUser, @Body() body: any) {
+  async templateApp(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    // Passthrough lets us hand-write the exact 400 invalid_settings body while
+    // the success path still returns its object normally.
+    @Res({ passthrough: true }) res: Response
+  ) {
     const startedAt = Date.now();
     const kind = String(body?.kind || '').trim().toLowerCase();
     if (kind !== 'shop' && kind !== 'erp') {
       throw new BadRequest('"kind" must be "shop" or "erp"');
     }
+    // C5: validate the optional settings BEFORE minting anything. The accent
+    // default is per-kind (shop teal vs ERP blue) so an omitted accentColor
+    // keeps each template byte-identical.
+    const parsed = parseTemplateSettings(
+      body?.settings,
+      kind === 'shop' ? CDZ_TPL_DEFAULT_ACCENT : CDZ_TPL_DEFAULT_ERP_ACCENT
+    );
+    if (!parsed.ok) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_settings', field: parsed.field });
+      return;
+    }
+    const tokens = parsed.tokens;
     // storeSlug: reuse for pairing (shop + its ERP share one datastore). Mint a
     // new slug otherwise — SAME code path as generate/deploy.
     const slug =
@@ -2281,13 +2491,26 @@ export class ClickDzBridgeController {
     // exact values; templates additionally carry __CLICKDZ_SLUG__ (mapped to the
     // bare slug). Using split/join keeps the mapping explicit and robust even if
     // a token appears many times.
+    // C5: the four customization tokens are mapped in the SAME chain. Their
+    // values are either the validated settings or the per-kind defaults, so a
+    // no-settings request substitutes the exact strings that used to be
+    // hardcoded → byte-identical output. None of the substituted values contain
+    // another __CLICKDZ_*__ sequence, so replacement order is irrelevant.
     html = html
       .split('__CLICKDZ_DATA_URL__')
       .join(dataUrl)
       .split('__CLICKDZ_DATA_TOKEN__')
       .join(dataToken)
       .split('__CLICKDZ_SLUG__')
-      .join(slug);
+      .join(slug)
+      .split('__CLICKDZ_STORE_NAME__')
+      .join(tokens.storeName)
+      .split('__CLICKDZ_WHATSAPP__')
+      .join(tokens.whatsapp)
+      .split('__CLICKDZ_ACCENT__')
+      .join(tokens.accent)
+      .split('__CLICKDZ_PIN__')
+      .join(tokens.pin);
     if (html.length > 400_000) html = html.slice(0, 400_000);
     this.logger.log(
       `[apps] template kind=${kind} user=${user.id} slug=${slug} bytes=${html.length}`
@@ -2308,6 +2531,11 @@ export class ClickDzBridgeController {
   /**
    * WS4 — GET /api/v1/apps/mine. The caller's published apps (auth'd).
    * Prunes any malformed records lazily via readPublishedApps.
+   *
+   * C5: each item now carries `kind` ('shop'|'erp'|'app') and `storeSlug` when
+   * the publish record has them. Records written before this change (and plain
+   * generated apps) omit both — the ShopERP page treats a missing `kind` as a
+   * generic "App" and a missing `storeSlug` as unpaired (null-safe).
    */
   @Throttle('strict')
   @Get('/api/v1/apps/mine')
@@ -2321,6 +2549,10 @@ export class ClickDzBridgeController {
         slug: r.slug,
         url: r.url,
         createdAt: r.createdAt,
+        // Only present when known — legacy rows leave these undefined so the
+        // JSON simply omits them (client reads them as optional).
+        ...(r.kind ? { kind: r.kind } : {}),
+        ...(r.storeSlug ? { storeSlug: r.storeSlug } : {}),
       })),
     };
   }
@@ -2373,13 +2605,136 @@ export class ClickDzBridgeController {
     return data;
   }
 
+  /**
+   * GET /api/voice/capabilities — what the Voice Studio can offer right now.
+   *
+   * Purely a reflection of which provider keys are set on the deployment, so
+   * the frontend can render each provider card enabled/disabled with the right
+   * voice list WITHOUT probing a real generation. Auth'd like the rest of the
+   * voice surface (session cookie). No key => that provider `available:false`;
+   * the page then disables its card and shows a tooltip. Additive, read-only.
+   */
+  @Throttle('strict')
+  @Get('/api/voice/capabilities')
+  voiceCapabilities() {
+    return {
+      transcription: {
+        // STT is OpenAI Whisper only (the working path). No key => the
+        // Transcribe tab shows a friendly "not configured" state.
+        available: !!OPENAI_VOICE_API_KEY,
+        provider: 'openai' as const,
+        model: 'whisper-1',
+      },
+      tts: {
+        // Default provider preserved as Deepgram (current behaviour).
+        defaultProvider: 'deepgram' as const,
+        providers: [
+          {
+            id: 'deepgram' as const,
+            label: 'Deepgram Aura-2',
+            available: !!DEEPGRAM_API_KEY,
+            voices: DEEPGRAM_TTS_VOICES,
+            defaultVoice: DEEPGRAM_TTS_DEFAULT_VOICE,
+            supportsSpeed: false,
+          },
+          {
+            id: 'openai' as const,
+            label: 'OpenAI',
+            available: !!OPENAI_VOICE_API_KEY,
+            voices: OPENAI_TTS_VOICES,
+            defaultVoice: OPENAI_TTS_DEFAULT_VOICE,
+            supportsSpeed: true,
+          },
+        ],
+      },
+    };
+  }
+
+  /**
+   * POST /api/voice/tts (and the legacy /api/copilot/voice/tts alias) — text
+   * to speech. Streams raw `audio/mpeg` bytes on success (unchanged wire shape).
+   *
+   * BODY: `{ text, provider?: 'deepgram'|'openai', voice?, speed? }`.
+   *  • provider omitted / 'deepgram'  -> EXACT current behaviour: Deepgram
+   *    Aura-2 /v1/speak, default model 'aura-2-thalia-en'. Do NOT break this.
+   *  • provider 'openai'              -> OpenAI /v1/audio/speech (tts-1, mp3),
+   *    voices alloy/echo/fable/onyx/nova/shimmer, optional `speed` 0.25–4.0.
+   *
+   * A missing key for the CHOSEN provider -> 501 {error:'provider_unavailable',
+   * provider} written straight to `res` (NOT a raw HttpException — the global
+   * filter would coerce that to a generic 500 and drop the contract body).
+   */
   @Throttle('strict')
   @Post(['/api/voice/tts', '/api/copilot/voice/tts'])
   async tts(@Body() body: any, @Res() res: Response) {
-    if (!DEEPGRAM_API_KEY) {
-      throw new HttpException({ ok: false, error: 'Deepgram is not configured' }, HttpStatus.SERVICE_UNAVAILABLE);
+    const provider = body?.provider === 'openai' ? 'openai' : 'deepgram';
+    const text = typeof body?.text === 'string' ? body.text : '';
+
+    if (provider === 'openai') {
+      if (!OPENAI_VOICE_API_KEY) {
+        res
+          .status(HttpStatus.NOT_IMPLEMENTED)
+          .json({ error: 'provider_unavailable', provider: 'openai' });
+        return;
+      }
+      // Voice/speed validation: unknown voice -> default; speed clamped to the
+      // OpenAI-accepted range (a missing/NaN speed omits the field entirely).
+      const voice = OPENAI_TTS_VOICES.includes(body?.voice)
+        ? body.voice
+        : OPENAI_TTS_DEFAULT_VOICE;
+      const speedNum = Number(body?.speed);
+      const payload: Record<string, unknown> = {
+        model: 'tts-1',
+        input: text,
+        voice,
+        response_format: 'mp3',
+      };
+      if (Number.isFinite(speedNum) && speedNum > 0) {
+        payload.speed = Math.max(0.25, Math.min(4, speedNum));
+      }
+      const response = await fetch(OPENAI_SPEECH_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${OPENAI_VOICE_API_KEY}`,
+          'Content-Type': 'application/json',
+          Accept: 'audio/mpeg',
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(VOICE_TTS_TIMEOUT_MS),
+      }).catch(() => null);
+      if (!response) {
+        res
+          .status(HttpStatus.BAD_GATEWAY)
+          .json({ error: 'tts_failed', provider: 'openai' });
+        return;
+      }
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        this.logger.warn(
+          `[voice] openai tts upstream ${response.status} detail=${detail.slice(0, 200)}`
+        );
+        res.status(HttpStatus.BAD_GATEWAY).json({
+          error: 'tts_failed',
+          provider: 'openai',
+          status: response.status,
+        });
+        return;
+      }
+      const buffer = Buffer.from(await response.arrayBuffer());
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.send(buffer);
+      return;
     }
-    const model = body?.voice || 'aura-2-thalia-en';
+
+    // provider === 'deepgram' — unchanged working path (extended only with the
+    // 501 contract body when the key is missing, replacing the old 503 throw).
+    if (!DEEPGRAM_API_KEY) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'provider_unavailable', provider: 'deepgram' });
+      return;
+    }
+    const model = body?.voice || DEEPGRAM_TTS_DEFAULT_VOICE;
     const response = await fetch(`https://api.deepgram.com/v1/speak?model=${encodeURIComponent(model)}&encoding=mp3`, {
       method: 'POST',
       headers: {
@@ -2387,25 +2742,165 @@ export class ClickDzBridgeController {
         'Content-Type': 'application/json',
         Accept: 'audio/mpeg',
       },
-      body: JSON.stringify({ text: body?.text || '' }),
+      body: JSON.stringify({ text }),
     });
     if (!response.ok) {
-      throw new HttpException({ ok: false, error: `Deepgram TTS failed: ${response.status}` }, HttpStatus.BAD_GATEWAY);
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'tts_failed',
+        provider: 'deepgram',
+        status: response.status,
+      });
+      return;
     }
     const buffer = Buffer.from(await response.arrayBuffer());
     res.setHeader('Content-Type', 'audio/mpeg');
     res.send(buffer);
   }
 
+  /**
+   * POST /api/voice/transcribe (and the legacy /api/copilot/voice/transcribe
+   * alias) — speech to text. This was a permanent stub; it is now REAL, using
+   * the SAME OpenAI Whisper mechanics as /api/v1/vdz/transcribe.
+   *
+   * BODY: the RAW audio bytes with `Content-Type: application/octet-stream`
+   * (routed through the app's 100MB raw parser — NOT JSON). QUERY: `?mime=`
+   * the real audio mime, `?name=` an optional filename hint (both sanitized).
+   *
+   * Engine: OpenAI `whisper-1`, `verbose_json`, word timestamps requested.
+   * RESPONSE: `{ text, words?: [{w,t0,t1}], language? }` (absolute audio
+   * seconds). No key => 501 {error:'provider_unavailable', provider:'openai'}
+   * via `res` (never a raw HttpException). Payload-shaped upstream failures ->
+   * 400; everything else -> 502.
+   */
   @Throttle('strict')
   @Post(['/api/voice/transcribe', '/api/copilot/voice/transcribe'])
-  async transcribe() {
-    if (!DEEPGRAM_API_KEY) {
-      throw new HttpException({ ok: false, error: 'Deepgram is not configured' }, HttpStatus.SERVICE_UNAVAILABLE);
+  async transcribe(
+    @Body() body: unknown,
+    @Res() res: Response,
+    @Query('mime') mime?: string,
+    @Query('name') name?: string
+  ) {
+    if (!OPENAI_VOICE_API_KEY) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'provider_unavailable', provider: 'openai' });
+      return;
     }
-    return {
-      ok: false,
-      error: 'Multipart transcription endpoint requires upload middleware; use Make.com STT webhook for browser audio uploads.',
-    };
+    if (!Buffer.isBuffer(body) || body.length === 0) {
+      res.status(HttpStatus.BAD_REQUEST).json({
+        error: 'bad_audio',
+        message:
+          'Send the raw audio bytes with Content-Type: application/octet-stream',
+      });
+      return;
+    }
+    if (body.length > MAX_VOICE_TRANSCRIBE_BYTES) {
+      res.status(HttpStatus.BAD_REQUEST).json({
+        error: 'too_large',
+        message: `Audio too large for transcription (max ${Math.floor(
+          MAX_VOICE_TRANSCRIBE_BYTES / (1024 * 1024)
+        )}MB)`,
+      });
+      return;
+    }
+    // Sanitize the client-supplied hints (they only shape the upload part) —
+    // identical rules to the vdz transcribe route.
+    const safeMime =
+      typeof mime === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(mime)
+        ? mime
+        : 'audio/mpeg';
+    const safeName =
+      typeof name === 'string' && name.trim()
+        ? name.trim().slice(0, 120).replace(/[^\w.\- ]+/g, '_')
+        : 'audio';
+
+    const form = new FormData();
+    form.append(
+      'file',
+      new Blob([new Uint8Array(body)], { type: safeMime }),
+      safeName
+    );
+    form.append('model', 'whisper-1');
+    form.append('response_format', 'verbose_json');
+    // Repeated `timestamp_granularities[]` field (one append per value); `word`
+    // populates a top-level words:[{word,start,end}] array we normalize below.
+    form.append('timestamp_granularities[]', 'word');
+    form.append('timestamp_granularities[]', 'segment');
+
+    const response = await fetch(OPENAI_TRANSCRIBE_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENAI_VOICE_API_KEY}` },
+      body: form,
+      signal: AbortSignal.timeout(VOICE_TRANSCRIBE_TIMEOUT_MS),
+    }).catch(() => null);
+    if (!response) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'transcribe_failed', message: 'Service unreachable' });
+      return;
+    }
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      this.logger.warn(
+        `[voice] transcribe upstream ${response.status} bytes=${body.length} detail=${detail.slice(0, 300)}`
+      );
+      if (
+        response.status === 400 ||
+        response.status === 415 ||
+        response.status === 422
+      ) {
+        res.status(HttpStatus.BAD_REQUEST).json({
+          error: 'bad_audio',
+          message:
+            'The audio could not be transcribed (unsupported or corrupt format)',
+        });
+        return;
+      }
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'transcribe_failed',
+        status: response.status,
+      });
+      return;
+    }
+
+    const data = (await response.json().catch(() => null)) as {
+      text?: unknown;
+      language?: unknown;
+      words?: unknown;
+    } | null;
+    if (!data) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'transcribe_failed', message: 'Malformed response' });
+      return;
+    }
+    const text = typeof data.text === 'string' ? data.text.trim() : '';
+    // Word timestamps arrive as a TOP-LEVEL words:[{word,start,end}] array
+    // (verbose_json + timestamp_granularities['word']). Normalize to the
+    // contract's `{ w, t0, t1 }` (absolute audio seconds); attach only when
+    // present so old callers that ignore `words` see a stable shape.
+    const words = (Array.isArray(data.words) ? data.words : [])
+      .map(raw => {
+        const w = (raw ?? {}) as Record<string, unknown>;
+        return {
+          w: typeof w.word === 'string' ? w.word : '',
+          t0: Number(w.start) || 0,
+          t1: Number(w.end) || 0,
+        };
+      })
+      .filter(w => w.w.trim().length > 0);
+    const language =
+      typeof data.language === 'string' && data.language.trim()
+        ? data.language.trim()
+        : undefined;
+
+    this.logger.log(
+      `[voice] transcribe bytes=${body.length} chars=${text.length} words=${words.length}`
+    );
+    res.json({
+      text,
+      ...(words.length > 0 ? { words } : {}),
+      ...(language ? { language } : {}),
+    });
   }
 }
