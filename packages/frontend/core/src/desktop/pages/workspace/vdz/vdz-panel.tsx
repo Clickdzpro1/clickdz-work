@@ -9,6 +9,7 @@ import {
 
 import * as chrome from './chrome-studio.css';
 import * as styles from './index.css';
+import * as barStyles from './project-bar.css';
 import {
   type UseVdzLayout,
   VDZ_PANEL_ICON_BY_TITLE,
@@ -197,9 +198,16 @@ interface VdzViewMenuProps {
 }
 
 /**
- * The page-header "View" control: a dropdown of the four panels with a checkmark
+ * The page-header "View" control: a dropdown of the panels with a checkmark
  * on each visible one, plus a "Reset layout" action. Self-contained (no Radix /
  * theme deps) to match the shell's dark, palette-locked surface.
+ *
+ * The trigger wears the SHARED header-cluster chrome from project-bar.css.ts
+ * (`barButton` + `countBadge` — one button recipe, one chip motif across the
+ * whole top bar; the old `viewMenuTrigger`/`viewMenuBadge` duplicates in
+ * index.css.ts are no longer referenced). It renders inside the ProjectBar's
+ * `viewMenu` slot, whose density attribute hides the "View" text under width
+ * pressure — the ▦ glyph, the N/6 chip and the tooltip keep it legible.
  */
 export function VdzViewMenu({
   layout,
@@ -240,24 +248,32 @@ export function VdzViewMenu({
     <div className={styles.viewMenuRoot} ref={rootRef}>
       <button
         type="button"
-        className={styles.viewMenuTrigger}
+        className={barStyles.barButton}
         data-open={open}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(o => !o)}
         title="Show or hide workspace panels"
+        aria-label="View panels"
       >
         <span className={styles.viewMenuGlyph} aria-hidden="true">
           ▦
         </span>
-        View
-        <span className={styles.viewMenuBadge}>
+        <span className={barStyles.viewLabel}>View</span>
+        <span className={barStyles.countBadge}>
           {visibleCount}/{VIEW_MENU_ITEMS.length}
         </span>
       </button>
 
       {open ? (
-        <div className={styles.viewMenu} role="menu">
+        /* Right-anchored (overriding the class's left:0) like the sibling
+           Open/⋯ popovers: the trigger now sits at the row's far right, so a
+           left-aligned 220px menu would poke past the viewport edge. */
+        <div
+          className={styles.viewMenu}
+          role="menu"
+          style={{ left: 'auto', right: 0 }}
+        >
           {VIEW_MENU_ITEMS.map(item => {
             const checked = layout[item.id].visible;
             const disabled = disabledIds?.has(item.id) ?? false;

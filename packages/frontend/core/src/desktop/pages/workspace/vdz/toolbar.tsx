@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { VdzOp, VdzTimeline } from '../../../../modules/vdz';
+import type { VdzClip, VdzOp, VdzTimeline } from '../../../../modules/vdz';
 import { VDZ_RATIO_PRESETS } from '../../../../modules/vdz/presets';
 import * as chrome from './chrome-studio.css';
 import { formatTimecode } from './constants';
 import * as styles from './index.css';
+import { VdzQuickActions } from './vdz-quick-actions';
 
 interface ToolbarProps {
   /** Whether the media bin panel is open (drives the toggle button state). */
@@ -29,6 +30,8 @@ interface ToolbarProps {
   onRippleDelete: () => void;
   /** Add a text clip at the playhead (relocated here from the footer). */
   onAddText?: () => void;
+  /** Add a shape clip (rect / circle) at the playhead — mirrors onAddText. */
+  onAddShape?: (shape: 'rect' | 'circle') => void;
   canUndo: boolean;
   onUndo: () => void;
   canRedo: boolean;
@@ -40,6 +43,13 @@ interface ToolbarProps {
   /** Single-op commit path (the SAME one the lanes/inspector use via `run`).
    * The Ratio picker emits `{ op:'setCanvas', width, height }` through it. */
   onCommitOp?: (op: VdzOp) => void;
+  /** Batch commit path (ONE history entry — the page's runBatch). Drives the
+   * quick-actions popover (canvas background + alignment presets). */
+  onCommitOps?: (ops: VdzOp[]) => void;
+  /** The single selected clip, if exactly one is selected (quick actions). */
+  selected?: { clip: VdzClip; trackId: string } | null;
+  /** Open the keyboard-shortcut cheatsheet overlay (the ⌨ button / `?`). */
+  onShowShortcuts?: () => void;
   /** Hide the timeline panel (collapse × at the end of the toolbar). */
   onCollapse?: () => void;
   // ---- MP4 export (compile timeline → cdz-render kind:'html') -------------
@@ -415,13 +425,161 @@ function RatioPicker({
   );
 }
 
+/**
+ * "＋ Shape" — the insert-group sibling of "＋ Text" (QUILL / WS11). A small
+ * popover picking Rectangle or Circle; each choice calls the page's
+ * `onAddShape` callback, which clones the add-text path (`addClip` onto the
+ * overlay lane at the playhead, creating the lane first when missing — the
+ * SAME single validated history path). Popover mechanics (outside click +
+ * Escape close, inline dark menu) mirror the RatioPicker above.
+ */
+function AddShapeButton({
+  onAddShape,
+}: {
+  onAddShape: (shape: 'rect' | 'circle') => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click or Escape (RatioPicker mechanics, verbatim).
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!wrapRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [open]);
+
+  const pick = (shape: 'rect' | 'circle') => {
+    onAddShape(shape);
+    setOpen(false);
+  };
+
+  const itemStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    width: '100%',
+    padding: '6px 8px',
+    border: '1px solid transparent',
+    borderRadius: 6,
+    background: 'transparent',
+    color: '#e7e9ee',
+    font: 'inherit',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    textAlign: 'left',
+  };
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative', display: 'inline-flex' }}>
+      <button
+        type="button"
+        className={styles.toolButton}
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
+        title="Add a shape clip at the playhead"
+      >
+        ＋ Shape
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Add a shape clip"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: 0,
+            zIndex: 40,
+            minWidth: 148,
+            padding: 6,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            background: '#1b1d22',
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: 8,
+            boxShadow: '0 12px 40px rgba(0,0,0,0.55)',
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => pick('rect')}
+            style={itemStyle}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'transparent';
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                flex: '0 0 auto',
+                width: 14,
+                height: 10,
+                borderRadius: 2,
+                border: '1px solid rgba(255,255,255,0.55)',
+                background: 'rgba(255,255,255,0.10)',
+              }}
+            />
+            Rectangle
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => pick('circle')}
+            style={itemStyle}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = 'transparent';
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                flex: '0 0 auto',
+                width: 12,
+                height: 12,
+                borderRadius: 999,
+                border: '1px solid rgba(255,255,255,0.55)',
+                background: 'rgba(255,255,255,0.10)',
+                marginLeft: 1,
+                marginRight: 1,
+              }}
+            />
+            Circle
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** Editor action bar. Sits ABOVE the lanes (never in the AI-dock footer).
  *
  * Controls are organised into four logically-grouped clusters, separated by
  * subtle hairline dividers: playback (media · play · audio · timecode) |
- * edit & insert (undo · redo · text · split · delete · ripple) | canvas &
- * zoom (zoom out/in · aspect ratio) | view & export (export · collapse). Each
- * button carries a tooltip naming its keyboard shortcut where one exists. */
+ * edit & insert (undo · redo · text · shape · split · delete · ripple) |
+ * canvas & zoom (zoom out/in · aspect ratio · quick actions) | view & export
+ * (export · shortcuts · collapse). Each button carries a tooltip naming its
+ * keyboard shortcut where one exists. */
 export function Toolbar({
   showMedia,
   onToggleMedia,
@@ -440,6 +598,7 @@ export function Toolbar({
   onDelete,
   onRippleDelete,
   onAddText,
+  onAddShape,
   canUndo,
   onUndo,
   canRedo,
@@ -447,6 +606,9 @@ export function Toolbar({
   selectionCount,
   timeline,
   onCommitOp,
+  onCommitOps,
+  selected,
+  onShowShortcuts,
   onCollapse,
   onExport,
   exportBusy,
@@ -533,6 +695,7 @@ export function Toolbar({
             ＋ Text
           </button>
         ) : null}
+        {onAddShape ? <AddShapeButton onAddShape={onAddShape} /> : null}
         <button
           type="button"
           className={styles.toolButton}
@@ -599,9 +762,17 @@ export function Toolbar({
         {onCommitOp ? (
           <RatioPicker timeline={timeline} onCommitOp={onCommitOp} />
         ) : null}
+
+        {onCommitOps ? (
+          <VdzQuickActions
+            timeline={timeline}
+            selected={selected}
+            onOps={onCommitOps}
+          />
+        ) : null}
       </span>
 
-      {onExport || onCollapse ? (
+      {onExport || onShowShortcuts || onCollapse ? (
         <>
           <span className={styles.toolDivider} />
           {/* ---- Group: view & export ------------------------------------ */}
@@ -645,6 +816,19 @@ export function Toolbar({
               >
                 {exportNote}
               </span>
+            ) : null}
+
+            {onShowShortcuts ? (
+              <button
+                type="button"
+                className={styles.toolButton}
+                onClick={onShowShortcuts}
+                aria-haspopup="dialog"
+                title="Keyboard shortcuts (?)"
+                aria-label="Keyboard shortcuts"
+              >
+                ⌨ Keys
+              </button>
             ) : null}
 
             {onCollapse ? (
