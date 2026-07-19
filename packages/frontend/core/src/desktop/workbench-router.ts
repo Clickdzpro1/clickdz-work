@@ -58,6 +58,14 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/shoperp/index'),
   },
   {
+    path: '/hermes',
+    lazy: () => import('./pages/workspace/hermes/index'),
+  },
+  {
+    path: '/openclaw',
+    lazy: () => import('./pages/workspace/openclaw/index'),
+  },
+  {
     path: '/settings',
     lazy: () => import('./pages/workspace/settings'),
   },

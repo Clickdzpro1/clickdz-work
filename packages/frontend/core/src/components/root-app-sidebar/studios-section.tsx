@@ -4,7 +4,7 @@
  */
 import { MenuLinkItem } from '@affine/core/modules/app-sidebar/views';
 import { WorkbenchService } from '@affine/core/modules/workbench';
-import { AiIcon, BlockLinkIcon, FrameIcon, VoiceIcon } from '@blocksuite/icons/rc';
+import { AiIcon, BlockLinkIcon, ChatWithAiIcon, FrameIcon, KeyboardIcon, VoiceIcon } from '@blocksuite/icons/rc';
 import { useLiveData, useService } from '@toeverything/infra';
 
 import { CollapsibleSection } from '../../desktop/components/navigation-panel';
@@ -106,6 +106,26 @@ export const StudiosSection = () => {
         postfixDisplay="always"
       >
         Voice Studio
+      </MenuLinkItem>
+      <MenuLinkItem
+        data-testid="slider-bar-hermes-button"
+        active={location.pathname.startsWith('/hermes')}
+        to={'/hermes'}
+        icon={<ChatWithAiIcon />}
+        postfix={<BetaChip />}
+        postfixDisplay="always"
+      >
+        Hermes
+      </MenuLinkItem>
+      <MenuLinkItem
+        data-testid="slider-bar-openclaw-button"
+        active={location.pathname.startsWith('/openclaw')}
+        to={'/openclaw'}
+        icon={<KeyboardIcon />}
+        postfix={<BetaChip />}
+        postfixDisplay="always"
+      >
+        OpenClaw
       </MenuLinkItem>
     </CollapsibleSection>
   );
