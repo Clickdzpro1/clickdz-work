@@ -42,6 +42,7 @@ import { Inspector } from './inspector';
 import { MediaBin } from './media-bin';
 import { PreviewCanvas } from './preview-canvas';
 import { ProjectBar } from './project-bar';
+import { VdzShortcutCheatsheet } from './shortcut-cheatsheet';
 import { TimelineLanes } from './timeline-lanes';
 import { Toolbar } from './toolbar';
 import { useVdzHistory } from './use-vdz-history';
@@ -197,6 +198,11 @@ const VdzStudioPage = () => {
   // so the user lands on the editable timeline with a pending Accept/Revert
   // proposal. Cleared by the dock via onInitialPromptConsumed after it sends.
   const [pendingEditorPrompt, setPendingEditorPrompt] = useState('');
+
+  // Keyboard-shortcut cheatsheet overlay (QUILL): opened by the `?` key or
+  // the toolbar's "⌨ Keys" button; closed by Escape / backdrop / ×.
+  // Read-only UI — zero timeline interaction.
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -497,6 +503,50 @@ const VdzStudioPage = () => {
     run({ op: 'addClip', trackId: overlay.id, clip: textClip });
   }, [timeline, playheadSeconds, duration, run, runBatch]);
 
+  // ---- Add shape clip (QUILL — the insert-group sibling of add-text) -----
+  // Clones the add-text path: a shape clip at the playhead on the overlay
+  // lane (created first when missing), through the SAME validated history
+  // path. Default geometry is centered; the circle compensates the canvas
+  // aspect so its default box renders visually round.
+  const onAddShapeClip = useCallback(
+    (shape: 'rect' | 'circle') => {
+      const overlay = timeline.tracks.find(track => track.kind === 'overlay');
+      const start = Math.min(playheadSeconds, Math.max(0, duration - 2));
+      const aspect =
+        timeline.width > 0 && timeline.height > 0
+          ? timeline.width / timeline.height
+          : 16 / 9;
+      const h = 0.3;
+      const w =
+        shape === 'circle'
+          ? Math.min(1, Math.round((h / aspect) * 1000) / 1000)
+          : 0.4;
+      const shapeClip = {
+        id: `clip-${nanoid(6)}`,
+        type: 'shape' as const,
+        name: shape === 'circle' ? 'Circle' : 'Rectangle',
+        start,
+        duration: 3,
+        shape,
+        color: '#5b8cff',
+        x: Math.round(((1 - w) / 2) * 1000) / 1000,
+        y: Math.round(((1 - h) / 2) * 1000) / 1000,
+        w,
+        h,
+      };
+      if (!overlay) {
+        const trackId = `track-overlay-${nanoid(4)}`;
+        runBatch([
+          { op: 'addTrack', track: { id: trackId, kind: 'overlay', name: 'Overlay', clips: [] } },
+          { op: 'addClip', trackId, clip: shapeClip },
+        ]);
+        return;
+      }
+      run({ op: 'addClip', trackId: overlay.id, clip: shapeClip });
+    },
+    [timeline, playheadSeconds, duration, run, runBatch]
+  );
+
   // ---- AI dock: stage → review → apply -----------------------------------
   // The dock hands us client-validated ops; we STAGE them (do not apply) so the
   // user can review a diff bar and Accept / Revert.
@@ -639,7 +689,15 @@ const VdzStudioPage = () => {
           else deleteSelected();
           break;
         case 'Escape':
-          clearSelection();
+          // The cheatsheet overlay wins Escape while open (its own window
+          // listener also closes it; this guard just spares the selection).
+          if (shortcutsOpen) setShortcutsOpen(false);
+          else clearSelection();
+          break;
+        case '?':
+          // `?` (Shift+/ on most layouts) toggles the shortcut cheatsheet.
+          event.preventDefault();
+          setShortcutsOpen(o => !o);
           break;
         case 'ArrowLeft':
           event.preventDefault();
@@ -663,6 +721,7 @@ const VdzStudioPage = () => {
       clearSelection,
       nudgeSelected,
       togglePanel,
+      shortcutsOpen,
     ]
   );
 
@@ -718,24 +777,30 @@ const VdzStudioPage = () => {
             </div>
           </div>
 
-          {/* RIGHT: the ProjectBar (inline-editable name + Save/Save As/Open,
-              owning all persistence), a slim divider, then the panel View menu.
-              In Generate mode the editor-only panels are mode-controlled, so
-              disable them here. */}
+          {/* RIGHT: one coherent action cluster hosted by the ProjectBar
+              (inline-editable name + Save/Open/⋯ overflow, owning all
+              persistence). The panel View menu rides along as its trailing
+              slot so the whole zone shares one gap rhythm, one divider spec
+              and one width budget — the bar condenses itself under width
+              pressure (density tiers) instead of squeezing the name to one
+              character or spilling buttons toward the mode tabs. In Generate
+              mode the editor-only panels are mode-controlled, so disable them
+              here. */}
           <div className={styles.headerRight}>
             <ProjectBar
               timeline={timeline}
               onLoadTimeline={loadProjectTimeline}
               onRename={renameProject}
               newTimeline={createSampleTimeline}
-            />
-            <span className={styles.headerDivider} aria-hidden="true" />
-            <VdzViewMenu
-              layout={layout}
-              onToggle={togglePanel}
-              onReset={resetLayout}
-              disabledIds={
-                mode === 'generate' ? generateDisabledPanels : undefined
+              viewMenu={
+                <VdzViewMenu
+                  layout={layout}
+                  onToggle={togglePanel}
+                  onReset={resetLayout}
+                  disabledIds={
+                    mode === 'generate' ? generateDisabledPanels : undefined
+                  }
+                />
               }
             />
           </div>
@@ -749,6 +814,12 @@ const VdzStudioPage = () => {
           onConfirm={engine => {
             void timelineExport.start(timeline, engine);
           }}
+        />
+        {/* Keyboard-shortcut cheatsheet (QUILL) — read-only portaled overlay;
+            opened via `?` or the toolbar's ⌨ button, closed by Esc/backdrop. */}
+        <VdzShortcutCheatsheet
+          open={shortcutsOpen}
+          onClose={() => setShortcutsOpen(false)}
         />
         {mode === 'generate' ? (
           <div className={styles.generateHost}>
@@ -856,6 +927,10 @@ const VdzStudioPage = () => {
                         onDelete={deleteSelected}
                         onRippleDelete={rippleDeleteSelected}
                         onAddText={onAddTextClip}
+                        onAddShape={onAddShapeClip}
+                        selected={selected}
+                        onCommitOps={runBatch}
+                        onShowShortcuts={() => setShortcutsOpen(true)}
                         canUndo={history.canUndo}
                         onUndo={undo}
                         canRedo={history.canRedo}

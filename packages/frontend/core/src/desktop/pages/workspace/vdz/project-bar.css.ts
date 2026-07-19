@@ -7,9 +7,24 @@ import { accentAlpha, v, vdzTheme } from './theme.css';
  *
  * Theme-aware: every color is a `--vdz-*` token (see theme.css.ts), so cdz
  * palettes + light mode flow in and the default "Midnight" dark look is the
- * fallback. The bar lives in the header's RIGHT zone and MUST stay inside the
- * fixed 40px row — every control is 28px tall (HEADER_CONTROL_H) so it sits on
- * the same baseline as the mode tabs and the View menu, and nothing wraps.
+ * fallback. The bar IS the header's RIGHT zone now (name · Save · Open · ⋯ ·
+ * divider · View slot) and MUST stay inside the fixed 40px row — every control
+ * is 28px tall (HEADER_CONTROL_H) so it sits on the same baseline as the mode
+ * tabs, and nothing wraps.
+ *
+ * SINGLE SOURCE OF TRUTH for the header-cluster chrome: `barButton` is THE
+ * header button recipe (the View trigger in vdz-panel.tsx wears it too — the
+ * old `viewMenuTrigger` copy in index.css.ts is retired), `barDivider` is THE
+ * one divider spec (both seams), and `barChip` is THE one in-button chip (the
+ * ⌘S hint + the View trigger's N/6 count), so the row reads as one family on
+ * one 8px gap rhythm.
+ *
+ * DENSITY: the bar root carries `data-density="full|tight|min"`, set by a
+ * ResizeObserver in project-bar.tsx from the width the header actually grants
+ * the right zone. Child styles key off that attribute so the cluster condenses
+ * in steps — the ⌘S hint first, then the View label, then Open (folded into
+ * the ⋯ overflow by JSX) — instead of crushing the project name to one
+ * character or spilling rigid buttons toward the mode tabs.
  *
  * The browser is a self-portaled dropdown popover anchored under the Open
  * button (not a panel in the layout system), carrying `vdzTheme` so the tokens
@@ -26,38 +41,44 @@ const accent = v.accent;
 
 const HEADER_CONTROL_H = 28;
 
-// ---- The bar: a compact inline group in the header-right zone ------------
-// Tightened rhythm: a slightly smaller inter-control gap, with the project
-// name (identity) leading and a hairline divider setting it off from the
-// action buttons (Save · Open · ⋯) so the hierarchy reads at a glance.
+// ---- The bar: the whole header-right cluster ------------------------------
+// ONE gap rhythm (8px) across the entire cluster — name · divider · Save ·
+// Open · ⋯ · divider · View all sit on the same beat (the old bar ran 4px
+// between buttons but ~12px around the View menu: two rhythms in one row).
+// `minWidth: 0` lets the cluster shrink inside the header's right zone; the
+// project name is the flexible child and the density tiers (see header note)
+// shed chrome before the name ever hits its floor.
 export const bar = style({
   display: 'flex',
   alignItems: 'center',
-  gap: 4,
+  gap: 8,
   minWidth: 0,
   height: HEADER_CONTROL_H,
 });
 
-// A hairline divider between the project name and the action cluster — the
-// same subtle seam the editor toolbar uses, giving the bar a clear "identity ·
-// actions" split without extra chrome.
+// THE hairline divider spec — used at both seams (name | actions and
+// actions | View). No extra margin: the bar's single gap rhythm spaces it.
+// (Replaces the second 1×18 `headerDivider` spec that lived in index.css.ts.)
 export const barDivider = style({
   width: 1,
   height: 16,
   flexShrink: 0,
   background: border,
-  margin: '0 4px',
 });
 
-// Inline-editable project name — the bar's title. Reads as a quiet field that
-// brightens on hover; truncates rather than pushing the row wider. Becomes a
-// real <input> on edit (same box metrics so there's no layout jump).
+// Inline-editable project name — the bar's title and its ONLY flexible child.
+// It ellipsizes under pressure, but with a sane floor: the old 40px minimum
+// collapsed real names to a single character ("C…") because every sibling is
+// flexShrink:0. Density tiers narrow the CAP first (so the buttons keep their
+// labels) and only lower the floor at the smallest tier — the name always
+// stays a readable word, never one letter. Becomes a real <input> on edit
+// (same box metrics so there's no layout jump).
 export const nameField = style({
   color: text,
   fontSize: 12.5,
   fontWeight: 600,
   letterSpacing: 0.1,
-  minWidth: 40,
+  minWidth: 96,
   maxWidth: 220,
   overflow: 'hidden',
   whiteSpace: 'nowrap',
@@ -75,9 +96,20 @@ export const nameField = style({
     background: bg,
     borderColor: border,
   },
+  selectors: {
+    [`${bar}[data-density='tight'] &`]: {
+      minWidth: 80,
+      maxWidth: 132,
+    },
+    [`${bar}[data-density='min'] &`]: {
+      minWidth: 48,
+      maxWidth: 112,
+    },
+  },
 });
 
-// The <input> shown while editing the name — matches nameField's metrics.
+// The <input> shown while editing the name — matches nameField's metrics
+// (and its density caps, so entering edit mode never widens the row).
 export const nameInput = style({
   appearance: 'none',
   boxSizing: 'border-box',
@@ -96,6 +128,14 @@ export const nameInput = style({
     outline: 'none',
     borderColor: accent,
   },
+  selectors: {
+    [`${bar}[data-density='tight'] &`]: {
+      width: 140,
+    },
+    [`${bar}[data-density='min'] &`]: {
+      width: 112,
+    },
+  },
 });
 
 // The "unsaved changes" indicator dot rendered INSIDE the Save button (before
@@ -109,7 +149,10 @@ export const saveDot = style({
   background: 'currentColor',
 });
 
-// Base header button (Save / Save As / Open). 28px tall to align on the row.
+// THE header button recipe (Save / Open / ⋯ / the View trigger in
+// vdz-panel.tsx / menu rows). 28px tall to align on the row. Keep this the
+// single source of truth — do not re-copy it (index.css.ts's old
+// `viewMenuTrigger` duplicate is no longer referenced).
 export const barButton = style({
   appearance: 'none',
   display: 'inline-flex',
@@ -153,18 +196,99 @@ export const barButton = style({
   },
 });
 
-// A keyboard-hint chip inside a button (e.g. ⌘S), dimmed and monospaced with a
-// faint inset pill so it reads as a distinct affordance, not part of the label.
-export const shortcutHint = style({
+// Save-specific layer worn TOGETHER with barButton (the element carries both
+// classes): a stable min-width so the Save / Saved / Saving… label swap never
+// jitters the row, plus calm resting states — the base :disabled grey (opacity
+// .4) read as broken chrome on the bar's primary action, so the clean state
+// renders as a quiet "✓ Saved" status (full opacity, chromeless) and the
+// in-flight state only dims slightly.
+export const saveButton = style({
+  minWidth: 88,
+  justifyContent: 'center',
+  selectors: {
+    [`${bar}[data-density='tight'] &`]: {
+      minWidth: 56,
+    },
+    [`${bar}[data-density='min'] &`]: {
+      minWidth: 56,
+    },
+    '&[data-state="saved"]:disabled': {
+      opacity: 1,
+      background: 'transparent',
+      borderColor: 'transparent',
+      color: textDim,
+      cursor: 'default',
+    },
+    '&[data-state="saving"]:disabled': {
+      opacity: 0.7,
+    },
+  },
+});
+
+// The small check inside the resting Save button ("✓ Saved") — a status glyph,
+// not an action affordance, tinted with the accent so "your work is safe"
+// still reads positively.
+export const saveCheck = style({
+  fontSize: 11,
+  lineHeight: 1,
+  color: accent,
+  flexShrink: 0,
+});
+
+// THE in-button chip recipe — one motif shared by the ⌘S hint and the View
+// trigger's N/6 count (previously three different pill treatments in ~360px).
+// Dimmed, monospaced, faint inset so it reads as an annotation, not a label.
+export const barChip = style({
   fontSize: 10,
   fontWeight: 600,
   lineHeight: 1,
   color: textDim,
-  padding: '2px 4px',
+  padding: '2px 5px',
   borderRadius: 4,
   background: accentAlpha(10),
+  flexShrink: 0,
   fontFamily:
     'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+});
+
+// The keyboard-hint chip (⌘S). First chrome to go when the cluster tightens —
+// the shortcut still works, the button's title still documents it.
+export const shortcutHint = style([
+  barChip,
+  {
+    selectors: {
+      [`${bar}[data-density='tight'] &`]: {
+        display: 'none',
+      },
+      [`${bar}[data-density='min'] &`]: {
+        display: 'none',
+      },
+    },
+  },
+]);
+
+// The View trigger's visible-panels count (e.g. 4/6) — same chip recipe,
+// tabular digits so 4/6 → 5/6 never shifts width. Kept at every density (it
+// is the trigger's information payload once the label hides).
+export const countBadge = style([
+  barChip,
+  {
+    fontWeight: 700,
+    fontVariantNumeric: 'tabular-nums',
+  },
+]);
+
+// The View trigger's text label — hidden when the cluster tightens (the ▦
+// glyph + count chip + tooltip carry the meaning at small widths).
+export const viewLabel = style({
+  selectors: {
+    [`${bar}[data-density='tight'] &`]: {
+      display: 'none',
+    },
+    [`${bar}[data-density='min'] &`]: {
+      display: 'none',
+    },
+  },
 });
 
 // ---- The browser: a dropdown popover anchored under the Open button ------

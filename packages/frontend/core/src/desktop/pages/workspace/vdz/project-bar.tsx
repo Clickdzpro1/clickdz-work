@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 import type { VdzTimeline } from '../../../../modules/vdz';
 import {
@@ -14,10 +20,21 @@ import { TemplateGallery } from './template-gallery';
 /**
  * Vdz Studio — the header ProjectBar.
  *
- * Owns everything about project persistence in the header's RIGHT zone: the
- * inline-editable project name, Save (⌘S) + Save As, and an "Open" button that
- * toggles the ProjectBrowser popover (list / open / delete / new). It is the
- * SINGLE caller of useVdzProjects, so all request lifecycle lives here.
+ * Owns everything about project persistence AND hosts the header's whole RIGHT
+ * zone: the inline-editable project name, Save (⌘S) + Save As, an "Open"
+ * button that toggles the ProjectBrowser popover (list / open / delete / new),
+ * the ⋯ overflow (Save As / Templates / Share), and — via the `viewMenu` slot
+ * the host passes in — the panel View menu, so the entire cluster shares one
+ * gap rhythm, one divider spec and one width budget. It is the SINGLE caller
+ * of useVdzProjects, so all request lifecycle lives here.
+ *
+ * DENSITY: a ResizeObserver watches the width the header actually grants the
+ * right zone (the bar's parent — a fixed flex share, so the measurement never
+ * depends on our own content and cannot feedback-loop) and steps the cluster
+ * through `data-density` tiers: full → tight (⌘S hint + "View" label hide,
+ * name cap narrows) → min (Open folds into the ⋯ overflow, name floor
+ * narrows). The project name is therefore never the only thing that shrinks,
+ * and the rigid buttons never spill toward the centre mode tabs.
  *
  * Timeline state itself still lives in index.tsx (useVdzHistory). This component
  * is handed the current `timeline`, plus three callbacks the host wires to the
@@ -43,6 +60,24 @@ const LAST_OPEN_KEY = 'vdz:last-open-project-id';
 const AUTOSAVE_DEBOUNCE_MS = 2000;
 /** First-run flag: once set, the welcome gallery never auto-opens again. */
 const ONBOARDED_KEY = 'vdz:onboarded:v1';
+
+/**
+ * Density tiers for the header action cluster (see the header comment).
+ * Thresholds are the available width (px) of the header's right zone:
+ *  · full  ≥ 470 — name up to 220px, ⌘S hint and "View" label visible.
+ *  · tight < 470 — hint + "View" label hide, name cap narrows (fits ~350+).
+ *  · min   < 350 — Open folds into ⋯, name floor narrows (fits ~260+).
+ */
+const DENSITY_TIGHT_BELOW = 470;
+const DENSITY_MIN_BELOW = 350;
+
+type BarDensity = 'full' | 'tight' | 'min';
+
+function densityFor(width: number): BarDensity {
+  if (width < DENSITY_MIN_BELOW) return 'min';
+  if (width < DENSITY_TIGHT_BELOW) return 'tight';
+  return 'full';
+}
 
 function readOnboarded(): boolean {
   try {
@@ -70,6 +105,12 @@ interface ProjectBarProps {
   onRename: (name: string) => void;
   /** Produce a brand-new working timeline (sample or blank). */
   newTimeline: () => VdzTimeline;
+  /**
+   * The header's panel View menu, rendered as the cluster's trailing control
+   * (after a divider) so the whole right zone shares one gap rhythm and one
+   * density budget. Optional — the bar still works standalone without it.
+   */
+  viewMenu?: ReactNode;
 }
 
 /** Stable JSON of a timeline for cheap dirty comparison (order is stable). */
@@ -104,8 +145,30 @@ export function ProjectBar({
   onLoadTimeline,
   onRename,
   newTimeline,
+  viewMenu,
 }: ProjectBarProps) {
   const projects = useVdzProjects();
+
+  // ---- Density: condense the cluster to the width we're actually given ----
+  // Observe the bar's PARENT (the header's right zone): its width is a fixed
+  // flex share that does not depend on our content, so switching tiers can
+  // never resize what we measure (no observer feedback loop). Same-value
+  // setState bails out, so resize drags don't churn renders.
+  const barRef = useRef<HTMLDivElement>(null);
+  const [density, setDensity] = useState<BarDensity>('full');
+
+  useEffect(() => {
+    const host = barRef.current?.parentElement;
+    if (!host || typeof ResizeObserver === 'undefined') return;
+    setDensity(densityFor(host.getBoundingClientRect().width));
+    const observer = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        setDensity(densityFor(entry.contentRect.width));
+      }
+    });
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
 
   // The currently-open stored project id (null = unsaved working timeline).
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -352,6 +415,13 @@ export function ProjectBar({
   }, []);
 
   const saveDisabled = projects.loading || (!dirty && !!projectId);
+  // Presentation-only mirror of the existing save logic (label ternary below
+  // is unchanged): drives the calm resting/"saving" looks via data-state.
+  const saveState = projects.loading
+    ? 'saving'
+    : dirty || !projectId
+      ? 'dirty'
+      : 'saved';
 
   // ---- Public share link (C4) ---------------------------------------------
   // Sharing needs a SAVED project (the share hangs off the project id). The
@@ -401,8 +471,27 @@ export function ProjectBar({
     }
   }, [shareApi]);
 
+  // The projects popover, defined once: it anchors under "Open" normally, or
+  // under the ⋯ overflow once Open has folded into it (min density) — both
+  // wrappers are position:relative anchors and the popover right-aligns, so
+  // it opens inside the viewport either way.
+  const projectBrowser = (
+    <ProjectBrowser
+      open={browserOpen}
+      onRequestClose={() => setBrowserOpen(false)}
+      projects={list}
+      loading={projects.loading}
+      error={projects.error}
+      currentId={projectId}
+      onRefresh={() => void refreshList()}
+      onOpenProject={id => void handleOpenProject(id)}
+      onDeleteProject={id => void handleDeleteProject(id)}
+      onNewProject={handleNewProject}
+    />
+  );
+
   return (
-    <div className={styles.bar}>
+    <div className={styles.bar} ref={barRef} data-density={density}>
       {editingName ? (
         <input
           className={styles.nameInput}
@@ -438,11 +527,15 @@ export function ProjectBar({
 
       {/* Save. The unsaved-changes indicator is a dot INSIDE this button when
           the working timeline is dirty (dirty is knowable from savedSnapshot),
-          so "there are changes to save" reads right where you'd act on it. */}
+          so "there are changes to save" reads right where you'd act on it.
+          When clean it rests as a quiet "✓ Saved" status (data-state styles),
+          not a greyed-out pill. Wiring (onClick / disabled / label logic) is
+          unchanged. */}
       <button
         type="button"
-        className={styles.barButton}
+        className={`${styles.barButton} ${styles.saveButton}`}
         data-primary="true"
+        data-state={saveState}
         onClick={handleSave}
         disabled={saveDisabled}
         title={dirty ? 'Save project — unsaved changes' : 'Save project'}
@@ -454,40 +547,40 @@ export function ProjectBar({
             title="Unsaved changes"
           />
         ) : null}
+        {saveState === 'saved' ? (
+          <span className={styles.saveCheck} aria-hidden="true">
+            ✓
+          </span>
+        ) : null}
         {projects.loading ? 'Saving…' : dirty || !projectId ? 'Save' : 'Saved'}
-        <span className={styles.shortcutHint}>⌘S</span>
+        {saveState === 'saved' ? null : (
+          <span className={styles.shortcutHint}>⌘S</span>
+        )}
       </button>
 
-      <div className={styles.browserRoot}>
-        <button
-          type="button"
-          className={styles.barButton}
-          data-open={browserOpen}
-          aria-haspopup="menu"
-          aria-expanded={browserOpen}
-          onClick={toggleBrowser}
-          title="Open a saved project"
-        >
-          Open
-        </button>
-        <ProjectBrowser
-          open={browserOpen}
-          onRequestClose={() => setBrowserOpen(false)}
-          projects={list}
-          loading={projects.loading}
-          error={projects.error}
-          currentId={projectId}
-          onRefresh={() => void refreshList()}
-          onOpenProject={id => void handleOpenProject(id)}
-          onDeleteProject={id => void handleDeleteProject(id)}
-          onNewProject={handleNewProject}
-        />
-      </div>
+      {/* Open — folded into the ⋯ overflow at min density (the popover then
+          anchors there instead; see projectBrowser above). */}
+      {density === 'min' ? null : (
+        <div className={styles.browserRoot}>
+          <button
+            type="button"
+            className={styles.barButton}
+            data-open={browserOpen}
+            aria-haspopup="menu"
+            aria-expanded={browserOpen}
+            onClick={toggleBrowser}
+            title="Open a saved project"
+          >
+            Open
+          </button>
+          {projectBrowser}
+        </div>
+      )}
 
-      {/* ---- ⋯ overflow: Save As / Templates / Share (top-bar fix: the
-           header-right was overflowing and buttons overlapped — the bar now
-           always fits: Name · Save · Open · ⋯). The Share popover stays
-           anchored to this wrapper. ---- */}
+      {/* ---- ⋯ overflow: Save As / Templates / Share — plus Open when the
+           cluster is at min density, so under width pressure low-priority
+           actions condense in here instead of the row overflowing. The Share
+           popover stays anchored to this wrapper. ---- */}
       <div className={styles.browserRoot}>
         <button
           type="button"
@@ -507,6 +600,16 @@ export function ProjectBar({
         {moreOpen ? (
           <div className={chrome.overflowMenu} role="menu">
             {[
+              ...(density === 'min'
+                ? [
+                    {
+                      icon: '📂',
+                      label: 'Open…',
+                      disabled: false,
+                      run: () => toggleBrowser(),
+                    },
+                  ]
+                : []),
               {
                 icon: '💾',
                 label: 'Save As…',
@@ -646,7 +749,20 @@ export function ProjectBar({
             ) : null}
           </div>
         ) : null}
+        {/* At min density the Open action lives in this menu, so its popover
+            anchors here too. */}
+        {density === 'min' ? projectBrowser : null}
       </div>
+
+      {/* ---- Trailing slot: the panel View menu, set off by the same divider
+           spec as the name seam so the cluster ends on the same rhythm it
+           started with. ---- */}
+      {viewMenu ? (
+        <>
+          <span className={styles.barDivider} aria-hidden="true" />
+          {viewMenu}
+        </>
+      ) : null}
 
       {/* ---- Template gallery / first-run welcome ---- */}
       <TemplateGallery
