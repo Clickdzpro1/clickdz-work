@@ -34,6 +34,19 @@ export interface VdzSuggestion {
   message: string;
 }
 
+/**
+ * Live editing state the analyzer can factor in beyond the static document:
+ * the playhead position and the sole-selected clip. Both OPTIONAL — omitted
+ * simply disables the rules that need them, so the timeline-only behavior is
+ * unchanged for callers that don't pass this.
+ */
+export interface VdzSuggestContext {
+  /** Current playhead position in seconds, if known. */
+  playheadSeconds?: number;
+  /** The sole-selected clip id (when the user has exactly one selected). */
+  selectedClipId?: string;
+}
+
 /** Max chips we surface at once — keep the idle state focused. */
 const MAX_SUGGESTIONS = 4;
 
@@ -48,6 +61,13 @@ const DEAD_GAP_SECONDS = 0.75;
  * card / lower-thirds" — long-form footage that has never been titled.
  */
 const LONG_UNTITLED_SECONDS = 25;
+
+/**
+ * The classic HTML export tier caps a composition at 300s (see the render
+ * service). Past this we nudge the user toward the Remotion export engine,
+ * which has no such ceiling — so a long project can still export cleanly.
+ */
+const LONG_EXPORT_SECONDS = 300;
 
 /**
  * Aspect-ratio tolerance. width/height within this fraction of 16:9 (1.777…)
@@ -73,6 +93,24 @@ const SOCIAL_HINT_WORDS = [
   'stories',
   'vertical',
   '9:16',
+];
+
+/**
+ * Words that hint the project is meant for a WIDE / landscape platform
+ * (YouTube, TV, cinema, webinar). Used to catch the reverse mismatch: a
+ * vertical/portrait canvas carrying clearly-landscape intent. Matched
+ * case-insensitively as substrings; deliberately narrow to avoid false hits.
+ */
+const LANDSCAPE_HINT_WORDS = [
+  'widescreen',
+  'landscape',
+  'youtube',
+  '16:9',
+  'cinema',
+  'cinematic',
+  'webinar',
+  'tv',
+  'desktop',
 ];
 
 /** Words that mark an audio clip as spoken narration (voiceover / dialogue). */
@@ -117,9 +155,15 @@ function matchesAny(haystack: string, words: readonly string[]): boolean {
  * capped — so the dock always shows the highest-signal ideas first. Existing
  * rules are preserved; context-aware rules (social reformat, transition on the
  * busiest boundary, ducking, caption styling, cinematic effects, title card for
- * long untitled footage) are added.
+ * long untitled footage) are added. When the live editing `context` (playhead /
+ * selection) is supplied, extra rules fire: split the clip under the playhead,
+ * fade a selected audio clip, switch a mismatched aspect ratio, and recommend
+ * the Remotion engine for a very long project.
  */
-export function suggestEdits(timeline: VdzTimeline): VdzSuggestion[] {
+export function suggestEdits(
+  timeline: VdzTimeline,
+  context: VdzSuggestContext = {}
+): VdzSuggestion[] {
   // Collect candidates keyed by id (dedupe), then rank + cap at the end so the
   // ORDER we push in below does not decide the final selection — PRIORITY does.
   const candidates = new Map<string, VdzSuggestion>();
@@ -206,6 +250,26 @@ export function suggestEdits(timeline: VdzTimeline): VdzSuggestion[] {
         'This looks like a vertical social video but the canvas is landscape ' +
         '16:9 — switch the canvas to 9:16 (1080×1920) for Reels / TikTok / ' +
         'Shorts.',
+    });
+  }
+
+  // (a2) The REVERSE mismatch: a portrait/vertical canvas but clearly landscape
+  //      intent (YouTube / widescreen / cinema hints) → suggest switching to
+  //      16:9. Complements the reformat-vertical rule (they never both fire —
+  //      the canvas can't be both portrait and landscape).
+  const isPortrait = height > width;
+  const landscapeHinted =
+    tracks.some(t =>
+      matchesAny((t.name ?? '').toLowerCase(), LANDSCAPE_HINT_WORDS)
+    ) || allClips.some(c => matchesAny(clipText(c.clip), LANDSCAPE_HINT_WORDS));
+  if (!isEmpty && isPortrait && landscapeHinted) {
+    add({
+      id: 'reformat-widescreen',
+      label: 'Make it 16:9 widescreen',
+      message:
+        'This looks like a widescreen / YouTube video but the canvas is ' +
+        'portrait — switch the canvas to 16:9 (1920×1080) for widescreen ' +
+        'playback.',
     });
   }
 
@@ -351,6 +415,78 @@ export function suggestEdits(timeline: VdzTimeline): VdzSuggestion[] {
     });
   }
 
+  // (g) PLAYHEAD strictly INSIDE a clip → offer to split it there. Uses the live
+  //     playhead position; picks the FIRST clip (in track order) whose span
+  //     contains it, so the suggestion names a real clip the AI can split at the
+  //     exact playhead time.
+  const playheadSeconds =
+    typeof context.playheadSeconds === 'number' &&
+    Number.isFinite(context.playheadSeconds)
+      ? context.playheadSeconds
+      : null;
+  if (!isEmpty && playheadSeconds != null) {
+    let underPlayhead: Record<string, unknown> | null = null;
+    for (const { clip } of allClips) {
+      const start = typeof clip.start === 'number' ? clip.start : 0;
+      const dur = typeof clip.duration === 'number' ? clip.duration : 0;
+      // Strictly inside (a split must land inside, not on a boundary).
+      if (playheadSeconds > start && playheadSeconds < start + dur) {
+        underPlayhead = clip;
+        break;
+      }
+    }
+    if (underPlayhead) {
+      const label =
+        (typeof underPlayhead.name === 'string' && underPlayhead.name.trim()) ||
+        (typeof underPlayhead.text === 'string' && underPlayhead.text.trim()) ||
+        (typeof underPlayhead.type === 'string' ? underPlayhead.type : 'clip');
+      add({
+        id: 'split-at-playhead',
+        label: `Split "${label}" at the playhead`,
+        message:
+          `Split the "${label}" clip at the playhead (${playheadSeconds.toFixed(2)}s) ` +
+          `into two clips.`,
+      });
+    }
+  }
+
+  // (h) A SELECTED audio clip with no fades → offer a fade-in/out polish. Reads
+  //     the sole-selected clip id from the live context and confirms it is an
+  //     audio clip lacking fadeIn/fadeOut.
+  if (!isEmpty && context.selectedClipId) {
+    const sel = allClips.find(c => c.clip.id === context.selectedClipId);
+    const clip = sel?.clip;
+    if (
+      clip &&
+      clip.type === 'audio' &&
+      typeof clip.fadeIn !== 'number' &&
+      typeof clip.fadeOut !== 'number'
+    ) {
+      const label =
+        (typeof clip.name === 'string' && clip.name.trim()) || 'audio';
+      add({
+        id: 'fade-selected-audio',
+        label: `Fade the "${label}" clip in and out`,
+        message:
+          `Add a smooth half-second fade-in and fade-out to the selected ` +
+          `"${label}" audio clip so it starts and ends cleanly.`,
+      });
+    }
+  }
+
+  // (i) A very long project (> LONG_EXPORT_SECONDS) → the classic export tier
+  //     caps at 300s, so recommend the Remotion engine (no such ceiling).
+  if (!isEmpty && duration > LONG_EXPORT_SECONDS) {
+    add({
+      id: 'long-use-remotion',
+      label: 'Long video — export with Remotion',
+      message:
+        `This project is over ${LONG_EXPORT_SECONDS}s, past the classic ` +
+        `exporter's limit — turn on the Remotion export engine so the whole ` +
+        `video renders.`,
+    });
+  }
+
   // 7) Non-empty but nothing more specific fired → a safe polish default so the
   //    row is never awkwardly empty on a valid project.
   if (!isEmpty && candidates.size === 0) {
@@ -363,19 +499,26 @@ export function suggestEdits(timeline: VdzTimeline): VdzSuggestion[] {
 
   // Rank by PRIORITY (lower = shown first) and cap. Unlisted ids sort last but
   // keep insertion order among themselves, so a future rule still appears.
+  // The live-context rules (split at playhead, fade the selected clip) rank
+  // highest among actionable ideas — they respond to exactly what the user is
+  // doing right now.
   const PRIORITY: Record<string, number> = {
     'build-intro': 0,
-    'reformat-vertical': 1,
-    'add-title': 2,
-    'long-needs-title': 2,
-    'add-audio': 3,
-    'duck-music': 4,
-    'add-transition': 5,
-    'close-gap': 6,
-    'style-captions': 7,
-    'cinematic-look': 8,
-    'add-outro': 9,
-    'add-motion': 10,
+    'split-at-playhead': 1,
+    'fade-selected-audio': 2,
+    'reformat-vertical': 3,
+    'reformat-widescreen': 3,
+    'add-title': 4,
+    'long-needs-title': 4,
+    'add-audio': 5,
+    'duck-music': 6,
+    'add-transition': 7,
+    'close-gap': 8,
+    'style-captions': 9,
+    'cinematic-look': 10,
+    'long-use-remotion': 11,
+    'add-outro': 12,
+    'add-motion': 13,
   };
   const ranked = [...candidates.values()].sort((a, b) => {
     const pa = PRIORITY[a.id] ?? 100;

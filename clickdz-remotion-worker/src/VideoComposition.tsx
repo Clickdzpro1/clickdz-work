@@ -58,6 +58,53 @@ import type {
 const CAPTION_DEFAULT_TEXT_SHADOW = '0 2px 12px rgba(0,0,0,0.6)';
 
 /**
+ * Seconds → frames using the SAME rounding the manifest builder uses
+ * (`Math.round(seconds * fps + 1e-6)`), so a render-window boundary lands on the
+ * exact frame the frame-domain fields already did.
+ */
+function secondsToFrames(seconds: number, fps: number): number {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.round(seconds * fps + 1e-6);
+}
+
+/**
+ * C3 — the <Sequence> MOUNT bounds for a clip. Prefers the transition-extended
+ * RENDER window (`renderStartSec` / `renderDurationSec`, in seconds → frames)
+ * when the manifest carries it, so an OUTGOING clip stays mounted through the
+ * after-boundary half of its crossfade (the app preview extends the same tail in
+ * `anim.ts::clipWindow`). Falls back to the clip's TRUE frame window when the
+ * fields are absent — the CURRENT prod app never sends them, so this is a no-op
+ * there. NOTE: this ONLY moves the mount bounds; the per-frame anim/transition
+ * math keeps using `clip.fromFrame` / `clip.durationInFrames` so the fade/slide
+ * curves stay centered on the true boundary.
+ */
+function sequenceBounds(
+  clip: ManifestClip,
+  fps: number
+): { from: number; durationInFrames: number } {
+  let from = clip.fromFrame;
+  let duration = clip.durationInFrames;
+  if (typeof clip.renderStartSec === 'number') {
+    const f = secondsToFrames(clip.renderStartSec, fps);
+    // A render window never trims INTO the clip: only extend the mount window
+    // (start no later than the true start) so we cannot hide real content.
+    from = Math.min(clip.fromFrame, f);
+  }
+  if (typeof clip.renderDurationSec === 'number') {
+    const d = secondsToFrames(clip.renderDurationSec, fps);
+    // The extended window must still cover the clip's true end; take the larger
+    // of the requested render span and the true [fromFrame,end) span measured
+    // from the (possibly earlier) mount start.
+    const trueEnd = clip.fromFrame + clip.durationInFrames;
+    duration = Math.max(d, trueEnd - from);
+  } else {
+    // If only the start moved earlier, keep covering the true end.
+    duration = clip.fromFrame + clip.durationInFrames - from;
+  }
+  return { from, durationInFrames: Math.max(1, duration) };
+}
+
+/**
  * The wrapper + inner-text CSS a caption preset contributes, mirroring the app's
  * `captionPresetCss` exactly (so exported captions match the preview chrome).
  */
@@ -366,10 +413,16 @@ function VisualClip({
   const filter = mergeFilters(effectsFilter(clip.effects), extraFilter);
   const vignette = vignetteOverlay(clip.effects);
 
+  // C3: the mount window prefers the transition-extended render window so the
+  // fade-out tail of an outgoing crossfade renders. The per-frame math above
+  // (base + transition) used the TRUE window, so extending the mount only keeps
+  // the element on-screen longer — the opacity curve does the actual fade.
+  const seq = sequenceBounds(clip, manifest.fps);
+
   return (
     <Sequence
-      from={clip.fromFrame}
-      durationInFrames={Math.max(1, clip.durationInFrames)}
+      from={seq.from}
+      durationInFrames={seq.durationInFrames}
       layout="none"
       name={clip.name || clip.id}
     >
@@ -402,7 +455,13 @@ function VisualClip({
 }
 
 /** One audio clip: a Sequence-bounded <Audio> with a per-frame gain envelope. */
-function AudioClip({ clip }: { clip: ManifestAudioClip }): React.ReactElement | null {
+function AudioClip({
+  clip,
+  fps,
+}: {
+  clip: ManifestAudioClip;
+  fps: number;
+}): React.ReactElement | null {
   const frame = useCurrentFrame();
   if (!clip.src) return null;
 
@@ -434,10 +493,16 @@ function AudioClip({ clip }: { clip: ManifestAudioClip }): React.ReactElement | 
     }
   }
 
+  // C3: mount bounds prefer the render window (fallback to the true window). The
+  // gain envelope above stays keyed to the TRUE clip span (fade in/out anchor to
+  // the real start/end). In practice audio clips carry no render window (the
+  // manifest extends only VISUAL transition tails), so this is a no-op for them.
+  const seq = sequenceBounds(clip, fps);
+
   return (
     <Sequence
-      from={clip.fromFrame}
-      durationInFrames={Math.max(1, clip.durationInFrames)}
+      from={seq.from}
+      durationInFrames={seq.durationInFrames}
       name={clip.name || clip.id}
     >
       <Audio src={clip.src} volume={Math.max(0, Math.min(1, gain))} />
@@ -455,7 +520,11 @@ export const VideoComposition: React.FC<{ manifest: RenderManifest }> = ({
         track.kind === 'audio'
           ? track.clips.map(clip =>
               clip.type === 'audio' ? (
-                <AudioClip key={`${track.id}:${clip.id}`} clip={clip} />
+                <AudioClip
+                  key={`${track.id}:${clip.id}`}
+                  clip={clip}
+                  fps={manifest.fps}
+                />
               ) : null
             )
           : track.clips.map((clip, i) =>

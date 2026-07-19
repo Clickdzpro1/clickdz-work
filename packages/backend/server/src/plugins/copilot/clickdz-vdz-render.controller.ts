@@ -43,6 +43,70 @@ const REMOTION_TOKEN = process.env.CDZ_REMOTION_TOKEN || '';
 // unaffected; the prefix is stripped before the id reaches the worker.
 const REMOTION_JOB_PREFIX = 'rmt:';
 
+// ---------------------------------------------------------------------------
+// C2 — explicit render params (SPLICE → this controller → cdz-render). All are
+// OPTIONAL on the wire so the OLD app (which sends only {html}) is byte-for-byte
+// unchanged: the classic branch only forwards a field when the client sent a
+// valid one, and cdz-render keeps its own server-side defaults for anything
+// absent. Bounds mirror cdz-render/server.mjs (and MOD/schema.ts's setCanvas).
+// ---------------------------------------------------------------------------
+const MIN_DIMENSION = 320; // px, per side floor
+const MAX_DIMENSION = 4096; // px, per side ceiling (4K+)
+const ALLOWED_FPS = new Set([24, 25, 30, 60]);
+const DEFAULT_FPS = 30;
+// Classic (HTML/headless-Chrome) tier length cap. Raised 120 → 300 in this
+// round (cdz-render's MAX_DURATION_S is raised to match). Over this we reject at
+// the edge with the C2 duration_cap body BEFORE round-tripping to cdz-render.
+const CLASSIC_MAX_SEC = 300;
+
+/**
+ * Parse an optional integer dimension (width/height) from the request body.
+ * Returns the validated int, or `null` when absent (→ let cdz-render default).
+ * Throws a typed 400 when present-but-out-of-range so a bogus value never
+ * silently renders at the wrong size.
+ */
+function parseDimension(value: unknown, field: 'width' | 'height'): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < MIN_DIMENSION || n > MAX_DIMENSION) {
+    throw new BadRequest(
+      `"${field}" must be an integer between ${MIN_DIMENSION} and ${MAX_DIMENSION}`
+    );
+  }
+  return n;
+}
+
+/**
+ * Parse an optional fps. Returns the validated value, or `null` when absent (→
+ * cdz-render applies DEFAULT_FPS). A present value MUST be one of the allowed
+ * rates; an out-of-set value is a 400 (we do not silently coerce here, unlike
+ * the render service's own last-resort fallback).
+ */
+function parseFps(value: unknown): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!ALLOWED_FPS.has(n)) {
+    throw new BadRequest(
+      `"fps" must be one of ${[...ALLOWED_FPS].join(', ')} (default ${DEFAULT_FPS})`
+    );
+  }
+  return n;
+}
+
+/**
+ * Parse an optional durationSec. Returns the finite positive value, or `null`
+ * when absent (→ cdz-render probes it from the HTML as before). A present
+ * non-finite / non-positive value is a 400.
+ */
+function parseDurationSec(value: unknown): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new BadRequest('"durationSec" must be a positive number');
+  }
+  return n;
+}
+
 // Caps mirror the render service's own validation (server.mjs) so we reject
 // oversized/short payloads at the edge instead of round-tripping them.
 const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB
@@ -189,6 +253,21 @@ export class ClickDzVdzRenderController {
       throw new BadRequest('Render manifest is too large (max 4MB)');
     }
 
+    // One structured log line per render (C2), same fixed shape as the classic
+    // branch — the Remotion tier carries these on the manifest (frame-domain),
+    // so we read durationSec/width/height/fps off it for parity in the logs. The
+    // manifest itself is still relayed VERBATIM below ({manifest} envelope).
+    const mf = manifest as {
+      durationInSeconds?: unknown;
+      width?: unknown;
+      height?: unknown;
+      fps?: unknown;
+    };
+    // eslint-disable-next-line no-console
+    console.log(
+      `[vdz-render] engine=remotion durationSec=${mf.durationInSeconds ?? ''} w=${mf.width ?? ''} h=${mf.height ?? ''} fps=${mf.fps ?? ''}`
+    );
+
     const res = await this.remotionUpstream(
       '/render',
       {
@@ -221,14 +300,26 @@ export class ClickDzVdzRenderController {
     return { jobId: `${REMOTION_JOB_PREFIX}${data.jobId}` };
   }
 
-  /** POST /render — enqueue an HTML composition; return the job id. */
+  /**
+   * POST /render — enqueue an HTML composition; return the job id.
+   *
+   * @Res passthrough: the C2 `duration_cap` rejection needs a CUSTOM body
+   * (`{error:'duration_cap', maxSec, engine}`) that a typed error cannot emit,
+   * so we write that ONE response directly (`res.status().json()`) and return.
+   * Every other path still returns an object normally (passthrough leaves Nest's
+   * serializer in charge) — including the Remotion branch, which is unchanged.
+   */
   @Throttle('strict')
   @Post('/api/v1/vdz/render')
-  async render(@Body() body: any): Promise<{ jobId: string }> {
+  async render(
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<{ jobId: string } | void> {
     // OPT-IN Remotion engine: only when the caller explicitly requests it. When
     // `engine` is anything else (or absent) we fall through to EXACTLY the
     // existing HTML path below — byte-identical behavior in prod. The env gate
-    // lives inside renderViaRemotion (typed 400 when unconfigured).
+    // lives inside renderViaRemotion (typed 400 when unconfigured). The manifest
+    // envelope + relay are unchanged (see renderViaRemotion).
     if (body?.engine === 'remotion') {
       return this.renderViaRemotion(body);
     }
@@ -246,26 +337,63 @@ export class ClickDzVdzRenderController {
       throw new BadRequest('Composition HTML is too large (max 2MB)');
     }
 
-    const res = await this.upstream(
+    // C2: parse the OPTIONAL explicit render params. Each is `null` when absent
+    // (→ forward nothing, cdz-render keeps its own default) or a validated value
+    // (present-but-invalid → typed 400 from the parser). `engine` is 'classic'
+    // on this branch by definition (anything but 'remotion' lands here).
+    const width = parseDimension(body?.width, 'width');
+    const height = parseDimension(body?.height, 'height');
+    const fps = parseFps(body?.fps);
+    const durationSec = parseDurationSec(body?.durationSec);
+
+    // C2 duration cap (classic tier only). Over CLASSIC_MAX_SEC we reject BEFORE
+    // round-tripping, with the exact contract body via passthrough res (NOT a
+    // raw HttpException — that would coerce to a 500 and drop the custom body).
+    if (durationSec != null && durationSec > CLASSIC_MAX_SEC) {
+      res.status(400).json({
+        error: 'duration_cap',
+        maxSec: CLASSIC_MAX_SEC,
+        engine: 'classic',
+      });
+      return;
+    }
+
+    // One structured log line per render (C2). Fields that were not sent show as
+    // empty so the line is greppable and fixed-shape regardless of the payload.
+    // eslint-disable-next-line no-console
+    console.log(
+      `[vdz-render] engine=classic durationSec=${durationSec ?? ''} w=${width ?? ''} h=${height ?? ''} fps=${fps ?? ''}`
+    );
+
+    const res2 = await this.upstream(
       '/render',
       {
         method: 'POST',
         headers: this.headers({ 'Content-Type': 'application/json' }),
         // kind:'html' is the only supported kind in this PR; the render service
         // itself validates fps/dimensions/duration and returns typed errors.
-        body: JSON.stringify({ kind: 'html', html }),
+        // Forward the C2 fields ONLY when present (spread of a conditional
+        // object) so the wire payload for the OLD app is byte-identical.
+        body: JSON.stringify({
+          kind: 'html',
+          html,
+          ...(width != null ? { width } : {}),
+          ...(height != null ? { height } : {}),
+          ...(fps != null ? { fps } : {}),
+          ...(durationSec != null ? { durationSec } : {}),
+        }),
       },
       PROXY_TIMEOUT_MS
     );
 
-    const data = (await res.json().catch(() => ({}))) as {
+    const data = (await res2.json().catch(() => ({}))) as {
       jobId?: unknown;
       error?: { message?: string };
     };
-    if (!res.ok) {
+    if (!res2.ok) {
       // Bubble the render service's own message (e.g. "too long", "no clips").
       throw new BadRequest(
-        data?.error?.message || `Render service rejected the request (${res.status})`
+        data?.error?.message || `Render service rejected the request (${res2.status})`
       );
     }
     if (typeof data?.jobId !== 'string' || !data.jobId) {

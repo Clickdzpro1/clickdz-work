@@ -6,6 +6,7 @@ import {
   type VdzProjectSummary,
 } from '../../../../modules/vdz/use-vdz-projects';
 import { useVdzShare } from '../../../../modules/vdz/use-vdz-share';
+import * as chrome from './chrome-studio.css';
 import * as styles from './project-bar.css';
 import { ProjectBrowser } from './project-browser';
 import { TemplateGallery } from './template-gallery';
@@ -402,14 +403,6 @@ export function ProjectBar({
 
   return (
     <div className={styles.bar}>
-      {dirty ? (
-        <span
-          className={styles.dirtyDot}
-          aria-hidden="true"
-          title="Unsaved changes"
-        />
-      ) : null}
-
       {editingName ? (
         <input
           className={styles.nameInput}
@@ -441,14 +434,26 @@ export function ProjectBar({
         </span>
       )}
 
+      <span className={styles.barDivider} aria-hidden="true" />
+
+      {/* Save. The unsaved-changes indicator is a dot INSIDE this button when
+          the working timeline is dirty (dirty is knowable from savedSnapshot),
+          so "there are changes to save" reads right where you'd act on it. */}
       <button
         type="button"
         className={styles.barButton}
         data-primary="true"
         onClick={handleSave}
         disabled={saveDisabled}
-        title="Save project"
+        title={dirty ? 'Save project — unsaved changes' : 'Save project'}
       >
+        {dirty ? (
+          <span
+            className={styles.saveDot}
+            aria-hidden="true"
+            title="Unsaved changes"
+          />
+        ) : null}
         {projects.loading ? 'Saving…' : dirty || !projectId ? 'Save' : 'Saved'}
         <span className={styles.shortcutHint}>⌘S</span>
       </button>
@@ -500,32 +505,17 @@ export function ProjectBar({
           ⋯
         </button>
         {moreOpen ? (
-          <div
-            role="menu"
-            style={{
-              position: 'absolute',
-              top: 'calc(100% + 6px)',
-              right: 0,
-              zIndex: 60,
-              minWidth: 170,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 2,
-              padding: 6,
-              borderRadius: 10,
-              border: '1px solid var(--vdz-border, #262a35)',
-              background: 'var(--vdz-panel, #12141a)',
-              boxShadow: '0 12px 32px rgba(0,0,0,0.45)',
-            }}
-          >
+          <div className={chrome.overflowMenu} role="menu">
             {[
               {
-                label: '💾 Save As…',
+                icon: '💾',
+                label: 'Save As…',
                 disabled: projects.loading,
                 run: () => handleSaveAs(),
               },
               {
-                label: '✨ Templates…',
+                icon: '✨',
+                label: 'Templates…',
                 disabled: false,
                 run: () => {
                   setGalleryWelcome(false);
@@ -533,7 +523,8 @@ export function ProjectBar({
                 },
               },
               {
-                label: '🔗 Share…',
+                icon: '🔗',
+                label: 'Share…',
                 disabled: !projectId,
                 run: () => {
                   setShareOpen(true);
@@ -554,6 +545,9 @@ export function ProjectBar({
                   item.run();
                 }}
               >
+                <span className={chrome.overflowIcon} aria-hidden="true">
+                  {item.icon}
+                </span>
                 {item.label}
               </button>
             ))}

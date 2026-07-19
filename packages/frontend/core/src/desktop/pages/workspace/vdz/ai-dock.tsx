@@ -13,6 +13,10 @@ import {
   vdzOpSchema,
   type VdzTimeline,
 } from '../../../../modules/vdz';
+import {
+  formatTimecodeFrames,
+  playheadFrame,
+} from '../../../../modules/vdz/serialize-timeline';
 import { useAiPulse } from '../../../../modules/vdz/use-ai-pulse';
 import * as styles from './ai-dock.css';
 import { AiPulseTicker } from './ai-pulse-ticker';
@@ -40,6 +44,13 @@ export interface VdzAiDockProps {
   timeline: VdzTimeline;
   /** Ids of currently-selected clips; disambiguate "this"/"these" for the AI. */
   selectedClipIds?: string[];
+  /**
+   * The live playhead position in seconds. Sent to the AI (so it can compute
+   * "at the playhead" edits) and shown in the context strip as a timecode +
+   * frame so the user sees exactly what the AI sees. Optional — omitted simply
+   * hides the playhead readout and drops playhead-relative context.
+   */
+  playheadSeconds?: number;
   /**
    * Called with the client-validated ops (and the model's summary) when the
    * user's request produced at least one valid op. The host applies them.
@@ -118,6 +129,7 @@ function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
 export function VdzAiDock({
   timeline,
   selectedClipIds,
+  playheadSeconds,
   onApplyOps,
   pendingProposal,
   onAcceptProposal,
@@ -163,7 +175,12 @@ export function VdzAiDock({
       pulse.start(task, 'video');
       let result: VdzChatResponse | null;
       try {
-        result = await send(message, timeline, selectedClipIds, turnMode);
+        // Forward the LIVE playhead so the AI can resolve "at the playhead"
+        // edits. The sole-selected clip is derived inside send() from
+        // selectedClipIds, so we only need to add the playhead here.
+        result = await send(message, timeline, selectedClipIds, turnMode, {
+          playheadSec: playheadSeconds,
+        });
       } finally {
         pulse.stop();
       }
@@ -205,7 +222,7 @@ export function VdzAiDock({
 
       if (valid.length > 0) onApplyOps(valid, result.summary);
     },
-    [busy, send, timeline, selectedClipIds, onApplyOps, pulse]
+    [busy, send, timeline, selectedClipIds, playheadSeconds, onApplyOps, pulse]
   );
 
   const onSubmit = useCallback(async () => {
@@ -319,17 +336,37 @@ export function VdzAiDock({
 
   const canSend = draft.trim().length > 0 && !busy;
 
+  // The sole-selected clip id (only when exactly one clip is selected) — the
+  // unambiguous target for "this"/"the selected clip" both in suggestions and
+  // in the context strip's selected-clip chip.
+  const soleSelectedId = useMemo(
+    () => (selectedClipIds?.length === 1 ? selectedClipIds[0] : undefined),
+    [selectedClipIds]
+  );
+
   // Proactive suggestions from the live timeline (pure, client-side). Hidden
-  // while a proposal is pending (the user has a decision to make first).
+  // while a proposal is pending (the user has a decision to make first). Passed
+  // the live playhead + selection so context-aware rules (split at the
+  // playhead, fade the selected clip) can fire.
   const suggestions = useMemo(
-    () => (pendingProposal ? [] : suggestEdits(timeline)),
-    [timeline, pendingProposal]
+    () =>
+      pendingProposal
+        ? []
+        : suggestEdits(timeline, {
+            playheadSeconds,
+            selectedClipId: soleSelectedId,
+          }),
+    [timeline, pendingProposal, playheadSeconds, soleSelectedId]
   );
 
   // Compact, at-a-glance summary of the timeline the AI is looking at — shown as
   // a one-line strip above the suggestion chips so the user can see the context
-  // the dock is reasoning over (aspect ratio, track/clip counts, captions).
-  const contextInfo = useMemo(() => summarizeContext(timeline), [timeline]);
+  // the dock is reasoning over (aspect ratio, track/clip counts, captions, plus
+  // the live playhead timecode/frame and the selected clip).
+  const contextInfo = useMemo(
+    () => summarizeContext(timeline, playheadSeconds, soleSelectedId),
+    [timeline, playheadSeconds, soleSelectedId]
+  );
 
   const bubbles = useMemo(() => {
     let assistantOrdinal = -1;
@@ -606,13 +643,23 @@ interface VdzContextInfo {
   clipCount: number;
   /** True when at least one text/caption clip exists. */
   hasCaptions: boolean;
+  /**
+   * The live playhead readout — timecode ("mm:ss.ff") + absolute frame — the
+   * SAME values the AI is sent. Present only when a playhead was supplied.
+   */
+  playhead?: { timecode: string; frame: number };
+  /** The sole-selected clip's short label + kind, for the selected-clip chip. */
+  selected?: { label: string; kind: string };
 }
 
 /**
  * A compact one-line context strip — e.g. "16:9 · 3 tracks · 12 clips ·
- * captions ✓" — shown just above the suggestion chips so the user can see the
- * timeline the AI is reasoning over. Read-only; inline-styled to stay within
- * the dock's palette without touching the stylesheet.
+ * captions ✓ · ⏱ 00:02.15 f75" — shown just above the suggestion chips so the
+ * user can see the timeline the AI is reasoning over, INCLUDING the live
+ * playhead (timecode + frame, the same values the AI receives) and a chip for
+ * the selected clip. Read-only. The base metrics stay inline-styled (as
+ * before); the playhead readout + selected chip use theme-aware classes from
+ * ai-dock.css.ts.
  */
 function ContextStrip({ info }: { info: VdzContextInfo }) {
   const dim = 'var(--affine-text-secondary-color, #8a8f98)';
@@ -659,32 +706,124 @@ function ContextStrip({ info }: { info: VdzContextInfo }) {
       <span style={item}>
         captions {info.hasCaptions ? '✓' : '—'}
       </span>
+      {info.playhead ? (
+        <>
+          {sep}
+          <span
+            className={styles.ctxPlayhead}
+            data-testid="vdz-context-playhead"
+            title={`Playhead — timecode ${info.playhead.timecode}, frame ${info.playhead.frame}`}
+          >
+            <span aria-hidden="true">⏱</span>
+            {info.playhead.timecode}
+            <span className={styles.ctxPlayheadFrame}>
+              f{info.playhead.frame}
+            </span>
+          </span>
+        </>
+      ) : null}
+      {info.selected ? (
+        <>
+          {sep}
+          <span
+            className={styles.ctxSelectedChip}
+            data-testid="vdz-context-selected"
+            title={`Selected ${info.selected.kind} clip: ${info.selected.label}`}
+          >
+            <span aria-hidden="true">{clipKindGlyph(info.selected.kind)}</span>
+            <span className={styles.ctxSelectedLabel}>
+              {info.selected.label}
+            </span>
+          </span>
+        </>
+      ) : null}
     </div>
   );
 }
 
 /**
- * Derive the {@link VdzContextInfo} for the strip from a live timeline. Pure and
- * defensive — reads through optional fields and never assumes a track/clip
- * exists, mirroring {@link suggestEdits}. Not exported (dock-local UI helper).
+ * Derive the {@link VdzContextInfo} for the strip from a live timeline plus the
+ * live playhead / sole-selected clip. Pure and defensive — reads through
+ * optional fields and never assumes a track/clip exists, mirroring
+ * {@link suggestEdits}. Not exported (dock-local UI helper).
  */
-function summarizeContext(timeline: VdzTimeline): VdzContextInfo {
+function summarizeContext(
+  timeline: VdzTimeline,
+  playheadSeconds?: number,
+  selectedClipId?: string
+): VdzContextInfo {
   const tracks = Array.isArray(timeline?.tracks) ? timeline.tracks : [];
   let clipCount = 0;
   let hasCaptions = false;
+  let selected: { label: string; kind: string } | undefined;
   for (const t of tracks) {
     const clips = Array.isArray(t?.clips) ? t.clips : [];
     clipCount += clips.length;
     if (clips.some(c => c?.type === 'text')) hasCaptions = true;
+    if (selectedClipId && !selected) {
+      const hit = clips.find(c => c?.id === selectedClipId) as
+        | Record<string, unknown>
+        | undefined;
+      if (hit) {
+        const kind = typeof hit.type === 'string' ? hit.type : 'clip';
+        const rawLabel =
+          (typeof hit.name === 'string' && hit.name.trim()) ||
+          (kind === 'text' &&
+            typeof hit.text === 'string' &&
+            hit.text.trim()) ||
+          (kind === 'shape' && typeof hit.shape === 'string' && hit.shape) ||
+          kind;
+        selected = { label: truncate(String(rawLabel), 24), kind };
+      }
+    }
   }
   const width = typeof timeline?.width === 'number' ? timeline.width : 1920;
   const height = typeof timeline?.height === 'number' ? timeline.height : 1080;
-  return {
+  const fps = typeof timeline?.fps === 'number' && timeline.fps > 0 ? timeline.fps : 30;
+
+  const info: VdzContextInfo = {
     ratio: aspectRatioLabel(width, height),
     trackCount: tracks.length,
     clipCount,
     hasCaptions,
+    selected,
   };
+  if (typeof playheadSeconds === 'number' && Number.isFinite(playheadSeconds)) {
+    // Reuse the serializer's exact timecode/frame math so the strip shows the
+    // SAME values that go to the AI.
+    info.playhead = {
+      timecode: formatTimecodeFrames(playheadSeconds, fps),
+      frame: playheadFrame(playheadSeconds, fps),
+    };
+  }
+  return info;
+}
+
+/** Truncate a string to `max` chars with a trailing ellipsis when cut. */
+function truncate(value: string, max: number): string {
+  const s = value.trim();
+  return s.length <= max ? s : `${s.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/**
+ * A small kind icon for the selected-clip chip, matching the emoji vocabulary
+ * used elsewhere in the dock. Falls back to a neutral clip glyph.
+ */
+function clipKindGlyph(kind: string): string {
+  switch (kind) {
+    case 'video':
+      return '🎞️';
+    case 'audio':
+      return '🎵';
+    case 'image':
+      return '🖼️';
+    case 'text':
+      return '🔤';
+    case 'shape':
+      return '⬛';
+    default:
+      return '▪️';
+  }
 }
 
 /**

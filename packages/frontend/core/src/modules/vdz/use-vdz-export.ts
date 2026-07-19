@@ -42,6 +42,15 @@ interface RenderStatusBody {
 async function readError(res: Response): Promise<string> {
   try {
     const data = (await res.json()) as any;
+    // The classic tier rejects an over-length composition with a typed
+    // passthrough body `{ error: 'duration_cap', maxSec, engine }` (C2). Turn
+    // that machine code into an actionable sentence recommending Remotion,
+    // rather than leaking the literal token to the user.
+    if (data?.error === 'duration_cap') {
+      const maxSec = Number(data?.maxSec);
+      const cap = Number.isFinite(maxSec) && maxSec > 0 ? maxSec : 300;
+      return `This timeline is longer than the ${cap}s limit for the Classic engine. Switch to Remotion (beta) to export the full length.`;
+    }
     const msg =
       data?.message ??
       data?.error?.message ??
@@ -74,9 +83,11 @@ export interface UseVdzExport {
   unavailable: boolean;
   /**
    * Kick off a render for the given composition HTML. `extra` is an OPTIONAL,
-   * additive set of fields merged into the POST body — used by the Remotion
-   * opt-in path to send `{ engine: 'remotion', manifest }` alongside the html.
-   * When omitted the body is exactly `{ html }` (unchanged behavior).
+   * additive set of fields merged into the POST body. The timeline export hook
+   * uses it to send the C2 render-request fields — `engine`, `width`, `height`,
+   * `fps`, `durationSec` (and, for the Remotion engine, `manifest`) — alongside
+   * the html. When omitted the body is exactly `{ html }` (unchanged behavior),
+   * and the server applies its own defaults.
    */
   start: (html: string, extra?: Record<string, unknown>) => Promise<void>;
   /** Reset back to idle (e.g. when the composition changes). */
@@ -123,7 +134,8 @@ export function useVdzExport(): UseVdzExport {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `{ html }` is the default body; `extra` (when present) additively adds
-        // the Remotion opt-in fields (`engine`, `manifest`). Spread AFTER html so
+        // the C2 render-request fields (`engine`, `width`, `height`, `fps`,
+        // `durationSec`, and — for Remotion — `manifest`). Spread AFTER html so
         // it never accidentally overwrites it.
         body: JSON.stringify({ html, ...(extra ?? {}) }),
       });

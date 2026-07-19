@@ -209,17 +209,175 @@ export const stage = style({
 
 export const previewWrapper = style({
   flex: 1,
+  // Both axes must be allowed to shrink below content size so the preview
+  // stage below can be MEASURED against the real available box (never pushed
+  // past it by its own aspect ratio — the old 9:16 collapse). `overflow:hidden`
+  // keeps any residual paint inside the center column, above the timeline.
   minHeight: 0,
+  minWidth: 0,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   padding: 16,
   boxSizing: 'border-box',
+  overflow: 'hidden',
 });
 
-// 16:9 preview canvas. `containerType: size` lets clip text scale to the box
-// via `cqh` units (see PreviewClip); kept here rather than inline so the CSS
-// prop is typed by vanilla-extract, not React's inline CSSProperties.
+// The measured preview VIEWPORT: a plain, shrinkable box that fills the
+// flex-centered wrapper. Its content-box is what a ResizeObserver measures
+// (see PreviewCanvas), and the canvas element is sized imperatively from that
+// measurement — NO CSS `aspect-ratio` here, so a portrait (9:16) canvas can
+// never drive the box taller than the space it was given. When the user zooms
+// past "fit", the scroll host inside switches to `overflow:auto` and the
+// oversized canvas scrolls while staying centered.
+export const previewViewport = style({
+  position: 'relative',
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  width: '100%',
+  height: '100%',
+  alignSelf: 'stretch',
+  overflow: 'hidden',
+  // A subtle letterbox surround so a portrait/cinema canvas reads as centered
+  // inside the darker stage rather than floating on the panel background.
+  background: v.bg,
+  borderRadius: 8,
+});
+
+// The inner scroll host, absolutely filling the viewport. When the canvas fits
+// (zoom ≤ fit) this centers it via flexbox (`center`); when the canvas is larger
+// than the viewport (zoom > fit) `data-scroll="true"` flips it to `overflow:auto`
+// with `safe center`, which centers while it fits but falls back to start-align
+// once it overflows so the top/left stays scroll-reachable (never clipped).
+// Layout (not transform) scrolling keeps text crisp at any zoom.
+export const previewCanvasScrollHost = style({
+  position: 'absolute',
+  inset: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  overflow: 'hidden',
+  selectors: {
+    '&[data-scroll="true"]': {
+      overflow: 'auto',
+      // Let the centered canvas keep symmetric margins while scrolling.
+      alignItems: 'safe center',
+      justifyContent: 'safe center',
+    },
+  },
+});
+
+// The preview CANVAS: a fixed-pixel box whose width/height are set inline from
+// the measured fit-scale × zoom. `containerType: size` stays here (moved off
+// the old width-driven `.preview`) so descendant caption text keeps scaling via
+// `cqh` — it queries THIS box's size, exactly as before. Never given a CSS
+// aspect ratio or percentage width: the imperative px sizing is the only source
+// of truth, which is what keeps every ratio (incl. 9:16) inside the viewport.
+export const previewCanvas = style({
+  position: 'relative',
+  // Centering is owned by the scroll host's flexbox (plain `center` when the
+  // canvas fits, `safe center` when it overflows and must stay scroll-reachable)
+  // — no `margin:auto` here, which would fight `safe center` and re-clip the
+  // start edge at high zoom.
+  flexShrink: 0,
+  background: '#000',
+  borderRadius: 8,
+  overflow: 'hidden',
+  boxShadow: '0 8px 40px rgba(0,0,0,0.5)',
+  border: `1px solid ${border}`,
+  containerType: 'size',
+});
+
+// ---- Preview zoom control chip (overlay, bottom-right of the viewport) ----
+// A small dark glass chip: [−] [readout] [+] [Fit]. Sits above the canvas,
+// non-intrusive; matches the studio's raised-surface + hairline-border idiom.
+export const previewZoomChip = style({
+  position: 'absolute',
+  right: 10,
+  bottom: 10,
+  zIndex: 6,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  padding: 3,
+  borderRadius: 8,
+  border: `1px solid ${border}`,
+  background: 'color-mix(in srgb, var(--vdz-panel) 78%, transparent)',
+  backdropFilter: 'blur(6px)',
+  boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+  color: text,
+  userSelect: 'none',
+});
+
+export const previewZoomButton = style({
+  appearance: 'none',
+  border: '1px solid transparent',
+  background: 'transparent',
+  color: textDim,
+  fontSize: 13,
+  fontWeight: 700,
+  lineHeight: 1,
+  minWidth: 22,
+  height: 22,
+  padding: '0 6px',
+  borderRadius: 6,
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
+      transition: 'none',
+    },
+  },
+  ':hover': {
+    color: text,
+    background: raised,
+    borderColor: border,
+  },
+  selectors: {
+    '&:disabled': {
+      opacity: 0.4,
+      cursor: 'default',
+      background: 'transparent',
+      borderColor: 'transparent',
+    },
+  },
+});
+
+// The "Fit" text button — same shape, a touch wider for the word.
+export const previewZoomFit = style({
+  fontSize: 11,
+  fontWeight: 600,
+  padding: '0 8px',
+  textTransform: 'none',
+  letterSpacing: 0.2,
+  selectors: {
+    '&[data-active="true"]': {
+      color: text,
+      background: raised,
+      borderColor: accent,
+    },
+  },
+});
+
+// The live percentage readout between the steppers.
+export const previewZoomReadout = style({
+  fontFamily:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  fontSize: 11,
+  fontWeight: 600,
+  color: text,
+  minWidth: 42,
+  textAlign: 'center',
+  fontVariantNumeric: 'tabular-nums',
+});
+
+// Kept for backward compatibility (external references / older callers). The
+// preview no longer uses this width-driven aspect box; `previewCanvas` above
+// replaces it. Left as-is so nothing that imports `styles.preview` breaks.
 export const preview = style({
   position: 'relative',
   aspectRatio: '16 / 9',

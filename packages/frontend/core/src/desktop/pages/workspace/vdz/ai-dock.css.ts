@@ -696,3 +696,43 @@ export const modeHint = style({
   color: textDim,
   lineHeight: 1.4,
 });
+
+// ---- Context strip: live playhead readout + selected-clip chip ----------
+// Additive, subtle extensions of the (inline-styled) context strip so the user
+// sees exactly what the AI sees. Theme-aware via the same tokens as the dock.
+
+// Playhead timecode + frame. tabular-nums keeps the readout from jittering as
+// the value ticks.
+export const ctxPlayhead = style({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums',
+});
+
+// The frame count, dimmed a touch relative to the timecode.
+export const ctxPlayheadFrame = style({
+  opacity: 0.7,
+});
+
+// A small pill naming the sole-selected clip (kind icon + truncated label), so
+// the user can confirm the AI's "this"/"selected clip" target at a glance.
+export const ctxSelectedChip = style({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  maxWidth: '100%',
+  padding: '1px 8px',
+  borderRadius: 999,
+  border: `1px solid ${border}`,
+  background: `color-mix(in srgb, ${accent} 12%, ${raised})`,
+  color: text,
+});
+
+// The chip's label truncates rather than wrapping the strip.
+export const ctxSelectedLabel = style({
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+});

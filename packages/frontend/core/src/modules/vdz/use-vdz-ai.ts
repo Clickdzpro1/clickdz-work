@@ -2,6 +2,22 @@ import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import { useCallback, useRef, useState } from 'react';
 
 import type { VdzTimeline } from './schema';
+import {
+  serializeTimelineForAI,
+  type SerializeTimelineOpts,
+} from './serialize-timeline';
+
+/**
+ * Reserved key on the wire `timeline` object carrying the compact,
+ * playhead-aware AI context (see {@link serializeTimelineForAI}). The chat
+ * controller forwards `payload.timeline` verbatim to the prompt's context
+ * builder, which detects this key, renders the context as its own PLAYHEAD &
+ * TIMELINE MAP section, and STRIPS it before showing the full timeline JSON —
+ * so we ride the extra signal through the existing request without a new field
+ * (or any controller change) and without polluting the model's view of the
+ * document. An older server that ignores it simply sees one extra timeline key.
+ */
+const AI_CONTEXT_KEY = '_aiContext';
 
 /**
  * Schema defaults — a field equal to its default carries no information for the
@@ -207,12 +223,18 @@ export interface UseVdzAi {
    * request failed or was aborted. Appends the user turn (and, on success, an
    * assistant summary turn) to {@link history}. `mode` selects the response
    * contract the server should follow (defaults to 'edit').
+   *
+   * `context` carries the LIVE editing state (playhead position, sole-selected
+   * clip) so the model can compute exact op arguments — e.g. "cut at the
+   * playhead". It is serialized FRESH here at send time (never stale) into a
+   * compact map that rides alongside the full timeline.
    */
   send: (
     message: string,
     timeline: VdzTimeline,
     selectedClipIds?: string[],
-    mode?: VdzChatMode
+    mode?: VdzChatMode,
+    context?: SerializeTimelineOpts
   ) => Promise<VdzChatResponse | null>;
   /** Abort an in-flight request, if any. */
   cancel: () => void;
@@ -250,7 +272,8 @@ export function useVdzAi(): UseVdzAi {
       message: string,
       timeline: VdzTimeline,
       selectedClipIds?: string[],
-      mode: VdzChatMode = 'edit'
+      mode: VdzChatMode = 'edit',
+      context: SerializeTimelineOpts = {}
     ): Promise<VdzChatResponse | null> => {
       const trimmed = message.trim();
       if (!trimmed || busy) return null;
@@ -268,6 +291,24 @@ export function useVdzAi(): UseVdzAi {
       setBusy(true);
       setError(null);
 
+      // The sole-selected clip (if exactly one) lets the AI resolve "this"/"the
+      // selected clip" to a concrete id in its op args; multi-select stays a
+      // list (in selectedClipIds) with no single target. Built here, at send
+      // time, so it is always in sync with what the user is looking at.
+      const soleSelected =
+        selectedClipIds && selectedClipIds.length === 1
+          ? selectedClipIds[0]
+          : undefined;
+      // Serialize the compact, playhead-aware context FRESH now (never stale)
+      // and ride it on the wire timeline under a reserved key. The full
+      // timeline still flows for op detail; this adds the frame/timecode/
+      // duration + a clip map the model targets by id (see AI_CONTEXT_KEY).
+      const wireTimeline = serializeTimelineForWire(timeline);
+      wireTimeline[AI_CONTEXT_KEY] = serializeTimelineForAI(timeline, {
+        playheadSec: context.playheadSec,
+        selectedClipId: context.selectedClipId ?? soleSelected,
+      });
+
       try {
         const response = await fetch(cdzApiUrl('/api/v1/vdz/chat'), {
           method: 'POST',
@@ -277,7 +318,8 @@ export function useVdzAi(): UseVdzAi {
             // Compacted: default fps/size, empty names and empty transition
             // arrays are stripped (the server re-hydrates via the same Zod
             // schema, so the contract is unchanged) — smaller, faster payload.
-            timeline: serializeTimelineForWire(timeline),
+            // The reserved `_aiContext` key carries the fresh playhead/frame map.
+            timeline: wireTimeline,
             selectedClipIds: selectedClipIds ?? [],
             history: priorHistory,
             // Which response contract to request. An older server ignores this
