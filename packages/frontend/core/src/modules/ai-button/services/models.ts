@@ -142,8 +142,17 @@ export class AIModelService extends Service {
     this.sessionModes.set(sessionId, mode);
   };
 
-  /** switch between normal chat and council mode, remembering the last model */
-  setCouncilMode = (on: boolean) => {
+  /**
+   * Switch between normal chat and council mode, remembering the last model.
+   *
+   * Council is a model selection that is mutually exclusive with the composer's
+   * one-off modes (Workers / Image / Builder). Those modes live on the
+   * `AIChatInput` Lit component (a different module), so callers that enable
+   * council pass `onEnable` — invoked exactly once when council is switched ON —
+   * to clear them from a single place, keeping the exclusion co-located with the
+   * council-enable logic rather than scattered across UI click handlers.
+   */
+  setCouncilMode = (on: boolean, onEnable?: () => void) => {
     const currentId = this.modelId.value;
     if (on) {
       if (currentId !== COUNCIL_MODEL_ID) {
@@ -156,6 +165,8 @@ export class AIModelService extends Service {
         AI_MODEL_ID_KEY,
         COUNCIL_MODEL_ID
       );
+      // Council excludes the composer's worker/image/app modes — clear them.
+      onEnable?.();
     } else if (currentId === COUNCIL_MODEL_ID) {
       const previous = this.globalStateService.globalState.get<string>(
         AI_PRE_COUNCIL_MODEL_KEY

@@ -2086,12 +2086,25 @@ export class AIChatInput extends SignalWatcher(
     }
   }
 
+  // Council (a 3-vendor fan-out model) is mutually exclusive with the composer's
+  // one-off modes. Enabling council clears all three from here so the exclusion
+  // lives in one place; passed to `setCouncilMode` as its `onEnable` callback.
+  private _clearCouncilExclusiveModes() {
+    this.activeWorker = null;
+    this.imageMode = false;
+    this.appMode = false;
+  }
+
   private _selectWorker(
     categoryName: string,
     icon: string,
     recommendedModel: string,
     w: { id: string; name: string }
   ) {
+    // A worker is a single-persona directive; council fans out to 3 vendors —
+    // they conflict. Turn council OFF first (before setModel below) so the
+    // worker's recommended model wins over council's pre-council restore.
+    this.aiModelService.setCouncilMode(false);
     this.activeWorker = {
       id: w.id,
       name: w.name,
@@ -3200,7 +3213,11 @@ export class AIChatInput extends SignalWatcher(
           title="ClickDz 1.0 image — describe it, we imagine it"
           @click=${() => {
             this.imageMode = !this.imageMode;
-            if (this.imageMode) this.appMode = false;
+            if (this.imageMode) {
+              this.appMode = false;
+              // Image mode excludes council (a model selection) — turn it off.
+              this.aiModelService.setCouncilMode(false);
+            }
           }}
         >
           🎨 <span class="clickdz-mode-label">Image</span>
@@ -3211,7 +3228,11 @@ export class AIChatInput extends SignalWatcher(
           title="ClickDz Apps — describe an app, get a live URL"
           @click=${() => {
             this.appMode = !this.appMode;
-            if (this.appMode) this.imageMode = false;
+            if (this.appMode) {
+              this.imageMode = false;
+              // Builder mode excludes council (a model selection) — turn it off.
+              this.aiModelService.setCouncilMode(false);
+            }
           }}
         >
           🚀 <span class="clickdz-mode-label">Builder</span>
@@ -3250,7 +3271,10 @@ export class AIChatInput extends SignalWatcher(
               .value === COUNCIL_MODEL_ID
               ? 'active'
               : ''}"
-            @click=${() => this.aiModelService.setCouncilMode(true)}
+            @click=${() =>
+              this.aiModelService.setCouncilMode(true, () =>
+                this._clearCouncilExclusiveModes()
+              )}
             title="Three models answer together with a synthesis"
           >
             🏛️ Council

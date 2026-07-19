@@ -57,7 +57,11 @@ export const MenuItem = React.forwardRef<HTMLDivElement, MenuItemProps>(
         data-active={active}
         data-disabled={disabled}
         data-collapsible={collapsible}
-        tabIndex={0}
+        // Default `0` (standalone MenuItem is its own focus target). When wrapped
+        // by MenuLinkItem the focusable <a> is the tab stop, so it passes
+        // `tabIndex={-1}` here to avoid a second, duplicate tab stop on the same
+        // row (the wrapper's :focus-visible still surfaces the ring on this row).
+        tabIndex={props.tabIndex ?? 0}
       >
         {icon && (
           <div className={styles.iconsContainer} data-collapsible={collapsible}>
@@ -104,9 +108,13 @@ export const MenuLinkItem = React.forwardRef<HTMLDivElement, MenuLinkItemProps>(
   ({ to, linkComponent: LinkComponent = WorkbenchLink, ...props }, ref) => {
     return (
       <LinkComponent to={to} className={styles.linkItemRoot}>
-        {/* The <a> element rendered by Link does not generate display box due to `display: contents` style */}
-        {/* Thus ref is passed to MenuItem instead of Link */}
-        <MenuItem ref={ref} {...props}></MenuItem>
+        {/* linkItemRoot is `display: contents`, so the <a> generates no box and
+            never paints its own ring; it stays keyboard-focusable as the link.
+            Thus ref is passed to MenuItem instead of Link. */}
+        {/* tabIndex={-1}: the focusable <a> is the single tab stop for this row —
+            without this the inner row would be a second, duplicate tab stop. The
+            <a>'s :focus-visible still surfaces the one focus ring on the row. */}
+        <MenuItem ref={ref} tabIndex={-1} {...props}></MenuItem>
       </LinkComponent>
     );
   }

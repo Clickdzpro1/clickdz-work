@@ -58,6 +58,67 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       color: var(--affine-v2-text-primary);
       background: var(--affine-v2-layer-background-hoverOverlay);
     }
+
+    /*
+     * Streaming tail caret.
+     *
+     * While the answer is actively streaming (host reflects
+     * data-status="transmitting") a soft gradient caret pulses at the very end
+     * of the flowed content. It is an inline ::after on the content wrapper, so
+     * it naturally trails the last streamed token; when the stream finishes the
+     * status attribute flips and the pseudo-element (and its animation) is
+     * dropped in the same frame — no teardown code, no leftover node. Only
+     * opacity/transform animate, so it stays on the GPU compositor. During the
+     * pre-token "loading" phase <ai-loading> is shown instead, so the caret is
+     * correctly scoped to transmitting only.
+     */
+    chat-message-assistant[data-status='transmitting'] .item-wrapper::after {
+      content: '';
+      display: inline-block;
+      width: 0.5em;
+      height: 1.05em;
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      border-radius: 2px;
+      background: linear-gradient(
+        180deg,
+        #2f7bff,
+        #8b5cf6 55%,
+        color-mix(in srgb, #10a37f 85%, transparent)
+      );
+      background-size: 100% 220%;
+      box-shadow: 0 0 8px color-mix(in srgb, #2f7bff 55%, transparent);
+      transform-origin: center bottom;
+      animation:
+        cdz-caret-pulse 1.05s ease-in-out infinite,
+        cdz-caret-sheen 2.4s linear infinite;
+    }
+    @keyframes cdz-caret-pulse {
+      0%,
+      100% {
+        opacity: 0.35;
+        transform: scaleY(0.82);
+      }
+      50% {
+        opacity: 1;
+        transform: scaleY(1);
+      }
+    }
+    @keyframes cdz-caret-sheen {
+      from {
+        background-position: 0 0;
+      }
+      to {
+        background-position: 0 -220%;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      chat-message-assistant[data-status='transmitting'] .item-wrapper::after {
+        animation: none;
+        opacity: 0.7;
+        transform: none;
+      }
+    }
   `;
 
   @property({ attribute: false })

@@ -3,9 +3,19 @@ import { cssVarV2 } from '@toeverything/theme/v2';
 import { style } from '@vanilla-extract/css';
 export const linkItemRoot = style({
   color: 'inherit',
-  // The wrapping <a> is focusable; without this it draws the browser default
-  // focus box around the whole item. Keyboard focus is surfaced on the inner
-  // row (`root`) via :focus-visible instead, so the flat look is preserved.
+  // The wrapping <a> must NOT generate its own box: `display: contents` makes it
+  // layout-transparent so it can never paint a border / outline / focus ring
+  // around the row. That stray wrapper box (a focusable <a> nested around the
+  // focusable row) was the source of the "double ring" — one rounded tint on the
+  // row plus a second rectangle on the <a> in themes / forced-colors mode where a
+  // plain `outline: none` on a real box gets overridden by the OS. With
+  // `display: contents` the <a> stays keyboard focusable as the link, and its
+  // focus is surfaced on the single inner row (`root`) via the
+  // `${linkItemRoot}:focus-visible &` selector below — so exactly one rounded
+  // container is ever visible.
+  display: 'contents',
+  // Belt-and-suspenders: also suppress any UA outline in engines that still hang
+  // a focus box off a `display: contents` element.
   outline: 'none',
 });
 export const root = style({
@@ -35,11 +45,20 @@ export const root = style({
       background: cssVarV2.layer.background.hoverOverlay,
       color: cssVarV2('text/primary'),
     },
-    // Keyboard focus only: reuse the flat hover tint (no ring / box-shadow /
-    // outline box) so focus stays visible without drawing a box.
+    // Keyboard focus: a SINGLE crisp accent ring on this one row, drawn as an
+    // inset box-shadow (not `outline`, not a nested element) so it hugs the 4px
+    // radius and can never become a second box. The wrapping <a> is
+    // `display: contents`, so the same ring is surfaced whether the row itself
+    // (standalone MenuItem) or the link (MenuLinkItem's <a>) receives keyboard
+    // focus — see the `${linkItemRoot}:focus-visible &` selector below. Mouse
+    // clicks use `:focus-visible`, so this only appears for keyboard users.
     '&:focus-visible': {
-      background: cssVarV2.layer.background.hoverOverlay,
       color: cssVarV2('text/primary'),
+      boxShadow: `inset 0 0 0 2px color-mix(in srgb, ${cssVar('primaryColor')} 45%, transparent)`,
+    },
+    [`${linkItemRoot}:focus-visible &`]: {
+      color: cssVarV2('text/primary'),
+      boxShadow: `inset 0 0 0 2px color-mix(in srgb, ${cssVar('primaryColor')} 45%, transparent)`,
     },
     '&[data-active="true"]': {
       // subtle accent tint only — no pill border, outline, or shadow
