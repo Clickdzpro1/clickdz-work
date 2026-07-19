@@ -38,6 +38,7 @@ import {
   type VdzMediaDragPayload,
 } from './constants';
 import * as styles from './index.css';
+import { NotifyBell } from '@affine/core/modules/platform-notify';
 import { Inspector } from './inspector';
 import { MediaBin } from './media-bin';
 import { PreviewCanvas } from './preview-canvas';
@@ -787,6 +788,7 @@ const VdzStudioPage = () => {
               mode the editor-only panels are mode-controlled, so disable them
               here. */}
           <div className={styles.headerRight}>
+            <NotifyBell />
             <ProjectBar
               timeline={timeline}
               onLoadTimeline={loadProjectTimeline}

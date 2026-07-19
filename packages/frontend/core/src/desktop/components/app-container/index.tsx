@@ -8,6 +8,7 @@ import {
 } from '@affine/core/modules/app-sidebar/views';
 import { AppTabsHeader } from '@affine/core/modules/app-tabs-header';
 import { NavigationButtons } from '@affine/core/modules/navigation';
+import { STUDIOS } from '@affine/core/modules/studio';
 import { WorkbenchService } from '@affine/core/modules/workbench';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import {
@@ -89,7 +90,7 @@ const DesktopLayout = ({
 
 // Full-bleed studio routes where the floating "Open in app" card would overlap
 // the surface (e.g. the vdz timeline). Future studios inherit suppression here.
-const STUDIO_ROUTE_PREFIXES = ['/vdz'];
+const STUDIO_ROUTE_PREFIXES = STUDIOS.map(studio => studio.route);
 
 const BrowserLayout = ({
   children,
