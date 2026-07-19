@@ -1272,6 +1272,176 @@ export class AIChatInput extends SignalWatcher(
       outline-offset: 1px;
     }
 
+    /* ===== Checklist pager (keeps the card from ever clipping steps) =====
+       A slim, flex-shrink:0 footer row under the steps list. Because the card
+       shell is max-height + overflow:hidden and the header/pager/actions are
+       all pinned, windowing the steps into pages removes the inner clip the
+       screenshot showed (step 6 cut off) entirely. */
+    .cdz-plan-pager {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid
+        color-mix(in srgb, var(--affine-v2-layer-insideBorder-border) 70%, transparent);
+    }
+    .cdz-plan-pager-btn {
+      flex-shrink: 0;
+      width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 7px;
+      padding: 0;
+      cursor: pointer;
+      color: var(--affine-v2-text-primary);
+      background: var(--affine-v2-layer-background-primary);
+      font-size: 15px;
+      line-height: 1;
+      transition:
+        color 0.15s ease,
+        border-color 0.15s ease,
+        background-color 0.15s ease;
+    }
+    .cdz-plan-pager-btn:hover:not(:disabled) {
+      color: #0d8a6c;
+      border-color: color-mix(in srgb, #10a37f 50%, transparent);
+      background: color-mix(in srgb, #10a37f 8%, transparent);
+    }
+    .cdz-plan-pager-btn:disabled {
+      cursor: default;
+      opacity: 0.4;
+    }
+    .cdz-plan-pager-btn:focus-visible {
+      outline: 2px solid color-mix(in srgb, #10a37f 60%, transparent);
+      outline-offset: 1px;
+    }
+    .cdz-plan-pager-mid {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .cdz-plan-pager-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--affine-v2-text-secondary);
+      text-align: center;
+      white-space: nowrap;
+    }
+    .cdz-plan-pager-track {
+      height: 3px;
+      border-radius: 999px;
+      background: color-mix(in srgb, #10a37f 14%, transparent);
+      overflow: hidden;
+    }
+    .cdz-plan-pager-fill {
+      display: block;
+      height: 100%;
+      border-radius: 999px;
+      background: #10a37f;
+      transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* ===== Two-phase review: badge + read-only final plan panel ===== */
+    .cdz-plan-phase-badge {
+      padding: 1px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: #0d8a6c;
+      background: color-mix(in srgb, #10a37f 14%, transparent);
+    }
+    .cdz-plan-review-final {
+      /* the final list carries the scroll if a very long plan overflows, so
+         the panel always fits the card budget without clipping the actions */
+      display: flex;
+      flex-direction: column;
+    }
+    .cdz-plan-final-lead {
+      margin-bottom: 8px;
+      color: var(--affine-v2-text-secondary);
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+    .cdz-plan-final-note {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, #10a37f 6%, transparent);
+      color: var(--affine-v2-text-primary);
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+    .cdz-plan-final-note-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--affine-v2-text-secondary);
+    }
+    .cdz-plan-final-list {
+      list-style: none;
+      margin: 0;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      /* Take the remaining body height and scroll INSIDE the list when a long
+         plan overflows, so the pinned Confirm/Edit bar is never pushed off. */
+      flex: 1 1 auto;
+      min-height: 0;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 10px;
+      background: var(--affine-v2-layer-background-primary);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .cdz-plan-final-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 3px 4px;
+    }
+    .cdz-plan-final-num {
+      flex-shrink: 0;
+      width: 20px;
+      height: 20px;
+      margin-top: 1px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 700;
+      color: #0d8a6c;
+      background: color-mix(in srgb, #10a37f 14%, transparent);
+    }
+    .cdz-plan-final-text {
+      flex: 1;
+      min-width: 0;
+      color: var(--affine-v2-text-primary);
+      font-size: 12.5px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cdz-plan-pager-fill {
+        transition: none;
+      }
+    }
+
     .cdz-artifacts-overlay {
       position: fixed;
       inset: 0;
@@ -1821,6 +1991,39 @@ export class AIChatInput extends SignalWatcher(
   // across re-renders even as steps are added, removed, or reordered.
   private _planStepSeq = 0;
 
+  // Checklist pagination: the edit-phase checklist is windowed into pages of
+  // CDZ_PLAN_PAGE_SIZE steps so the card ALWAYS fits its budget instead of
+  // clipping later steps behind an inner scroller. Reset in _beginPlanReview
+  // and clamped by every step mutator so the index never dangles past the
+  // last page after add/remove.
+  @state()
+  accessor _planPage = 0;
+
+  // Two-phase review (coding-agent style): 'edit' is the paginated, editable
+  // checklist; 'review' is a read-only full-plan panel (goal + every chosen
+  // step) gated before the terminal send(). _executePlanReview() advances
+  // edit -> review; the review panel's Confirm runs the real send.
+  @state()
+  accessor _planPhase: 'edit' | 'review' = 'edit';
+
+  // Steps shown per checklist page. Small enough that a page of steps plus the
+  // goal/question/answer header always fits the card budget on a short dock.
+  private static readonly CDZ_PLAN_PAGE_SIZE = 4;
+
+  // Total number of checklist pages for the current plan (>= 1).
+  private get _planPageCount() {
+    const total = this.planReview?.steps.length ?? 0;
+    return Math.max(1, Math.ceil(total / AIChatInput.CDZ_PLAN_PAGE_SIZE));
+  }
+
+  // Clamp _planPage into [0, pageCount - 1]. Called after any step mutation so
+  // a removed last page can never leave the window pointing at emptiness.
+  private _clampPlanPage() {
+    const max = this._planPageCount - 1;
+    if (this._planPage > max) this._planPage = max;
+    if (this._planPage < 0) this._planPage = 0;
+  }
+
   // ===== Slash command palette (quick actions) =====
   // Purely additive: opens ONLY when the textarea value starts with '/' at
   // position 0. When closed it has zero effect on send/IME/shortcut behavior.
@@ -2192,6 +2395,9 @@ export class AIChatInput extends SignalWatcher(
     if (this.planBusy) return;
     this.planBusy = true;
     this.planReview = null;
+    // A fresh plan always opens on the first checklist page in the edit phase.
+    this._planPage = 0;
+    this._planPhase = 'edit';
     try {
       const response = await fetch(cdzApiUrl('/api/v1/plan/clarify'), {
         method: 'POST',
@@ -2266,21 +2472,51 @@ export class AIChatInput extends SignalWatcher(
   private _cancelPlanReview() {
     this.planReview = null;
     this.planMode = false;
+    this._planPhase = 'edit';
+    this._planPage = 0;
   }
 
   private get _planCheckedCount() {
     return this.planReview?.steps.filter(step => step.checked).length ?? 0;
   }
 
+  // The checked steps that make the final plan, trimmed and non-empty. Shared
+  // by the review panel (to show exactly what will run) and the send path.
+  private _chosenPlanSteps(): string[] {
+    const review = this.planReview;
+    if (!review) return [];
+    return review.steps
+      .filter(step => step.checked)
+      .map(step => step.text.trim())
+      .filter(Boolean);
+  }
+
+  // Primary action chokepoint. In the edit phase this ADVANCES to the read-only
+  // review panel (a final full-plan gate) instead of sending; in the review
+  // phase it runs the real send. Keeps _executePlanReview as the single entry
+  // point wired to Approve/Confirm + Ctrl+Enter, so the terminal send() is the
+  // only thing gated behind the second phase.
   private async _executePlanReview() {
+    const review = this.planReview;
+    if (!review) return;
+    // Guard against an all-unchecked approve at either phase.
+    if (!this._chosenPlanSteps().length) return;
+    if (this._planPhase === 'edit') {
+      this._planPhase = 'review';
+      return;
+    }
+    await this._sendPlanReview();
+  }
+
+  // Terminal step: assemble the approved plan directive from the checked steps
+  // + goal + clarification, clear planMode (so the re-entrant send() doesn't
+  // loop back into plan review), and send the real turn.
+  private async _sendPlanReview() {
     const review = this.planReview;
     if (!review) return;
     // Only checked steps make the final plan; that is the whole point of the
     // checklist. Guard against an all-unchecked approve.
-    const chosen = review.steps
-      .filter(step => step.checked)
-      .map(step => step.text.trim())
-      .filter(Boolean);
+    const chosen = this._chosenPlanSteps();
     if (!chosen.length) return;
     const planBody = chosen
       .map((step, index) => `${index + 1}. ${step}`)
@@ -2299,6 +2535,8 @@ export class AIChatInput extends SignalWatcher(
       ) + review.request;
     this.planReview = null;
     this.planMode = false;
+    this._planPhase = 'edit';
+    this._planPage = 0;
     await this.send(approvedRequest);
   }
 
@@ -2335,8 +2573,13 @@ export class AIChatInput extends SignalWatcher(
     const index = review.steps.findIndex(step => step.id === id);
     const fresh = this._makePlanStep('', true);
     const steps = review.steps.slice();
-    steps.splice(index < 0 ? steps.length : index + 1, 0, fresh);
+    const insertAt = index < 0 ? steps.length : index + 1;
+    steps.splice(insertAt, 0, fresh);
     this.planReview = { ...review, steps };
+    // Follow the new step to its page so it is visible (and focusable) even
+    // when the checklist spans multiple pages.
+    this._planPage = Math.floor(insertAt / AIChatInput.CDZ_PLAN_PAGE_SIZE);
+    this._clampPlanPage();
     this._focusPlanStepById(fresh.id);
   }
 
@@ -2346,21 +2589,52 @@ export class AIChatInput extends SignalWatcher(
     const index = review.steps.findIndex(step => step.id === id);
     const steps = review.steps.filter(step => step.id !== id);
     this.planReview = { ...review, steps };
+    // A removed last step can empty the current page — clamp back in range.
+    this._clampPlanPage();
     const focusTarget = steps[Math.max(0, index - 1)];
     if (focusTarget) this._focusPlanStepById(focusTarget.id);
+  }
+
+  // Step the checklist window. Bounds-checked; used by the pager buttons and
+  // the Arrow/PageUp-Down key nav in _planCardKeyDown.
+  private _goToPlanPage(page: number) {
+    const max = this._planPageCount - 1;
+    const next = Math.min(max, Math.max(0, page));
+    if (next !== this._planPage) this._planPage = next;
   }
 
   private readonly _planCardKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
-      this._cancelPlanReview();
+      // Two-phase Esc: from the review panel step BACK to editing; from the
+      // edit phase cancel the whole preflight (original behavior).
+      if (this._planPhase === 'review') {
+        this._planPhase = 'edit';
+      } else {
+        this._cancelPlanReview();
+      }
       return;
     }
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       event.stopPropagation();
+      // Two-phase Ctrl+Enter: edit -> review, then review -> send. Both go
+      // through the single _executePlanReview chokepoint.
       void this._executePlanReview();
+      return;
+    }
+    // Page the checklist with PageUp/PageDown while editing. Arrow keys are
+    // left untouched so the step <textarea> keeps native caret movement.
+    if (
+      this._planPhase === 'edit' &&
+      !event.isComposing &&
+      (event.key === 'PageUp' || event.key === 'PageDown')
+    ) {
+      event.preventDefault();
+      this._goToPlanPage(
+        this._planPage + (event.key === 'PageDown' ? 1 : -1)
+      );
     }
   };
 
@@ -2395,22 +2669,50 @@ export class AIChatInput extends SignalWatcher(
     if (!review) return nothing;
     const total = review.steps.length;
     const checked = this._planCheckedCount;
-    const allChecked = total > 0 && checked === total;
+    const isReview = this._planPhase === 'review';
     return html`<div
-      class="cdz-plan-review"
+      class="cdz-plan-review ${isReview ? 'phase-review' : 'phase-edit'}"
       data-testid="clickdz-plan-review"
+      data-plan-phase=${this._planPhase}
       @keydown=${this._planCardKeyDown}
     >
       <div class="cdz-plan-header">
         <div class="cdz-plan-review-title">
           <span class="cdz-plan-title-icon">🧭</span>
-          <span>Plan preflight</span>
+          <span>${isReview ? 'Review plan' : 'Plan preflight'}</span>
+          ${isReview
+            ? html`<span class="cdz-plan-phase-badge">final check</span>`
+            : nothing}
         </div>
         <div class="cdz-plan-kbd-hint">
-          <kbd>Esc</kbd> cancel · <kbd>Ctrl</kbd>+<kbd>↵</kbd> approve
+          ${isReview
+            ? html`<kbd>Esc</kbd> edit · <kbd>Ctrl</kbd>+<kbd>↵</kbd> send`
+            : html`<kbd>Esc</kbd> cancel · <kbd>Ctrl</kbd>+<kbd>↵</kbd> review`}
         </div>
       </div>
-      <div class="cdz-plan-body">
+      ${isReview
+        ? this._renderPlanReviewPanel(review, checked)
+        : this._renderPlanEditPanel(review, total, checked)}
+    </div>`;
+  }
+
+  // ----- Edit phase: the paginated, editable checklist (today's card) -----
+  private _renderPlanEditPanel(
+    review: NonNullable<AIChatInput['planReview']>,
+    total: number,
+    checked: number
+  ) {
+    const allChecked = total > 0 && checked === total;
+    const pageCount = this._planPageCount;
+    const pageSize = AIChatInput.CDZ_PLAN_PAGE_SIZE;
+    // Clamp defensively at render time too (state edits elsewhere already
+    // clamp, but a page could be stale for one frame after a shrink).
+    const page = Math.min(this._planPage, pageCount - 1);
+    const pageStart = page * pageSize;
+    const pageEnd = Math.min(pageStart + pageSize, total);
+    const pageSteps = review.steps.slice(pageStart, pageEnd);
+    const paged = pageCount > 1;
+    return html`<div class="cdz-plan-body">
       ${review.goal
         ? html`<div class="cdz-plan-goal">${review.goal}</div>`
         : nothing}
@@ -2456,47 +2758,50 @@ export class AIChatInput extends SignalWatcher(
       </div>
       <div class="cdz-plan-steps" role="group" aria-label="Editable plan checklist">
         ${repeat(
-          review.steps,
+          pageSteps,
           step => step.id,
-          (step, index) => html`<div
-            class="cdz-plan-step ${step.checked ? '' : 'unchecked'}"
-          >
-            <button
-              class="cdz-plan-check ${step.checked ? 'on' : ''}"
-              role="checkbox"
-              aria-checked=${step.checked ? 'true' : 'false'}
-              title=${step.checked ? 'Included — click to skip' : 'Skipped — click to include'}
-              @click=${() => this._togglePlanStep(step.id)}
+          (step, localIndex) => {
+            const index = pageStart + localIndex;
+            return html`<div
+              class="cdz-plan-step ${step.checked ? '' : 'unchecked'}"
             >
-              ${step.checked ? '✓' : ''}
-            </button>
-            <span class="cdz-plan-step-num">${index + 1}</span>
-            <textarea
-              class="cdz-plan-step-text"
-              data-step-id=${step.id}
-              rows="1"
-              placeholder="Describe this step…"
-              aria-label=${`Plan step ${index + 1}`}
-              .value=${step.text}
-              @input=${(event: Event) => {
-                this._setPlanStepText(
-                  step.id,
-                  (event.target as HTMLTextAreaElement).value
-                );
-              }}
-              @keydown=${(event: KeyboardEvent) =>
-                this._planStepKeyDown(event, step.id)}
-            ></textarea>
-            <button
-              class="cdz-plan-step-remove"
-              title="Remove step"
-              aria-label=${`Remove step ${index + 1}`}
-              ?disabled=${review.steps.length <= 1}
-              @click=${() => this._removePlanStep(step.id)}
-            >
-              ✕
-            </button>
-          </div>`
+              <button
+                class="cdz-plan-check ${step.checked ? 'on' : ''}"
+                role="checkbox"
+                aria-checked=${step.checked ? 'true' : 'false'}
+                title=${step.checked ? 'Included — click to skip' : 'Skipped — click to include'}
+                @click=${() => this._togglePlanStep(step.id)}
+              >
+                ${step.checked ? '✓' : ''}
+              </button>
+              <span class="cdz-plan-step-num">${index + 1}</span>
+              <textarea
+                class="cdz-plan-step-text"
+                data-step-id=${step.id}
+                rows="1"
+                placeholder="Describe this step…"
+                aria-label=${`Plan step ${index + 1}`}
+                .value=${step.text}
+                @input=${(event: Event) => {
+                  this._setPlanStepText(
+                    step.id,
+                    (event.target as HTMLTextAreaElement).value
+                  );
+                }}
+                @keydown=${(event: KeyboardEvent) =>
+                  this._planStepKeyDown(event, step.id)}
+              ></textarea>
+              <button
+                class="cdz-plan-step-remove"
+                title="Remove step"
+                aria-label=${`Remove step ${index + 1}`}
+                ?disabled=${review.steps.length <= 1}
+                @click=${() => this._removePlanStep(step.id)}
+              >
+                ✕
+              </button>
+            </div>`;
+          }
         )}
         <button
           class="cdz-plan-add-step"
@@ -2510,6 +2815,52 @@ export class AIChatInput extends SignalWatcher(
         </button>
       </div>
       </div>
+      ${paged
+        ? html`<div
+            class="cdz-plan-pager"
+            role="navigation"
+            aria-label="Plan step pages"
+          >
+            <button
+              class="cdz-plan-pager-btn"
+              title="Previous steps"
+              aria-label="Previous steps"
+              ?disabled=${page <= 0}
+              @click=${() => this._goToPlanPage(page - 1)}
+            >
+              ‹
+            </button>
+            <div class="cdz-plan-pager-mid">
+              <span class="cdz-plan-pager-label"
+                >${pageStart + 1}–${pageEnd} of ${total}</span
+              >
+              <div
+                class="cdz-plan-pager-track"
+                role="progressbar"
+                aria-valuemin="1"
+                aria-valuemax=${pageCount}
+                aria-valuenow=${page + 1}
+                aria-label=${`Page ${page + 1} of ${pageCount}`}
+              >
+                <span
+                  class="cdz-plan-pager-fill"
+                  style=${styleMap({
+                    width: `${((page + 1) / pageCount) * 100}%`,
+                  })}
+                ></span>
+              </div>
+            </div>
+            <button
+              class="cdz-plan-pager-btn"
+              title="More steps"
+              aria-label="More steps"
+              ?disabled=${page >= pageCount - 1}
+              @click=${() => this._goToPlanPage(page + 1)}
+            >
+              ›
+            </button>
+          </div>`
+        : nothing}
       <div class="cdz-plan-actions">
         <span class="cdz-plan-selected-count"
           >${checked} of ${total} selected</span
@@ -2524,10 +2875,68 @@ export class AIChatInput extends SignalWatcher(
           ?disabled=${checked === 0}
           @click=${() => this._executePlanReview()}
         >
-          ✓ Approve ${checked} step${checked === 1 ? '' : 's'}
+          Review ${checked} step${checked === 1 ? '' : 's'} →
         </button>
+      </div>`;
+  }
+
+  // ----- Review phase: read-only full-plan panel (goal + every chosen step) --
+  private _renderPlanReviewPanel(
+    review: NonNullable<AIChatInput['planReview']>,
+    checked: number
+  ) {
+    const chosen = this._chosenPlanSteps();
+    return html`<div class="cdz-plan-body cdz-plan-review-final">
+      <div class="cdz-plan-final-lead">
+        Here is the full plan the assistant will follow. Confirm to run it, or go
+        back to edit.
       </div>
-    </div>`;
+      ${review.goal
+        ? html`<div class="cdz-plan-goal">${review.goal}</div>`
+        : nothing}
+      ${review.answer
+        ? html`<div class="cdz-plan-final-note">
+            <span class="cdz-plan-final-note-label">Clarification</span>
+            <span>${review.answer}</span>
+          </div>`
+        : nothing}
+      <div class="cdz-plan-steps-head">
+        <span class="cdz-plan-steps-label"
+          >Plan · ${chosen.length} step${chosen.length === 1 ? '' : 's'}</span
+        >
+      </div>
+      <ol class="cdz-plan-final-list" aria-label="Final plan steps">
+        ${chosen.map(
+          (step, index) => html`<li class="cdz-plan-final-item">
+            <span class="cdz-plan-final-num">${index + 1}</span>
+            <span class="cdz-plan-final-text">${step}</span>
+          </li>`
+        )}
+      </ol>
+      </div>
+      <div class="cdz-plan-actions">
+        <span class="cdz-plan-selected-count"
+          >${checked} step${checked === 1 ? '' : 's'} ready</span
+        >
+        <span class="cdz-plan-actions-spacer"></span>
+        <button
+          class="cdz-plan-action"
+          data-testid="clickdz-plan-edit-back"
+          @click=${() => {
+            this._planPhase = 'edit';
+          }}
+        >
+          ‹ Edit
+        </button>
+        <button
+          class="cdz-plan-action primary"
+          data-testid="clickdz-plan-confirm"
+          ?disabled=${checked === 0}
+          @click=${() => this._sendPlanReview()}
+        >
+          ✓ Confirm &amp; send
+        </button>
+      </div>`;
   }
 
   private _persistCurrentApp() {
