@@ -1,11 +1,19 @@
 // ClickDz Ready Shop — complete single-file storefront + admin template.
 //
 // This constant is a COMPLETE, self-contained HTML application (hash-routed
-// vanilla-JS SPA, all CSS inline). The Gatekeeper substitutes three tokens at
+// vanilla-JS SPA, all CSS inline). The Gatekeeper substitutes these tokens at
 // serve time before deploying it:
-//   __CLICKDZ_DATA_URL__   → `${externalBase}/api/v2/apps-data/${slug}`
-//   __CLICKDZ_DATA_TOKEN__ → dataWriteToken(slug)   (bearer for v2 writes)
-//   __CLICKDZ_SLUG__       → the app slug
+//   __CLICKDZ_DATA_URL__     → `${externalBase}/api/v2/apps-data/${slug}`
+//   __CLICKDZ_DATA_TOKEN__   → dataWriteToken(slug)   (bearer for v2 writes)
+//   __CLICKDZ_SLUG__         → the app slug
+// Plus the C5 customization tokens (defaults = the values that were hardcoded
+// here before, so a template minted WITHOUT `settings` is byte-identical):
+//   __CLICKDZ_STORE_NAME__   → store name          (default "Ma Boutique")
+//   __CLICKDZ_WHATSAPP__     → WhatsApp digits      (default "213600000000")
+//   __CLICKDZ_ACCENT__       → accent #RRGGBB       (default "#0f766e")
+//   __CLICKDZ_PIN__          → admin PIN 4–8 digits (default "1234")
+// These feed the settings-singleton defaults, the runtime fallbacks and the
+// <title>; the runtime settings form still lets the owner edit them post-launch.
 //
 // Data model (ClickDz Data API — GET/POST/DELETE only, no PUT): collections
 // `products`, `orders`, `settings` (singleton). "Update" = DELETE + re-create
@@ -23,10 +31,10 @@ export const CLICKDZ_SHOP_TEMPLATE_HTML: string = String.raw`<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#111827" />
-<title>Ma Boutique — ClickDz</title>
+<title>__CLICKDZ_STORE_NAME__ — ClickDz</title>
 <style>
   :root{
-    --accent:#0f766e;
+    --accent:__CLICKDZ_ACCENT__;
     --accent-d:#0b5b54;
     --accent-l:#ccfbf1;
     --ink:#0f172a;
@@ -373,12 +381,12 @@ var WILAYAS = [
 function defaultSettings() {
   return {
     key: 'settings',
-    shopName: 'Ma Boutique',
+    shopName: '__CLICKDZ_STORE_NAME__',
     tagline: 'Produits de qualité, livrés partout en Algérie — paiement à la livraison.',
-    whatsapp: '213600000000',
+    whatsapp: '__CLICKDZ_WHATSAPP__',
     deliveryFee: 500,
-    adminPin: '1234',
-    accent: '#0f766e',
+    adminPin: '__CLICKDZ_PIN__',
+    accent: '__CLICKDZ_ACCENT__',
     currency: 'DZD'
   };
 }
@@ -569,8 +577,8 @@ function updateCartCount() {
 function orderRef() {
   return 'CMD-' + Date.now().toString(36).toUpperCase();
 }
-function accent() { return (store.settings && store.settings.accent) || '#0f766e'; }
-function shopName() { return (store.settings && store.settings.shopName) || 'Ma Boutique'; }
+function accent() { return (store.settings && store.settings.accent) || '__CLICKDZ_ACCENT__'; }
+function shopName() { return (store.settings && store.settings.shopName) || '__CLICKDZ_STORE_NAME__'; }
 
 /* darken a hex color for the accent-dark custom prop */
 function shade(hex, pct) {
@@ -1205,7 +1213,7 @@ function renderAdmin(tab) {
     '</div></div></main>';
     var input = document.getElementById('pin-input');
     var tryPin = function () {
-      if (input.value === String(s.adminPin || '1234')) {
+      if (input.value === String(s.adminPin || '__CLICKDZ_PIN__')) {
         setAuthed(true);
         toast('Bienvenue dans votre espace gérant', 'ok');
         if (!store.ordersLoaded) { refreshOrders().then(function () { renderAdmin('orders'); }); } else { renderAdmin('orders'); }
@@ -1530,12 +1538,12 @@ function saveSettings() {
   if (!f) return;
   var body = {
     key: 'settings',
-    shopName: String(f.shopName.value || '').slice(0, 60) || 'Ma Boutique',
+    shopName: String(f.shopName.value || '').slice(0, 60) || '__CLICKDZ_STORE_NAME__',
     tagline: String(f.tagline.value || '').slice(0, 200),
     whatsapp: digitsOnly(f.whatsapp.value),
     deliveryFee: Math.max(0, Math.round(Number(f.deliveryFee.value) || 0)),
-    adminPin: String(f.adminPin.value || '1234').slice(0, 12) || '1234',
-    accent: f.accent.value || '#0f766e',
+    adminPin: String(f.adminPin.value || '__CLICKDZ_PIN__').slice(0, 12) || '__CLICKDZ_PIN__',
+    accent: f.accent.value || '__CLICKDZ_ACCENT__',
     currency: 'DZD'
   };
   var btn = document.getElementById('save-settings');

@@ -4,7 +4,7 @@
  */
 import { MenuLinkItem } from '@affine/core/modules/app-sidebar/views';
 import { WorkbenchService } from '@affine/core/modules/workbench';
-import { AiIcon, BlockLinkIcon, FrameIcon } from '@blocksuite/icons/rc';
+import { AiIcon, BlockLinkIcon, FrameIcon, VoiceIcon } from '@blocksuite/icons/rc';
 import { useLiveData, useService } from '@toeverything/infra';
 
 import { CollapsibleSection } from '../../desktop/components/navigation-panel';
@@ -86,6 +86,26 @@ export const StudiosSection = () => {
         postfixDisplay="always"
       >
         🔌 Integrations
+      </MenuLinkItem>
+      <MenuLinkItem
+        data-testid="slider-bar-shoperp-button"
+        active={location.pathname.startsWith('/shoperp')}
+        to={'/shoperp'}
+        icon={<BlockLinkIcon />}
+        postfix={<BetaChip />}
+        postfixDisplay="always"
+      >
+        🛍️ Shop ERP
+      </MenuLinkItem>
+      <MenuLinkItem
+        data-testid="slider-bar-voice-studio-button"
+        active={location.pathname.startsWith('/voice')}
+        to={'/voice'}
+        icon={<VoiceIcon />}
+        postfix={<BetaChip />}
+        postfixDisplay="always"
+      >
+        Voice Studio
       </MenuLinkItem>
     </CollapsibleSection>
   );

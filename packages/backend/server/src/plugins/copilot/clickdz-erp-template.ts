@@ -10,6 +10,13 @@
  *   __CLICKDZ_DATA_URL__    -> <externalBase>/api/v2/apps-data/<slug>
  *   __CLICKDZ_DATA_TOKEN__  -> dataWriteToken(slug)   (Bearer, gates writes/deletes)
  *   __CLICKDZ_SLUG__        -> the app slug (pairing key with the shop)
+ * Plus two C5 customization tokens the paired ShopERP wizard threads through so
+ * the dashboard matches its storefront at first paint (before shared settings
+ * load from the common datastore):
+ *   __CLICKDZ_STORE_NAME__  -> store name (fed to the <title>; default "Ma Boutique")
+ *   __CLICKDZ_ACCENT__      -> accent #RRGGBB for the light-theme --brand (default "#2f6bff")
+ * The runtime settings singleton (shared with the shop) still overrides the
+ * store name in-app once loaded; the dark-theme brand shade is left untouched.
  *
  * Data API contract (clickdz-data.controller.ts):
  *   GET    {DATA_URL}/:collection?limit=N  -> records[] (newest-first, no token)
@@ -33,12 +40,12 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>ClickDz ERP</title>
+<title>__CLICKDZ_STORE_NAME__ — ERP</title>
 <style>
   :root{
     --bg:#f4f6fb; --surface:#ffffff; --surface-2:#f8fafc; --line:#e5e9f2;
     --ink:#1a2233; --ink-soft:#5b6577; --ink-faint:#8a93a5;
-    --brand:#2f6bff; --brand-soft:#e8effe; --brand-ink:#1d4fd0;
+    --brand:__CLICKDZ_ACCENT__; --brand-soft:#e8effe; --brand-ink:#1d4fd0;
     --ok:#16a06a; --ok-soft:#e2f6ee; --warn:#d9822b; --warn-soft:#fdf0e0;
     --bad:#d64550; --bad-soft:#fdeaec; --info:#4b62d8; --info-soft:#e9edfb;
     --violet:#7b52d0; --violet-soft:#efe8fb;

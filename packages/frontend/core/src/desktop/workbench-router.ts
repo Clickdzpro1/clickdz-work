@@ -46,8 +46,16 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/vdz/index'),
   },
   {
+    path: '/voice',
+    lazy: () => import('./pages/workspace/voice/index'),
+  },
+  {
     path: '/integrations',
     lazy: () => import('./pages/workspace/integrations/index'),
+  },
+  {
+    path: '/shoperp',
+    lazy: () => import('./pages/workspace/shoperp/index'),
   },
   {
     path: '/settings',
