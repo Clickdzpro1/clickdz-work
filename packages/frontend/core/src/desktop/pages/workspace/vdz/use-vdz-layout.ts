@@ -21,7 +21,8 @@ export type VdzPanelId =
   | 'aiDock'
   | 'timeline'
   | 'transcript'
-  | 'effects';
+  | 'effects'
+  | 'shorts';
 
 export interface VdzPanelState {
   visible: boolean;
@@ -51,6 +52,10 @@ export const VDZ_PANEL_SPECS: Record<VdzPanelId, PanelSpec> = {
   // so existing workspaces don't shift, and readLayout() merges the default in
   // for storage saved before it existed.
   effects: { size: 320, min: 260, max: 560, visible: false },
+  // AI Shorts — long→short repurposing panel. Same opt-in story: hidden by
+  // default (no layout shift for existing workspaces; readLayout() merges the
+  // default in for storage saved before it existed).
+  shorts: { size: 340, min: 260, max: 560, visible: false },
 };
 
 export const VDZ_PANEL_IDS = Object.keys(VDZ_PANEL_SPECS) as VdzPanelId[];
@@ -83,6 +88,7 @@ export const VDZ_PANEL_META: Record<VdzPanelId, VdzPanelMeta> = {
   timeline: { label: 'Timeline', icon: '▦', shortcutDigit: '4' },
   transcript: { label: 'Transcript', icon: '💬', shortcutDigit: '5' },
   effects: { label: 'Effects', icon: '✨', shortcutDigit: '6' },
+  shorts: { label: 'AI Shorts', icon: '✂', shortcutDigit: '7' },
 };
 
 /** The consistent shortcut label for a panel (e.g. `Cmd/Ctrl+2`). */
@@ -128,6 +134,10 @@ function defaultLayout(): VdzLayout {
     effects: {
       visible: VDZ_PANEL_SPECS.effects.visible,
       size: VDZ_PANEL_SPECS.effects.size,
+    },
+    shorts: {
+      visible: VDZ_PANEL_SPECS.shorts.visible,
+      size: VDZ_PANEL_SPECS.shorts.size,
     },
   };
 }

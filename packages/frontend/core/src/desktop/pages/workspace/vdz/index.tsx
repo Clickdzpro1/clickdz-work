@@ -73,6 +73,9 @@ const TranscriptPanel = lazy(() =>
 const EffectsPanel = lazy(() =>
   import('./effects-panel').then(m => ({ default: m.EffectsPanel }))
 );
+const ShortsPanel = lazy(() =>
+  import('./shorts-panel').then(m => ({ default: m.ShortsPanel }))
+);
 
 /** Which top-level surface the page is showing. */
 type VdzMode = 'edit' | 'generate';
@@ -578,7 +581,7 @@ const VdzStudioPage = () => {
     null
   );
   const GENERATE_HIDDEN: VdzPanelId[] = useMemo(
-    () => ['mediaBin', 'inspector', 'timeline', 'transcript', 'effects'],
+    () => ['mediaBin', 'inspector', 'timeline', 'transcript', 'effects', 'shorts'],
     []
   );
   // Same set as a lookup for the View menu's disabled state in Generate mode.
@@ -658,8 +661,8 @@ const VdzStudioPage = () => {
         return;
       }
 
-      // Cmd/Ctrl+1..6 toggle the workspace panels.
-      if (meta && event.key >= '1' && event.key <= '6') {
+      // Cmd/Ctrl+1..7 toggle the workspace panels.
+      if (meta && event.key >= '1' && event.key <= '7') {
         event.preventDefault();
         const panelForDigit: Record<string, VdzPanelId> = {
           '1': 'mediaBin',
@@ -668,6 +671,7 @@ const VdzStudioPage = () => {
           '4': 'timeline',
           '5': 'transcript',
           '6': 'effects',
+          '7': 'shorts',
         };
         togglePanel(panelForDigit[event.key]);
         return;
@@ -879,6 +883,9 @@ const VdzStudioPage = () => {
                   <PreviewCanvas
                     timeline={timeline}
                     playheadSeconds={playheadSeconds}
+                    isPlaying={isPlaying}
+                    muted={audioMuted}
+                    onToggleMute={() => setAudioMuted(m => !m)}
                   />
                   {/* Non-visual: hidden <audio> pool slaved to the playhead so
                       the preview actually plays sound. Unmounts with the editor
@@ -999,8 +1006,41 @@ const VdzStudioPage = () => {
               {layout.inspector.visible ||
               layout.aiDock.visible ||
               layout.transcript.visible ||
-              layout.effects.visible ? (
+              layout.effects.visible ||
+              layout.shorts.visible ? (
                 <div className={styles.rightStack}>
+                  {/* AI Shorts — long→short repurposing. Hidden by default;
+                      opt-in via View menu / Cmd+7. */}
+                  {layout.shorts.visible ? (
+                    <>
+                      <VdzResizeHandle
+                        id="shorts"
+                        size={layout.shorts.size}
+                        setSize={setPanelSize}
+                        onReset={() => resetPanelSize('shorts')}
+                        axis="x"
+                        dir={-1}
+                        aria-label="Resize AI Shorts"
+                      />
+                      <div
+                        className={styles.sidePanelSlot}
+                        style={{ width: layout.shorts.size }}
+                      >
+                        <Suspense fallback={null}>
+                          <ShortsPanel
+                            timeline={timeline}
+                            playheadSeconds={playheadSeconds}
+                            projectName={timeline.name}
+                            onSeek={scrubTo}
+                            onOpenTimeline={loadProjectTimeline}
+                            onCollapse={() =>
+                              setPanelVisible('shorts', false)
+                            }
+                          />
+                        </Suspense>
+                      </div>
+                    </>
+                  ) : null}
                   {/* Effects & Transitions — one-click looks + clip-to-clip
                       transitions for the selected clip. Hidden by default;
                       opt-in via View menu / Cmd+6. One op per action through

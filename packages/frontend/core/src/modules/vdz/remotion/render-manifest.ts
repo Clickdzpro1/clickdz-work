@@ -270,14 +270,20 @@ export interface VdzRenderManifest {
 /** Options for {@link buildRenderManifest}. */
 export interface BuildRenderManifestOptions {
   /**
-   * Map of a clip `src` (e.g. `vdz-blob:<id>` or a remote https url) to a
-   * directly-loadable value the worker can fetch — typically a signed/public
-   * https url (the Remotion worker CAN fetch over the network, unlike the
-   * offline HTML tier, so a `data:` URI is NOT required). Srcs absent from the
-   * map are emitted unchanged and reported in `unresolved`. Omit entirely to
-   * pass every src through verbatim (fine for already-public srcs).
+   * A per-src resolver applied to EVERY clip src (video/audio/image) as the
+   * manifest is written: given a clip `src` (e.g. `vdz-blob:<id>`, `blob:` /
+   * `data:`, or a remote https url) it returns a directly-loadable value the
+   * worker can fetch — typically a signed/public https url (the Remotion worker
+   * CAN fetch over the network, unlike the offline HTML tier, so a `data:` URI
+   * is NOT required). A src the resolver returns UNCHANGED that is not already a
+   * directly-loadable url (`https?:` / `data:`) is reported in `unresolved`.
+   *
+   * Defaults to the IDENTITY function when omitted, so every existing caller
+   * (and the classic behavior) is byte-identical to the pre-resolver manifest:
+   * public https/data: srcs pass through, workspace-local `vdz-blob:` handles
+   * are emitted raw and flagged `unresolved` exactly as before.
    */
-  resolveSrc?: Record<string, string>;
+  resolveSrc?: (src: string) => string;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,17 +337,21 @@ function extendedWindow(
 /** The default animation-side duration, mirroring `anim.ts::animDuration` (0.5s). */
 const DEFAULT_ANIM_SECONDS = 0.5;
 
-/** Resolve a clip src against the map; report misses. */
+/** Resolve a clip src through the resolver fn; report misses. */
 function resolveSrc(
   src: string,
-  map: Record<string, string> | undefined,
+  resolve: (src: string) => string,
   unresolved: Set<string>
 ): string {
   if (!src) return '';
-  const mapped = map?.[src];
-  if (typeof mapped === 'string' && mapped) return mapped;
-  // Already a directly-loadable url (public https / data:) — pass through and
-  // do NOT flag it. Only workspace-local blob handles are truly unresolved.
+  // Apply the caller's resolver (identity by default). A non-empty result that
+  // actually CHANGES the src means it was resolved to a loadable value.
+  const mapped = resolve(src);
+  if (typeof mapped === 'string' && mapped && mapped !== src) return mapped;
+  // The resolver returned the src unchanged. If it is already a directly-
+  // loadable url (public https / data:) pass it through and do NOT flag it;
+  // only workspace-local blob handles (`vdz-blob:` / `blob:`) are truly
+  // unresolved — identical to the pre-resolver behavior.
   if (/^https?:/i.test(src) || src.startsWith('data:')) return src;
   unresolved.add(src);
   return src;
@@ -439,7 +449,7 @@ interface DuckWindow {
 function lowerClip(
   clip: VdzClip,
   fps: number,
-  map: Record<string, string> | undefined,
+  resolve: (src: string) => string,
   unresolved: Set<string>,
   duckWindows: DuckWindow[],
   win?: { start: number; end: number }
@@ -450,7 +460,7 @@ function lowerClip(
       return {
         ...base,
         type: 'video',
-        src: resolveSrc(clip.src, map, unresolved),
+        src: resolveSrc(clip.src, resolve, unresolved),
         trimStartInFrames: toFrames(clip.trimStart ?? 0, fps),
         volume: typeof clip.volume === 'number' ? clamp01(clip.volume) : 1,
       };
@@ -469,7 +479,7 @@ function lowerClip(
       return {
         ...base,
         type: 'audio',
-        src: resolveSrc(clip.src, map, unresolved),
+        src: resolveSrc(clip.src, resolve, unresolved),
         volume: typeof clip.volume === 'number' ? clamp01(clip.volume) : 1,
         fadeInFrames: toFrames(clip.fadeIn ?? 0, fps),
         fadeOutFrames: toFrames(clip.fadeOut ?? 0, fps),
@@ -481,7 +491,7 @@ function lowerClip(
       return {
         ...base,
         type: 'image',
-        src: resolveSrc(clip.src, map, unresolved),
+        src: resolveSrc(clip.src, resolve, unresolved),
         fit: clip.fit ?? 'cover',
       };
     case 'text':
@@ -578,7 +588,10 @@ export function buildRenderManifest(
   const fps = timeline.fps || 30;
   const width = timeline.width || 1920;
   const height = timeline.height || 1080;
-  const map = options.resolveSrc;
+  // Default to the IDENTITY resolver: with no option supplied every src maps to
+  // itself, so public https/data: srcs pass through and `vdz-blob:` handles are
+  // flagged `unresolved` — byte-identical to the pre-resolver manifest.
+  const resolve = options.resolveSrc ?? ((src: string) => src);
   const unresolved = new Set<string>();
 
   // First pass: collect the absolute frame window of every DUCK voiceover across
@@ -616,7 +629,14 @@ export function buildRenderManifest(
         isVisualTrack && clip.type !== 'audio'
           ? extendedWindow(track, clip, clipIndex)
           : undefined;
-      const lowered = lowerClip(clip, fps, map, unresolved, duckWindows, win);
+      const lowered = lowerClip(
+        clip,
+        fps,
+        resolve,
+        unresolved,
+        duckWindows,
+        win
+      );
       if (lowered) manifestClips.push(lowered);
     });
     return {

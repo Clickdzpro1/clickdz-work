@@ -10,14 +10,19 @@ import {
 import { isClipActive } from './constants';
 
 /**
- * Audible playback for the Vdz preview.
+ * Audible playback for the Vdz preview — the AUDIO-TRACK engine.
  *
- * The preview canvas is a VISUAL surface only — its `<video>` elements are
- * muted and re-seeked per playhead tick (see preview-canvas.tsx), so the editor
- * has never produced sound. This component closes that gap for AUDIO-track
- * clips: it mounts a hidden `<audio>` per audio clip and slaves it to the SAME
- * master clock the rest of the editor uses (`playheadSeconds` + `isPlaying`,
- * owned by the page and advanced by its rAF loop).
+ * This component owns sound for `type === 'audio'` clips ONLY: it mounts a
+ * hidden `<audio>` per audio clip and slaves it to the SAME master clock the
+ * rest of the editor uses (`playheadSeconds` + `isPlaying`, owned by the page
+ * and advanced by its rAF loop).
+ *
+ * VIDEO-CLIP AUDIO IS DELIBERATELY NOT HANDLED HERE. A video clip's sound comes
+ * from its OWN preview `<video>` element (see preview-canvas.tsx `PreviewVideo`,
+ * A1b) — one element for both pixels and sound keeps A/V inherently in sync. If
+ * this engine also mounted a voice for `type === 'video'` clips the audio would
+ * play TWICE (decoded once by the `<video>`, once by a parallel `<audio>`), so
+ * the `type === 'audio'` filter below is load-bearing: do not widen it.
  *
  * Design notes:
  * - One `<audio>` per audio clip (keyed by clip id; React mounts/unmounts as
@@ -28,6 +33,8 @@ import { isClipActive } from './constants';
  *   expected source time, so audio is never stuttered by a per-frame seek.
  * - Paused / scrubbing is silent (mirrors the visual scrub) but we keep the
  *   element's `currentTime` aligned so the next Play resumes in sync.
+ * - Master mute (`muted`, the preview/toolbar speaker toggle) silences these
+ *   voices AND the preview `<video>` elements together — one shared state.
  *
  * Gain: each element's volume is the clip's base volume × its fade envelope
  * (fadeIn/fadeOut ramps) × the duck multiplier (other audio dips under `duck`
@@ -35,9 +42,8 @@ import { isClipActive } from './constants';
  * perceptually smooth; a WebAudio MediaElementSource graph would silence
  * cross-origin sources, so element.volume automation is the deliberate call).
  *
- * Out of scope here (documented follow-ups): video-clip audio. MP4-export
- * audio is a Remotion-tier concern — the HTML export path is muted by design
- * (see compile-timeline.ts).
+ * Out of scope here: MP4-export audio is a Remotion-tier concern — the HTML
+ * export path is muted by design (see compile-timeline.ts).
  */
 
 /** Only re-seek an element when it drifts this far (seconds) from the playhead. */
@@ -148,7 +154,9 @@ export const VdzAudioPlayback = memo(function VdzAudioPlayback({
   const voices: VdzAudioClip[] = [];
   for (const track of timeline.tracks) {
     for (const clip of track.clips) {
-      // Only real audio clips with a source contribute sound.
+      // AUDIO clips only. Video-clip audio is played by that clip's own preview
+      // <video> (preview-canvas.tsx, A1b); mounting a voice here too would
+      // double-play it. This filter is load-bearing — do NOT include 'video'.
       if (clip.type === 'audio' && clip.src) voices.push(clip);
     }
   }

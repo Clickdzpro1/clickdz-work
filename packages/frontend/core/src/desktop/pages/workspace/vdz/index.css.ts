@@ -343,6 +343,48 @@ export const previewZoomReadout = style({
   fontVariantNumeric: 'tabular-nums',
 });
 
+// ---- Preview master-mute toggle (overlay, top-right of the viewport) -------
+export const previewMuteButton = style({
+  position: 'absolute',
+  top: 10,
+  right: 10,
+  zIndex: 6,
+  appearance: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 28,
+  height: 28,
+  padding: 0,
+  fontSize: 14,
+  lineHeight: 1,
+  borderRadius: 8,
+  border: `1px solid ${border}`,
+  background: 'color-mix(in srgb, var(--vdz-panel) 78%, transparent)',
+  backdropFilter: 'blur(6px)',
+  boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+  color: text,
+  cursor: 'pointer',
+  userSelect: 'none',
+  transition: 'background 120ms ease, border-color 120ms ease, color 120ms ease',
+  '@media': {
+    '(prefers-reduced-motion: reduce)': {
+      transition: 'none',
+    },
+  },
+  ':hover': {
+    background: raised,
+    borderColor: border,
+    color: text,
+  },
+  selectors: {
+    '&[aria-pressed="true"]': {
+      borderColor: accent,
+      color: text,
+    },
+  },
+});
+
 // Kept for backward compatibility (external references / older callers). The
 // preview no longer uses this width-driven aspect box; `previewCanvas` above
 // replaces it. Left as-is so nothing that imports `styles.preview` breaks.

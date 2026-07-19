@@ -38,22 +38,47 @@ function parseCssBlock(block: string): Record<string, string> {
   }
   return out;
 }
-import { formatTimecode } from './constants';
+import { formatTimecode, isClipActive } from './constants';
 import * as styles from './index.css';
 import { PreviewZoomChip } from './preview-zoom-chip';
 
+/** Only re-seek a PLAYING element when it drifts this far (seconds) from the
+ * playhead — mirrors the audio engine so native playback isn't stuttered by a
+ * per-frame seek. (A1b) */
+const VIDEO_DRIFT_TOLERANCE = 0.25;
+/** Precise seek threshold while SCRUBBING (paused): keep the frame accurate
+ * without thrashing the decoder on sub-frame jitter. */
+const SCRUB_SEEK_EPSILON = 0.02;
+
 /**
- * A frame-accurate <video> for the preview: muted, controls-off, and seeked to
- * the source time for the current playhead. This is a VISUAL scrub preview only
- * — we deliberately do not attempt synced audio playback in this PR (the video
- * is muted and never `.play()`ed; each playhead change re-seeks the element).
+ * A frame-accurate <video> for the preview, now with SYNCED AUDIO (A1b).
+ *
+ * The single `<video>` element is the source of both pixels and sound, so audio
+ * is inherently in sync with the picture — there is no parallel audio element to
+ * drift against. Two modes, driven by the shared preview transport
+ * (`isPlaying` + the `playheadSeconds` clock owned by the page):
+ *
+ * - PLAYING & the clip sits under the playhead: the element plays NATIVELY at
+ *   its own rate; we only re-seek when it drifts past {@link
+ *   VIDEO_DRIFT_TOLERANCE} from the expected source time (no per-tick seek → no
+ *   stutter). Volume comes from `clip.volume` (default 1, clamped 0..1).
+ * - SCRUBBING / paused / not active: the element is PAUSED on the exact frame
+ *   for the playhead (precise re-seek past {@link SCRUB_SEEK_EPSILON}) and is
+ *   therefore silent — matching the visual-only scrub behaviour.
+ *
+ * The master-mute (`muted`) is applied to the element every tick so muting
+ * silences video audio alongside the audio engine.
  */
 const PreviewVideo = memo(function PreviewVideo({
   clip,
   playheadSeconds,
+  isPlaying,
+  muted,
 }: {
   clip: Extract<VdzClip, { type: 'video' }>;
   playheadSeconds: number;
+  isPlaying: boolean;
+  muted: boolean;
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   // Resolve a durable `vdz-blob:` handle (or pass a remote URL through) to a
@@ -64,23 +89,66 @@ const PreviewVideo = memo(function PreviewVideo({
     0,
     playheadSeconds - clip.start + (clip.trimStart ?? 0)
   );
+  const active = isClipActive(clip, playheadSeconds);
 
+  // Volume + master-mute, kept in sync without touching transport. Base volume
+  // is the clip's `volume` (schema: video clips carry an optional 0..1 volume),
+  // defaulting to full and clamped defensively.
+  const volume = Math.min(1, Math.max(0, clip.volume ?? 1));
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    // Only seek when meaningfully different to avoid thrashing the decoder.
-    if (
-      Number.isFinite(sourceTime) &&
-      Math.abs(el.currentTime - sourceTime) > 0.02
-    ) {
-      try {
-        el.currentTime = sourceTime;
-      } catch {
-        // Seeking before metadata is ready throws in some browsers — ignore;
-        // the onLoadedMetadata handler re-applies the seek below.
+    el.volume = volume;
+    el.muted = muted;
+  }, [volume, muted]);
+
+  // Transport: play under the playhead with sound, pause (silent) otherwise,
+  // correcting drift lazily. Mirrors the audio engine so A/V stay together.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !resolvedSrc) return;
+    if (isPlaying && active) {
+      // Only re-seek on meaningful drift so native playback runs smooth.
+      if (
+        Number.isFinite(sourceTime) &&
+        Math.abs(el.currentTime - sourceTime) > VIDEO_DRIFT_TOLERANCE
+      ) {
+        try {
+          el.currentTime = sourceTime;
+        } catch {
+          // Seeking before metadata loads can throw; the next tick retries.
+        }
+      }
+      if (el.paused) {
+        // play() can reject if the browser wants a gesture; pressing Play IS a
+        // gesture, and a rejection is harmless (the next tick retries).
+        void el.play().catch(() => undefined);
+      }
+    } else {
+      // Scrubbing / not active → hold a paused (silent) frame at the playhead.
+      if (!el.paused) el.pause();
+      if (
+        Number.isFinite(sourceTime) &&
+        Math.abs(el.currentTime - sourceTime) > SCRUB_SEEK_EPSILON
+      ) {
+        try {
+          el.currentTime = sourceTime;
+        } catch {
+          // Seeking before metadata is ready throws in some browsers — ignore;
+          // the onLoadedMetadata handler re-applies the seek below.
+        }
       }
     }
-  }, [sourceTime, resolvedSrc]);
+  }, [isPlaying, active, sourceTime, resolvedSrc]);
+
+  // Never leave a dangling element playing after unmount (clip deleted, editor
+  // closed, project switched, or the clip scrolled out of the active frame).
+  useEffect(() => {
+    return () => {
+      const el = ref.current;
+      if (el && !el.paused) el.pause();
+    };
+  }, []);
 
   if (!resolvedSrc) {
     return <div className={styles.previewVideoBlock}>video · loading…</div>;
@@ -91,18 +159,27 @@ const PreviewVideo = memo(function PreviewVideo({
       ref={ref}
       className={styles.previewImage}
       src={resolvedSrc}
-      muted
+      // NOT hardcoded muted anymore: volume + master-mute are driven imperatively
+      // above so the active clip plays in sync during playback (A1b).
       playsInline
       preload="auto"
-      // No controls: this is a scrub-only surface driven by the playhead.
+      // No controls: this is a playhead-driven surface (transport above).
       onLoadedMetadata={e => {
         const el = e.currentTarget;
+        // Apply volume/mute immediately so the first played frame isn't loud or
+        // wrongly silent before the sync effect runs.
+        el.volume = volume;
+        el.muted = muted;
         if (Number.isFinite(sourceTime)) {
           try {
             el.currentTime = sourceTime;
           } catch {
             // ignore
           }
+        }
+        // If we mounted mid-playback under an active clip, start playing now.
+        if (isPlaying && active && el.paused) {
+          void el.play().catch(() => undefined);
         }
       }}
       style={{ objectFit: 'cover' }}
@@ -145,9 +222,13 @@ const ResolvedImg = memo(function ResolvedImg({
 const PreviewClipContent = memo(function PreviewClipContent({
   clip,
   playheadSeconds,
+  isPlaying,
+  muted,
 }: {
   clip: VdzClip;
   playheadSeconds: number;
+  isPlaying: boolean;
+  muted: boolean;
 }) {
   switch (clip.type) {
     case 'text': {
@@ -220,10 +301,18 @@ const PreviewClipContent = memo(function PreviewClipContent({
         <div className={styles.previewImagePlaceholder}>image · empty src</div>
       );
     case 'video': {
-      // Real media → a frame-accurate seeked <video>. Empty src keeps the
-      // hatched placeholder block (nothing to show yet).
+      // Real media → a frame-accurate seeked <video> that also plays its audio
+      // in sync during playback (A1b). Empty src keeps the hatched placeholder
+      // block (nothing to show yet).
       if (clip.src) {
-        return <PreviewVideo clip={clip} playheadSeconds={playheadSeconds} />;
+        return (
+          <PreviewVideo
+            clip={clip}
+            playheadSeconds={playheadSeconds}
+            isPlaying={isPlaying}
+            muted={muted}
+          />
+        );
       }
       const label = clip.name ?? 'video';
       return (
@@ -244,14 +333,19 @@ const PreviewClipContent = memo(function PreviewClipContent({
  * comes from the pure {@link resolveItemRender} / {@link visualTransformCss}.
  *
  * `playheadSeconds` is threaded through so a video clip's inner <video> can seek
- * to the right source frame (the pure preview item carries no clock).
+ * to the right source frame (the pure preview item carries no clock); `isPlaying`
+ * + `muted` drive that same <video>'s audio transport (A1b).
  */
 const PreviewItem = memo(function PreviewItem({
   item,
   playheadSeconds,
+  isPlaying,
+  muted,
 }: {
   item: VdzPreviewItem;
   playheadSeconds: number;
+  isPlaying: boolean;
+  muted: boolean;
 }) {
   const { clip, visual } = item;
   const { opacity, extraTranslateX, clipPath } = resolveItemRender(item);
@@ -286,7 +380,12 @@ const PreviewItem = memo(function PreviewItem({
           ...capWrap,
         }}
       >
-        <PreviewClipContent clip={clip} playheadSeconds={playheadSeconds} />
+        <PreviewClipContent
+          clip={clip}
+          playheadSeconds={playheadSeconds}
+          isPlaying={isPlaying}
+          muted={muted}
+        />
         {textVignette ? <div style={parseCssBlock(textVignette)} /> : null}
       </div>
     );
@@ -315,7 +414,12 @@ const PreviewItem = memo(function PreviewItem({
         clipPath,
       }}
     >
-      <PreviewClipContent clip={clip} playheadSeconds={playheadSeconds} />
+      <PreviewClipContent
+        clip={clip}
+        playheadSeconds={playheadSeconds}
+        isPlaying={isPlaying}
+        muted={muted}
+      />
       {vignetteOverlayCss(clip.effects) ? (
         <div style={parseCssBlock(vignetteOverlayCss(clip.effects) as string)} />
       ) : null}
@@ -326,6 +430,17 @@ const PreviewItem = memo(function PreviewItem({
 interface PreviewCanvasProps {
   timeline: VdzTimeline;
   playheadSeconds: number;
+  /** Whether the shared preview transport is playing. Drives video-clip audio
+   * playback (A1b): the active clip's <video> plays with sound while true and
+   * is a paused, silent frame while scrubbing. */
+  isPlaying?: boolean;
+  /** Master mute for ALL preview audio (video clips + the audio engine). When
+   * true, every preview <video> is muted. Defaults to sound ON. */
+  muted?: boolean;
+  /** Toggle the master mute. When provided, a small speaker button is shown in
+   * the preview UI; the state itself is owned by the host so the audio engine
+   * and the toolbar toggle stay a single source of truth. */
+  onToggleMute?: () => void;
 }
 
 /** A measured content-box size in CSS pixels. */
@@ -451,7 +566,13 @@ function useElementSize<T extends HTMLElement>(): [
  * never overshoot its wrapper and collapse the layout. Every clip value stays
  * aspect-relative (`cqh` text, fraction/inset boxes) so it follows the box.
  */
-export function PreviewCanvas({ timeline, playheadSeconds }: PreviewCanvasProps) {
+export function PreviewCanvas({
+  timeline,
+  playheadSeconds,
+  isPlaying = false,
+  muted = false,
+  onToggleMute,
+}: PreviewCanvasProps) {
   const items = useMemo(
     () => computePreviewFrame(timeline, playheadSeconds),
     [timeline, playheadSeconds]
@@ -584,11 +705,28 @@ export function PreviewCanvas({ timeline, playheadSeconds }: PreviewCanvasProps)
                 key={item.key}
                 item={item}
                 playheadSeconds={playheadSeconds}
+                isPlaying={isPlaying}
+                muted={muted}
               />
             ))
           )}
         </div>
       </div>
+      {onToggleMute ? (
+        <button
+          type="button"
+          className={styles.previewMuteButton}
+          // Keep clicks off the viewport (selection / scrub handlers).
+          onPointerDown={e => e.stopPropagation()}
+          onClick={onToggleMute}
+          aria-pressed={muted}
+          aria-label={muted ? 'Unmute preview audio' : 'Mute preview audio'}
+          title={muted ? 'Unmute preview audio' : 'Mute preview audio'}
+        >
+          {/* Boot-safe glyphs (no icon-component import): speaker / muted. */}
+          <span aria-hidden="true">{muted ? '🔇' : '🔊'}</span>
+        </button>
+      ) : null}
       <PreviewZoomChip
         percent={percent}
         atFit={atFit}
