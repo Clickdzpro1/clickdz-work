@@ -1,3 +1,4 @@
+import { artifactStore } from '@affine/core/modules/ai-artifacts/store';
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import {
   type CSSProperties,
@@ -271,6 +272,16 @@ export interface ErpSettings {
   adminPin?: string;
   accent?: string;
   currency?: string;
+  // C7 appearance fields — preset IDs (never raw CSS). The bridge allowlist
+  // (normalizeErpSettings + POST /erp/settings) validates these against the
+  // same id sets below; SHOP-TEMPLATE maps each id to its :root vars/layout at
+  // runtime. All optional: a legacy singleton omits them and renders today's
+  // look (theme 'classic' / template 'standard' / font 'system' / all sections).
+  theme?: string;
+  template?: string;
+  font?: string;
+  /** Compact CSV of enabled section ids, e.g. 'hero,trust,categories'. */
+  sections?: string;
 }
 
 export interface ErpOrderItem {
@@ -544,6 +555,220 @@ export function postErpSettings(
   patch: Partial<ErpSettings>
 ): Promise<ErpMutateOutcome<{ ok?: boolean; settings?: ErpSettings }>> {
   return erpMutate(slug, 'settings', { patch });
+}
+
+// ---------------------------------------------------------------------------
+// C7 APPEARANCE — theme / layout-template / font / section catalogs. These are
+// the SINGLE source of the id strings the Shop Appearance editor writes into
+// the settings singleton (POST /erp/settings). The ids MUST match SHOP-TEMPLATE
+// (clickdz-shop-template.ts), which maps each id → :root vars / layout, and the
+// BRIDGE-BE allowlist (normalizeErpSettings), which validates them. We store
+// IDS ONLY (never raw CSS) to respect the 8KB settings cap. Every DEFAULT below
+// is chosen so an unset field renders today's look (byte-identical legacy).
+//   theme:    classic | dark | vibrant | minimal        (default 'classic')
+//   template: standard | boutique                       (default 'standard')
+//   font:     system | inter | georgia | helvetica | mono (default 'system')
+//   sections: CSV of { hero, trust, categories }         (default all on)
+// The `preview` fields drive the lightweight in-app preview only — the deployed
+// storefront's authoritative styling comes from SHOP-TEMPLATE reading settings.
+// ---------------------------------------------------------------------------
+
+export interface ThemeOption {
+  id: string;
+  label: string;
+  hint: string;
+  /** Preview-only swatches (bg / surface / ink) — NOT the deployed CSS. */
+  preview: { bg: string; card: string; ink: string; line: string };
+}
+
+/** Theme presets — order = display order; first is the default ('classic'). */
+export const THEME_OPTIONS: ThemeOption[] = [
+  {
+    id: 'classic',
+    label: 'Classic',
+    hint: 'Today’s look — light, airy, teal-friendly.',
+    preview: { bg: '#f6f7f9', card: '#ffffff', ink: '#0f172a', line: '#e5e7eb' },
+  },
+  {
+    id: 'dark',
+    label: 'Dark',
+    hint: 'Deep neutral surfaces with a bright accent.',
+    preview: { bg: '#0b0f19', card: '#151b2b', ink: '#e8ecf4', line: '#26304a' },
+  },
+  {
+    id: 'vibrant',
+    label: 'Vibrant',
+    hint: 'Warm, high-contrast, punchy accent gradients.',
+    preview: { bg: '#fff7ed', card: '#ffffff', ink: '#1f130a', line: '#f3d9bf' },
+  },
+  {
+    id: 'minimal',
+    label: 'Minimal',
+    hint: 'Flat, monochrome, thin lines — content first.',
+    preview: { bg: '#ffffff', card: '#ffffff', ink: '#111111', line: '#ececec' },
+  },
+];
+
+export interface TemplateOption {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+/** Layout templates — first is the default ('standard'). */
+export const TEMPLATE_OPTIONS: TemplateOption[] = [
+  {
+    id: 'standard',
+    label: 'Standard',
+    hint: 'Hero banner + category rail + product grid (the default).',
+  },
+  {
+    id: 'boutique',
+    label: 'Boutique',
+    hint: 'Compact editorial header, larger cards, no hero band.',
+  },
+];
+
+export interface FontOption {
+  id: string;
+  label: string;
+  /** Preview-only CSS font stack; SHOP-TEMPLATE owns the deployed --font. */
+  stack: string;
+}
+
+/** Curated fonts — ids map to a --font stack in SHOP-TEMPLATE. */
+export const FONT_OPTIONS: FontOption[] = [
+  {
+    id: 'system',
+    label: 'System',
+    stack:
+      "'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,'Noto Sans Arabic',sans-serif",
+  },
+  {
+    id: 'inter',
+    label: 'Inter',
+    stack: "'Inter',system-ui,-apple-system,Segoe UI,Arial,sans-serif",
+  },
+  {
+    id: 'poppins',
+    label: 'Poppins',
+    stack: "'Poppins',system-ui,-apple-system,Segoe UI,Arial,sans-serif",
+  },
+  {
+    id: 'playfair',
+    label: 'Playfair',
+    stack: "'Playfair Display',Georgia,'Times New Roman',Times,serif",
+  },
+];
+
+export interface SectionOption {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+/** Toggleable storefront sections — all enabled by default. */
+export const SECTION_OPTIONS: SectionOption[] = [
+  { id: 'hero', label: 'Hero banner', hint: 'The headline + call-to-action band.' },
+  { id: 'trust', label: 'Trust strip', hint: 'COD / delivery / support reassurance row.' },
+  {
+    id: 'categories',
+    label: 'Category rail',
+    hint: 'The horizontal category filter chips.',
+  },
+];
+
+export const DEFAULT_THEME = 'classic';
+export const DEFAULT_TEMPLATE = 'standard';
+export const DEFAULT_FONT = 'system';
+/** Default = every section enabled (today's storefront shows them all). */
+export const DEFAULT_SECTIONS: string[] = SECTION_OPTIONS.map(s => s.id);
+
+/** Resolve a stored theme id to a known option (falls back to the default). */
+export function resolveTheme(id: string | undefined): ThemeOption {
+  return THEME_OPTIONS.find(t => t.id === id) ?? THEME_OPTIONS[0];
+}
+export function resolveTemplate(id: string | undefined): TemplateOption {
+  return TEMPLATE_OPTIONS.find(t => t.id === id) ?? TEMPLATE_OPTIONS[0];
+}
+export function resolveFont(id: string | undefined): FontOption {
+  return FONT_OPTIONS.find(f => f.id === id) ?? FONT_OPTIONS[0];
+}
+
+/** Parse the compact sections CSV → the set of enabled ids (unset = all on). */
+export function parseSections(csv: string | undefined): string[] {
+  if (csv == null || csv === '') return [...DEFAULT_SECTIONS];
+  const wanted = String(csv)
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  const enabled = SECTION_OPTIONS.filter(s => wanted.includes(s.id)).map(
+    s => s.id
+  );
+  // An explicit empty-but-present value means "all off"; only fall back to the
+  // default when nothing recognizable was stored at all.
+  return enabled;
+}
+
+/** Serialize enabled section ids back to the stored CSV (stable order). */
+export function serializeSections(enabled: string[]): string {
+  return SECTION_OPTIONS.filter(s => enabled.includes(s.id))
+    .map(s => s.id)
+    .join(',');
+}
+
+// ---------------------------------------------------------------------------
+// Republish helper — after saving appearance to the settings singleton, the
+// deployed storefront only reflects it on its next load IF it re-reads settings
+// (SHOP-TEMPLATE's runtime applyTheme). We re-deploy the store's staged HTML
+// under the SAME slug (idempotent — an existing slug never trips the publish
+// cap) so a fresh copy goes live immediately; the HTML itself is unchanged, so
+// this is safe even before SHOP-TEMPLATE lands. The source HTML is read from
+// the shared studio shelf (artifactStore `app_<slug>`), exactly as the wizard's
+// ERP-publish flow does. Degrades cleanly: if no shelf HTML is present we report
+// 'no-source' and the caller tells the user to re-publish from Manage/Studio.
+// ---------------------------------------------------------------------------
+
+export type RepublishOutcome =
+  | { status: 'ok'; url: string }
+  | { status: 'no-source' }
+  | { status: 'cap' }
+  | { status: 'upgrade' }
+  | { status: 'error'; message: string };
+
+/**
+ * Re-deploy the store's storefront (by slug) from its staged shelf HTML so the
+ * live site re-fetches the updated settings singleton. `storeSlug`/`kind` are
+ * forwarded so the publish record keeps its pairing + label.
+ */
+export async function republishShop(input: {
+  slug: string;
+  storeSlug?: string;
+  kind?: 'shop' | 'erp';
+}): Promise<RepublishOutcome> {
+  const art = artifactStore.get(`app_${input.slug}`);
+  const html = art?.payload;
+  if (!html || html.length < 20) {
+    return { status: 'no-source' };
+  }
+  const outcome = await deployApp({
+    html,
+    slug: input.slug,
+    ...(input.kind ?? art?.kind ? { kind: (input.kind ?? art?.kind) as 'shop' | 'erp' } : {}),
+    ...(input.storeSlug ?? art?.storeSlug
+      ? { storeSlug: (input.storeSlug ?? art?.storeSlug) as string }
+      : {}),
+  });
+  if (outcome.status === 'ok') {
+    // Keep the shelf URL fresh so later reads/links stay correct.
+    if (art) {
+      artifactStore.upsert({ ...art, url: outcome.result.url });
+    }
+    return { status: 'ok', url: outcome.result.url };
+  }
+  if (outcome.status === 'cap') return { status: 'cap' };
+  if (outcome.status === 'upgrade') return { status: 'upgrade' };
+  return { status: 'error', message: outcome.message };
 }
 
 // ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 
 import { GenerateTab } from './generate-tab';
+import { StudioTab } from './studio-tab';
 import { TranscribeTab } from './transcribe-tab';
 import {
   C,
@@ -17,18 +18,24 @@ import {
 // ---------------------------------------------------------------------------
 // ClickDz Voice Studio — DARK by default.
 //
-// A real, complete voice workspace on the /voice page: live-feeling
-// transcription (OpenAI Whisper) + speech generation (Deepgram AND OpenAI).
-// The page reflects GET /api/voice/capabilities so each surface degrades
+// A real, complete voice workspace on the /voice page. Three surfaces, all
+// driven by GET /api/voice/capabilities (BRIDGE-BE C3):
+//   • Studio    — ElevenLabs-style multi-segment generation (per-segment voice,
+//                 emotion/instructions + presets, model/speed/format, inline
+//                 streaming playback, per-segment + download-all, history).
+//   • Transcribe— live-feeling + file transcription (OpenAI Whisper).
+//   • Generate  — the classic single-shot text->speech (kept, still works).
+//
+// The page reflects the capabilities payload so each surface degrades
 // gracefully when a provider key is missing (never a crash). No new .css.ts —
 // inline styles only, mirroring the Integrations page's `C` palette scaffold.
 // ---------------------------------------------------------------------------
 
-type Tab = 'transcribe' | 'generate';
+type Tab = 'studio' | 'transcribe' | 'generate';
 type LoadState = 'loading' | 'ready' | 'error';
 
 const VoiceStudioPage = () => {
-  const [tab, setTab] = useState<Tab>('transcribe');
+  const [tab, setTab] = useState<Tab>('studio');
   const [state, setState] = useState<LoadState>('loading');
   const [caps, setCaps] = useState<VoiceCapabilities | null>(null);
 
@@ -122,8 +129,8 @@ const VoiceStudioPage = () => {
                 <span>🎙️</span> Voice Studio
               </h1>
               <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
-                Transcribe speech to text and generate natural voice-overs — all
-                in one place.
+                Compose multi-voice narration with emotion, transcribe speech to
+                text, and generate natural voice-overs — all in one place.
               </p>
             </header>
 
@@ -139,6 +146,12 @@ const VoiceStudioPage = () => {
                 alignSelf: 'flex-start',
               }}
             >
+              <TabButton
+                active={tab === 'studio'}
+                onClick={() => setTab('studio')}
+              >
+                Studio
+              </TabButton>
               <TabButton
                 active={tab === 'transcribe'}
                 onClick={() => setTab('transcribe')}
@@ -197,6 +210,8 @@ const VoiceStudioPage = () => {
                   Retry
                 </button>
               </div>
+            ) : tab === 'studio' ? (
+              <StudioTab caps={caps} />
             ) : tab === 'transcribe' ? (
               <TranscribeTab available={caps.transcription.available} />
             ) : (

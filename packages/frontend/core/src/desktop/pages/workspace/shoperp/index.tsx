@@ -4,7 +4,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { type DashboardSection, ErpDashboard } from './dashboard';
 import { ManageView } from './manage';
@@ -22,15 +22,44 @@ import { ShopWizard } from './wizard';
 // ClickDz ShopERP — a real, end-to-end surface for creating and managing online
 // shops (+ their paired ERP dashboards). Follows the Integrations page scaffold
 // exactly: ViewTitle/ViewIcon/ViewHeader/ViewBody + inline styles, no i18n, no
-// new .css.ts. Three states, driven by GET /api/v1/apps/mine:
+// new .css.ts. States, driven by GET /api/v1/apps/mine:
 //   • no apps yet → onboarding wizard (per-user customized shop creation)
-//   • apps exist  → management list (dashboard / open / delete / new shop)
-//   • store selected → in-app ERP dashboard (live KPIs + orders/stock/settings
-//     admin over the store's data namespace — see dashboard.tsx)
+//   • exactly one shop (provisioned) → jump STRAIGHT into that store's managed
+//     dashboard (the studio home) — no manage-list detour
+//   • multiple apps → management list (dashboard / open / delete / new shop)
+//   • store selected → in-app ERP dashboard (live KPIs + orders / stock /
+//     clients / appearance / settings over the store's data namespace)
+// The auto-open is one-shot: once the user hits "← Shops" they land on the
+// manage list and stay there (we don't fight their navigation).
 // Every button hits the real /api/v1/apps/* backend — nothing is stubbed.
 // ---------------------------------------------------------------------------
 
 type LoadState = 'loading' | 'ready' | 'error';
+
+// The store to auto-open for a provisioned user: prefer a single `kind:'shop'`.
+// The dashboard's namespace is the store's slug, which is the `storeSlug`
+// pairing key when present (a shop + its ERP share it), else the shop's own
+// slug. Returns null when there isn't exactly one shop to open unambiguously.
+function singleShopTarget(
+  apps: MineApp[]
+): { slug: string; url?: string } | null {
+  const shops = apps.filter(a => a.kind === 'shop');
+  // Exactly one shop → open it. (A shop + its paired ERP is still ONE shop.)
+  if (shops.length === 1) {
+    const shop = shops[0];
+    const slug = shop.storeSlug || shop.slug;
+    return { slug, ...(shop.url ? { url: shop.url } : {}) };
+  }
+  // No labeled shop but a single app total (legacy unlabeled) → open that.
+  if (shops.length === 0 && apps.length === 1 && apps[0].kind !== 'erp') {
+    const only = apps[0];
+    return {
+      slug: only.storeSlug || only.slug,
+      ...(only.url ? { url: only.url } : {}),
+    };
+  }
+  return null;
+}
 
 const ShopErpPage = () => {
   const [state, setState] = useState<LoadState>('loading');
@@ -73,7 +102,28 @@ const ShopErpPage = () => {
     },
     []
   );
-  const closeDashboard = useCallback(() => setDashboard(null), []);
+  // Once the user leaves the dashboard we go to the manage list and STAY there
+  // (guard flips so the one-shot auto-open below won't yank them back in).
+  const autoOpenedRef = useRef(false);
+  const closeDashboard = useCallback(() => {
+    autoOpenedRef.current = true;
+    setDashboard(null);
+  }, []);
+
+  // Provisioned single-shop user → auto-open their store as the studio home.
+  const autoTarget = useMemo(() => singleShopTarget(apps), [apps]);
+  useEffect(() => {
+    if (
+      state === 'ready' &&
+      !forceWizard &&
+      dashboard === null &&
+      !autoOpenedRef.current &&
+      autoTarget
+    ) {
+      autoOpenedRef.current = true;
+      openDashboard(autoTarget.slug, 'overview', autoTarget.url);
+    }
+  }, [state, forceWizard, dashboard, autoTarget, openDashboard]);
 
   const hasApps = apps.length > 0;
   const showWizard = state === 'ready' && (!hasApps || forceWizard);
