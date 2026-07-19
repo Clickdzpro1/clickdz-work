@@ -2,26 +2,43 @@ import type { CSSProperties } from 'react';
 import { memo, useCallback, useMemo, useState } from 'react';
 
 import type { VdzOp, VdzTimeline } from '../../../../modules/vdz';
+import type { VdzTranscribableClip } from '../../../../modules/vdz/use-vdz-transcript';
+import { isTranscribableClip } from '../../../../modules/vdz/use-vdz-transcript';
 import {
   collectTranscriptLines,
   type VdzTranscriptLine,
 } from './captions';
-import { formatTimecode } from './constants';
+import { findClip, formatTimecode } from './constants';
 import * as styles from './index.css';
+import { TranscriptEdit } from './transcript-edit';
 import * as tcs from './transcript.css';
 import { VdzPanel } from './vdz-panel';
 
 /**
  * Transcript panel — the Descript-style view of the timeline's spoken layer.
  *
- * Every text clip on the overlay lanes appears as one line, in time order
- * (captions from Whisper and hand-made titles alike). The panel is a THIN
- * projection over the same document everything else edits:
- *   · click a line        → seek the playhead there + select the clip
- *   · edit a line's text  → ONE `setText` op on blur/Enter (undoable)
- *   · delete a line (✕)   → ONE `removeClip` op
- * No state of its own beyond input drafts — the timeline is the truth, so
- * lane edits, AI ops and undo all reflect here instantly.
+ * TWO modes, side by side:
+ *
+ *  1. Clip transcript (new) — when a single VIDEO/AUDIO clip is selected, a
+ *     "Transcribe" action turns its speech into editable sentences; deleting a
+ *     sentence (or a picked word-span) CUTS the underlying clip on the timeline
+ *     (splitClip → splitClip → rippleDelete, one undo). Lives in
+ *     {@link TranscriptEdit}; the transcript itself is a project-scoped
+ *     side-store (never a schema change).
+ *
+ *  2. Captions / overlay text (unchanged) — every text clip on the overlay
+ *     lanes appears as one line, in time order (captions from Whisper and
+ *     hand-made titles alike). The panel is a THIN projection over the same
+ *     document everything else edits:
+ *       · click a line        → seek the playhead there + select the clip
+ *       · edit a line's text  → ONE `setText` op on blur/Enter (undoable)
+ *       · delete a line (✕)   → ONE `removeClip` op
+ *     No state of its own beyond input drafts — the timeline is the truth, so
+ *     lane edits, AI ops and undo all reflect here instantly. The "Caption
+ *     style" bar (WS7 Apply-to-all) restyles every caption at once.
+ *
+ * The two modes are additive: selecting a video/audio clip shows the clip
+ * transcript ABOVE the (still fully-functional) caption list.
  */
 
 /**
@@ -233,7 +250,9 @@ export interface TranscriptPanelProps {
   /**
    * Emit a batch of ops as ONE history entry (same path the Inspector uses).
    * Optional: when absent, "Apply to all captions" falls back to sequential
-   * `onOp` calls (still correct, just one undo entry per caption).
+   * `onOp` calls (still correct, just one undo entry per caption), and the
+   * clip-transcript cut falls back the same way (a cut is normally ONE undo via
+   * this path — the real editor always provides it).
    */
   onOps?: (ops: VdzOp[]) => void;
   onCollapse: () => void;
@@ -250,6 +269,38 @@ export function TranscriptPanel({
   onCollapse,
 }: TranscriptPanelProps) {
   const lines = useMemo(() => collectTranscriptLines(timeline), [timeline]);
+
+  // The clip-transcript mode targets exactly ONE selected video/audio clip.
+  // Resolve it (and its track) from the live timeline; anything else (0 or >1
+  // selected, or a text/image/shape clip) leaves the panel in caption-only mode.
+  const clipTarget = useMemo((): {
+    clip: VdzTranscribableClip;
+    trackId: string;
+  } | null => {
+    if (selectedIds.size !== 1) return null;
+    const [id] = [...selectedIds];
+    const found = findClip(timeline, id);
+    if (!found || !isTranscribableClip(found.clip)) return null;
+    return { clip: found.clip, trackId: found.trackId };
+  }, [selectedIds, timeline]);
+
+  // Batch commit for the clip-transcript cut: prefer the host's single-undo
+  // `onOps` (runBatch). Fall back to sequential `onOp` only when a host didn't
+  // wire runBatch — `applyOps` stops at the first failure, so the end state
+  // stays consistent; it just records one undo per op. The real editor always
+  // passes onOps, so this branch is purely defensive.
+  const commitCutOps = useCallback(
+    (ops: VdzOp[]): boolean => {
+      if (ops.length === 0) return false;
+      if (onOps) {
+        onOps(ops);
+        return true;
+      }
+      for (const op of ops) onOp(op);
+      return true;
+    },
+    [onOps, onOp]
+  );
 
   const onJump = useCallback(
     (line: VdzTranscriptLine) => {
@@ -273,25 +324,43 @@ export function TranscriptPanel({
     [onOp]
   );
 
+  const hasClipMode = clipTarget !== null;
+  const hasCaptions = lines.length > 0;
+
   return (
     <VdzPanel
       title="Transcript"
       data-testid="vdz-transcript"
       onCollapse={onCollapse}
       accessory={
-        lines.length > 0 ? (
+        hasCaptions ? (
           <span className={tcs.countBadge}>{lines.length}</span>
         ) : undefined
       }
       bodyClassName={styles.inspectorBody}
     >
-      {lines.length === 0 ? (
-        <div className={tcs.emptyHint}>
-          No captions or overlay text yet. Select an audio clip and use{' '}
-          <b>Captions → Generate captions</b> in the Inspector — every phrase
-          lands here, editable and clickable.
-        </div>
-      ) : (
+      {/* Mode 1 — clip transcript (a video/audio clip is selected). */}
+      {clipTarget ? (
+        <TranscriptEdit
+          // Re-mount the editor when the selected clip changes so its local
+          // selection/state resets cleanly to the new clip.
+          key={clipTarget.clip.id}
+          clip={clipTarget.clip}
+          trackId={clipTarget.trackId}
+          timeline={timeline}
+          playheadSeconds={playheadSeconds}
+          onSeek={onSeek}
+          onOps={commitCutOps}
+        />
+      ) : null}
+
+      {/* A divider only when BOTH modes are on screen at once. */}
+      {hasClipMode && hasCaptions ? (
+        <div className={tcs.modeDivider}>Captions &amp; overlay text</div>
+      ) : null}
+
+      {/* Mode 2 — captions / overlay text (unchanged WS7 behavior). */}
+      {hasCaptions ? (
         <>
           <CaptionStyleBar lines={lines} onOp={onOp} onOps={onOps} />
           <div className={tcs.list}>
@@ -313,6 +382,14 @@ export function TranscriptPanel({
             ))}
           </div>
         </>
+      ) : hasClipMode ? null : (
+        // Neither mode: the original empty hint (also nudges the clip mode).
+        <div className={tcs.emptyHint}>
+          Select a <b>video or audio clip</b> to transcribe it and edit by
+          sentence — deleting a sentence cuts the clip. Captions and overlay
+          text appear here too: generate them from an audio clip via{' '}
+          <b>Captions → Generate captions</b> in the Inspector.
+        </div>
       )}
     </VdzPanel>
   );

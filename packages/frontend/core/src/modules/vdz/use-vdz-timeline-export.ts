@@ -1,3 +1,4 @@
+import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import { useService } from '@toeverything/infra';
 import { useCallback, useMemo, useState } from 'react';
@@ -242,6 +243,146 @@ export async function resolveTimelineMedia(
   return { resolveSrc, skipped, bytes };
 }
 
+// ---------------------------------------------------------------------------
+// REMOTION media path (C4). Unlike the classic tier the Remotion worker fetches
+// media over the network, so instead of inlining `data:` URIs (capped at
+// MAX_INLINE_BYTES) we hand the worker BACKEND-SIGNED absolute https URLs it can
+// GET directly — no size cap, full-quality footage. The FE collects the
+// workspace blob handles on the timeline, asks the backend (C3
+// `POST /api/v1/vdz/blob-urls`) to mint short-lived signed URLs for them, and
+// builds a `resolveSrc(src) => url` resolver the manifest applies to every clip
+// src. The CLASSIC tier below is untouched — it still inlines via
+// `resolveTimelineMedia`.
+// ---------------------------------------------------------------------------
+
+/** The C3 mint route: session-authed, returns signed absolute blob URLs. */
+const BLOB_URLS_URL = '/api/v1/vdz/blob-urls';
+
+/**
+ * A typed error surfaced to the export UI when the signed-URL mint fails (C4).
+ * The Remotion path REFUSES to ship a manifest whose media the worker cannot
+ * fetch — silently dropping footage would produce a blank/broken render — so a
+ * mint failure fails the export loudly instead. The Classic engine remains
+ * available (it inlines media a different way), so the dialog can offer it as a
+ * fallback.
+ */
+export class VdzBlobUrlError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VdzBlobUrlError';
+  }
+}
+
+/**
+ * Collect the distinct workspace blob ids referenced by the timeline's clip
+ * srcs — the `vdz-blob:<id>` handles the worker cannot resolve on its own and
+ * that therefore need signing. `blob:`/`data:`/`https:` srcs carry no workspace
+ * blob id (data:/https: are already worker-loadable; ephemeral `blob:` object
+ * URLs are session-local and never persist on a saved timeline), so they are
+ * skipped here and simply pass through the resolver unchanged.
+ */
+export function collectTimelineBlobIds(timeline: VdzTimeline): string[] {
+  const ids = new Set<string>();
+  for (const track of timeline.tracks) {
+    for (const clip of track.clips) {
+      const src = (clip as { src?: unknown }).src;
+      if (typeof src !== 'string' || !src) continue;
+      if (isVdzBlobSrc(src)) {
+        const id = blobIdFromSrc(src);
+        if (id) ids.add(id);
+      }
+    }
+  }
+  return [...ids];
+}
+
+/** Pull a typed-error message out of an AFFiNE error body (mirrors siblings). */
+async function readBlobUrlError(res: Response): Promise<string> {
+  try {
+    const data = (await res.json()) as any;
+    const msg =
+      data?.message ??
+      data?.error?.message ??
+      (typeof data?.error === 'string' ? data.error : undefined);
+    if (typeof msg === 'string' && msg.trim()) return msg.trim();
+  } catch {
+    // fall through to status text
+  }
+  return res.statusText || `Request failed (${res.status})`;
+}
+
+/**
+ * Ask the backend (C3) to mint signed absolute URLs for a workspace's blob ids.
+ * Returns the `{ [blobId]: signedUrl }` map. Throws {@link VdzBlobUrlError} on
+ * any transport/HTTP/shape failure so the Remotion path can fail loudly rather
+ * than ship a manifest the worker can't fetch. Same request idiom as the other
+ * Vdz FE hooks: `cdzApiUrl` (desktop/native resolve against the connected
+ * server) + `credentials: 'include'` (session cookie rides along).
+ */
+async function fetchSignedBlobUrls(
+  workspaceId: string,
+  blobIds: string[]
+): Promise<Record<string, string>> {
+  if (blobIds.length === 0) return {};
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(BLOB_URLS_URL), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId, blobIds }),
+    });
+  } catch (cause) {
+    throw new VdzBlobUrlError(
+      cause instanceof Error && cause.message
+        ? `Could not reach the media service: ${cause.message}`
+        : 'Could not reach the media service to prepare your video.'
+    );
+  }
+  if (!res.ok) {
+    throw new VdzBlobUrlError(await readBlobUrlError(res));
+  }
+  let data: { urls?: unknown };
+  try {
+    data = (await res.json()) as { urls?: unknown };
+  } catch {
+    throw new VdzBlobUrlError('The media service returned an invalid response.');
+  }
+  const urls = data?.urls;
+  if (!urls || typeof urls !== 'object') {
+    throw new VdzBlobUrlError('The media service returned no signed URLs.');
+  }
+  // Keep only string values (defensive against a partial/typo'd payload).
+  const out: Record<string, string> = {};
+  for (const [id, url] of Object.entries(urls as Record<string, unknown>)) {
+    if (typeof url === 'string' && url) out[id] = url;
+  }
+  return out;
+}
+
+/**
+ * Build the manifest `resolveSrc(src) => url` resolver from a signed-URL map
+ * (keyed by blobId). A `vdz-blob:<id>` src whose id was signed resolves to its
+ * absolute https URL; EVERY other src (a `vdz-blob:` id that wasn't signed,
+ * `data:`, `https:`, `blob:`, anything unknown) is returned UNCHANGED — the
+ * manifest builder then passes worker-loadable srcs through and flags the truly
+ * unresolvable ones in `manifest.unresolved`.
+ */
+export function makeSignedSrcResolver(
+  signed: Record<string, string>
+): (src: string) => string {
+  return (src: string): string => {
+    if (isVdzBlobSrc(src)) {
+      const id = blobIdFromSrc(src);
+      if (id) {
+        const url = signed[id];
+        if (url) return url;
+      }
+    }
+    return src;
+  };
+}
+
 export interface UseVdzTimelineExport {
   /** The underlying export transport (status/progress/error/fileUrl/reset). */
   export: UseVdzExport;
@@ -254,6 +395,14 @@ export interface UseVdzTimelineExport {
   lastCompile: CompileTimelineResult | null;
   /** Srcs that could not be inlined (dead blob / CORS / over budget). */
   skippedMedia: string[];
+  /**
+   * Error from the PREPARE step that runs BEFORE the render enqueue — currently
+   * the Remotion signed-URL mint (C4) failing. `null` when there is none. The
+   * export UI should show this (or `export.error`) as the export's failure and
+   * offer the Classic engine as a fallback; a failed mint never ships a broken
+   * manifest.
+   */
+  prepareError: string | null;
   /** Whether the export dialog is open (engine choice + confirm). */
   dialogOpen: boolean;
   /**
@@ -286,6 +435,11 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
     null
   );
   const [skippedMedia, setSkippedMedia] = useState<string[]>([]);
+  // Error raised during the PREPARE step (before the render enqueue) — today
+  // only the Remotion signed-URL mint (C4). The shared transport's `export.error`
+  // only covers the enqueue/poll phase, so this is a separate surface for the
+  // export UI to render a pre-render failure.
+  const [prepareError, setPrepareError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const { start: startRender } = exporter;
@@ -302,6 +456,7 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
       setDialogOpen(false);
       setPreparing(true);
       setSkippedMedia([]);
+      setPrepareError(null);
       try {
         // Code-split: the compiler only exists in memory once an export is
         // actually requested. Parallel to the media resolution below in
@@ -309,13 +464,6 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
         // bundler after the first click.
         const { compileTimelineToHtml } = await import('./compile-timeline');
         const blobSync = workspaceService.workspace.docCollection.blobSync;
-        const { resolveSrc, skipped } = await resolveTimelineMedia(
-          timeline,
-          blobSync
-        );
-        setSkippedMedia(skipped);
-        const compiled = compileTimelineToHtml(timeline, { resolveSrc });
-        setLastCompile(compiled);
 
         // C1/C2: resolve the canonical duration + canvas + fps ONCE and send
         // them on EVERY render request so the server never has to re-probe a
@@ -326,7 +474,7 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
         const height = timeline.height || 1080;
 
         // Base body fields (C2), sent for BOTH engines. The Remotion branch adds
-        // the render manifest (C3) on top.
+        // the render manifest (C3/C4) on top.
         const extra: Record<string, unknown> = {
           engine,
           width,
@@ -335,16 +483,50 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
           durationSec,
         };
 
+        let compiled: CompileTimelineResult;
+
         if (engine === 'remotion') {
-          // Build the render manifest and send it with the html so the backend
-          // routes to the Remotion worker (effective when CDZ_REMOTION_URL is
-          // set). The manifest reuses the SAME resolved media map (data: URLs
-          // are valid loadable srcs for the worker too). Code-split alongside
-          // the compiler so a classic export never loads it.
+          // REMOTION (C4). The worker fetches media over the network, so we do
+          // NOT inline `data:` URIs here (no MAX_INLINE_BYTES cap): instead we
+          // mint backend-SIGNED absolute https URLs for the workspace blobs on
+          // the timeline and build a `resolveSrc(src) => url` resolver the
+          // manifest applies to every clip src. A mint failure throws
+          // VdzBlobUrlError → surfaced to the export UI (never a silently broken
+          // manifest); the Classic engine stays available as a fallback.
+          const workspaceId = workspaceService.workspace.id;
+          const blobIds = collectTimelineBlobIds(timeline);
+          const signed = await fetchSignedBlobUrls(workspaceId, blobIds);
+          const resolveSrc = makeSignedSrcResolver(signed);
+
+          // The transport still POSTs `{ html, ...extra }`, but the worker
+          // renders from the MANIFEST and ignores this html — so we compile with
+          // an EMPTY resolve map (no inlining, no network, no size cap) purely to
+          // satisfy the body shape and populate `lastCompile` diagnostics.
+          compiled = compileTimelineToHtml(timeline, { resolveSrc: {} });
+          setLastCompile(compiled);
+          // Nothing was inlined on this path; any truly unfetchable src is
+          // reported via the manifest's `unresolved` list instead.
+          setSkippedMedia([]);
+
+          // Build the render manifest with the signed-URL resolver and send it
+          // with the html so the backend routes to the Remotion worker
+          // (effective when CDZ_REMOTION_URL is set). Code-split alongside the
+          // compiler so a classic export never loads it.
           const { buildRenderManifest } = await import(
             './remotion/render-manifest'
           );
           extra.manifest = buildRenderManifest(timeline, { resolveSrc });
+        } else {
+          // CLASSIC (unchanged). The offline headless-Chrome tier cannot fetch
+          // `vdz-blob:`/remote srcs, so it inlines every distinct src to a
+          // `data:` URI under the MAX_INLINE_BYTES budget exactly as before.
+          const { resolveSrc, skipped } = await resolveTimelineMedia(
+            timeline,
+            blobSync
+          );
+          setSkippedMedia(skipped);
+          compiled = compileTimelineToHtml(timeline, { resolveSrc });
+          setLastCompile(compiled);
         }
 
         // Hand the compiled HTML + the C2 fields to the shared render path
@@ -352,6 +534,18 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
         // with a typed 400 that the export hook surfaces as an error; the
         // classic tier also rejects durationSec > 300s with a duration_cap 400.
         await startRender(compiled.html, extra);
+      } catch (e) {
+        // A signed-URL mint failure (Remotion path) is the one error raised
+        // BEFORE the render enqueue, so the shared transport (`export.error`)
+        // never sees it. Surface it through this hook's own `prepareError` so
+        // the export UI can render it, then swallow — the dialog can fall back
+        // to the Classic engine (its own inlining path is unaffected). Any other
+        // (unexpected) error is left to propagate.
+        if (e instanceof VdzBlobUrlError) {
+          setPrepareError(e.message);
+          return;
+        }
+        throw e;
       } finally {
         setPreparing(false);
       }
@@ -365,6 +559,7 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
       preparing,
       lastCompile,
       skippedMedia,
+      prepareError,
       dialogOpen,
       openDialog,
       closeDialog,
@@ -375,6 +570,7 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
       preparing,
       lastCompile,
       skippedMedia,
+      prepareError,
       dialogOpen,
       openDialog,
       closeDialog,
