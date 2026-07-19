@@ -3,13 +3,20 @@ import {
   Controller,
   Delete,
   Get,
+  HttpStatus,
   Logger,
   Param,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
+// `@Res({ passthrough: true })` lets the repurpose route emit an exact 502 with
+// a typed JSON body without a raw HttpException (mirrors telemetry.controller).
+import type { Response } from 'express';
 // SECURITY: crypto-strong randomness for unguessable auto project ids.
-import { randomBytes } from 'node:crypto';
+// `createHash` derives a STABLE key from a media src for the transcript
+// side-store (never for secrets — just a namespacing digest).
+import { createHash, randomBytes } from 'node:crypto';
 
 // Typed AFFiNE errors so the global exception filter emits proper 4xx/5xx
 // (a raw @nestjs/common HttpException is turned into a generic 500 here).
@@ -121,6 +128,61 @@ const shareKey = (shareId: string) => `clickdz:vdz:share:${shareId}`;
 const shareOfProjectKey = (ownerId: string, projectId: string) =>
   `clickdz:vdz:share-of:${ownerId}:${projectId}`;
 
+// ---------------------------------------------------------------------------
+// Transcript side-store (C1) — Redis, NO schema change. Caches the expensive
+// Whisper result keyed by a STABLE hash of the media src so it survives clip
+// splits (both halves share the source, sliced by their own window). Value:
+// { src, words: [{w,t0,t1}], language?, updatedAt } in media-time seconds.
+//
+// SCOPING NOTE: `CurrentUser` here carries only user identity (id/email/…),
+// NOT a workspaceId — no vdz route in this controller has a clean workspace
+// handle (projects/shares are all keyed by user.id). So the transcript key is
+// scoped by USER id, mirroring the projects store. The key template keeps a
+// `<scope>` segment so a future workspace handle drops in without a reshape.
+// ---------------------------------------------------------------------------
+const TRANSCRIPT_TTL_SECONDS = 30 * 24 * 60 * 60;
+// Defensive cap on stored words (never store raw media, only word timings).
+const MAX_TRANSCRIPT_WORDS = 5_000;
+const MAX_TRANSCRIPT_SRC_CHARS = 2_048;
+const MAX_TRANSCRIPT_LANGUAGE_CHARS = 32;
+// A stable, url-safe digest of the media src — the key suffix. sha256 hex,
+// sliced to 32 chars (128 bits) is collision-safe for this per-user namespace
+// and keeps the Redis key short. NOT a security token.
+const srcHash = (src: string): string =>
+  createHash('sha256').update(src).digest('hex').slice(0, 32);
+const transcriptKey = (scopeId: string, src: string) =>
+  `clickdz:vdz:transcript:${scopeId}:${srcHash(src)}`;
+
+/** A stored transcript side-store document (media-time seconds). */
+interface VdzTranscriptDoc {
+  src: string;
+  words: Array<{ w: string; t0: number; t1: number }>;
+  language?: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Long→short repurpose (C2) — one-shot cdz-flash scoring of the source into
+// ranked short segments. Reuses this controller's runVdzModel engine call +
+// extractVdzResponse fail-closed parse (same idiom as /chat).
+// ---------------------------------------------------------------------------
+const REPURPOSE_DEFAULT_COUNT = 6;
+const REPURPOSE_MIN_COUNT = 3;
+const REPURPOSE_MAX_COUNT = 12;
+const REPURPOSE_MIN_SHORT_SECONDS = 15;
+const REPURPOSE_MAX_SHORT_SECONDS = 60;
+// Safe token budget for the transcript fed to the planner (~6000 chars).
+const REPURPOSE_MAX_TRANSCRIPT_CHARS = 6_000;
+
+/** A single ranked short segment returned by the repurpose planner. */
+interface VdzShort {
+  startSec: number;
+  endSec: number;
+  title: string;
+  hook: string;
+  score: number;
+}
+
 /** A stored public share document. `timeline` is the inlined snapshot. */
 interface VdzShareDoc {
   shareId: string;
@@ -187,26 +249,21 @@ interface ExtractedVdzResponse {
 }
 
 /**
- * Best-effort extraction of the strict response JSON object from a raw model
- * reply. Prefers a clean `JSON.parse`; if the model wrapped it in prose or
- * fences, strips fences and slices the outermost `{...}`. Returns the parsed
- * object on success (carrying `summary`, `ops`, and — when present — `plan` /
- * `suggestions` for the non-default modes), or null when nothing parseable is
- * present. Extra fields are harmless: a mode that doesn't use them ignores them.
+ * Fail-closed lenient parse of a raw model reply into a plain JSON object.
+ * Prefers a clean `JSON.parse`; if the model wrapped it in prose or ``` fences,
+ * strips fences and slices the outermost `{...}`. Returns the parsed object on
+ * success, or null when nothing object-shaped is present. Shared by
+ * `extractVdzResponse` (chat) and the repurpose route so both use the SAME
+ * fail-closed parse idiom.
  */
-function extractVdzResponse(raw: string): ExtractedVdzResponse | null {
+function parseLenientJsonObject(raw: string): Record<string, unknown> | null {
   const text = (raw ?? '').trim();
   if (!text) return null;
-  const tryParse = (s: string): ExtractedVdzResponse | null => {
+  const tryParse = (s: string): Record<string, unknown> | null => {
     try {
-      const parsed = JSON.parse(s) as Record<string, unknown>;
+      const parsed = JSON.parse(s) as unknown;
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return {
-          summary: parsed.summary,
-          ops: parsed.ops,
-          plan: parsed.plan,
-          suggestions: parsed.suggestions,
-        };
+        return parsed as Record<string, unknown>;
       }
       return null;
     } catch {
@@ -231,6 +288,24 @@ function extractVdzResponse(raw: string): ExtractedVdzResponse | null {
     if (sliced) return sliced;
   }
   return null;
+}
+
+/**
+ * Best-effort extraction of the strict response JSON object from a raw model
+ * reply. Returns the parsed object on success (carrying `summary`, `ops`, and —
+ * when present — `plan` / `suggestions` for the non-default modes), or null when
+ * nothing parseable is present. Extra fields are harmless: a mode that doesn't
+ * use them ignores them.
+ */
+function extractVdzResponse(raw: string): ExtractedVdzResponse | null {
+  const parsed = parseLenientJsonObject(raw);
+  if (!parsed) return null;
+  return {
+    summary: parsed.summary,
+    ops: parsed.ops,
+    plan: parsed.plan,
+    suggestions: parsed.suggestions,
+  };
 }
 
 /** A normalized plan step returned to the client. */
@@ -287,6 +362,136 @@ function coerceSuggestions(value: unknown): string[] {
 /** Read a request `mode`, defaulting anything unknown to 'edit'. */
 function parseMode(raw: unknown): 'edit' | 'plan' | 'suggestions' {
   return raw === 'plan' || raw === 'suggestions' ? raw : 'edit';
+}
+
+/** Clamp `n` into [lo, hi]; non-finite → `lo`. */
+function clampNumber(n: number, lo: number, hi: number): number {
+  if (!Number.isFinite(n)) return lo;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+/**
+ * Coerce an unknown `words` value into a clean `[{w,t0,t1}]` array of media-time
+ * seconds, dropping malformed entries and capping length defensively. Mirrors
+ * the normalization the /transcribe route already applies to Whisper output.
+ */
+function coerceTranscriptWords(
+  value: unknown
+): Array<{ w: string; t0: number; t1: number }> {
+  if (!Array.isArray(value)) return [];
+  const out: Array<{ w: string; t0: number; t1: number }> = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue;
+    const obj = raw as Record<string, unknown>;
+    const w = typeof obj.w === 'string' ? obj.w : '';
+    if (!w.trim()) continue;
+    const t0 = Number(obj.t0);
+    const t1 = Number(obj.t1);
+    out.push({
+      w,
+      t0: Number.isFinite(t0) ? t0 : 0,
+      t1: Number.isFinite(t1) ? t1 : 0,
+    });
+    if (out.length >= MAX_TRANSCRIPT_WORDS) break;
+  }
+  return out;
+}
+
+/**
+ * Build the two-message conversation for the repurpose planner. Reuses the same
+ * `{role, content}` shape runVdzModel consumes. The transcript (if any) is
+ * rendered as compact `t0-t1: word` lines, already truncated to a safe char
+ * budget by the caller. Asks for STRICT JSON `{ shorts: [...] }` so the shared
+ * extractVdzResponse parser can lift it fail-closed.
+ */
+function buildRepurposePrompt(
+  transcriptText: string,
+  durationSec: number,
+  count: number
+): Array<{ role: string; content: string }> {
+  const system =
+    'You are a short-form video editor. You are given the transcript (with ' +
+    'media-time word timings in seconds) and total duration of a long video. ' +
+    'Identify the most engaging, self-contained moments to cut into vertical ' +
+    'shorts. Reply with STRICT JSON only — no prose, no code fences.';
+  const instruction = [
+    `Return exactly ${count} ranked short segments as JSON:`,
+    '{"shorts":[{"startSec":number,"endSec":number,"title":string,"hook":string,"score":number}]}',
+    `- Each segment MUST be between ${REPURPOSE_MIN_SHORT_SECONDS} and ${REPURPOSE_MAX_SHORT_SECONDS} seconds long.`,
+    `- startSec and endSec MUST be within [0, ${Math.floor(durationSec)}] and startSec < endSec.`,
+    '- score is 0..1 (higher = more viral / self-contained). Sort by score descending.',
+    '- title: <=60 chars punchy title. hook: <=120 chars opening line.',
+    '- Segments should not overlap. Prefer complete thoughts.',
+    `Total video duration: ${Math.floor(durationSec)}s.`,
+    transcriptText
+      ? `Transcript (mediaSeconds: text):\n${transcriptText}`
+      : 'No transcript is available — infer evenly spaced highlight windows across the duration.',
+  ].join('\n');
+  return [
+    { role: 'system', content: system },
+    { role: 'user', content: instruction },
+  ];
+}
+
+/**
+ * Coerce an unknown planner reply's `shorts` value into clean, clamped
+ * `VdzShort[]`: each 15–60s within [0, durationSec], sorted by score desc, and
+ * capped to `count`. Returns [] when nothing usable is present (fail-closed).
+ */
+function coerceShorts(
+  value: unknown,
+  durationSec: number,
+  count: number
+): VdzShort[] {
+  if (!Array.isArray(value)) return [];
+  const out: VdzShort[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue;
+    const obj = raw as Record<string, unknown>;
+    let startSec = Number(obj.startSec);
+    let endSec = Number(obj.endSec);
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) continue;
+    // Clamp into the source window, then enforce a valid 15–60s span.
+    startSec = clampNumber(startSec, 0, durationSec);
+    endSec = clampNumber(endSec, 0, durationSec);
+    if (endSec <= startSec) continue;
+    let span = endSec - startSec;
+    if (span < REPURPOSE_MIN_SHORT_SECONDS) {
+      // Grow the window to the minimum, preferring to extend forward, then back.
+      endSec = clampNumber(
+        startSec + REPURPOSE_MIN_SHORT_SECONDS,
+        0,
+        durationSec
+      );
+      startSec = clampNumber(endSec - REPURPOSE_MIN_SHORT_SECONDS, 0, endSec);
+      span = endSec - startSec;
+      // Source too short to host even a minimum-length short → skip.
+      if (span < REPURPOSE_MIN_SHORT_SECONDS) continue;
+    } else if (span > REPURPOSE_MAX_SHORT_SECONDS) {
+      endSec = startSec + REPURPOSE_MAX_SHORT_SECONDS;
+    }
+    const title =
+      typeof obj.title === 'string' && obj.title.trim()
+        ? obj.title.trim().slice(0, 120)
+        : 'Untitled short';
+    const hook =
+      typeof obj.hook === 'string' && obj.hook.trim()
+        ? obj.hook.trim().slice(0, 240)
+        : '';
+    const rawScore = Number(obj.score);
+    const score = Number.isFinite(rawScore)
+      ? clampNumber(rawScore, 0, 1)
+      : 0;
+    out.push({
+      startSec: Math.round(startSec * 1000) / 1000,
+      endSec: Math.round(endSec * 1000) / 1000,
+      title,
+      hook,
+      score,
+    });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, count);
 }
 
 @Controller()
@@ -707,6 +912,179 @@ export class ClickDzVdzController {
       `[vdz] transcribe user=${user.id} bytes=${body.length} segments=${segments.length} words=${allWords.length}`
     );
     return { text, segments };
+  }
+
+  // =========================================================================
+  // Transcript side-store (C1) — Redis, no schema change. Caches a media
+  // transcript keyed by a stable hash of its src so it survives clip splits.
+  // Scoped by user.id (this controller has no clean workspace handle — see the
+  // note on transcriptKey). Same auth stance as every vdz route.
+  // =========================================================================
+
+  /**
+   * POST /api/v1/vdz/transcript — cache a media transcript.
+   * Body: `{ src, words: [{w,t0,t1}], language? }` (media-time seconds). Words
+   * are capped defensively; raw media is NEVER stored. Rolling 30-day TTL.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/vdz/transcript')
+  async saveTranscript(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: unknown
+  ): Promise<{ ok: true }> {
+    const payload = (body ?? {}) as Record<string, unknown>;
+
+    const src = typeof payload.src === 'string' ? payload.src.trim() : '';
+    if (!src) {
+      throw new BadRequest('A non-empty "src" string is required');
+    }
+    if (src.length > MAX_TRANSCRIPT_SRC_CHARS) {
+      throw new BadRequest(
+        `"src" is too long (max ${MAX_TRANSCRIPT_SRC_CHARS} characters)`
+      );
+    }
+    const words = coerceTranscriptWords(payload.words);
+    const language =
+      typeof payload.language === 'string' && payload.language.trim()
+        ? payload.language.trim().slice(0, MAX_TRANSCRIPT_LANGUAGE_CHARS)
+        : undefined;
+
+    const doc: VdzTranscriptDoc = {
+      src,
+      words,
+      ...(language ? { language } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    // Scope by user.id (no workspace handle on CurrentUser here).
+    await this.redis.set(
+      transcriptKey(user.id, src),
+      JSON.stringify(doc),
+      'EX',
+      TRANSCRIPT_TTL_SECONDS
+    );
+    // NEVER log the src/key contents beyond a length — keys can embed blob ids.
+    this.logger.log(
+      `[vdz] transcript save user=${user.id} words=${words.length}${language ? ` lang=${language}` : ''}`
+    );
+    return { ok: true };
+  }
+
+  /**
+   * GET /api/v1/vdz/transcript?src=<src> — read a cached transcript.
+   * Returns `{ words, language? }` or `{ words: [] }` when none is stored.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/vdz/transcript')
+  async getTranscript(
+    @CurrentUser() user: CurrentUser,
+    @Query('src') src?: string
+  ): Promise<{
+    words: Array<{ w: string; t0: number; t1: number }>;
+    language?: string;
+  }> {
+    const key = typeof src === 'string' ? src.trim() : '';
+    if (!key) {
+      throw new BadRequest('A non-empty "src" query parameter is required');
+    }
+    if (key.length > MAX_TRANSCRIPT_SRC_CHARS) {
+      throw new BadRequest(
+        `"src" is too long (max ${MAX_TRANSCRIPT_SRC_CHARS} characters)`
+      );
+    }
+    const raw = await this.redis.get(transcriptKey(user.id, key));
+    if (!raw) return { words: [] };
+    let doc: VdzTranscriptDoc;
+    try {
+      doc = JSON.parse(raw) as VdzTranscriptDoc;
+    } catch {
+      // Corrupt cache entry degrades to "no transcript" rather than 500.
+      return { words: [] };
+    }
+    const words = Array.isArray(doc.words) ? doc.words : [];
+    return doc.language ? { words, language: doc.language } : { words };
+  }
+
+  // =========================================================================
+  // Long→short repurpose (C2) — one-shot cdz-flash scoring into ranked shorts.
+  // Reuses runVdzModel (the cdz-flash engine call) + extractVdzResponse
+  // (fail-closed JSON parse). Planner-down/parse-fail → typed 502.
+  // =========================================================================
+
+  /**
+   * POST /api/v1/vdz/repurpose — rank the source into short segments.
+   * Body: `{ transcript?: [{w,t0,t1}], durationSec, count? }`. Returns
+   * `{ shorts: [{startSec,endSec,title,hook,score}] }`: count default 6
+   * (clamped 3–12), each 15–60s within [0, durationSec], sorted by score desc.
+   * Planner unavailable or an unparseable reply → typed 502
+   * `{ error: 'repurpose_unavailable' }` (NEVER a raw HttpException).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/vdz/repurpose')
+  async repurpose(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<{ shorts: VdzShort[] } | { error: 'repurpose_unavailable' }> {
+    const payload = (body ?? {}) as Record<string, unknown>;
+
+    const durationSec = Number(payload.durationSec);
+    if (!Number.isFinite(durationSec) || durationSec <= 0) {
+      throw new BadRequest('"durationSec" must be a positive number');
+    }
+    // The source must be long enough to host at least one minimum-length short.
+    if (durationSec < REPURPOSE_MIN_SHORT_SECONDS) {
+      throw new BadRequest(
+        `"durationSec" must be at least ${REPURPOSE_MIN_SHORT_SECONDS} seconds to repurpose`
+      );
+    }
+    const count =
+      payload.count == null
+        ? REPURPOSE_DEFAULT_COUNT
+        : Math.round(
+            clampNumber(
+              Number(payload.count),
+              REPURPOSE_MIN_COUNT,
+              REPURPOSE_MAX_COUNT
+            )
+          );
+
+    // Render the (optional) transcript as compact `t0-t1: word` lines and
+    // truncate to a safe token budget before it reaches the planner.
+    const words = coerceTranscriptWords(payload.transcript);
+    let transcriptText = words
+      .map(w => `${w.t0.toFixed(1)}-${w.t1.toFixed(1)}: ${w.w}`)
+      .join('\n');
+    if (transcriptText.length > REPURPOSE_MAX_TRANSCRIPT_CHARS) {
+      transcriptText = transcriptText.slice(0, REPURPOSE_MAX_TRANSCRIPT_CHARS);
+    }
+
+    this.logger.log(
+      `[vdz] repurpose user=${user.id} duration=${Math.floor(durationSec)} count=${count} words=${words.length}`
+    );
+
+    // Run the SAME cdz-flash engine call the dock uses (runVdzModel + its
+    // CDZ_AI_BASE_URL normalization). Any engine failure (unconfigured, network,
+    // upstream error) becomes a typed 502 via @Res passthrough — NEVER a raw
+    // HttpException, and NEVER InternalServerError (which maps to 500).
+    let rawReply: string;
+    try {
+      rawReply = await this.runVdzModel(
+        buildRepurposePrompt(transcriptText, durationSec, count)
+      );
+    } catch {
+      res.status(HttpStatus.BAD_GATEWAY);
+      return { error: 'repurpose_unavailable' };
+    }
+
+    // Fail-closed parse (SAME lenient parser as /chat), then coerce/clamp/sort.
+    const parsed = parseLenientJsonObject(rawReply);
+    const shorts = coerceShorts(parsed?.shorts, durationSec, count);
+    if (!shorts.length) {
+      // Planner replied but produced nothing usable → same typed 502 contract.
+      res.status(HttpStatus.BAD_GATEWAY);
+      return { error: 'repurpose_unavailable' };
+    }
+    return { shorts };
   }
 
   @Throttle('strict')

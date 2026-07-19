@@ -79,7 +79,13 @@ export class CopilotFeatureModule {}
 export class CopilotApiModule {}
 
 @Module({
-  imports: [CopilotKernelModule, CopilotFeatureModule, CopilotApiModule],
+  imports: [
+    CopilotKernelModule,
+    CopilotFeatureModule,
+    CopilotApiModule,
+    StorageModule,
+    PermissionModule,
+  ],
   controllers: [
     CopilotController,
     ClickDzBridgeController,
