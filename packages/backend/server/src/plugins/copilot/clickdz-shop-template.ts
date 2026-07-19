@@ -21,6 +21,22 @@
 // 500/collection — images are stored as URLs only. Checkout = cash-on-delivery
 // + a wa.me WhatsApp deep link. All 58 Algerian wilayas are embedded.
 //
+// C7 — Appearance (theme / layout / font) is driven entirely by the settings
+// singleton at runtime (never baked into :root as raw CSS — only ids are stored,
+// well within the 8KB cap). The singleton gains three OPTIONAL id fields, each
+// with a default that reproduces today's exact look, so a shop with no
+// appearance settings renders byte-identically to before:
+//   settings.theme    → THEMES id      ('classic' [default] | 'dark' | 'vibrant' | 'minimal')
+//   settings.template → LAYOUTS id     ('standard' [default] | 'boutique')
+//   settings.font     → FONTS id       ('system'  [default] | 'inter' | 'poppins' | 'playfair')
+// At runtime applyTheme(settings) writes the chosen preset's CSS custom props
+// onto :root (mirroring applyAccent, which still runs AFTER so settings.accent
+// overrides the preset accent). 'classic' writes the SAME values already present
+// in the static :root block (a visual no-op); 'standard' branches emit markup
+// identical to today; 'system' keeps the current --font stack and loads no font
+// <link>. The Shop Appearance editor (SHOP-UX) and the ERP settings allowlist
+// (BRIDGE-BE normalizeErpSettings / POST /erp/settings) validate these ids.
+//
 // String.raw is used so any backslashes in the HTML/CSS/JS survive verbatim;
 // the inner content is authored to contain no backtick or ${ sequences, so no
 // escaping is required inside the literal.
@@ -336,6 +352,37 @@ export const CLICKDZ_SHOP_TEMPLATE_HTML: string = String.raw`<!doctype html>
   .spinner{width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+
+  /* ---------- layout: boutique (settings.template='boutique') ----------
+     An asymmetric editorial hero + a roomier product grid. Only used when the
+     merchant opts into the 'boutique' template; the default 'standard' layout
+     is untouched above so it renders identically to before. */
+  .hero-boutique{position:relative;overflow:hidden;background:linear-gradient(120deg,var(--accent-d),var(--accent))}
+  .hero-boutique::after{content:"";position:absolute;inset:0;background:radial-gradient(680px 320px at 12% 8%,rgba(255,255,255,.22),transparent 62%);pointer-events:none}
+  .hero-boutique .hb-inner{position:relative;z-index:1;display:flex;flex-direction:column;gap:16px;align-items:flex-start;text-align:start;color:#fff;padding:56px 0 62px;max-width:640px}
+  .hero-boutique .hb-kicker{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.3);border-radius:999px;padding:6px 14px;font-size:12.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+  .hero-boutique h1{font-size:clamp(30px,6.6vw,54px);font-weight:900;letter-spacing:-.035em;line-height:1.03}
+  .hero-boutique p{font-size:clamp(15px,2.4vw,19px);opacity:.94;max-width:520px;margin:0}
+  .hero-boutique .cta-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  .hero-boutique .btn.light{background:#fff;color:var(--accent-d)}
+  .hero-boutique .btn.ghost{background:rgba(255,255,255,.14);border-color:rgba(255,255,255,.4);color:#fff}
+  .hero-boutique .btn.ghost:hover{background:rgba(255,255,255,.24)}
+  .grid-boutique{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px}
+  @media(min-width:560px){.grid-boutique{grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:22px}}
+  .grid-boutique .card{border-radius:calc(var(--r) + 4px)}
+  .grid-boutique .card .thumb{aspect-ratio:4/5}
+  .grid-boutique .card .body{padding:14px 15px 16px;gap:8px}
+  .grid-boutique .card .title{font-size:15.5px}
+  .grid-boutique .card .price{font-size:19px}
+  .feature-boutique{display:grid;gap:16px;margin-top:22px}
+  @media(min-width:760px){.feature-boutique{grid-template-columns:1.4fr 1fr;align-items:stretch}}
+  .feature-boutique .fb-hero{position:relative;border-radius:calc(var(--r) + 6px);overflow:hidden;min-height:260px;background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+  .feature-boutique .fb-hero img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+  .feature-boutique .fb-hero .fb-ph{position:absolute;inset:0;display:grid;place-items:center;font-size:64px;color:var(--ink-mute);background:linear-gradient(135deg,#eef1f4,#e2e7ec)}
+  .feature-boutique .fb-hero .fb-cap{position:absolute;inset-inline:0;bottom:0;padding:18px;background:linear-gradient(0deg,rgba(0,0,0,.62),transparent);color:#fff}
+  .feature-boutique .fb-hero .fb-cap .t{font-weight:800;font-size:19px}
+  .feature-boutique .fb-hero .fb-cap .p{font-weight:900;font-size:16px;margin-top:2px}
+  .feature-boutique .fb-side{display:flex;flex-direction:column;gap:12px}
 </style>
 </head>
 <body>
@@ -377,7 +424,10 @@ var WILAYAS = [
   '56 - Djanet', '57 - El M\'Ghair', '58 - El Meniaa'
 ];
 
-/* ---- default settings singleton ---- */
+/* ---- default settings singleton ----
+   theme/template/font default to the ids that reproduce today's exact look, so
+   a legacy singleton (or none) renders byte-identically. They are validated
+   against THEMES/LAYOUTS/FONTS at read time, never trusted blindly. */
 function defaultSettings() {
   return {
     key: 'settings',
@@ -387,7 +437,10 @@ function defaultSettings() {
     deliveryFee: 500,
     adminPin: '__CLICKDZ_PIN__',
     accent: '__CLICKDZ_ACCENT__',
-    currency: 'DZD'
+    currency: 'DZD',
+    theme: 'classic',
+    template: 'standard',
+    font: 'system'
   };
 }
 
@@ -499,7 +552,7 @@ function bootstrap() {
       }
       return chain;
     })
-    .then(function () { store.loading = false; applyAccent(); })
+    .then(function () { store.loading = false; applyAppearance(); })
     .catch(function (err) {
       store.loading = false;
       store.error = (err && err.message) || 'Erreur de chargement';
@@ -609,6 +662,186 @@ function applyAccent() {
   var tc = document.querySelector('meta[name=theme-color]');
   if (tc) tc.setAttribute('content', a);
   document.title = shopName() + ' — Boutique en ligne';
+}
+
+/* =========================================================================
+   Appearance — THEMES (color/shadow/radius presets), FONTS, LAYOUTS.
+   All appearance is a set of CSS custom-property values written onto :root at
+   runtime (exactly like applyAccent) — never raw CSS in the settings record, so
+   the 8KB singleton cap is never at risk (we store only ids).
+
+   INVARIANTS that keep the default byte-identical:
+     • theme 'classic'  writes the SAME values already in the static :root block
+       (a pure visual no-op) and leaves accent entirely to applyAccent().
+     • font  'system'   resolves to the SAME --font stack as :root and loads no
+       <link>.
+     • layout 'standard' is the default branch of the view functions and emits
+       markup identical to today.
+   A non-'classic' theme carries a suggested accent that is applied ONLY while
+   the merchant is still on the default accent — a chosen accent from the
+   settings singleton always wins (applyAccent runs after applyTheme).
+   ========================================================================= */
+
+/* The exact classic (default) neutral palette — mirrors the :root block so
+   applyTheme('classic') is a no-op. Non-accent props only; accent stays with
+   applyAccent(). */
+var THEMES = {
+  classic: {
+    label: 'Classique',
+    vars: {
+      '--ink': '#0f172a', '--ink-soft': '#475569', '--ink-mute': '#94a3b8',
+      '--line': '#e5e7eb', '--bg': '#f6f7f9', '--card': '#ffffff',
+      '--ok': '#16a34a', '--ok-bg': '#dcfce7',
+      '--warn': '#b45309', '--warn-bg': '#fef3c7',
+      '--danger': '#dc2626', '--danger-bg': '#fee2e2',
+      '--info': '#1d4ed8', '--info-bg': '#dbeafe',
+      '--shadow': '0 1px 2px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.06)',
+      '--shadow-lg': '0 12px 40px rgba(15,23,42,.16)',
+      '--r': '14px', '--r-sm': '10px'
+    }
+  },
+  dark: {
+    label: 'Sombre',
+    accent: '#22d3ee',
+    themeColor: '#0b1220',
+    vars: {
+      '--ink': '#e5e7eb', '--ink-soft': '#94a3b8', '--ink-mute': '#64748b',
+      '--line': '#1f2937', '--bg': '#0b1220', '--card': '#111827',
+      '--ok': '#4ade80', '--ok-bg': '#052e16',
+      '--warn': '#fbbf24', '--warn-bg': '#3a2c07',
+      '--danger': '#f87171', '--danger-bg': '#3b0d0d',
+      '--info': '#60a5fa', '--info-bg': '#0b2447',
+      '--shadow': '0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.45)',
+      '--shadow-lg': '0 12px 40px rgba(0,0,0,.6)',
+      '--r': '14px', '--r-sm': '10px'
+    }
+  },
+  vibrant: {
+    label: 'Vibrant',
+    accent: '#db2777',
+    themeColor: '#fff7fb',
+    vars: {
+      '--ink': '#1a1030', '--ink-soft': '#5b4a72', '--ink-mute': '#9d8cb3',
+      '--line': '#f0d9e8', '--bg': '#fff7fb', '--card': '#ffffff',
+      '--ok': '#16a34a', '--ok-bg': '#dcfce7',
+      '--warn': '#b45309', '--warn-bg': '#fef3c7',
+      '--danger': '#dc2626', '--danger-bg': '#fee2e2',
+      '--info': '#7c3aed', '--info-bg': '#ede9fe',
+      '--shadow': '0 2px 6px rgba(219,39,119,.10),0 12px 30px rgba(124,58,237,.12)',
+      '--shadow-lg': '0 18px 50px rgba(219,39,119,.24)',
+      '--r': '20px', '--r-sm': '14px'
+    }
+  },
+  minimal: {
+    label: 'Minimal',
+    accent: '#111827',
+    themeColor: '#ffffff',
+    vars: {
+      '--ink': '#111827', '--ink-soft': '#4b5563', '--ink-mute': '#9ca3af',
+      '--line': '#ececec', '--bg': '#ffffff', '--card': '#ffffff',
+      '--ok': '#15803d', '--ok-bg': '#eef7f0',
+      '--warn': '#92400e', '--warn-bg': '#fbf3e6',
+      '--danger': '#b91c1c', '--danger-bg': '#fbeaea',
+      '--info': '#1f2937', '--info-bg': '#eef0f2',
+      '--shadow': '0 1px 2px rgba(17,24,39,.04)',
+      '--shadow-lg': '0 8px 24px rgba(17,24,39,.10)',
+      '--r': '6px', '--r-sm': '4px'
+    }
+  }
+};
+
+/* Curated font stacks. 'system' === the :root default (no webfont fetched). The
+   others map to a Google Fonts family + a <link>; the stack still falls back to
+   the system fonts so text renders instantly before the webfont loads. */
+var SYSTEM_FONT_STACK = "'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,'Noto Sans Arabic',sans-serif";
+var FONTS = {
+  system: { label: 'Système', stack: SYSTEM_FONT_STACK, google: '' },
+  inter: {
+    label: 'Inter',
+    stack: "'Inter'," + SYSTEM_FONT_STACK,
+    google: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap'
+  },
+  poppins: {
+    label: 'Poppins',
+    stack: "'Poppins'," + SYSTEM_FONT_STACK,
+    google: 'https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800;900&display=swap'
+  },
+  playfair: {
+    label: 'Élégant (Playfair)',
+    stack: "'Playfair Display',Georgia,'Times New Roman',serif",
+    google: 'https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700;800;900&display=swap'
+  }
+};
+
+/* Layout ids (branched in the view functions). 'standard' === today. */
+var LAYOUTS = {
+  standard: { label: 'Standard' },
+  boutique: { label: 'Boutique' }
+};
+
+function themeId() {
+  var t = store.settings && store.settings.theme;
+  return (t && THEMES[t]) ? t : 'classic';
+}
+function fontId() {
+  var f = store.settings && store.settings.font;
+  return (f && FONTS[f]) ? f : 'system';
+}
+function layoutId() {
+  var l = store.settings && store.settings.template;
+  return (l && LAYOUTS[l]) ? l : 'standard';
+}
+/* True while the merchant is still on the compile-time default accent, i.e. has
+   not chosen a custom accent — lets a theme apply its own suggested accent. */
+function accentIsDefault() {
+  var a = String((store.settings && store.settings.accent) || '').toLowerCase();
+  return !a || a === String('__CLICKDZ_ACCENT__').toLowerCase();
+}
+
+/* Write the chosen theme preset's custom props onto :root. Accent is applied
+   here ONLY as a theme suggestion when the merchant hasn't picked one; the real
+   accent pipeline (applyAccent) runs afterwards and wins for a chosen accent. */
+function applyTheme() {
+  var preset = THEMES[themeId()] || THEMES.classic;
+  var root = document.documentElement.style;
+  var vars = preset.vars || {};
+  for (var k in vars) { if (Object.prototype.hasOwnProperty.call(vars, k)) root.setProperty(k, vars[k]); }
+  if (preset.accent && accentIsDefault()) {
+    var a = preset.accent;
+    root.setProperty('--accent', a);
+    root.setProperty('--accent-d', shade(a, -0.22));
+    root.setProperty('--accent-l', tint(a));
+    if (store.settings) store.settings.accent = a; /* so applyAccent keeps it */
+  }
+  applyFont();
+}
+
+/* Set --font and inject the Google Fonts <link> for the chosen family. 'system'
+   keeps the default stack and loads nothing. */
+function applyFont() {
+  var f = FONTS[fontId()] || FONTS.system;
+  document.documentElement.style.setProperty('--font', f.stack);
+  var linkId = 'cdz-font-link';
+  var existing = document.getElementById(linkId);
+  if (f.google) {
+    if (!existing) {
+      var pre1 = document.createElement('link'); pre1.rel = 'preconnect'; pre1.href = 'https://fonts.googleapis.com';
+      var pre2 = document.createElement('link'); pre2.rel = 'preconnect'; pre2.href = 'https://fonts.gstatic.com'; pre2.crossOrigin = 'anonymous';
+      var link = document.createElement('link'); link.id = linkId; link.rel = 'stylesheet'; link.href = f.google;
+      document.head.appendChild(pre1); document.head.appendChild(pre2); document.head.appendChild(link);
+    } else if (existing.getAttribute('href') !== f.google) {
+      existing.setAttribute('href', f.google);
+    }
+  } else if (existing && existing.parentNode) {
+    existing.parentNode.removeChild(existing);
+  }
+}
+
+/* Apply the whole appearance layer (theme → font → accent). accent LAST so a
+   merchant-chosen accent always wins over a theme's suggestion. */
+function applyAppearance() {
+  applyTheme();
+  applyAccent();
 }
 
 /* =========================================================================
@@ -763,6 +996,7 @@ function digitsOnly(s) { return String(s || '').replace(/[^0-9]/g, ''); }
 var currentCat = '';
 
 function viewHome() {
+  if (layoutId() === 'boutique') return viewHomeBoutique();
   var s = store.settings || defaultSettings();
   var wa = digitsOnly(s.whatsapp);
   var errBanner = store.error ? '<div class="wrap"><div class="callout" style="margin-top:16px"><span class="ic">⚠️</span><div>Certaines données n\'ont pas pu être chargées. Réessayez plus tard.</div></div></div>' : '';
@@ -828,6 +1062,83 @@ function productCard(p) {
           ? '<button class="btn ghost sm add" disabled>Rupture de stock</button>'
           : '<button class="btn primary sm add" data-add="' + attr(p.id) + '">🛒 Ajouter</button>') +
       '</div>' +
+    '</div>';
+}
+
+/* ---- Boutique layout home (settings.template='boutique') ----
+   Same data + the same delegated events (data-add / data-cat) as the standard
+   home, but an editorial hero, a featured product spotlight and a roomier grid.
+   Reuses productCard so cart/stock behavior is identical. */
+function viewHomeBoutique() {
+  var s = store.settings || defaultSettings();
+  var wa = digitsOnly(s.whatsapp);
+  var errBanner = store.error ? '<div class="wrap"><div class="callout" style="margin-top:16px"><span class="ic">⚠️</span><div>Certaines données n\'ont pas pu être chargées. Réessayez plus tard.</div></div></div>' : '';
+
+  var hero = '' +
+    '<section class="hero-boutique"><div class="wrap"><div class="hb-inner">' +
+      '<span class="hb-kicker">✦ ' + esc(s.shopName) + '</span>' +
+      '<h1>' + esc(s.shopName) + '</h1>' +
+      '<p>' + esc(s.tagline) + '</p>' +
+      '<div class="cta-row">' +
+        '<a class="btn light lg" href="#products">Explorer la collection</a>' +
+        (wa ? '<a class="btn ghost lg" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Nous contacter</a>' : '') +
+      '</div>' +
+      '<span class="cod-pill" style="background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.3)">💵 Paiement à la livraison · 58 wilayas</span>' +
+    '</div></div></section>';
+
+  var prods = activeProducts();
+  var cats = categories();
+  var chips = '<button class="chip ' + (currentCat === '' ? 'active' : '') + '" data-cat="">Tous</button>';
+  cats.forEach(function (c) {
+    chips += '<button class="chip ' + (currentCat === c ? 'active' : '') + '" data-cat="' + attr(c) + '">' + esc(c) + '</button>';
+  });
+
+  var shown = currentCat ? prods.filter(function (p) { return (p.category || '') === currentCat; }) : prods;
+
+  /* featured spotlight = first shown product (only when browsing "Tous") */
+  var featured = '';
+  if (!currentCat && shown.length) {
+    var fp = shown[0];
+    var fout = (Number(fp.stock) || 0) <= 0;
+    var media = fp.imageUrl
+      ? '<img loading="lazy" src="' + attr(fp.imageUrl) + '" alt="' + attr(fp.title) + '" onerror="this.style.display=\'none\'" />'
+      : '<div class="fb-ph">🛍️</div>';
+    featured = '<div class="feature-boutique">' +
+      '<a class="fb-hero" href="#/product/' + encodeURIComponent(fp.id) + '" aria-label="' + attr(fp.title) + '">' +
+        media +
+        '<div class="fb-cap"><div class="t">' + esc(fp.title) + '</div><div class="p">' + money(fp.price) + ' DZD</div></div>' +
+      '</a>' +
+      '<div class="fb-side">' +
+        '<div class="section-head" style="margin:0"><h2>À la une</h2></div>' +
+        (fp.description ? '<p style="color:var(--ink-soft);font-size:14.5px;margin:0">' + esc(String(fp.description).slice(0, 180)) + '</p>' : '') +
+        (fout
+          ? '<button class="btn ghost lg block" disabled>Rupture de stock</button>'
+          : '<button class="btn primary lg block" data-add="' + attr(fp.id) + '">🛒 Ajouter au panier</button>') +
+        '<a class="btn ghost block" href="#/product/' + encodeURIComponent(fp.id) + '">Voir le produit →</a>' +
+      '</div>' +
+    '</div>';
+  }
+
+  var restProducts = (!currentCat && shown.length) ? shown.slice(1) : shown;
+
+  var gridHtml;
+  if (!prods.length) {
+    gridHtml = emptyState('📦', 'Aucun produit pour le moment', 'Revenez bientôt — le catalogue arrive !', wa ? '<a class="btn soft" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Nous contacter</a>' : '');
+  } else if (!shown.length) {
+    gridHtml = emptyState('🔍', 'Aucun produit dans cette catégorie', 'Essayez une autre catégorie.', '<button class="btn ghost" data-cat="">Voir tout</button>');
+  } else if (!restProducts.length) {
+    gridHtml = '';
+  } else {
+    gridHtml = '<div class="grid-boutique">' + restProducts.map(productCard).join('') + '</div>';
+  }
+
+  return errBanner + hero +
+    '<div class="wrap" id="products">' +
+      '<div class="section-head"><h2>Nos produits</h2><span class="muted">' + shown.length + ' article' + (shown.length > 1 ? 's' : '') + '</span></div>' +
+      (cats.length ? '<div class="chips">' + chips + '</div>' : '') +
+      featured +
+      (featured && gridHtml ? '<div class="section-head" style="margin:22px 0 14px"><h2>Toute la collection</h2></div>' : '') +
+      gridHtml +
     '</div>';
 }
 
@@ -1419,12 +1730,25 @@ function openProductModal(id) {
 }
 
 /* ---- Admin: Settings ---- */
+function selectOptions(table, current) {
+  var out = '';
+  for (var id in table) {
+    if (!Object.prototype.hasOwnProperty.call(table, id)) continue;
+    var sel = String(current) === id ? ' selected' : '';
+    out += '<option value="' + attr(id) + '"' + sel + '>' + esc(table[id].label || id) + '</option>';
+  }
+  return out;
+}
+
 function adminSettings() {
   var s = store.settings || defaultSettings();
   var palette = ['#0f766e', '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#16a34a', '#0891b2', '#4f46e5', '#111827'];
   var sw = palette.map(function (c) {
     return '<div class="swatch ' + (c.toLowerCase() === String(s.accent || '').toLowerCase() ? 'sel' : '') + '" data-color="' + c + '" style="background:' + c + '"></div>';
   }).join('');
+  var curTheme = THEMES[s.theme] ? s.theme : 'classic';
+  var curTemplate = LAYOUTS[s.template] ? s.template : 'standard';
+  var curFont = FONTS[s.font] ? s.font : 'system';
 
   return '<div class="section-head" style="margin-bottom:10px"><h2>Réglages de la boutique</h2></div>' +
     '<form class="panel" id="settings-form" style="padding:20px"><div class="form">' +
@@ -1437,9 +1761,15 @@ function adminSettings() {
       '<div class="field"><label>Code PIN gérant</label><input class="control" name="adminPin" value="' + attr(s.adminPin) + '" maxlength="12" /><div class="hint">Sert à protéger cet espace. Notez-le bien.</div></div>' +
       '<div class="field"><label>Couleur d\'accentuation</label><div class="colorrow" id="swatches">' + sw + '</div>' +
         '<input type="hidden" name="accent" value="' + attr(s.accent) + '" /></div>' +
+      '<div class="section-head" style="margin:8px 0 0"><h2 style="font-size:16px">Apparence</h2></div>' +
+      '<div class="grid2">' +
+        '<div class="field"><label>Thème</label><select class="control" name="theme">' + selectOptions(THEMES, curTheme) + '</select><div class="hint">Palette, ombres et coins.</div></div>' +
+        '<div class="field"><label>Mise en page</label><select class="control" name="template">' + selectOptions(LAYOUTS, curTemplate) + '</select><div class="hint">Agencement de l\'accueil.</div></div>' +
+      '</div>' +
+      '<div class="field"><label>Police</label><select class="control" name="font">' + selectOptions(FONTS, curFont) + '</select><div class="hint">La police système ne charge aucune ressource externe.</div></div>' +
     '</div></form>' +
     '<button class="btn primary lg block" style="margin-top:14px" id="save-settings">💾 Enregistrer les réglages</button>' +
-    '<div class="callout" style="margin-top:14px"><span class="ic">💡</span><div>Ces réglages pilotent votre vitrine : nom, couleurs, frais de livraison et bouton WhatsApp de commande.</div></div>';
+    '<div class="callout" style="margin-top:14px"><span class="ic">💡</span><div>Ces réglages pilotent votre vitrine : nom, couleurs, thème, mise en page, police, frais de livraison et bouton WhatsApp de commande.</div></div>';
 }
 
 /* ---- Admin binding ---- */
@@ -1497,10 +1827,27 @@ function bindAdmin(tab) {
         sw.classList.add('sel');
         var hid = app.querySelector('#settings-form [name=accent]');
         if (hid) hid.value = c;
+        if (store.settings) store.settings.accent = c;
         document.documentElement.style.setProperty('--accent', c);
         document.documentElement.style.setProperty('--accent-d', shade(c, -0.22));
         document.documentElement.style.setProperty('--accent-l', tint(c));
       });
+    });
+    /* live theme preview (accent re-applied after so a chosen accent still wins) */
+    var themeSel = app.querySelector('#settings-form [name=theme]');
+    if (themeSel) themeSel.addEventListener('change', function () {
+      if (!THEMES[themeSel.value]) return;
+      if (store.settings) store.settings.theme = themeSel.value;
+      applyTheme(); applyAccent();
+      var hid = app.querySelector('#settings-form [name=accent]');
+      if (hid && store.settings) hid.value = store.settings.accent;
+    });
+    /* live font preview */
+    var fontSel = app.querySelector('#settings-form [name=font]');
+    if (fontSel) fontSel.addEventListener('change', function () {
+      if (!FONTS[fontSel.value]) return;
+      if (store.settings) store.settings.font = fontSel.value;
+      applyFont();
     });
     var save = document.getElementById('save-settings');
     if (save) save.addEventListener('click', saveSettings);
@@ -1536,6 +1883,12 @@ function toggleProduct(id) {
 function saveSettings() {
   var f = document.getElementById('settings-form');
   if (!f) return;
+  var cur = store.settings || defaultSettings();
+  /* appearance ids: read the picker when present, else preserve the current id.
+     Guarded against unknown ids so a stray value can never poison :root. */
+  var theme = (f.theme && THEMES[f.theme.value]) ? f.theme.value : (THEMES[cur.theme] ? cur.theme : 'classic');
+  var template = (f.template && LAYOUTS[f.template.value]) ? f.template.value : (LAYOUTS[cur.template] ? cur.template : 'standard');
+  var font = (f.font && FONTS[f.font.value]) ? f.font.value : (FONTS[cur.font] ? cur.font : 'system');
   var body = {
     key: 'settings',
     shopName: String(f.shopName.value || '').slice(0, 60) || '__CLICKDZ_STORE_NAME__',
@@ -1544,7 +1897,10 @@ function saveSettings() {
     deliveryFee: Math.max(0, Math.round(Number(f.deliveryFee.value) || 0)),
     adminPin: String(f.adminPin.value || '__CLICKDZ_PIN__').slice(0, 12) || '__CLICKDZ_PIN__',
     accent: f.accent.value || '__CLICKDZ_ACCENT__',
-    currency: 'DZD'
+    currency: 'DZD',
+    theme: theme,
+    template: template,
+    font: font
   };
   var btn = document.getElementById('save-settings');
   btn.disabled = true; btn.textContent = 'Enregistrement…';
@@ -1552,7 +1908,7 @@ function saveSettings() {
     .then(function (created) {
       store.settingsId = created && created.id ? created.id : store.settingsId;
       store.settings = Object.assign(defaultSettings(), body);
-      applyAccent();
+      applyAppearance();
       toast('Réglages enregistrés', 'ok');
       renderAdmin('settings');
     })

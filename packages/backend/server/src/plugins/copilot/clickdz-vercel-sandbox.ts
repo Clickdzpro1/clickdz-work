@@ -50,6 +50,16 @@ import { Logger } from '@nestjs/common';
 // --- env (read once at module load, same idiom as the bridge's VERCEL_TOKEN) ---
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
+// C6 FIX — the pre-created OpenClaw sandbox project id (e.g. prj_…). When the
+// operator sets VERCEL_PROJECT_ID we use it VERBATIM and SKIP the name lookup /
+// create dance entirely (see ensureProjectId). Root cause of "sandbox doesn't
+// work": ensureProjectId resolved the project by NAME under the token's team
+// scope, so a team/name mismatch 404s → CREATE → 409 → fail → degrade to
+// plan-only, even though the project physically exists. Reading the id directly
+// sidesteps every name/team resolution failure mode. NEVER hardcoded here — the
+// operator sets it on the server; absent env falls back to name lookup/create so
+// today's behavior is preserved when it is unset.
+const SANDBOX_PROJECT_ID = process.env.VERCEL_PROJECT_ID || '';
 
 // --- hosts + the dedicated project every sandbox is billed/scoped to ---
 const SANDBOX_API_BASE = 'https://vercel.com/api';
@@ -185,8 +195,15 @@ function upstreamMessage(data: any): string {
 
 /**
  * Map a non-2xx Vercel response to a typed SandboxError with a human message.
- * 401/402/403 all normalize to `not_enabled` (auth/plan/feature gate) so the
- * capability probe surfaces one actionable "not enabled" state to the UI.
+ * C6 FIX — SPLIT the auth/plan gate so real failures surface their true reason
+ * instead of always reading "not enabled":
+ *   - 401 → `not_configured` (a CONFIG / auth fault: the token is wrong, expired
+ *     or scoped to the wrong team). Distinct message "check VERCEL_TOKEN…" so a
+ *     bad token is never masked by the plan-gate banner.
+ *   - 402/403 → `not_enabled` (plan/feature gate — enable Sandbox in the Vercel
+ *     dashboard / upgrade the plan).
+ * Both codes still degrade OpenClaw to plan-only, but the surfaced `reason`
+ * now tells the operator which knob to turn. NEVER logs/echoes token material.
  */
 function statusToError(
   status: number,
@@ -197,8 +214,8 @@ function statusToError(
   const suffix = detail ? `: ${detail}` : '';
   if (status === 401) {
     return new SandboxError(
-      'not_enabled',
-      `Vercel rejected the configured token (HTTP 401) — check VERCEL_TOKEN${suffix}`,
+      'not_configured',
+      `Vercel rejected the configured token (HTTP 401) — check VERCEL_TOKEN (wrong, expired, or scoped to a different team)${suffix}`,
       status
     );
   }
@@ -251,7 +268,9 @@ function parseRoutes(raw: any): SandboxRoute[] {
 }
 
 // ---------------------------------------------------------------------------
-// Project ensure (create-or-get "clickdz-openclaw") — cached module-level
+// Project ensure — cached module-level.
+// C6 FIX: PREFER the pre-created VERCEL_PROJECT_ID (short-circuit, no HTTP) when
+// set; else fall back to the legacy create-or-get "clickdz-openclaw" by name.
 // ---------------------------------------------------------------------------
 
 let cachedProjectId: string | null = null;
@@ -266,6 +285,17 @@ async function ensureProjectId(): Promise<string> {
     );
   }
   if (cachedProjectId) return cachedProjectId;
+  // C6 FIX — short-circuit: when the operator supplied the pre-created project
+  // id, use it VERBATIM. No GET /v9/projects, no create, no 404→409 team-scope
+  // failure path. This is THE fix for "sandbox doesn't work": the id is passed
+  // straight to POST /v2/sandboxes regardless of how name/team resolution would
+  // have behaved. Cache it so subsequent calls stay allocation-free.
+  if (SANDBOX_PROJECT_ID) {
+    cachedProjectId = SANDBOX_PROJECT_ID;
+    // One-shot, id only — never the token. (env-provided → no name in the log.)
+    logger.log(`[sandbox] project id from env: id=${SANDBOX_PROJECT_ID}`);
+    return cachedProjectId;
+  }
   if (ensureInflight) return ensureInflight;
   ensureInflight = (async () => {
     try {

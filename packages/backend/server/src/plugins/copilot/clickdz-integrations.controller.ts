@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Logger, Post, Res } from '@nestjs/common';
+import { Body, Controller, Get, Logger, Post, Query, Res } from '@nestjs/common';
 import type { Response } from 'express';
 
 import { CurrentUser } from '../../core/auth';
@@ -17,8 +17,15 @@ import { BadRequest, Throttle } from '../../base';
 const COMPOSIO_API_KEY = process.env.COMPOSIO_API_KEY || '';
 
 // Composio public REST surface (plain fetch — NO SDK dependency).
-const COMPOSIO_TOOLKITS_URL =
-  'https://backend.composio.dev/api/v3/toolkits?limit=24';
+// C4 FIX — the 24-cap is GONE. This is the BARE toolkits endpoint; the paged
+// route below appends `?limit=&cursor=&search=&category=` as needed so the UI
+// can browse the FULL ~250+ toolkit catalog with search + category filters +
+// pagination, instead of the first 24.
+const COMPOSIO_TOOLKITS_URL = 'https://backend.composio.dev/api/v3/toolkits';
+// Connected accounts (list) — used to cheaply mark toolkits already connected
+// for the current user so the grid can badge them (best-effort, soft-fail).
+const COMPOSIO_CONNECTED_ACCOUNTS_URL =
+  'https://backend.composio.dev/api/v3/connected_accounts';
 // Auth-link session (returns a hosted redirect_url the user opens to connect).
 const COMPOSIO_LINK_URL =
   'https://backend.composio.dev/api/v3.1/connected_accounts/link';
@@ -34,6 +41,19 @@ const COMPOSIO_AUTH_CONFIGS_URL =
   'https://backend.composio.dev/api/v3/auth_configs';
 
 const COMPOSIO_TIMEOUT_MS = 8_000;
+// C4 — toolkit catalog paging budgets. One page per request (the UI drives
+// pagination / infinite-scroll via nextCursor), so the request stays cheap and
+// well under the timeout even for the full catalog. The catalog fetch gets its
+// own slightly larger budget than the default 8s.
+const TOOLKITS_CATALOG_TIMEOUT_MS = 12_000;
+const TOOLKITS_PAGE_DEFAULT = 50; // sane page size the UI can override (?limit=)
+const TOOLKITS_PAGE_MAX = 100; // hard ceiling per page to bound payload size
+const TOOLKITS_SEARCH_MAX = 200; // clamp untrusted ?search= length
+const TOOLKITS_CATEGORY_MAX = 100; // clamp untrusted ?category= length
+const TOOLKITS_CURSOR_MAX = 512; // clamp untrusted ?cursor= length
+// Cheap "connected?" enrichment: cap how many connected accounts we scan so a
+// user with many connections never blows the request budget.
+const CONNECTED_ACCOUNTS_SCAN_LIMIT = 200;
 
 // --- CDZ_AI direct-path envs (mirrors clickdz-bridge.controller.ts:179-193 &
 // conversation/compact.ts). The OpenAI-compatible `cdz-flash` catalog served by
@@ -88,6 +108,10 @@ interface CdzToolkit {
   slug: string;
   name: string;
   logo?: string;
+  // C4 — richer catalog metadata (both optional; only set when the v3 payload
+  // carries them / when we cheaply know the connection state).
+  categories?: string[];
+  connected?: boolean;
 }
 
 // A discovered, normalized Composio tool used by the /run planner.
@@ -185,6 +209,136 @@ function extractToolList(data: any): any[] {
   if (Array.isArray(data?.tools)) return data.tools;
   if (Array.isArray(data)) return data;
   return [];
+}
+
+/**
+ * Defensively pull the array of TOOLKIT objects out of a Composio v3 toolkits
+ * payload. v3 list responses vary — tolerate {items|toolkits|data|<array>} the
+ * same way the tools/auth-config parsers do. (C4 catalog paging.)
+ */
+function extractToolkitList(data: any): any[] {
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.toolkits)) return data.toolkits;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data)) return data;
+  return [];
+}
+
+/**
+ * Defensively pull the NEXT-PAGE cursor out of a Composio v3 list payload,
+ * tolerant of the several shapes the API has shipped: top-level
+ * `next_cursor`/`nextCursor`/`cursor`, or nested under
+ * `meta`/`pagination`/`page_info` (incl. camel/snake `next_cursor`). Returns a
+ * non-empty string cursor or null (null → the UI stops paging). Never throws.
+ */
+function extractNextCursor(data: any): string | null {
+  const pick = (v: any): string | null =>
+    typeof v === 'string' && v.trim() ? v.trim() : null;
+  const containers = [
+    data,
+    data?.meta,
+    data?.pagination,
+    data?.meta?.pagination,
+    data?.page_info,
+    data?.pageInfo,
+  ];
+  for (const c of containers) {
+    if (!c || typeof c !== 'object') continue;
+    const cursor =
+      pick(c.next_cursor) ??
+      pick(c.nextCursor) ??
+      pick(c.cursor) ??
+      pick(c.next);
+    if (cursor) return cursor;
+  }
+  return null;
+}
+
+/**
+ * Defensively normalize a toolkit's categories into a string[] (or undefined).
+ * v3 has shipped categories as `string[]`, `{name|slug}[]`, or a single string;
+ * tolerate all. Deduped, capped, empty → undefined so the field is omitted.
+ */
+function extractCategories(t: any): string[] | undefined {
+  const raw = t?.categories ?? t?.meta?.categories ?? t?.category;
+  const out: string[] = [];
+  const push = (v: any) => {
+    const s =
+      typeof v === 'string'
+        ? v
+        : typeof v?.name === 'string'
+          ? v.name
+          : typeof v?.slug === 'string'
+            ? v.slug
+            : '';
+    const trimmed = s.trim();
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  };
+  if (Array.isArray(raw)) {
+    for (const v of raw) push(v);
+  } else if (raw) {
+    push(raw);
+  }
+  return out.length ? out.slice(0, 12) : undefined;
+}
+
+/**
+ * Map one raw Composio v3 toolkit object to a normalized CdzToolkit (or null).
+ * Tolerant of slug/key/name id fallbacks and logo/meta.logo drift (mirrors the
+ * inline mapping the toolkits route used before). `connected` is layered on by
+ * the route from the connected-accounts set; categories come from the payload.
+ */
+function normalizeToolkit(t: any): CdzToolkit | null {
+  const slug =
+    typeof t?.slug === 'string'
+      ? t.slug
+      : typeof t?.key === 'string'
+        ? t.key
+        : typeof t?.name === 'string'
+          ? t.name
+          : null;
+  if (!slug) return null;
+  const name = typeof t?.name === 'string' && t.name.length ? t.name : slug;
+  const logo =
+    typeof t?.meta?.logo === 'string'
+      ? t.meta.logo
+      : typeof t?.logo === 'string'
+        ? t.logo
+        : undefined;
+  const categories = extractCategories(t);
+  const out: CdzToolkit = { slug, name };
+  if (logo) out.logo = logo;
+  if (categories) out.categories = categories;
+  return out;
+}
+
+/**
+ * Defensively pull the set of connected toolkit slugs out of a Composio v3
+ * connected_accounts list payload so the catalog can badge `connected:true`.
+ * Each account references its toolkit under one of several keys across API
+ * versions (`toolkit_slug`, `toolkit.slug`, `app_name`, `appName`, `toolkit`
+ * as a bare string). Lower-cased for case-insensitive matching. Never throws.
+ */
+function extractConnectedSlugs(data: any): Set<string> {
+  const slugs = new Set<string>();
+  const list = extractToolkitList(data); // same container shapes (items|data|…)
+  for (const acct of list) {
+    const raw =
+      typeof acct?.toolkit_slug === 'string'
+        ? acct.toolkit_slug
+        : typeof acct?.toolkit?.slug === 'string'
+          ? acct.toolkit.slug
+          : typeof acct?.app_name === 'string'
+            ? acct.app_name
+            : typeof acct?.appName === 'string'
+              ? acct.appName
+              : typeof acct?.toolkit === 'string'
+                ? acct.toolkit
+                : '';
+    const s = raw.trim().toLowerCase();
+    if (s) slugs.add(s);
+  }
+  return slugs;
 }
 
 /**
@@ -326,27 +480,73 @@ export class ClickDzIntegrationsController {
   }
 
   /**
-   * GET toolkits.
-   *  - disabled  -> {enabled:false, toolkits:[]}
-   *  - enabled   -> fetch Composio v3, map to {slug,name,logo?}
-   *  - on any fetch/parse/timeout failure -> {enabled:true, toolkits:[],
-   *    error:'composio_unreachable'} (never throws — the grid degrades softly).
+   * GET toolkits — the FULL Composio catalog, paged (C4).
+   *
+   * The old 24-cap is gone (both `?limit=24` and `.slice(0,24)`). This route now
+   * pages the live `api/v3/toolkits` endpoint so the UI can browse ALL ~250+
+   * toolkits with search + category filters + pagination / infinite-scroll.
+   *
+   * Query params (all optional, all clamped — untrusted):
+   *   - ?search=   free-text filter passed through to Composio (server-side).
+   *   - ?category= category slug filter passed through to Composio.
+   *   - ?cursor=   opaque next-page cursor returned by a previous call.
+   *   - ?limit=    page size (default 50, hard max 100).
+   *
+   * Response:
+   *   - disabled -> {enabled:false, toolkits:[]}
+   *   - enabled  -> {enabled:true, toolkits:[{slug,name,logo?,categories?,
+   *                  connected?}], nextCursor?}   (nextCursor omitted on last page)
+   *   - any fetch/parse/timeout failure -> {enabled:true, toolkits:[],
+   *     error:'composio_unreachable'} (never throws — the grid degrades softly).
+   *
+   * `connected` is a best-effort badge: we cheaply list the user's connected
+   * accounts once and mark matching slugs. If that lookup fails we simply omit
+   * the flag (the field is optional) — the catalog still renders.
    */
   @Throttle('strict')
   @Get('/api/v1/integrations/toolkits')
-  async toolkits(@CurrentUser() _user: CurrentUser, @Res() res: Response) {
+  async toolkits(
+    @CurrentUser() user: CurrentUser,
+    @Query() query: any,
+    @Res() res: Response
+  ) {
     if (!COMPOSIO_API_KEY) {
       res.status(200).json({ enabled: false, toolkits: [] });
       return;
     }
+
+    // ---- parse + clamp untrusted query params ----
+    const clampStr = (v: unknown, max: number): string =>
+      typeof v === 'string' ? v.trim().slice(0, max) : '';
+    const search = clampStr(query?.search ?? query?.q, TOOLKITS_SEARCH_MAX);
+    const category = clampStr(query?.category, TOOLKITS_CATEGORY_MAX);
+    const cursor = clampStr(query?.cursor, TOOLKITS_CURSOR_MAX);
+    const limitRaw = Number.parseInt(String(query?.limit ?? ''), 10);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(limitRaw, TOOLKITS_PAGE_MAX)
+        : TOOLKITS_PAGE_DEFAULT;
+
+    // ---- build the paged v3 URL (params only added when present) ----
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (cursor) params.set('cursor', cursor);
+    if (search) params.set('search', search);
+    if (category) params.set('category', category);
+    const url = `${COMPOSIO_TOOLKITS_URL}?${params.toString()}`;
+
     try {
-      const response = await this.fetchWithTimeout(COMPOSIO_TOOLKITS_URL, {
-        method: 'GET',
-        headers: {
-          'x-api-key': COMPOSIO_API_KEY,
-          Accept: 'application/json',
+      const response = await this.fetchWithTimeout(
+        url,
+        {
+          method: 'GET',
+          headers: {
+            'x-api-key': COMPOSIO_API_KEY,
+            Accept: 'application/json',
+          },
         },
-      });
+        TOOLKITS_CATALOG_TIMEOUT_MS
+      );
       if (!response.ok) {
         this.logger.warn(`[integrations] toolkits HTTP ${response.status}`);
         res
@@ -355,41 +555,30 @@ export class ClickDzIntegrationsController {
         return;
       }
       const data: any = await response.json();
-      // Defensive extraction: the v3 payload is {items:[{slug,name,meta:{logo}}]}
-      // but tolerate items/toolkits/data and logo/meta.logo shape drift.
-      const rawList: any[] = Array.isArray(data?.items)
-        ? data.items
-        : Array.isArray(data?.toolkits)
-          ? data.toolkits
-          : Array.isArray(data?.data)
-            ? data.data
-            : Array.isArray(data)
-              ? data
-              : [];
+      // Defensive extraction: the v3 payload is {items:[{slug,name,meta:{logo},
+      // categories}], next_cursor?} but tolerate items/toolkits/data containers
+      // and logo/meta.logo + cursor shape drift.
+      const rawList = extractToolkitList(data);
       const toolkits: CdzToolkit[] = rawList
-        .map((t: any): CdzToolkit | null => {
-          const slug =
-            typeof t?.slug === 'string'
-              ? t.slug
-              : typeof t?.key === 'string'
-                ? t.key
-                : typeof t?.name === 'string'
-                  ? t.name
-                  : null;
-          if (!slug) return null;
-          const name =
-            typeof t?.name === 'string' && t.name.length ? t.name : slug;
-          const logo =
-            typeof t?.meta?.logo === 'string'
-              ? t.meta.logo
-              : typeof t?.logo === 'string'
-                ? t.logo
-                : undefined;
-          return logo ? { slug, name, logo } : { slug, name };
-        })
-        .filter((t): t is CdzToolkit => t !== null)
-        .slice(0, 24);
-      res.status(200).json({ enabled: true, toolkits });
+        .map(normalizeToolkit)
+        .filter((t): t is CdzToolkit => t !== null);
+
+      // Best-effort connected badges — never let this fail the catalog.
+      const connectedSlugs = await this.fetchConnectedSlugs(user.id);
+      if (connectedSlugs.size) {
+        for (const tk of toolkits) {
+          if (connectedSlugs.has(tk.slug.toLowerCase())) tk.connected = true;
+        }
+      }
+
+      const nextCursor = extractNextCursor(data);
+      const payload: {
+        enabled: true;
+        toolkits: CdzToolkit[];
+        nextCursor?: string;
+      } = { enabled: true, toolkits };
+      if (nextCursor) payload.nextCursor = nextCursor;
+      res.status(200).json(payload);
     } catch (err) {
       // Timeout (AbortError), DNS, TLS, JSON parse — all soft-fail.
       this.logger.warn(
@@ -398,6 +587,44 @@ export class ClickDzIntegrationsController {
       res
         .status(200)
         .json({ enabled: true, toolkits: [], error: 'composio_unreachable' });
+    }
+  }
+
+  /**
+   * Best-effort: list the current user's connected Composio accounts and return
+   * the set of connected toolkit slugs (lower-cased) so the catalog can badge
+   * `connected:true`. Soft-fail by contract — ANY error (no route, non-ok,
+   * timeout, parse) returns an EMPTY set so the toolkits route still renders the
+   * full catalog. Scans at most CONNECTED_ACCOUNTS_SCAN_LIMIT accounts.
+   */
+  private async fetchConnectedSlugs(userId: string): Promise<Set<string>> {
+    try {
+      const params = new URLSearchParams();
+      params.set('user_id', userId);
+      params.set('limit', String(CONNECTED_ACCOUNTS_SCAN_LIMIT));
+      const response = await this.fetchWithTimeout(
+        `${COMPOSIO_CONNECTED_ACCOUNTS_URL}?${params.toString()}`,
+        {
+          method: 'GET',
+          headers: {
+            'x-api-key': COMPOSIO_API_KEY,
+            Accept: 'application/json',
+          },
+        }
+      );
+      if (!response.ok) {
+        this.logger.warn(
+          `[integrations] connected_accounts HTTP ${response.status}`
+        );
+        return new Set<string>();
+      }
+      const data: any = await response.json().catch(() => null);
+      return extractConnectedSlugs(data);
+    } catch (err) {
+      this.logger.warn(
+        `[integrations] connected_accounts fetch failed: ${(err as Error)?.message ?? err}`
+      );
+      return new Set<string>();
     }
   }
 

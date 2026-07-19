@@ -204,8 +204,13 @@ const FAST_IMAGE_TIMEOUT_MS = 60_000;
 // Deepgram Aura-2 TTS voices this route accepts (the working provider's
 // supported set). The frontend renders exactly these for the Deepgram card.
 // Unknown/empty -> the historical default so old callers stay byte-identical.
+// C3 (VOICE): the list is broadened to the fuller Aura-2 English roster across
+// registers/accents/genders. The historical default and the original ten voices
+// are still first in the array, so an old caller that passed any of them (or
+// nothing) resolves to the exact same voice as before — additive only.
 const DEEPGRAM_TTS_DEFAULT_VOICE = 'aura-2-thalia-en';
 const DEEPGRAM_TTS_VOICES = [
+  // — original ten (kept first, order-stable for byte-compatible callers) —
   'aura-2-thalia-en',
   'aura-2-andromeda-en',
   'aura-2-helena-en',
@@ -216,10 +221,45 @@ const DEEPGRAM_TTS_VOICES = [
   'aura-2-orion-en',
   'aura-2-orpheus-en',
   'aura-2-zeus-en',
+  // — C3 additions: fuller Aura-2 English library —
+  'aura-2-amalthea-en',
+  'aura-2-asteria-en',
+  'aura-2-athena-en',
+  'aura-2-atlas-en',
+  'aura-2-aurora-en',
+  'aura-2-callista-en',
+  'aura-2-cora-en',
+  'aura-2-cordelia-en',
+  'aura-2-delia-en',
+  'aura-2-draco-en',
+  'aura-2-electra-en',
+  'aura-2-harmonia-en',
+  'aura-2-hera-en',
+  'aura-2-hermes-en',
+  'aura-2-hyperion-en',
+  'aura-2-iris-en',
+  'aura-2-janus-en',
+  'aura-2-juno-en',
+  'aura-2-jupiter-en',
+  'aura-2-mars-en',
+  'aura-2-minerva-en',
+  'aura-2-neptune-en',
+  'aura-2-odysseus-en',
+  'aura-2-ophelia-en',
+  'aura-2-pandora-en',
+  'aura-2-phoebe-en',
+  'aura-2-pluto-en',
+  'aura-2-saturn-en',
+  'aura-2-selene-en',
+  'aura-2-theia-en',
+  'aura-2-vesta-en',
 ] as const;
-// OpenAI /v1/audio/speech voices (tts-1). The frontend renders exactly these
-// for the OpenAI card. Unknown/empty -> 'alloy'. `speed` is clamped 0.25–4.0
-// per the OpenAI contract; Deepgram has no speed knob so it is ignored there.
+// OpenAI /v1/audio/speech voices. The frontend renders exactly these for the
+// OpenAI card. Unknown/empty -> 'alloy'. `speed` is clamped 0.25–4.0 per the
+// OpenAI contract; Deepgram has no speed knob so it is ignored there.
+// C3 (VOICE): expanded to the full roster shipped by gpt-4o-mini-tts — the six
+// legacy tts-1 voices (kept first for byte-compatibility) plus ash/ballad/coral/
+// sage/verse. Any previously-valid voice still validates to the same value.
 const OPENAI_TTS_DEFAULT_VOICE = 'alloy';
 const OPENAI_TTS_VOICES = [
   'alloy',
@@ -228,7 +268,39 @@ const OPENAI_TTS_VOICES = [
   'onyx',
   'nova',
   'shimmer',
+  'ash',
+  'ballad',
+  'coral',
+  'sage',
+  'verse',
 ] as const;
+// C3 (VOICE): OpenAI TTS models. `gpt-4o-mini-tts` is the new default — it
+// honours a free-text `instructions` field (emotion/prosody steerability), the
+// real ElevenLabs-style-control analog. `tts-1`/`tts-1-hd` stay selectable and
+// ignore `instructions`. Unknown/omitted model -> the default below.
+const OPENAI_TTS_DEFAULT_MODEL = 'gpt-4o-mini-tts';
+const OPENAI_TTS_MODELS = ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd'] as const;
+// Only gpt-4o-mini-tts steers on `instructions`; tts-1* silently ignore it, so
+// we only forward the field for the model that supports it (avoids upstream 400s
+// on the legacy models). Kept as a set for O(1) membership checks.
+const OPENAI_TTS_INSTRUCTION_MODELS = new Set<string>(['gpt-4o-mini-tts']);
+// C3 (VOICE): output container/format the client may request. Default stays
+// 'mp3' so the wire shape (audio/mpeg) is byte-identical for existing callers.
+// Each maps to the upstream response_format value + the Content-Type we set.
+const VOICE_TTS_FORMATS: Record<
+  string,
+  { openai: string; deepgram: string; contentType: string }
+> = {
+  mp3: { openai: 'mp3', deepgram: 'mp3', contentType: 'audio/mpeg' },
+  opus: { openai: 'opus', deepgram: 'opus', contentType: 'audio/ogg' },
+  aac: { openai: 'aac', deepgram: 'aac', contentType: 'audio/aac' },
+  flac: { openai: 'flac', deepgram: 'flac', contentType: 'audio/flac' },
+  wav: { openai: 'wav', deepgram: 'wav', contentType: 'audio/wav' },
+};
+const VOICE_TTS_DEFAULT_FORMAT = 'mp3';
+// Cap the free-text OpenAI `instructions` field so it can't be abused as a
+// giant prompt against the paid speech API.
+const MAX_TTS_INSTRUCTIONS_CHARS = 1_000;
 const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
 const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
 const MAKE_BUILDER_AGENT_ID = process.env.MAKE_BUILDER_AGENT_ID || '';
@@ -934,6 +1006,59 @@ const ERP_MAX_WRITE_BYTES = 8 * 1024 - 128;
 const ERP_DEFAULT_TAGLINE =
   'Produits de qualité, livrés partout en Algérie — paiement à la livraison.';
 
+// ---------------------------------------------------------------------------
+// C7 — SHOP APPEARANCE allowlist (theme / template / font / sections).
+// The settings singleton stores APPEARANCE as IDS/ENUMS only — NEVER raw CSS —
+// so the record stays tiny (well under the 8KB cap) and the storefront template
+// (owned by SHOP-TEMPLATE) resolves each id to its concrete :root vars / layout
+// at render time. The DEFAULTS below reproduce today's single look, so a legacy
+// singleton (no appearance fields) normalizes to the byte-identical current
+// storefront. Unknown ids are REJECTED (400 invalid_settings) — the server
+// never trusts a caller-supplied style string.
+// ---------------------------------------------------------------------------
+// Theme presets (≥4). 'classic' == today's teal look (the default).
+const ERP_THEME_IDS = ['classic', 'dark', 'vibrant', 'minimal'] as const;
+const ERP_DEFAULT_THEME = 'classic';
+// Layout templates (≥2, ids owned by clickdz-shop-template.ts). 'standard' ==
+// today's hero + product grid (default); 'boutique' == editorial layout.
+const ERP_TEMPLATE_IDS = ['standard', 'boutique'] as const;
+const ERP_DEFAULT_TEMPLATE = 'standard';
+// Font ids map to a --font stack in the template (mirrors the studio's
+// cdz-style-editor font choices). 'system' == today's stack (the default).
+const ERP_FONT_IDS = ['system', 'inter', 'poppins', 'playfair'] as const;
+const ERP_DEFAULT_FONT = 'system';
+// Toggleable storefront sections (ids only). Default = all on (today's look).
+const ERP_SECTION_IDS = ['hero', 'trust', 'categories', 'featured'] as const;
+const ERP_DEFAULT_SECTIONS = ERP_SECTION_IDS.join(',');
+// Cap the stored sections CSV defensively (ids only; this is belt-and-braces).
+const ERP_MAX_SECTIONS_LEN = 200;
+
+/**
+ * C7: validate + normalize the optional `sections` field. Accepts either a
+ * CSV string ('hero,trust') or a string[] of ids; returns a de-duplicated,
+ * allowlist-filtered CSV in the canonical ERP_SECTION_IDS order, or null when
+ * the input is malformed / contains an unknown id (caller emits 400). An empty
+ * selection is valid (all sections hidden) and normalizes to ''.
+ */
+function normalizeErpSections(raw: unknown): string | null {
+  let parts: string[];
+  if (Array.isArray(raw)) {
+    parts = raw.map(v => (typeof v === 'string' ? v : ''));
+  } else if (typeof raw === 'string') {
+    parts = raw.split(',');
+  } else {
+    return null;
+  }
+  const wanted = new Set(parts.map(s => s.trim().toLowerCase()).filter(Boolean));
+  for (const id of wanted) {
+    if (!(ERP_SECTION_IDS as readonly string[]).includes(id)) return null;
+  }
+  // Canonical order + de-dup; keep it tiny.
+  const csv = ERP_SECTION_IDS.filter(id => wanted.has(id)).join(',');
+  if (csv.length > ERP_MAX_SECTIONS_LEN) return null;
+  return csv;
+}
+
 /** Template `num()`: Number(v), non-finite → 0. */
 function erpNum(v: unknown): number {
   const n = Number(v);
@@ -980,9 +1105,24 @@ function erpDisplayTitle(rec: ErpRecord): string {
  * defaultSettings(), so a never-visited shop still yields a complete,
  * render-ready object. The accent is regex-checked server-side because the
  * dashboard injects it into inline styles.
+ *
+ * C7 (APPEARANCE): the object is EXTENDED (additive) with theme/template/font/
+ * sections — IDS ONLY, each validated against its allowlist and falling back to
+ * the default (today's look) when absent or unrecognized. A legacy singleton
+ * (none of these fields set) therefore normalizes to the byte-identical current
+ * storefront, and a stored-but-corrupt id can never break rendering. No raw CSS
+ * is ever read or stored.
  */
 function normalizeErpSettings(row: ErpRecord | undefined) {
   const accent = erpStr(row?.accent);
+  const theme = erpStr(row?.theme).trim().toLowerCase();
+  const template = erpStr(row?.template).trim().toLowerCase();
+  const font = erpStr(row?.font).trim().toLowerCase();
+  // sections: accept a stored CSV (or legacy array), re-validate to a canonical
+  // CSV; anything invalid → the default (all sections on).
+  const sections = normalizeErpSections(
+    row?.sections !== undefined ? row.sections : ERP_DEFAULT_SECTIONS
+  );
   return {
     key: 'settings',
     shopName:
@@ -1000,6 +1140,17 @@ function normalizeErpSettings(row: ErpRecord | undefined) {
     adminPin: erpStr(row?.adminPin).slice(0, 12) || CDZ_TPL_DEFAULT_PIN,
     accent: CDZ_ACCENT_RE.test(accent) ? accent : CDZ_TPL_DEFAULT_ACCENT,
     currency: erpStr(row?.currency).trim() || 'DZD',
+    // C7 appearance ids (validated; defaults reproduce today's look).
+    theme: (ERP_THEME_IDS as readonly string[]).includes(theme)
+      ? theme
+      : ERP_DEFAULT_THEME,
+    template: (ERP_TEMPLATE_IDS as readonly string[]).includes(template)
+      ? template
+      : ERP_DEFAULT_TEMPLATE,
+    font: (ERP_FONT_IDS as readonly string[]).includes(font)
+      ? font
+      : ERP_DEFAULT_FONT,
+    sections: sections ?? ERP_DEFAULT_SECTIONS,
   };
 }
 
@@ -1131,15 +1282,31 @@ export class ClickDzBridgeController {
   }
 
   /**
-   * WS4 cap enforcement, folded into the deploy path. Returns true when the
-   * deploy may proceed. When a NEW slug would exceed the per-owner cap, writes
-   * the exact contract 409 body and returns false. Same-slug redeploy is always
+   * WS4 + C2 cap enforcement, folded into the deploy path. Returns true when the
+   * deploy may proceed. On ANY breach it writes the exact typed 409 body (whose
+   * `message` NAMES the limit) and returns false. Same-slug redeploy is always
    * allowed. An optional body.replaceSlug is unpublished FIRST (freeing a slot).
+   *
+   * C2 (QUOTAS) — three caps, all computed from the existing Redis SET (no
+   * schema change; the record already carries `kind`/`storeSlug`):
+   *   1. TOTAL apps: at most CDZ_PUBLISH_MAX_APPS distinct published slugs
+   *      (default 1) — the pre-existing behaviour, preserved.
+   *   2. SHOP: at most one `kind:'shop'` store per user. A 2nd shop (a shop
+   *      record with a DIFFERENT storeSlug) is a typed 409 `shop_limit_reached`.
+   *   3. ERP: at most one STANDALONE `kind:'erp'` per user. A shop's PAIRED ERP
+   *      (its storeSlug matches an existing shop's slug/storeSlug) is ALWAYS
+   *      allowed — the shop+erp pair counts as the ONE shop. A 2nd standalone
+   *      erp is a typed 409 `erp_limit_reached`.
+   * Net product rule: 1 app, 1 shop(+its erp) per user.
    */
   private async assertUnderPublishCap(
     ownerId: string,
     slug: string,
     replaceSlug: string | undefined,
+    // C2: the kind + shared storeSlug of THIS deploy (both may be undefined for
+    // a plain generated app). Drive the per-kind caps + shop/erp pairing.
+    kind: 'shop' | 'erp' | undefined,
+    storeSlug: string | undefined,
     res: Response
   ): Promise<boolean> {
     // replaceSlug: unpublish that slug first (Vercel delete + srem), freeing a
@@ -1149,15 +1316,94 @@ export class ClickDzBridgeController {
       await this.sremPublishedApp(ownerId, replaceSlug);
     }
     const existing = await this.readPublishedApps(ownerId);
-    // Same-slug redeploy never grows the set — always allowed.
+    // Same-slug redeploy never grows the set — always allowed (unchanged).
     if (existing.some(r => r.slug === slug)) return true;
-    if (existing.length >= CDZ_PUBLISH_MAX_APPS) {
-      res.status(HttpStatus.CONFLICT).json({
-        error: 'publish_limit_reached',
-        limit: CDZ_PUBLISH_MAX_APPS,
-        existing: existing.map(r => ({ slug: r.slug, url: r.url })),
-      });
-      return false;
+
+    // The storeSlug this deploy binds to. A shop's own slug doubles as its
+    // storeSlug (the template returns storeSlug === slug), so fall back to the
+    // slug when a shop deploy omits storeSlug.
+    const thisStore = storeSlug || (kind === 'shop' ? slug : undefined);
+
+    // ----- C2 (2): one SHOP store per user -----------------------------------
+    if (kind === 'shop') {
+      // Existing shop stores that are NOT this same store (a re-mint of the same
+      // shop store keeps the count at one and is allowed to proceed to the total
+      // cap check below).
+      const otherShops = existing.filter(
+        r =>
+          r.kind === 'shop' &&
+          (r.storeSlug || r.slug) !== thisStore
+      );
+      if (otherShops.length >= 1) {
+        res.status(HttpStatus.CONFLICT).json({
+          error: 'shop_limit_reached',
+          limit: 1,
+          message:
+            'You can only have one shop. Delete your existing shop before creating another.',
+          existing: otherShops.map(r => ({ slug: r.slug, url: r.url })),
+        });
+        return false;
+      }
+    }
+
+    // ----- C2 (3): one STANDALONE ERP per user (a shop's paired ERP is free) --
+    if (kind === 'erp') {
+      // Is this ERP the paired ERP of an existing shop? (shares that shop's
+      // slug/storeSlug). If so it belongs to the ONE shop and is always allowed.
+      const isPairedWithShop =
+        !!thisStore &&
+        existing.some(
+          r => r.kind === 'shop' && (r.storeSlug || r.slug) === thisStore
+        );
+      if (!isPairedWithShop) {
+        // Standalone ERP. Count OTHER standalone erps (an erp whose store is
+        // not this one and which is not itself paired to any shop store).
+        const shopStores = new Set(
+          existing
+            .filter(r => r.kind === 'shop')
+            .map(r => r.storeSlug || r.slug)
+        );
+        const otherStandaloneErps = existing.filter(
+          r =>
+            r.kind === 'erp' &&
+            (r.storeSlug || r.slug) !== thisStore &&
+            !shopStores.has(r.storeSlug || r.slug)
+        );
+        if (otherStandaloneErps.length >= 1) {
+          res.status(HttpStatus.CONFLICT).json({
+            error: 'erp_limit_reached',
+            limit: 1,
+            message:
+              'You can only have one standalone ERP. Delete the existing one before creating another.',
+            existing: otherStandaloneErps.map(r => ({
+              slug: r.slug,
+              url: r.url,
+            })),
+          });
+          return false;
+        }
+      }
+    }
+
+    // ----- WS4 (1): generic-APP cap (CDZ_PUBLISH_MAX_APPS, preserved) ---------
+    // The app cap governs GENERIC apps only (kind not shop/erp). This keeps the
+    // net rule "1 app, 1 shop(+its erp)" possible — a shop and its paired ERP do
+    // NOT consume the generic-app budget (they're governed by the per-kind caps
+    // above). For a user who only ever publishes generic apps, this is identical
+    // to the pre-C2 total cap (there are no shop/erp records to exclude).
+    if (kind !== 'shop' && kind !== 'erp') {
+      const genericApps = existing.filter(
+        r => r.kind !== 'shop' && r.kind !== 'erp'
+      );
+      if (genericApps.length >= CDZ_PUBLISH_MAX_APPS) {
+        res.status(HttpStatus.CONFLICT).json({
+          error: 'publish_limit_reached',
+          limit: CDZ_PUBLISH_MAX_APPS,
+          message: `You have reached the limit of ${CDZ_PUBLISH_MAX_APPS} published app${CDZ_PUBLISH_MAX_APPS === 1 ? '' : 's'}.`,
+          existing: genericApps.map(r => ({ slug: r.slug, url: r.url })),
+        });
+        return false;
+      }
     }
     return true;
   }
@@ -2189,50 +2435,232 @@ export class ClickDzBridgeController {
     return data;
   }
 
-  /** deploy a single-file app to Vercel and wait briefly for it to go live */
-  private async deployAppToVercel(slug: string, html: string) {
+  /**
+   * C2 (VERCEL HARDENING): map a Vercel upstream HTTP status to this route's
+   * typed contract body (written via passthrough `res` — a raw HttpException
+   * would be flattened to a generic 500 by the global filter, dropping the
+   * body). Distinguishes:
+   *   401            -> 503 vercel_auth_failed   (token invalid/expired: config)
+   *   402 / 403      -> 402 vercel_quota_or_plan (billing/plan/quota — user-fix)
+   *   429            -> 429 vercel_rate_limited  (transient; retry later)
+   *   anything else  -> 502 vercel_deploy_failed (generic upstream failure)
+   * The message NAMES the reason so the frontend can tell the user what to do.
+   * NEVER logs the token. `detail` is a short upstream message slice only.
+   */
+  private writeVercelUpstreamError(
+    res: Response,
+    status: number,
+    detail: string
+  ): void {
+    const short = (detail || '').slice(0, 200);
+    if (status === 401) {
+      res.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        error: 'vercel_auth_failed',
+        message:
+          'Publishing is misconfigured: Vercel rejected the deploy token (401). An administrator must refresh VERCEL_TOKEN.',
+        status,
+      });
+    } else if (status === 402 || status === 403) {
+      res.status(HttpStatus.PAYMENT_REQUIRED).json({
+        error: 'vercel_quota_or_plan',
+        message:
+          'Vercel refused the deployment for a plan/quota/permission reason (402/403). Check the Vercel plan or project limits.',
+        status,
+      });
+    } else if (status === 429) {
+      res.status(HttpStatus.TOO_MANY_REQUESTS).json({
+        error: 'vercel_rate_limited',
+        message:
+          'Vercel is rate-limiting deployments (429). Please wait a moment and try publishing again.',
+        status,
+      });
+    } else {
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'vercel_deploy_failed',
+        message: short || 'The deployment provider returned an error.',
+        status,
+      });
+    }
+  }
+
+  /**
+   * Deploy a single-file app to Vercel and wait for it to go live.
+   *
+   * C2 (VERCEL HARDENING): takes the deploy route's passthrough `res` and
+   * returns a discriminated result. On ANY failure it writes the exact typed
+   * contract body to `res` (503/502/402/429 — see writeVercelUpstreamError) and
+   * returns `{ ok: false }`; the caller then returns immediately WITHOUT
+   * recording a publish (no silent partial success). On success it returns
+   * `{ ok: true, deployed }` with the SAME success wire shape as before.
+   *
+   * Hardening vs. the previous implementation:
+   *  • preflight VERCEL_TOKEN inside the helper too -> typed 503 (belt & braces
+   *    with the route's own preflight).
+   *  • the create POST + its JSON parse are wrapped so a network throw / non-JSON
+   *    body becomes a typed 502 instead of an uncaught 500.
+   *  • the poll loop uses incremental backoff with a ~40s HARD DEADLINE and each
+   *    poll fetch/parse is individually try/caught (a transient poll throw is
+   *    tolerated, not fatal); still-not-READY at the deadline OR a terminal
+   *    'ERROR'/'CANCELED' build is a typed 502 — never returned as success.
+   */
+  private async deployAppToVercel(
+    slug: string,
+    html: string,
+    res: Response
+  ): Promise<
+    | {
+        ok: true;
+        deployed: {
+          slug: string;
+          state: string;
+          url: string;
+          deploymentUrl: string | undefined;
+        };
+      }
+    | { ok: false }
+  > {
+    // Preflight: no token -> publishing is not configured (typed 503).
+    if (!VERCEL_TOKEN) {
+      res.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        error: 'publishing_not_configured',
+        message: 'Publishing is not configured on this deployment.',
+      });
+      return { ok: false };
+    }
     const projectName = `clickdz-app-${slug}`.slice(0, 52);
     const teamQuery = VERCEL_TEAM_ID
       ? `?teamId=${encodeURIComponent(VERCEL_TEAM_ID)}`
       : '';
-    const createRes = await fetch(
-      `https://api.vercel.com/v13/deployments${teamQuery}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${VERCEL_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: projectName,
-          files: [{ file: 'index.html', data: html }],
-          projectSettings: { framework: null },
-          target: 'production',
-        }),
-        signal: AbortSignal.timeout(30000),
-      }
-    );
-    const created = (await createRes.json()) as any;
-    if (!createRes.ok) {
-      throw new HttpException(
-        { error: { message: created?.error?.message || 'Vercel deployment failed', type: 'provider_error', code: 'vercel_deploy_failed' } },
-        HttpStatus.BAD_GATEWAY
-      );
-    }
-    // poll briefly until the deployment is READY (static deploys are fast)
-    let state = created.readyState as string;
-    for (let i = 0; i < 10 && state !== 'READY' && state !== 'ERROR'; i++) {
-      await new Promise(resolve => setTimeout(resolve, 2500));
-      const pollRes = await fetch(
-        `https://api.vercel.com/v13/deployments/${created.id}${teamQuery}`,
+
+    // ----- create the deployment (Vercel auto-creates the project by name) ----
+    let createRes: globalThis.Response;
+    try {
+      createRes = await fetch(
+        `https://api.vercel.com/v13/deployments${teamQuery}`,
         {
-          headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
-          signal: AbortSignal.timeout(15000),
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${VERCEL_TOKEN}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            name: projectName,
+            files: [{ file: 'index.html', data: html }],
+            projectSettings: { framework: null },
+            target: 'production',
+          }),
+          signal: AbortSignal.timeout(30000),
         }
       );
-      const polled = (await pollRes.json()) as any;
-      state = polled.readyState || state;
+    } catch (e) {
+      // Network error / timeout reaching Vercel — typed 502, never an uncaught
+      // 500. NEVER logs the token.
+      this.logger.warn(`[apps] Vercel create unreachable slug=${slug}: ${String(e)}`);
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'vercel_deploy_failed',
+        message: 'Could not reach the deployment provider. Please try again.',
+      });
+      return { ok: false };
     }
+    // Parse the body defensively (a non-JSON error page must not throw).
+    const created = (await createRes.json().catch(() => null)) as any;
+    if (!createRes.ok) {
+      const detail =
+        (created?.error?.message as string | undefined) ||
+        (typeof created === 'string' ? created : '') ||
+        '';
+      this.logger.warn(
+        `[apps] Vercel create failed slug=${slug} status=${createRes.status} detail=${detail.slice(0, 200)}`
+      );
+      this.writeVercelUpstreamError(res, createRes.status, detail);
+      return { ok: false };
+    }
+    if (!created || typeof created.id !== 'string') {
+      // 2xx but a body we can't act on — treat as a provider failure, not a lie.
+      this.logger.warn(`[apps] Vercel create returned no deployment id slug=${slug}`);
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'vercel_deploy_failed',
+        message: 'The deployment provider returned an unexpected response.',
+      });
+      return { ok: false };
+    }
+
+    // ----- poll until READY, with backoff + a hard deadline -------------------
+    // Terminal-failure states never resolve to a live URL; we must not record
+    // them as a successful publish.
+    let state = (created.readyState as string) || 'QUEUED';
+    const deadline = Date.now() + 40_000; // ~40s hard ceiling
+    let delay = 1_000; // incremental backoff: 1s, 1.5s, 2.25s … capped at 5s
+    while (
+      state !== 'READY' &&
+      state !== 'ERROR' &&
+      state !== 'CANCELED' &&
+      Date.now() < deadline
+    ) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay = Math.min(Math.round(delay * 1.5), 5_000);
+      try {
+        const pollRes = await fetch(
+          `https://api.vercel.com/v13/deployments/${created.id}${teamQuery}`,
+          {
+            headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+            signal: AbortSignal.timeout(15000),
+          }
+        );
+        if (!pollRes.ok) {
+          // A transient poll error (e.g. 5xx) is tolerated — keep polling until
+          // the deadline rather than failing a build that may still be going.
+          // An auth/plan error here, however, is terminal.
+          if (
+            pollRes.status === 401 ||
+            pollRes.status === 402 ||
+            pollRes.status === 403
+          ) {
+            const detail = await pollRes.text().catch(() => '');
+            this.logger.warn(
+              `[apps] Vercel poll auth/plan error slug=${slug} status=${pollRes.status}`
+            );
+            this.writeVercelUpstreamError(res, pollRes.status, detail);
+            return { ok: false };
+          }
+          continue;
+        }
+        const polled = (await pollRes.json().catch(() => null)) as any;
+        if (polled && typeof polled.readyState === 'string') {
+          state = polled.readyState;
+        }
+      } catch (e) {
+        // Poll network throw: tolerate and retry until the deadline. This is the
+        // GAP that previously escaped as an uncaught 500.
+        this.logger.warn(`[apps] Vercel poll hiccup slug=${slug}: ${String(e)}`);
+      }
+    }
+
+    // Terminal failure OR still-not-READY at the deadline -> typed 502. Do NOT
+    // return a non-READY deploy as success (no silent partial success).
+    if (state === 'ERROR' || state === 'CANCELED') {
+      this.logger.warn(`[apps] Vercel build ${state} slug=${slug}`);
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'vercel_deploy_failed',
+        message: `The deployment failed to build (${state}).`,
+        state,
+      });
+      return { ok: false };
+    }
+    if (state !== 'READY') {
+      this.logger.warn(
+        `[apps] Vercel deploy not READY at deadline slug=${slug} state=${state}`
+      );
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'vercel_deploy_timeout',
+        message:
+          'The deployment did not go live in time. It may still finish — check your published apps shortly.',
+        state,
+      });
+      return { ok: false };
+    }
+
+    // ----- resolve the REAL live URL (fail-soft) ------------------------------
     // never GUESS the live URL — Vercel may truncate long project names when
     // assigning the <project>.vercel.app domain, so read the real one
     let liveUrl = created.url ? `https://${created.url}` : undefined;
@@ -2244,7 +2672,7 @@ export class ClickDzBridgeController {
           signal: AbortSignal.timeout(15000),
         }
       );
-      const domains = (await domainsRes.json()) as any;
+      const domains = (await domainsRes.json().catch(() => null)) as any;
       const assigned =
         (domains?.domains || []).find(
           (d: any) => d.verified && String(d.name).endsWith('.vercel.app')
@@ -2256,10 +2684,13 @@ export class ClickDzBridgeController {
       // keep the deployment-specific URL as a safe fallback
     }
     return {
-      slug,
-      state,
-      url: liveUrl ?? `https://${projectName}.vercel.app`,
-      deploymentUrl: created.url ? `https://${created.url}` : undefined,
+      ok: true,
+      deployed: {
+        slug,
+        state,
+        url: liveUrl ?? `https://${projectName}.vercel.app`,
+        deploymentUrl: created.url ? `https://${created.url}` : undefined,
+      },
     };
   }
 
@@ -2482,11 +2913,16 @@ export class ClickDzBridgeController {
     @Body() body: any,
     @Res({ passthrough: true }) res: Response
   ) {
+    // C2 (VERCEL HARDENING): publishing not configured -> typed 503 via
+    // passthrough (a raw HttpException here is flattened to a generic 500 by the
+    // global filter, dropping the contract body). The deploy helper preflights
+    // the token again as belt-and-braces.
     if (!VERCEL_TOKEN) {
-      throw new HttpException(
-        { error: { message: 'Vercel deployment is not configured', type: 'configuration_error', code: 'vercel_token_missing' } },
-        HttpStatus.SERVICE_UNAVAILABLE
-      );
+      res.status(HttpStatus.SERVICE_UNAVAILABLE).json({
+        error: 'publishing_not_configured',
+        message: 'Publishing is not configured on this deployment.',
+      });
+      return;
     }
     // SECURITY: reject wrong-typed html before coercion (a non-string that
     // stringifies to garbage should not reach the deploy pipeline).
@@ -2522,12 +2958,11 @@ export class ClickDzBridgeController {
       typeof body?.replaceSlug === 'string' && APP_SLUG_RE.test(body.replaceSlug)
         ? body.replaceSlug
         : undefined;
-    if (!(await this.assertUnderPublishCap(user.id, slug, replaceSlug, res))) {
-      return;
-    }
     // C5: optional pairing metadata. A ShopERP deploy passes kind ('shop'|'erp')
     // and the shared storeSlug so GET /apps/mine can label + pair them. Both are
     // validated/normalized and simply omitted when absent (legacy/plain apps).
+    // C2 (QUOTAS): parsed BEFORE the cap check so the per-kind guard can see the
+    // kind + the shop/erp pairing (a shop's paired ERP shares the storeSlug).
     const kindRaw = String(body?.kind || '').trim().toLowerCase();
     const kind: 'shop' | 'erp' | undefined =
       kindRaw === 'shop' || kindRaw === 'erp' ? kindRaw : undefined;
@@ -2535,13 +2970,34 @@ export class ClickDzBridgeController {
       typeof body?.storeSlug === 'string' && APP_SLUG_RE.test(body.storeSlug)
         ? body.storeSlug
         : undefined;
+    // C2 (QUOTAS): the total-app cap AND the per-kind caps (1 shop(+its erp),
+    // 1 standalone erp) are all enforced here off the existing Redis SET. A
+    // breach writes the exact typed 409 (message names the limit) and returns
+    // false — the response is already committed, so stop.
+    if (
+      !(await this.assertUnderPublishCap(
+        user.id,
+        slug,
+        replaceSlug,
+        kind,
+        storeSlug,
+        res
+      ))
+    ) {
+      return;
+    }
     if (!html.includes('Built with ClickDz') && html.includes('</body>')) {
       html = html.replace('</body>', `${CLICKDZ_APP_WATERMARK}</body>`);
     }
     this.logger.log(
       `[apps] deploying ${html.length} chars as slug=${slug} user=${user.id}`
     );
-    const deployed = await this.deployAppToVercel(slug, html);
+    // C2 (VERCEL HARDENING): the helper owns `res` on failure (typed 503/502/
+    // 402/429 already written) — stop WITHOUT recording, so there is no silent
+    // partial success. Only a READY deploy reaches recordPublishedApp.
+    const result = await this.deployAppToVercel(slug, html, res);
+    if (!result.ok) return;
+    const deployed = result.deployed;
     this.logger.log(`[apps] deployed: ${deployed.url} (${deployed.state})`);
     // WS4: record the successful publish under the caller's set (idempotent per
     // slug) so it counts toward the cap and appears in GET /apps/mine.
@@ -2738,10 +3194,27 @@ export class ClickDzBridgeController {
    * voice list WITHOUT probing a real generation. Auth'd like the rest of the
    * voice surface (session cookie). No key => that provider `available:false`;
    * the page then disables its card and shows a tooltip. Additive, read-only.
+   *
+   * C3 (VOICE): the per-provider shape is EXTENDED (additive — every prior key
+   * is unchanged) with `models[]`, `supportsInstructions`, `formats[]`,
+   * `defaultModel` and a `cloning:{ supported:false, reason }` block so the
+   * Studio can render model pickers, an instructions/style textarea, a format
+   * picker, and an honest "cloning needs another provider" note. The existing
+   * `id/label/available/voices/defaultVoice/supportsSpeed` keys are preserved so
+   * the current Generate tab keeps working unchanged.
    */
   @Throttle('strict')
   @Get('/api/voice/capabilities')
   voiceCapabilities() {
+    // Neither OpenAI /v1/audio/speech nor Deepgram Aura-2 accepts a reference
+    // sample to reproduce a specific person's voice — cloning is out of scope
+    // for BOTH providers. Report it honestly so the UI shows "needs a cloning
+    // provider" instead of faking a cloning affordance.
+    const cloning = {
+      supported: false,
+      reason:
+        'Voice cloning requires a dedicated cloning provider; OpenAI and Deepgram offer preset voices only.',
+    } as const;
     return {
       transcription: {
         // STT is OpenAI Whisper only (the working path). No key => the
@@ -2749,10 +3222,17 @@ export class ClickDzBridgeController {
         available: !!OPENAI_VOICE_API_KEY,
         provider: 'openai' as const,
         model: 'whisper-1',
+        models: ['whisper-1'],
       },
+      // Cloning verdict surfaced at the top level too so the Studio can render a
+      // single global "cloning unavailable" banner without inspecting providers.
+      cloning,
       tts: {
         // Default provider preserved as Deepgram (current behaviour).
         defaultProvider: 'deepgram' as const,
+        // Advertised output formats (default first). All callers keep mp3.
+        formats: Object.keys(VOICE_TTS_FORMATS),
+        defaultFormat: VOICE_TTS_DEFAULT_FORMAT,
         providers: [
           {
             id: 'deepgram' as const,
@@ -2760,7 +3240,16 @@ export class ClickDzBridgeController {
             available: !!DEEPGRAM_API_KEY,
             voices: DEEPGRAM_TTS_VOICES,
             defaultVoice: DEEPGRAM_TTS_DEFAULT_VOICE,
-            supportsSpeed: false,
+            // C3: Aura-2 accepts a rate control on /v1/speak — flip this on so
+            // the UI shows a speed slider for Deepgram too.
+            supportsSpeed: true,
+            // Deepgram has no free-text style steering.
+            supportsInstructions: false,
+            // Aura-2 is a single-model TTS surface (voice == model here).
+            models: [],
+            defaultModel: null,
+            formats: Object.keys(VOICE_TTS_FORMATS),
+            cloning,
           },
           {
             id: 'openai' as const,
@@ -2769,6 +3258,15 @@ export class ClickDzBridgeController {
             voices: OPENAI_TTS_VOICES,
             defaultVoice: OPENAI_TTS_DEFAULT_VOICE,
             supportsSpeed: true,
+            // gpt-4o-mini-tts honours a free-text `instructions` field.
+            supportsInstructions: true,
+            models: OPENAI_TTS_MODELS,
+            defaultModel: OPENAI_TTS_DEFAULT_MODEL,
+            // Only gpt-4o-mini-tts actually steers on instructions; the UI can
+            // grey the textarea out for the legacy tts-1 models.
+            instructionModels: Array.from(OPENAI_TTS_INSTRUCTION_MODELS),
+            formats: Object.keys(VOICE_TTS_FORMATS),
+            cloning,
           },
         ],
       },
@@ -2776,14 +3274,65 @@ export class ClickDzBridgeController {
   }
 
   /**
+   * C3 (VOICE): pipe an upstream TTS audio body straight to the Express
+   * response for low-latency time-to-first-audio, falling back to a buffered
+   * send when the runtime doesn't expose an async-iterable body. Headers are
+   * NOT committed until the upstream is confirmed OK by the caller, so an error
+   * body can still be written as JSON. Returns nothing — it owns `res` from the
+   * first byte. Mirrors the SSE-streaming idiom already used by the chat path
+   * (`for await (const bytes of response.body …)`). NEVER logs keys.
+   */
+  private async streamAudioBody(
+    res: Response,
+    response: Response | globalThis.Response,
+    contentType: string
+  ): Promise<void> {
+    const upstream = response as unknown as {
+      body: AsyncIterable<Uint8Array> | null;
+      arrayBuffer(): Promise<ArrayBuffer>;
+    };
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'no-store');
+    // Prefer true streaming when the body is async-iterable (undici on Node
+    // 18+). Any mid-stream error can't retro-actively change the status (bytes
+    // are already flowing), so we just end the response — the client hears a
+    // truncated clip rather than a 200-with-garbage lie.
+    if (upstream.body && typeof (upstream.body as any)[Symbol.asyncIterator] === 'function') {
+      try {
+        for await (const bytes of upstream.body) {
+          // Respect backpressure: stop if the client hung up.
+          if (res.writableEnded || res.destroyed) break;
+          res.write(Buffer.from(bytes));
+        }
+        res.end();
+        return;
+      } catch (e) {
+        this.logger.warn(`[voice] tts stream interrupted: ${String(e)}`);
+        if (!res.writableEnded) res.end();
+        return;
+      }
+    }
+    // Buffered fallback (no streamable body).
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    res.send(buffer);
+  }
+
+  /**
    * POST /api/voice/tts (and the legacy /api/copilot/voice/tts alias) — text
-   * to speech. Streams raw `audio/mpeg` bytes on success (unchanged wire shape).
+   * to speech. Streams the audio body on success (mp3 by default, so the wire
+   * shape is byte-identical for existing callers).
    *
-   * BODY: `{ text, provider?: 'deepgram'|'openai', voice?, speed? }`.
-   *  • provider omitted / 'deepgram'  -> EXACT current behaviour: Deepgram
-   *    Aura-2 /v1/speak, default model 'aura-2-thalia-en'. Do NOT break this.
-   *  • provider 'openai'              -> OpenAI /v1/audio/speech (tts-1, mp3),
-   *    voices alloy/echo/fable/onyx/nova/shimmer, optional `speed` 0.25–4.0.
+   * BODY: `{ text, provider?: 'deepgram'|'openai', voice?, speed?, instructions?,
+   *          model?, format? }` — ALL new fields are optional; a legacy body
+   *          `{ text, provider?, voice?, speed? }` behaves exactly as before.
+   *  • provider omitted / 'deepgram'  -> Deepgram Aura-2 /v1/speak, default
+   *    model 'aura-2-thalia-en'. `speed` (Aura-2 rate) + `format` are threaded
+   *    through as query params; with neither supplied the request is identical
+   *    to the historical `?model=<voice>&encoding=mp3` call.
+   *  • provider 'openai'              -> OpenAI /v1/audio/speech. Default model
+   *    is now `gpt-4o-mini-tts` (honouring a free-text `instructions` field for
+   *    emotion/prosody); `tts-1`/`tts-1-hd` remain selectable via `model` and
+   *    ignore `instructions`. Full voice roster; optional `speed` 0.25–4.0.
    *
    * A missing key for the CHOSEN provider -> 501 {error:'provider_unavailable',
    * provider} written straight to `res` (NOT a raw HttpException — the global
@@ -2794,6 +3343,12 @@ export class ClickDzBridgeController {
   async tts(@Body() body: any, @Res() res: Response) {
     const provider = body?.provider === 'openai' ? 'openai' : 'deepgram';
     const text = typeof body?.text === 'string' ? body.text : '';
+    // Shared, additive format selection (default mp3 => byte-identical wire).
+    const fmtKey =
+      typeof body?.format === 'string' && body.format in VOICE_TTS_FORMATS
+        ? body.format
+        : VOICE_TTS_DEFAULT_FORMAT;
+    const fmt = VOICE_TTS_FORMATS[fmtKey];
 
     if (provider === 'openai') {
       if (!OPENAI_VOICE_API_KEY) {
@@ -2807,22 +3362,41 @@ export class ClickDzBridgeController {
       const voice = OPENAI_TTS_VOICES.includes(body?.voice)
         ? body.voice
         : OPENAI_TTS_DEFAULT_VOICE;
+      // Model: validated against the allowlist; unknown/omitted -> the new
+      // gpt-4o-mini-tts default. Legacy callers that never sent `model` now get
+      // the better default model with the SAME voices + mp3 output.
+      const model =
+        typeof body?.model === 'string' && (OPENAI_TTS_MODELS as readonly string[]).includes(body.model)
+          ? body.model
+          : OPENAI_TTS_DEFAULT_MODEL;
       const speedNum = Number(body?.speed);
       const payload: Record<string, unknown> = {
-        model: 'tts-1',
+        model,
         input: text,
         voice,
-        response_format: 'mp3',
+        response_format: fmt.openai,
       };
       if (Number.isFinite(speedNum) && speedNum > 0) {
         payload.speed = Math.max(0.25, Math.min(4, speedNum));
+      }
+      // `instructions` (emotion/prosody) — only forwarded for models that
+      // actually support it, and only when non-empty. tts-1* silently ignore
+      // the field upstream, but we omit it there to avoid a 400 on strict tiers.
+      if (
+        OPENAI_TTS_INSTRUCTION_MODELS.has(model) &&
+        typeof body?.instructions === 'string' &&
+        body.instructions.trim()
+      ) {
+        payload.instructions = body.instructions
+          .trim()
+          .slice(0, MAX_TTS_INSTRUCTIONS_CHARS);
       }
       const response = await fetch(OPENAI_SPEECH_URL, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${OPENAI_VOICE_API_KEY}`,
           'Content-Type': 'application/json',
-          Accept: 'audio/mpeg',
+          Accept: fmt.contentType,
         },
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(VOICE_TTS_TIMEOUT_MS),
@@ -2836,7 +3410,7 @@ export class ClickDzBridgeController {
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
         this.logger.warn(
-          `[voice] openai tts upstream ${response.status} detail=${detail.slice(0, 200)}`
+          `[voice] openai tts upstream ${response.status} model=${model} detail=${detail.slice(0, 200)}`
         );
         res.status(HttpStatus.BAD_GATEWAY).json({
           error: 'tts_failed',
@@ -2845,14 +3419,14 @@ export class ClickDzBridgeController {
         });
         return;
       }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.send(buffer);
+      await this.streamAudioBody(res, response, fmt.contentType);
       return;
     }
 
-    // provider === 'deepgram' — unchanged working path (extended only with the
-    // 501 contract body when the key is missing, replacing the old 503 throw).
+    // provider === 'deepgram' — the working path. Extended additively: the 501
+    // contract body when the key is missing, plus optional speed/format query
+    // params. With neither speed nor a non-mp3 format the outbound request is
+    // byte-identical to the historical `?model=<voice>&encoding=mp3` call.
     if (!DEEPGRAM_API_KEY) {
       res
         .status(HttpStatus.NOT_IMPLEMENTED)
@@ -2860,16 +3434,38 @@ export class ClickDzBridgeController {
       return;
     }
     const model = body?.voice || DEEPGRAM_TTS_DEFAULT_VOICE;
-    const response = await fetch(`https://api.deepgram.com/v1/speak?model=${encodeURIComponent(model)}&encoding=mp3`, {
+    // Aura-2 encoding param: mp3 stays 'mp3'; other formats map through the same
+    // table (opus/aac/flac/wav are valid Deepgram encodings).
+    const dgEncoding = fmt.deepgram;
+    let dgUrl = `https://api.deepgram.com/v1/speak?model=${encodeURIComponent(model)}&encoding=${encodeURIComponent(dgEncoding)}`;
+    // Aura-2 supports a playback rate control; forward a clamped `speed` when a
+    // finite, positive, non-default value is supplied (omit otherwise so the
+    // default request is unchanged).
+    const dgSpeed = Number(body?.speed);
+    if (Number.isFinite(dgSpeed) && dgSpeed > 0 && dgSpeed !== 1) {
+      dgUrl += `&speed=${encodeURIComponent(String(Math.max(0.25, Math.min(4, dgSpeed))))}`;
+    }
+    const response = await fetch(dgUrl, {
       method: 'POST',
       headers: {
         Authorization: `Token ${DEEPGRAM_API_KEY}`,
         'Content-Type': 'application/json',
-        Accept: 'audio/mpeg',
+        Accept: fmt.contentType,
       },
       body: JSON.stringify({ text }),
-    });
+      signal: AbortSignal.timeout(VOICE_TTS_TIMEOUT_MS),
+    }).catch(() => null);
+    if (!response) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'tts_failed', provider: 'deepgram' });
+      return;
+    }
     if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      this.logger.warn(
+        `[voice] deepgram tts upstream ${response.status} detail=${detail.slice(0, 200)}`
+      );
       res.status(HttpStatus.BAD_GATEWAY).json({
         error: 'tts_failed',
         provider: 'deepgram',
@@ -2877,9 +3473,7 @@ export class ClickDzBridgeController {
       });
       return;
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.send(buffer);
+    await this.streamAudioBody(res, response, fmt.contentType);
   }
 
   /**
@@ -3575,6 +4169,13 @@ export class ClickDzBridgeController {
    * /apps/template emits (passthrough res carries the field name). The merge
    * base is the stored singleton normalized to the deployed shop's full field
    * set, so unpatched fields keep their values (defaults when never set).
+   *
+   * C7 (APPEARANCE): the allowlist is EXTENDED (additive) with theme/template/
+   * font/sections — IDS/ENUMS ONLY, validated against their allowlists; NEVER
+   * raw CSS (store ids, the template resolves them). An unknown id → the same
+   * 400 {error:'invalid_settings', field}. Everything else (delete+recreate on
+   * the singleton, 8KB cap, per-slug write token, French status strings) is
+   * unchanged.
    */
   @Throttle('strict')
   @Post('/api/v1/apps/:slug/erp/settings')
@@ -3621,6 +4222,32 @@ export class ClickDzBridgeController {
         badField = 'adminPin';
       } else patch.adminPin = s.adminPin;
     }
+    // C7 (APPEARANCE): theme / template / font — validated ID enums, stored as
+    // lowercase ids (never raw CSS). An unknown id is a per-field 400.
+    if (!badField && s.theme != null) {
+      const id = typeof s.theme === 'string' ? s.theme.trim().toLowerCase() : '';
+      if (!(ERP_THEME_IDS as readonly string[]).includes(id)) badField = 'theme';
+      else patch.theme = id;
+    }
+    if (!badField && s.template != null) {
+      const id =
+        typeof s.template === 'string' ? s.template.trim().toLowerCase() : '';
+      if (!(ERP_TEMPLATE_IDS as readonly string[]).includes(id)) {
+        badField = 'template';
+      } else patch.template = id;
+    }
+    if (!badField && s.font != null) {
+      const id = typeof s.font === 'string' ? s.font.trim().toLowerCase() : '';
+      if (!(ERP_FONT_IDS as readonly string[]).includes(id)) badField = 'font';
+      else patch.font = id;
+    }
+    // C7: sections — a CSV/array of allowed section ids, normalized to a
+    // canonical CSV. Malformed / unknown id → 400. Empty selection is valid.
+    if (!badField && s.sections != null) {
+      const csv = normalizeErpSections(s.sections);
+      if (csv === null) badField = 'sections';
+      else patch.sections = csv;
+    }
     if (badField) {
       res
         .status(HttpStatus.BAD_REQUEST)
@@ -3629,7 +4256,7 @@ export class ClickDzBridgeController {
     }
     if (Object.keys(patch).length === 0) {
       throw new BadRequest(
-        '"patch" must include at least one of: shopName, tagline, whatsapp, deliveryFee, accent, adminPin'
+        '"patch" must include at least one of: shopName, tagline, whatsapp, deliveryFee, accent, adminPin, theme, template, font, sections'
       );
     }
     const token = dataWriteToken(slug);

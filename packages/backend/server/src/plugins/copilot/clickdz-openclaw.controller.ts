@@ -47,13 +47,18 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   Req,
   Res,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
-import { BadRequest, NotFound, Throttle } from '../../base';
+// WS14/C5: `Cache` is the @Global JSON-wrapped Redis provider (get<T>/set with a
+// PX ttl — fail-soft, never throws) — the SAME provider ClickDzAgentRuntime uses
+// for thread persistence. The per-user agent config singleton is persisted
+// through it, mirroring that Pattern-B idiom.
+import { BadRequest, Cache, NotFound, Throttle } from '../../base';
 import { CurrentUser } from '../../core/auth';
 // RUNTIME (contract C3): the shared agent runtime — SSE writer, Redis-backed
 // threads, cooperative stop registry — plus the wire types (C1/C2). HERMESB2
@@ -162,6 +167,50 @@ const THREAD_TITLE_MAX = 200;
 const OPENCLAW_RUNTIMES = ['node24', 'python3.13'];
 const OPENCLAW_DEFAULT_RUNTIME = 'node24';
 const AGENT_NAME = 'openclaw' as const;
+
+// --- WS14 / C5: per-user agent CONFIG (onboarding persistence). A per-user
+// singleton (the "1 openclaw" = one config each) persisted through the JSON
+// Cache under `clickdz:agent:config:<userId>:openclaw`, ~90d TTL refreshed on
+// write — mirroring the runtime's Pattern-B thread persistence. Threads stay the
+// runs (no cap here). ---
+const OPENCLAW_CONFIG_TTL_MS = 90 * 24 * 60 * 60 * 1000; // ~90 days
+const openclawConfigKey = (userId: string) =>
+  `clickdz:agent:config:${userId}:openclaw`;
+
+// The persisted per-user OpenClaw config. `provisioned` drives the onboarding
+// gate (unprovisioned → wizard; provisioned → dashboard/console). Optional
+// fields are omitted when unset so the GET default is a clean {provisioned}.
+interface OpenclawConfig {
+  provisioned: boolean;
+  defaultRuntime?: (typeof OPENCLAW_RUNTIMES)[number];
+  previewAutoOpen?: boolean;
+  updatedAt?: number;
+}
+
+/**
+ * Sanitize a persisted (possibly partial/corrupt) OpenClaw config read back from
+ * the cache into the canonical GET shape. Unknown/invalid fields are dropped;
+ * defaultRuntime is validated against the accepted runtimes; the default when
+ * nothing is stored is {provisioned:false}. Pure, never throws.
+ */
+function normalizeOpenclawConfig(raw: unknown): OpenclawConfig {
+  if (!raw || typeof raw !== 'object') return { provisioned: false };
+  const o = raw as Record<string, unknown>;
+  const out: OpenclawConfig = { provisioned: o.provisioned === true };
+  if (
+    typeof o.defaultRuntime === 'string' &&
+    OPENCLAW_RUNTIMES.includes(o.defaultRuntime)
+  ) {
+    out.defaultRuntime = o.defaultRuntime as (typeof OPENCLAW_RUNTIMES)[number];
+  }
+  if (typeof o.previewAutoOpen === 'boolean') {
+    out.previewAutoOpen = o.previewAutoOpen;
+  }
+  if (typeof o.updatedAt === 'number' && Number.isFinite(o.updatedAt)) {
+    out.updatedAt = o.updatedAt;
+  }
+  return out;
+}
 
 // One executed loop step surfaced back to the legacy /run client (WS11 shape).
 interface ClawStep {
@@ -412,9 +461,27 @@ export class ClickDzOpenclawController {
   private readonly logger = new Logger(ClickDzOpenclawController.name);
 
   // The shared agent runtime (SSE + threads + stop) is injected; the sandbox
-  // client is a set of module functions (no DI). CacheRedis is reached through
-  // the runtime, so this controller needs no direct Redis dependency.
-  constructor(private readonly runtime: ClickDzAgentRuntime) {}
+  // client is a set of module functions (no DI). Thread persistence is reached
+  // through the runtime; WS14/C5 adds the @Global JSON `Cache` for the per-user
+  // config singleton (the SAME provider the runtime persists threads through).
+  constructor(
+    private readonly runtime: ClickDzAgentRuntime,
+    private readonly cache: Cache
+  ) {}
+
+  /**
+   * Read + normalize the caller's persisted OpenClaw config (fail-soft). Returns
+   * the canonical {provisioned:false} default when nothing is stored or the read
+   * fails. Never throws.
+   */
+  private async readOpenclawConfig(userId: string): Promise<OpenclawConfig> {
+    try {
+      const raw = await this.cache.get<unknown>(openclawConfigKey(userId));
+      return normalizeOpenclawConfig(raw);
+    } catch {
+      return { provisioned: false };
+    }
+  }
 
   // One-shot flag so the resolved planner base+path is logged the FIRST time a
   // planner call is actually attempted (lazy — never at import), never
@@ -438,12 +505,18 @@ export class ClickDzOpenclawController {
 
   /**
    * GET capabilities — drives the frontend enable/disable state.
-   * {sandbox, reason?, plannerReady, runtimes, streaming:true} (contract C6).
+   * {sandbox, reason?, plannerReady, runtimes, streaming:true, provisioned}
+   * (contract C6). WS14/C5 folds the per-user `provisioned` flag in (additive —
+   * the existing fields are untouched) so the FE onboarding gate can key off
+   * /capabilities alone if it prefers.
    */
   @Throttle('strict')
   @Get('/api/v1/openclaw/capabilities')
-  async capabilities(@CurrentUser() _user: CurrentUser, @Res() res: Response) {
-    const capability = await this.probeSandbox();
+  async capabilities(@CurrentUser() user: CurrentUser, @Res() res: Response) {
+    const [capability, config] = await Promise.all([
+      this.probeSandbox(),
+      this.readOpenclawConfig(user.id),
+    ]);
     res.status(200).json({
       sandbox: capability.sandbox,
       ...(capability.reason ? { reason: capability.reason } : {}),
@@ -451,7 +524,88 @@ export class ClickDzOpenclawController {
       runtimes: OPENCLAW_RUNTIMES,
       // WS12: this controller now speaks SSE at /api/v1/openclaw/stream.
       streaming: true,
+      provisioned: config.provisioned,
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // WS14 / C5 — per-user agent CONFIG (onboarding persistence).
+  //
+  //   GET /api/v1/openclaw/config → the caller's config (defaults
+  //     {provisioned:false} when none). Auth via @CurrentUser.
+  //   PUT /api/v1/openclaw/config {defaultRuntime?, previewAutoOpen?} → upsert
+  //     (merges over the stored config, sets provisioned:true), validated
+  //     (defaultRuntime enum; previewAutoOpen boolean), typed 400 on malformed
+  //     input via @Res passthrough — NEVER a raw HttpException.
+  //
+  // The config is a per-user SINGLETON (the "1 openclaw" = one config each);
+  // threads remain the runs, so there is no thread cap and no 409 — PUT just
+  // upserts. Persisted through the JSON Cache under
+  // `clickdz:agent:config:<userId>:openclaw` (~90d TTL, refreshed on write).
+  // -------------------------------------------------------------------------
+  @Throttle('default')
+  @Get('/api/v1/openclaw/config')
+  async getConfig(@CurrentUser() user: CurrentUser): Promise<OpenclawConfig> {
+    return this.readOpenclawConfig(user.id);
+  }
+
+  @Throttle('default')
+  @Put('/api/v1/openclaw/config')
+  async putConfig(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<OpenclawConfig | { ok: false; error: string }> {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ ok: false, error: 'body must be an object' });
+      return { ok: false, error: 'invalid_body' };
+    }
+
+    // Partial upsert: start from the stored config, validate + apply each field.
+    const current = await this.readOpenclawConfig(user.id);
+    const next: OpenclawConfig = { ...current, provisioned: true };
+
+    if (body.defaultRuntime !== undefined) {
+      if (
+        typeof body.defaultRuntime !== 'string' ||
+        !OPENCLAW_RUNTIMES.includes(body.defaultRuntime)
+      ) {
+        res.status(400).json({
+          ok: false,
+          error: `"defaultRuntime" must be one of: ${OPENCLAW_RUNTIMES.join(
+            ', '
+          )}`,
+        });
+        return { ok: false, error: 'invalid_defaultRuntime' };
+      }
+      next.defaultRuntime =
+        body.defaultRuntime as (typeof OPENCLAW_RUNTIMES)[number];
+    }
+
+    if (body.previewAutoOpen !== undefined) {
+      if (typeof body.previewAutoOpen !== 'boolean') {
+        res.status(400).json({
+          ok: false,
+          error: '"previewAutoOpen" must be a boolean',
+        });
+        return { ok: false, error: 'invalid_previewAutoOpen' };
+      }
+      next.previewAutoOpen = body.previewAutoOpen;
+    }
+
+    next.updatedAt = Date.now();
+
+    const saved = await this.cache.set(openclawConfigKey(user.id), next, {
+      ttl: OPENCLAW_CONFIG_TTL_MS,
+    });
+    if (!saved) {
+      res.status(503).json({
+        ok: false,
+        error: 'config could not be persisted right now — please retry',
+      });
+      return { ok: false, error: 'persist_failed' };
+    }
+    return normalizeOpenclawConfig(next);
   }
 
   // =========================================================================
