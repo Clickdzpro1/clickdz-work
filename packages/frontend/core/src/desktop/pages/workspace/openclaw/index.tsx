@@ -1,8 +1,9 @@
 // STREAMCLIENT (C7): the FE SSE + thread client. The page owns no fetching of
-// its own beyond capabilities + workspace hydration — the hooks drive the run.
-// The stream hook ALREADY collects terminal/files/preview/pendingApproval for
-// us (see the exact return shape below); the page reads those directly and only
-// uses the `onEvent` PARAM to adopt a freshly-minted thread id.
+// its own beyond capabilities + config + workspace hydration — the hooks drive
+// the run. The stream hook ALREADY collects terminal/files/preview/
+// pendingApproval for us (see the exact return shape below); the console reads
+// those directly and only uses the `onEvent` PARAM to adopt a freshly-minted
+// thread id.
 import * as agentApi from '@affine/core/modules/agents/api';
 import type { AgentEvent } from '@affine/core/modules/agents/types';
 import { useAgentStream } from '@affine/core/modules/agents/use-agent-stream';
@@ -39,44 +40,46 @@ import {
 // their C9 prop signatures (documented at the bottom of this file); in an
 // isolated single-file esbuild check they won't resolve — expected.
 import { CodeViewer } from './code-viewer';
+import { OpenClawDashboard } from './dashboard';
 import { FileTree } from './file-tree';
+import {
+  Banner as StudioBanner,
+  type ClawCapabilities,
+  getCapabilities,
+  getConfig,
+  type OpenClawConfig,
+  Spinner as StudioSpinner,
+} from './openclaw-shared';
 import { PreviewPanel } from './preview-panel';
 import { Terminal } from './terminal';
+import { OpenClawWizard } from './wizard';
 
 // ---------------------------------------------------------------------------
-// OpenClaw — a real streaming coding-agent console.
+// OpenClaw — a per-user coding studio built on a real streaming coding console.
 //
-// Type a coding task; the server-side agent (cdz-flash planner) writes files,
-// runs commands in a PERSISTENT Vercel Sandbox microVM, streams stdout/stderr
-// live, and — for web tasks — boots a dev server and exposes a live preview.
-// Everything is driven by the two agent hooks + the SSE protocol (contract C1):
-//   • useAgentThreads → the left ThreadSidebar (list/load/new/rename/delete)
-//   • useAgentStream  → the run: streamingMessage (in-progress turn), status,
-//     phase, terminal/files/preview (already collected), pendingApproval,
-//     stop, approve. The `onEvent` PARAM taps `thread` to adopt a minted id.
+// The page is a STATE MACHINE mirroring the ShopERP onboarding pattern
+// (shoperp/index.tsx): on mount it GETs the per-user config + capabilities.
+//   • !provisioned            → the ONBOARDING WIZARD (set up your agent)
+//   • provisioned + dashboard → the DASHBOARD (recent tasks, sandbox status,
+//                               runtime pref, last project files/preview) with
+//                               the streaming console reachable via "New task"
+//                               / opening a thread
+//   • provisioned + console   → the live coding console (below), the exact
+//                               surface that shipped, wired to the two agent
+//                               hooks + the SSE protocol (contract C1):
+//       useAgentThreads → the left ThreadSidebar (list/load/new/rename/delete)
+//       useAgentStream  → the run: streamingMessage, status, phase,
+//                         terminal/files/preview (already collected),
+//                         pendingApproval, stop, approve.
 //
-// The right WORKSPACE panel has three tabs wired to live hook state:
-//   • Files    ← hook.files deltas ∪ api.listFiles → FileTree; open →
-//                api.readFile → CodeViewer
-//   • Terminal ← hook.terminal (stdout/stderr) → Terminal
-//   • Preview  ← hook.preview (url,status) → PreviewPanel (iframe of vercel.run)
-//
-// Capabilities gate the surface: sandbox enabled → runtime picker + live exec;
-// disabled → a clear, honest notice that code is generated but NOT executed
-// (the backend degrade path). No new .css.ts — inline styles only (house rule);
-// animations are subtle and prefers-reduced-motion safe.
+// Capabilities gate the surface honestly: sandbox enabled → live exec; disabled
+// → a clear notice (with the backend's real reason, C6) that code is generated
+// but NOT executed. No new .css.ts — inline styles only; motion is subtle and
+// prefers-reduced-motion safe.
 // ---------------------------------------------------------------------------
 
 const C = AgentPalette.color;
 const monoFamily = AgentPalette.font.mono;
-
-interface ClawCapabilities {
-  sandbox: boolean;
-  reason?: string;
-  plannerReady: boolean;
-  runtimes: string[];
-  streaming?: boolean;
-}
 
 const DEFAULT_RUNTIMES = ['node24', 'python3.13'];
 const RUNTIME_LABELS: Record<string, string> = {
@@ -95,6 +98,8 @@ const EXAMPLES: string[] = [
 
 type LoadState = 'loading' | 'ready' | 'error';
 type WorkspaceTab = 'files' | 'terminal' | 'preview';
+// The three top-level page views.
+type View = 'wizard' | 'dashboard' | 'console';
 
 // A tracked file in the workspace panel (built from the hook's `files` deltas +
 // hydrated from api.listFiles on thread load).
@@ -113,11 +118,226 @@ interface OpenFile {
   error?: string;
 }
 
-const OpenClawConsole = () => {
-  // ---- capabilities (sandbox on/off, planner readiness, runtimes) ----------
-  const [capsState, setCapsState] = useState<LoadState>('loading');
-  const [caps, setCaps] = useState<ClawCapabilities | null>(null);
+// ===========================================================================
+// PAGE — the state machine (config gate → wizard / dashboard / console).
+// ===========================================================================
 
+const OpenClawPage = () => {
+  // ---- config + capabilities (fetched once on mount) ----------------------
+  const [bootState, setBootState] = useState<LoadState>('loading');
+  const [config, setConfig] = useState<OpenClawConfig | null>(null);
+  const [caps, setCaps] = useState<ClawCapabilities | null>(null);
+  const [capsState, setCapsState] = useState<LoadState>('loading');
+
+  // View orchestration. `forceWizard` re-runs onboarding over an existing
+  // config; `consoleSeed` carries a prompt from the dashboard into the console;
+  // `consoleThreadId` opens a specific thread.
+  const [view, setView] = useState<View>('dashboard');
+  const [forceWizard, setForceWizard] = useState(false);
+  const [consoleSeed, setConsoleSeed] = useState<string | undefined>(undefined);
+  const [consoleThreadId, setConsoleThreadId] = useState<string | null>(null);
+
+  // Re-probe capabilities (wizard/dashboard recheck buttons).
+  const loadCaps = useCallback(async () => {
+    setCapsState('loading');
+    try {
+      const data = await getCapabilities();
+      setCaps(data);
+      setCapsState('ready');
+    } catch {
+      setCapsState('error');
+    }
+  }, []);
+
+  const loadBoot = useCallback(async () => {
+    setBootState('loading');
+    setCapsState('loading');
+    // Config + capabilities in parallel; the config drives the gate, caps drive
+    // the honest sandbox status. Capability failure is non-fatal (the page still
+    // opens; the sandbox card shows the error + a recheck).
+    const [cfgRes, capRes] = await Promise.allSettled([
+      getConfig(),
+      getCapabilities(),
+    ]);
+    if (cfgRes.status === 'fulfilled') {
+      setConfig(cfgRes.value);
+      setBootState('ready');
+    } else {
+      setBootState('error');
+    }
+    if (capRes.status === 'fulfilled') {
+      setCaps(capRes.value);
+      setCapsState('ready');
+    } else {
+      setCapsState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBoot();
+  }, [loadBoot]);
+
+  const provisioned = config?.provisioned === true;
+  const showWizard = bootState === 'ready' && (!provisioned || forceWizard);
+
+  // Keep `view` coherent with provisioning: an unprovisioned user is always in
+  // the wizard; a provisioned user defaults to the dashboard.
+  useEffect(() => {
+    if (bootState !== 'ready') return;
+    if (!provisioned) {
+      setView('wizard');
+    } else if (view === 'wizard' && !forceWizard) {
+      setView('dashboard');
+    }
+  }, [bootState, provisioned, forceWizard, view]);
+
+  // ---- view transitions ---------------------------------------------------
+  const handleWizardDone = useCallback((saved: OpenClawConfig) => {
+    setConfig(saved);
+    setForceWizard(false);
+    setView('dashboard');
+  }, []);
+
+  const openConsoleNew = useCallback((seed?: string) => {
+    setConsoleThreadId(null);
+    setConsoleSeed(seed);
+    setView('console');
+  }, []);
+
+  const openConsoleThread = useCallback((id: string) => {
+    setConsoleThreadId(id);
+    setConsoleSeed(undefined);
+    setView('console');
+  }, []);
+
+  const backToDashboard = useCallback(() => {
+    setConsoleSeed(undefined);
+    setView('dashboard');
+  }, []);
+
+  // ------------------------------------------------------------------ header
+  const headerChip =
+    capsState === 'ready' ? (
+      <span
+        style={{
+          ...capChipStyle,
+          color: caps?.sandbox ? C.okText : C.amber,
+          background: caps?.sandbox ? C.okBg : C.warnBg,
+          border: `1px solid ${caps?.sandbox ? C.okBorder : C.warnBorder}`,
+        }}
+        title={
+          caps?.sandbox
+            ? 'Vercel Sandbox is enabled — tasks run live.'
+            : caps?.reason ?? 'Sandbox off — code is generated, not run.'
+        }
+      >
+        {caps?.sandbox ? 'live' : 'generate-only'}
+      </span>
+    ) : null;
+
+  return (
+    <>
+      <ViewTitle title="OpenClaw" />
+      <ViewIcon icon="edgeless" />
+      <ViewHeader>
+        <div style={headerStyle}>
+          <span style={headerGlyphStyle}>{'>_'}</span>
+          OpenClaw
+          <span style={betaBadgeStyle}>béta</span>
+          {headerChip}
+          {view === 'console' && provisioned ? (
+            <button
+              style={headerBackBtnStyle}
+              onClick={backToDashboard}
+              title="Back to dashboard"
+            >
+              ← Dashboard
+            </button>
+          ) : null}
+        </div>
+      </ViewHeader>
+      <ViewBody>
+        {view === 'console' && provisioned ? (
+          // The live coding console fills the whole body (its own 3-pane layout).
+          <OpenClawConsole
+            caps={caps}
+            capsState={capsState}
+            onReloadCaps={loadCaps}
+            initialThreadId={consoleThreadId}
+            seedInput={consoleSeed}
+            defaultRuntime={config?.defaultRuntime}
+            previewAutoOpen={config?.previewAutoOpen !== false}
+          />
+        ) : (
+          // Wizard + dashboard share a centered, scrollable canvas (matches the
+          // ShopERP onboarding surface).
+          <div style={studioScrollStyle}>
+            <div style={studioInnerStyle}>
+              {bootState === 'loading' ? (
+                <div style={studioLoadingStyle}>
+                  <StudioSpinner /> Loading OpenClaw…
+                </div>
+              ) : bootState === 'error' ? (
+                <StudioBanner tone="error">
+                  Couldn’t load your OpenClaw setup.{' '}
+                  <button style={linkBtnStyle} onClick={() => void loadBoot()}>
+                    Retry
+                  </button>
+                </StudioBanner>
+              ) : showWizard ? (
+                <OpenClawWizard
+                  caps={caps}
+                  capsState={capsState}
+                  onReloadCaps={loadCaps}
+                  onDone={handleWizardDone}
+                  onCancel={
+                    provisioned ? () => setForceWizard(false) : undefined
+                  }
+                  hasExisting={provisioned}
+                  initial={config}
+                />
+              ) : config ? (
+                <OpenClawDashboard
+                  config={config}
+                  caps={caps}
+                  capsState={capsState}
+                  onReloadCaps={loadCaps}
+                  onNewTask={openConsoleNew}
+                  onOpenThread={openConsoleThread}
+                  onReconfigure={() => setForceWizard(true)}
+                />
+              ) : null}
+            </div>
+          </div>
+        )}
+      </ViewBody>
+    </>
+  );
+};
+
+// ===========================================================================
+// CONSOLE — the streaming coding console (the surface that shipped), extracted
+// into a component so the dashboard can hand it a seed prompt / thread id and
+// so the page can toggle between studio views. Behavior is unchanged.
+// ===========================================================================
+
+const OpenClawConsole = ({
+  caps,
+  capsState,
+  onReloadCaps,
+  initialThreadId,
+  seedInput,
+  defaultRuntime,
+  previewAutoOpen,
+}: {
+  caps: ClawCapabilities | null;
+  capsState: LoadState;
+  onReloadCaps: () => void;
+  initialThreadId: string | null;
+  seedInput?: string;
+  defaultRuntime?: string;
+  previewAutoOpen: boolean;
+}) => {
   // ---- threads (left sidebar) ---------------------------------------------
   const {
     threads,
@@ -131,6 +351,20 @@ const OpenClawConsole = () => {
     loadThread,
     loadingThreads,
   } = useAgentThreads({ agent: 'openclaw' });
+
+  // Open the requested thread once on mount (from the dashboard). A null id
+  // means "new task" — leave the composer empty/seeded.
+  const appliedInitialRef = useRef(false);
+  useEffect(() => {
+    if (appliedInitialRef.current) return;
+    appliedInitialRef.current = true;
+    if (initialThreadId) {
+      setActiveId(initialThreadId);
+    } else {
+      newThread();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // The stream hook needs to adopt a minted thread id + refresh the sidebar on
   // completion. `onEvent` is a PARAM (not a return) — it fires for every raw
@@ -182,50 +416,20 @@ const OpenClawConsole = () => {
   } = useAgentStream({ agent: 'openclaw', onEvent: handleStreamEvent });
 
   // ---- composer ------------------------------------------------------------
-  const [input, setInput] = useState('');
-  const [runtime, setRuntime] = useState(DEFAULT_RUNTIMES[0]);
+  const [input, setInput] = useState(seedInput ?? '');
+  const [runtime, setRuntime] = useState(
+    defaultRuntime ?? DEFAULT_RUNTIMES[0]
+  );
 
   // ---- workspace panel state ----------------------------------------------
   const [tab, setTab] = useState<WorkspaceTab>('files');
-  // Files hydrated from api.listFiles on thread load; the hook's live `files`
-  // deltas are merged on top (see the merge memo below).
   const [hydratedFiles, setHydratedFiles] = useState<WorkspaceFile[]>([]);
   const [openFile, setOpenFile] = useState<OpenFile | null>(null);
-  // A restored preview URL from the thread's persistent sandbox routes, used
-  // only until the hook surfaces a live preview.
   const [restoredPreview, setRestoredPreview] = useState<{
     url: string;
     status: 'starting' | 'ready';
   } | null>(null);
-  // Track the thread whose workspace we've hydrated, so switching threads
-  // resets the panels exactly once.
   const hydratedThreadRef = useRef<string | null>(null);
-
-  // ------------------------------------------------------------------- caps
-  const loadCaps = useCallback(async () => {
-    setCapsState('loading');
-    try {
-      const data = await agentApi.getCapabilities('openclaw');
-      const runtimes =
-        Array.isArray(data?.runtimes) && data.runtimes.length > 0
-          ? data.runtimes.filter((r): r is string => typeof r === 'string')
-          : DEFAULT_RUNTIMES;
-      setCaps({
-        sandbox: !!data?.sandbox,
-        reason: typeof data?.reason === 'string' ? data.reason : undefined,
-        plannerReady: data?.plannerReady !== false,
-        runtimes,
-        streaming: data?.streaming !== false,
-      });
-      setCapsState('ready');
-    } catch {
-      setCapsState('error');
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadCaps();
-  }, [loadCaps]);
 
   // Keep the selected runtime valid once real capabilities arrive.
   useEffect(() => {
@@ -236,8 +440,6 @@ const OpenClawConsole = () => {
   }, [caps, runtime]);
 
   // ----------------------------------------------- merged file list
-  // api.listFiles snapshot ∪ the hook's live `files` deltas (deltas win, since
-  // they reflect the newest write/update; `delete` deltas drop a path).
   const files = useMemo<WorkspaceFile[]>(() => {
     const byPath = new Map<string, WorkspaceFile>();
     for (const f of hydratedFiles) {
@@ -318,13 +520,9 @@ const OpenClawConsole = () => {
   );
 
   // ----------------------------------------------- hydrate on thread switch
-  // When the active thread changes, reset the panels and hydrate the file list
-  // for the newly-selected thread (contract C6/C9). Terminal/preview are driven
-  // live by the hook; the restored preview is recomputed below.
   useEffect(() => {
     if (hydratedThreadRef.current === activeId) return;
     hydratedThreadRef.current = activeId ?? null;
-    // Reset panel state for the new (or empty) thread.
     setHydratedFiles([]);
     setOpenFile(null);
     setRestoredPreview(null);
@@ -332,9 +530,7 @@ const OpenClawConsole = () => {
     if (!activeId) return;
 
     let alive = true;
-    // Full thread doc (messages + sandbox routes) into the conversation + preview.
     void loadThread(activeId);
-    // File list from the persistent sandbox.
     void (async () => {
       try {
         const list = await agentApi.listFiles(activeId);
@@ -358,9 +554,7 @@ const OpenClawConsole = () => {
     };
   }, [activeId, loadThread]);
 
-  // Restore the last preview URL once the full thread doc lands (it carries the
-  // persistent sandbox's exposed routes, port 3000). Only until a live preview
-  // arrives from the hook.
+  // Restore the last preview URL once the full thread doc lands.
   useEffect(() => {
     const routes = activeThread?.sandbox?.routes;
     if (!routes || routes.length === 0) {
@@ -372,17 +566,18 @@ const OpenClawConsole = () => {
     setRestoredPreview(primary ? { url: primary, status: 'ready' } : null);
   }, [activeThread]);
 
-  // The live preview from the hook wins; otherwise fall back to the restored
-  // route URL from the thread's persistent sandbox.
   const effectivePreview = preview ?? restoredPreview;
 
-  // Auto-switch to the Preview tab the moment a live preview is ready.
+  // Auto-switch to the Preview tab the moment a live preview is ready — honors
+  // the user's config.previewAutoOpen preference.
   const prevPreviewReadyRef = useRef(false);
   useEffect(() => {
     const ready = preview?.status === 'ready';
-    if (ready && !prevPreviewReadyRef.current) setTab('preview');
+    if (ready && !prevPreviewReadyRef.current && previewAutoOpen) {
+      setTab('preview');
+    }
     prevPreviewReadyRef.current = ready;
-  }, [preview]);
+  }, [preview, previewAutoOpen]);
 
   // --------------------------------------------------------------- derived
   const sandboxOn = capsState === 'ready' && !!caps?.sandbox;
@@ -401,7 +596,7 @@ const OpenClawConsole = () => {
     void send({
       message: text,
       threadId: activeId ?? undefined,
-      runtime,
+      runtime: runtime as 'node24' | 'python3.13',
     });
     setInput('');
   }, [input, running, plannerDown, send, activeId, runtime]);
@@ -458,222 +653,190 @@ const OpenClawConsole = () => {
   const hasThread = !!activeId;
 
   return (
-    <>
-      <ViewTitle title="OpenClaw" />
-      <ViewIcon icon="edgeless" />
-      <ViewHeader>
-        <div style={headerStyle}>
-          <span style={headerGlyphStyle}>{'>_'}</span>
-          OpenClaw
-          <span style={betaBadgeStyle}>béta</span>
-          {capsState === 'ready' ? (
-            <span
-              style={{
-                ...capChipStyle,
-                color: sandboxOn ? C.okText : C.amber,
-                background: sandboxOn ? C.okBg : C.warnBg,
-                border: `1px solid ${sandboxOn ? C.okBorder : C.warnBorder}`,
-              }}
-              title={
-                sandboxOn
-                  ? 'Vercel Sandbox is enabled — tasks run live.'
-                  : caps?.reason ?? 'Sandbox off — code is generated, not run.'
-              }
-            >
-              {sandboxOn ? 'live' : 'generate-only'}
-            </span>
-          ) : null}
+    <div style={rootStyle}>
+      {/* ---- LEFT: thread sidebar (SHELL) ---- */}
+      <div style={sidebarWrapStyle}>
+        <ThreadSidebar
+          threads={threads}
+          activeId={activeId}
+          onSelect={setActiveId}
+          onNew={() => {
+            void newThread();
+          }}
+          onRename={(id, title) => {
+            void renameThread(id, title);
+          }}
+          onDelete={id => {
+            void removeThread(id);
+          }}
+          loading={loadingThreads}
+          title="Sessions"
+        />
+      </div>
+
+      {/* ---- MIDDLE: conversation + composer ---- */}
+      <div style={centerColStyle}>
+        {/* status bar (phase chip + label + running) */}
+        <div style={{ flexShrink: 0 }}>
+          <StatusBar
+            phase={phase ?? 'planning'}
+            label={status ?? ''}
+            running={running}
+          />
         </div>
-      </ViewHeader>
-      <ViewBody>
-        <div style={rootStyle}>
-          {/* ---- LEFT: thread sidebar (SHELL) ---- */}
-          <div style={sidebarWrapStyle}>
-            <ThreadSidebar
-              threads={threads}
-              activeId={activeId}
-              onSelect={setActiveId}
-              onNew={() => {
-                void newThread();
-              }}
-              onRename={(id, title) => {
-                void renameThread(id, title);
-              }}
-              onDelete={id => {
-                void removeThread(id);
-              }}
-              loading={loadingThreads}
-              title="Sessions"
-            />
-          </div>
 
-          {/* ---- MIDDLE: conversation + composer ---- */}
-          <div style={centerColStyle}>
-            {/* status bar (phase chip + label + running) */}
-            <div style={{ flexShrink: 0 }}>
-              <StatusBar
-                phase={phase ?? 'planning'}
-                label={status ?? ''}
-                running={running}
-              />
-            </div>
-
-            {/* capabilities / planner banners */}
-            {capsState === 'loading' ? (
-              <Banner tone="info">Checking sandbox availability…</Banner>
-            ) : capsState === 'error' ? (
-              <Banner tone="error">
-                Couldn&apos;t load OpenClaw capabilities.{' '}
-                <button style={linkBtnStyle} onClick={() => void loadCaps()}>
-                  Retry
-                </button>
-              </Banner>
-            ) : !sandboxOn ? (
-              <Banner tone="warn">
-                <strong>Generated (not executed).</strong> Live execution is off,
-                so OpenClaw will write &amp; explain code but won&apos;t run it.
-                {caps?.reason ? (
-                  <div style={{ marginTop: 4, color: C.muted, fontSize: 12 }}>
-                    Reason: {caps.reason}
-                  </div>
-                ) : null}
-              </Banner>
+        {/* capabilities / planner banners */}
+        {capsState === 'loading' ? (
+          <Banner tone="info">Checking sandbox availability…</Banner>
+        ) : capsState === 'error' ? (
+          <Banner tone="error">
+            Couldn&apos;t load OpenClaw capabilities.{' '}
+            <button style={linkBtnStyle} onClick={onReloadCaps}>
+              Retry
+            </button>
+          </Banner>
+        ) : !sandboxOn ? (
+          <Banner tone="warn">
+            <strong>Generated (not executed).</strong> Live execution is off, so
+            OpenClaw will write &amp; explain code but won&apos;t run it.
+            {caps?.reason ? (
+              <div style={{ marginTop: 4, color: C.muted, fontSize: 12 }}>
+                Reason: {caps.reason}
+              </div>
             ) : null}
-            {plannerDown ? (
-              <Banner tone="warn">
-                The AI planner isn&apos;t configured — ask the owner to set{' '}
-                <code style={codeChipStyle}>CDZ_AI_KEY</code>. Running is disabled
-                until then.
-              </Banner>
-            ) : null}
+          </Banner>
+        ) : null}
+        {plannerDown ? (
+          <Banner tone="warn">
+            The AI planner isn&apos;t configured — ask the owner to set{' '}
+            <code style={codeChipStyle}>CDZ_AI_KEY</code>. Running is disabled
+            until then.
+          </Banner>
+        ) : null}
 
-            {/* conversation OR empty state */}
-            <div style={conversationScrollStyle}>
-              {hasThread || messages.length > 0 || streamingMessage ? (
-                <ConversationThread
-                  messages={messages}
-                  streamingMessage={streamingMessage}
-                  style={conversationInnerStyle}
-                  renderExtras={
-                    pendingApproval ? (
-                      <div style={{ marginTop: 12 }}>
-                        <ApprovalPrompt
-                          request={pendingApproval}
-                          onDecide={(id, decision) =>
-                            void approve(id, decision)
-                          }
-                          disabled={!running}
-                        />
-                      </div>
-                    ) : undefined
-                  }
-                />
-              ) : (
-                <EmptyState
-                  icon="🐾"
-                  title="Build something and watch it run"
-                  subtitle={
-                    sandboxOn
-                      ? 'Describe a coding task. OpenClaw writes the files, runs them in an isolated sandbox, streams the output, and (for web apps) shows a live preview.'
-                      : 'Describe a coding task. OpenClaw writes and explains the code. Live execution is off on this server, so nothing is run.'
-                  }
-                  examples={EXAMPLES}
-                  onPickExample={pickExample}
-                />
-              )}
-            </div>
-
-            {/* composer — runtime picker in the leftSlot */}
-            <div style={{ flexShrink: 0 }}>
-              <Composer
-                value={input}
-                onChange={setInput}
-                onSend={handleSend}
-                onStop={() => void stop()}
-                running={running}
-                disabled={plannerDown}
-                placeholder={
-                  sandboxOn
-                    ? 'Describe a coding task — e.g. build an Express API with a /health route and show it running'
-                    : 'Describe a coding task — code will be generated but not executed'
-                }
-                leftSlot={runtimePicker}
-              />
-            </div>
-          </div>
-
-          {/* ---- RIGHT: workspace panel (Files / Terminal / Preview) ---- */}
-          <div style={workspaceColStyle}>
-            <WorkspaceTabs
-              tab={tab}
-              onTab={setTab}
-              fileCount={files.length}
-              terminalCount={terminal.length}
-              previewReady={effectivePreview?.status === 'ready'}
-              running={running}
-            />
-            <div style={workspaceBodyStyle}>
-              {tab === 'files' ? (
-                <div style={filesLayoutStyle}>
-                  <div style={fileTreeWrapStyle}>
-                    <FileTree
-                      files={files}
-                      activePath={openFile?.path}
-                      onOpen={path => void openPath(path)}
+        {/* conversation OR empty state */}
+        <div style={conversationScrollStyle}>
+          {hasThread || messages.length > 0 || streamingMessage ? (
+            <ConversationThread
+              messages={messages}
+              streamingMessage={streamingMessage}
+              style={conversationInnerStyle}
+              renderExtras={
+                pendingApproval ? (
+                  <div style={{ marginTop: 12 }}>
+                    <ApprovalPrompt
+                      request={pendingApproval}
+                      onDecide={(id, decision) => void approve(id, decision)}
+                      disabled={!running}
                     />
                   </div>
-                  <div style={codeViewerWrapStyle}>
-                    {openFile ? (
-                      openFile.loading ? (
-                        <CodeViewer path={openFile.path} loading />
-                      ) : openFile.error ? (
-                        <PanelHint tone="error">{openFile.error}</PanelHint>
-                      ) : (
-                        <CodeViewer
-                          path={openFile.path}
-                          content={openFile.content}
-                          language={openFile.language}
-                        />
-                      )
-                    ) : (
-                      <PanelHint>
-                        {files.length > 0
-                          ? 'Select a file to view it.'
-                          : 'Files the agent writes will appear here.'}
-                      </PanelHint>
-                    )}
-                  </div>
-                </div>
-              ) : tab === 'terminal' ? (
-                <Terminal lines={terminal} />
-              ) : (
-                <PreviewPanel
-                  url={effectivePreview?.url}
-                  status={
-                    effectivePreview?.status ?? (running ? 'starting' : 'ready')
-                  }
-                  onRefresh={() => {
-                    // Bounce the restored URL to force the iframe to reload.
-                    setRestoredPreview(p => (p ? { ...p } : p));
-                  }}
-                />
-              )}
-            </div>
-          </div>
+                ) : undefined
+              }
+            />
+          ) : (
+            <EmptyState
+              icon="🐾"
+              title="Build something and watch it run"
+              subtitle={
+                sandboxOn
+                  ? 'Describe a coding task. OpenClaw writes the files, runs them in an isolated sandbox, streams the output, and (for web apps) shows a live preview.'
+                  : 'Describe a coding task. OpenClaw writes and explains the code. Live execution is off on this server, so nothing is run.'
+              }
+              examples={EXAMPLES}
+              onPickExample={pickExample}
+            />
+          )}
         </div>
 
-        {/* Page-scoped keyframes + prefers-reduced-motion guards. */}
-        <style>
-          {`
+        {/* composer — runtime picker in the leftSlot */}
+        <div style={{ flexShrink: 0 }}>
+          <Composer
+            value={input}
+            onChange={setInput}
+            onSend={handleSend}
+            onStop={() => void stop()}
+            running={running}
+            disabled={plannerDown}
+            autoFocus
+            placeholder={
+              sandboxOn
+                ? 'Describe a coding task — e.g. build an Express API with a /health route and show it running'
+                : 'Describe a coding task — code will be generated but not executed'
+            }
+            leftSlot={runtimePicker}
+          />
+        </div>
+      </div>
+
+      {/* ---- RIGHT: workspace panel (Files / Terminal / Preview) ---- */}
+      <div style={workspaceColStyle}>
+        <WorkspaceTabs
+          tab={tab}
+          onTab={setTab}
+          fileCount={files.length}
+          terminalCount={terminal.length}
+          previewReady={effectivePreview?.status === 'ready'}
+          running={running}
+        />
+        <div style={workspaceBodyStyle}>
+          {tab === 'files' ? (
+            <div style={filesLayoutStyle}>
+              <div style={fileTreeWrapStyle}>
+                <FileTree
+                  files={files}
+                  activePath={openFile?.path}
+                  onOpen={path => void openPath(path)}
+                />
+              </div>
+              <div style={codeViewerWrapStyle}>
+                {openFile ? (
+                  openFile.loading ? (
+                    <CodeViewer path={openFile.path} loading />
+                  ) : openFile.error ? (
+                    <PanelHint tone="error">{openFile.error}</PanelHint>
+                  ) : (
+                    <CodeViewer
+                      path={openFile.path}
+                      content={openFile.content}
+                      language={openFile.language}
+                    />
+                  )
+                ) : (
+                  <PanelHint>
+                    {files.length > 0
+                      ? 'Select a file to view it.'
+                      : 'Files the agent writes will appear here.'}
+                  </PanelHint>
+                )}
+              </div>
+            </div>
+          ) : tab === 'terminal' ? (
+            <Terminal lines={terminal} />
+          ) : (
+            <PreviewPanel
+              url={effectivePreview?.url}
+              status={
+                effectivePreview?.status ?? (running ? 'starting' : 'ready')
+              }
+              onRefresh={() => {
+                setRestoredPreview(p => (p ? { ...p } : p));
+              }}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Page-scoped keyframes + prefers-reduced-motion guards. */}
+      <style>
+        {`
 @keyframes cdz-openclaw-spin{to{transform:rotate(360deg)}}
 .cdz-openclaw-spinner{animation:cdz-openclaw-spin .7s linear infinite}
 @media (prefers-reduced-motion: reduce){
   .cdz-openclaw-spinner{animation:none !important}
 }
 `}
-        </style>
-      </ViewBody>
-    </>
+      </style>
+    </div>
   );
 };
 
@@ -879,6 +1042,18 @@ const betaBadgeStyle: CSSProperties = {
   backgroundColor:
     'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
 };
+const headerBackBtnStyle: CSSProperties = {
+  appearance: 'none',
+  marginInlineStart: 'auto',
+  cursor: 'pointer',
+  padding: '4px 12px',
+  borderRadius: AgentPalette.radius.md,
+  fontSize: 12,
+  fontWeight: 600,
+  color: C.text,
+  background: 'transparent',
+  border: `1px solid ${C.border}`,
+};
 const capChipStyle: CSSProperties = {
   fontSize: 10,
   fontWeight: 700,
@@ -889,6 +1064,33 @@ const capChipStyle: CSSProperties = {
   fontFamily: monoFamily,
 };
 
+// ---- studio (wizard/dashboard) canvas ----
+const studioScrollStyle: CSSProperties = {
+  height: '100%',
+  width: '100%',
+  overflow: 'auto',
+  background: C.bg,
+  color: C.text,
+  fontSize: 13,
+  lineHeight: 1.5,
+};
+const studioInnerStyle: CSSProperties = {
+  maxWidth: 1120,
+  margin: '0 auto',
+  padding: '28px 24px 48px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 20,
+};
+const studioLoadingStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '28px 4px',
+  color: C.muted,
+};
+
+// ---- console layout ----
 const rootStyle: CSSProperties = {
   height: '100%',
   width: '100%',
@@ -900,8 +1102,6 @@ const rootStyle: CSSProperties = {
   lineHeight: 1.5,
   minHeight: 0,
   overflow: 'hidden',
-  // Responsive: the workspace panel drops below a comfortable width; the
-  // conversation column always stays. flexWrap lets the three panes reflow.
   flexWrap: 'wrap',
 };
 
@@ -995,7 +1195,7 @@ const codeViewerWrapStyle: CSSProperties = {
 };
 
 export const Component = () => {
-  return <OpenClawConsole />;
+  return <OpenClawPage />;
 };
 
 // ---------------------------------------------------------------------------
