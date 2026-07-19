@@ -20,9 +20,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
  *     (`{prompt}` → `{data:[{url}]}`), wrapped in {@link cdzApiUrl}. Remote
  *     https URLs are used directly as the clip `src`, mirroring the ClickDz
  *     builder studio's image insert.
- *   · Stock — the EXISTING `GET /api/copilot/unsplash/photos?query=...` route
- *     (`{results:[{urls:{regular}}]}`), wrapped in {@link cdzApiUrl}. Again a
- *     remote https URL used directly.
+ *   · Stock — the `GET /api/copilot/stock/search?query=…&source=…` route
+ *     (multi-provider: keyless Openverse always works; Pexels / Pixabay /
+ *     Unsplash when the server has their keys), normalized server-side to
+ *     `{results:[{url,thumb,author,link,source,…}]}`, wrapped in
+ *     {@link cdzApiUrl}. Again a remote https URL used directly.
  *
  * Every network call goes through `cdzApiUrl(...)` so desktop/native builds
  * resolve against the connected server (web is a no-op — same origin).
@@ -76,6 +78,12 @@ export interface VdzMediaItem {
   thumbnail?: string;
   /** MIME type, when known. */
   mime?: string;
+  /** Attribution line for stock media (photographer / creator name). */
+  credit?: string;
+  /** Landing page for the credited work on its provider, if any. */
+  creditUrl?: string;
+  /** Which stock provider a `source: 'stock'` item came from. */
+  provider?: string;
 }
 
 /** Per-kind upload size caps, in bytes. */
@@ -194,9 +202,26 @@ interface ImageGenResponse {
   message?: string;
 }
 
-/** The server envelope for the unsplash search route. */
-interface UnsplashResponse {
-  results?: Array<{ urls?: { regular?: string } }>;
+/**
+ * The server envelope for the multi-provider stock search route. Items carry
+ * flat normalized fields plus a legacy `urls` alias; error replies carry a
+ * user-friendly `message` (e.g. a keyed source that is not configured).
+ */
+interface StockSearchResponse {
+  source?: string;
+  message?: string;
+  error?: string;
+  results?: Array<{
+    id?: string;
+    source?: string;
+    url?: string;
+    thumb?: string;
+    full?: string;
+    description?: string;
+    author?: string;
+    link?: string;
+    urls?: { thumb?: string; small?: string; regular?: string; full?: string };
+  }>;
 }
 
 // ---- Durable blob-src resolver -------------------------------------------
@@ -369,6 +394,33 @@ async function resolveReferenceForApi(item: VdzMediaItem): Promise<string> {
   return dataUrl;
 }
 
+// ---- Stock search sources (WS11 STOCK) -------------------------------------
+
+/**
+ * Stock providers the backend can search. Openverse needs no API key, so it
+ * works on every deployment; the rest light up when the server has their
+ * keys. `auto` lets the server pick (a keyed provider first, keyless
+ * Openverse as the fallback).
+ */
+export type VdzStockSource =
+  | 'auto'
+  | 'openverse'
+  | 'pexels'
+  | 'pixabay'
+  | 'unsplash';
+
+/** Picker options for the stock tab (Openverse first — always available). */
+export const VDZ_STOCK_SOURCE_OPTIONS: Array<{
+  id: VdzStockSource;
+  label: string;
+}> = [
+  { id: 'openverse', label: 'Openverse' },
+  { id: 'pexels', label: 'Pexels' },
+  { id: 'pixabay', label: 'Pixabay' },
+  { id: 'unsplash', label: 'Unsplash' },
+  { id: 'auto', label: 'Auto' },
+];
+
 export interface UseVdzMedia {
   items: VdzMediaItem[];
   /** Non-fatal status message for the current op (upload/search), or null. */
@@ -394,8 +446,16 @@ export interface UseVdzMedia {
     prompt: string,
     options?: VdzGenerateImageOptions
   ) => Promise<void>;
-  /** Search Unsplash and add the chosen photo to the bin on click. */
-  searchStock: (query: string) => Promise<VdzMediaItem[]>;
+  /**
+   * Search free stock photo providers (see {@link VdzStockSource}; Openverse
+   * needs no key) and return picker results with per-item credit/source —
+   * the grid adds the chosen photo to the bin on click. Failures set a
+   * friendly {@link UseVdzMedia.error} and resolve to `[]`.
+   */
+  searchStock: (
+    query: string,
+    source?: VdzStockSource
+  ) => Promise<VdzMediaItem[]>;
   /** Add a stock/AI result URL to the bin (used by the grid click). */
   addRemote: (
     url: string,
@@ -408,7 +468,7 @@ export interface UseVdzMedia {
   clearError: () => void;
 }
 
-/** Max Unsplash results we keep from a single search. */
+/** Max stock results we keep from a single search. */
 const STOCK_LIMIT = 12;
 
 export function useVdzMedia(): UseVdzMedia {
@@ -586,37 +646,62 @@ export function useVdzMedia(): UseVdzMedia {
   );
 
   const searchStock = useCallback(
-    async (query: string): Promise<VdzMediaItem[]> => {
+    async (
+      query: string,
+      source: VdzStockSource = 'auto'
+    ): Promise<VdzMediaItem[]> => {
       const trimmed = query.trim();
       setBusy(true);
       setError(null);
       try {
-        let url = '/api/copilot/unsplash/photos';
-        if (trimmed) url += `?query=${encodeURIComponent(trimmed)}`;
-        const response = await fetch(cdzApiUrl(url));
+        const params = new URLSearchParams();
+        if (trimmed) params.set('query', trimmed);
+        params.set('source', source);
+        params.set('per_page', String(STOCK_LIMIT));
+        const response = await fetch(
+          cdzApiUrl(`/api/copilot/stock/search?${params.toString()}`)
+        );
         const data = (await response
           .json()
-          .catch(() => null)) as UnsplashResponse | null;
+          .catch(() => null)) as StockSearchResponse | null;
         if (!response.ok) {
-          throw new Error(`Stock search failed (${response.status})`);
+          // The backend replies with a friendly JSON message (e.g. a keyed
+          // source that isn't configured, or an upstream hiccup naming the
+          // provider). Fall back to a generic hint — never a bare status.
+          throw new Error(
+            (typeof data?.message === 'string' && data.message) ||
+              'Search unavailable — try another source.'
+          );
         }
         const results = Array.isArray(data?.results) ? data.results : [];
         // These are search RESULTS, not bin items yet — the grid adds on click.
-        return results
-          .map(r => r.urls?.regular)
-          .filter((u): u is string => typeof u === 'string' && !!u)
-          .slice(0, STOCK_LIMIT)
-          .map(regular => ({
-            id: `stock-${nanoid(8)}`,
-            kind: 'image' as const,
-            source: 'stock' as const,
-            name: trimmed || 'Unsplash photo',
-            url: regular,
-            duration: 0,
-            thumbnail: regular,
-          }));
+        return results.slice(0, STOCK_LIMIT).flatMap(r => {
+          // Flat normalized field first; `urls.regular` is the legacy alias.
+          const regular = r.url || r.urls?.regular;
+          if (typeof regular !== 'string' || !regular) return [];
+          const thumb = r.thumb || r.urls?.small || r.urls?.thumb || regular;
+          return [
+            {
+              id: `stock-${nanoid(8)}`,
+              kind: 'image' as const,
+              source: 'stock' as const,
+              name:
+                (r.description || '').slice(0, 60) || trimmed || 'Stock photo',
+              url: regular,
+              duration: 0,
+              thumbnail: thumb,
+              credit: r.author || undefined,
+              creditUrl: r.link || undefined,
+              provider: r.source || data?.source || undefined,
+            },
+          ];
+        });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Stock search failed');
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Search unavailable — try another source.'
+        );
         return [];
       } finally {
         setBusy(false);

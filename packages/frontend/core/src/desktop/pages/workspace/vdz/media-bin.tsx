@@ -5,7 +5,9 @@ import {
   type CdzImageRefMode,
   type CdzImageTier,
   type UseVdzMedia,
+  VDZ_STOCK_SOURCE_OPTIONS,
   type VdzMediaItem,
+  type VdzStockSource,
 } from '../../../../modules/vdz/use-vdz-media';
 import { VDZ_MEDIA_DND_MIME, type VdzMediaDragPayload } from './constants';
 import * as styles from './media-bin.css';
@@ -370,16 +372,30 @@ function AiImagesTab({ media }: { media: UseVdzMedia }) {
   );
 }
 
-// ---- Stock (Unsplash) tab ----------------------------------------------
+// ---- Stock tab (Openverse / Pexels / Pixabay / Unsplash) -----------------
+
+/** Short display label for a stock provider id (e.g. 'pexels' → 'Pexels'). */
+function stockSourceLabel(id: string | undefined): string {
+  const option = VDZ_STOCK_SOURCE_OPTIONS.find(o => o.id === id);
+  return option ? option.label : (id ?? '');
+}
+
 function StockTab({ media }: { media: UseVdzMedia }) {
   const [query, setQuery] = useState('');
+  // Openverse is the default source: it needs no API key, so it works on
+  // every deployment. Keyed sources reply with a clear message when they
+  // are not configured on the server.
+  const [source, setSource] = useState<VdzStockSource>('openverse');
   const [results, setResults] = useState<VdzMediaItem[]>([]);
+  // Distinguishes the pristine tab from "searched and found nothing".
+  const [searched, setSearched] = useState(false);
 
   const onSearch = useCallback(async () => {
     if (media.busy) return;
-    const found = await media.searchStock(query);
+    const found = await media.searchStock(query, source);
     setResults(found);
-  }, [query, media]);
+    setSearched(true);
+  }, [query, source, media]);
 
   const onPick = useCallback(
     (result: VdzMediaItem) => {
@@ -388,12 +404,50 @@ function StockTab({ media }: { media: UseVdzMedia }) {
     [media]
   );
 
+  const sourceSelectStyle: React.CSSProperties = {
+    flex: '0 0 auto',
+    width: 118,
+    height: 28,
+    fontSize: 11,
+    padding: '0 6px',
+    borderRadius: 7,
+    border: '1px solid var(--vdz-border, #262a35)',
+    background: 'var(--vdz-bg, #0b0d12)',
+    color: 'var(--vdz-text, #e6e9f0)',
+  };
+  const sourceHintStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 11,
+    color: 'var(--vdz-muted, #8b93a7)',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
+  };
+  const overlayStackStyle: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 2,
+    minWidth: 0,
+    maxWidth: '100%',
+  };
+  const overlayCreditStyle: React.CSSProperties = {
+    fontSize: 10,
+    fontWeight: 500,
+    opacity: 0.9,
+    maxWidth: '100%',
+    overflow: 'hidden',
+    whiteSpace: 'nowrap',
+    textOverflow: 'ellipsis',
+  };
+
   return (
     <>
       <div className={styles.searchRow}>
         <input
           className={styles.searchInput}
-          placeholder="Search Unsplash…"
+          placeholder="Search free stock photos…"
           value={query}
           disabled={media.busy}
           onChange={e => {
@@ -414,7 +468,33 @@ function StockTab({ media }: { media: UseVdzMedia }) {
           {media.busy ? '…' : 'Search'}
         </button>
       </div>
-      {media.busy ? <div className={styles.status}>Searching…</div> : null}
+      <div className={styles.searchRow}>
+        <select
+          style={sourceSelectStyle}
+          value={source}
+          disabled={media.busy}
+          onChange={e => {
+            setSource(e.target.value as VdzStockSource);
+            if (media.error) media.clearError();
+          }}
+          aria-label="Stock photo source"
+          title="Which stock photo provider to search (Openverse needs no key)"
+        >
+          {VDZ_STOCK_SOURCE_OPTIONS.map(option => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <span style={sourceHintStyle}>
+          {source === 'openverse'
+            ? 'Free CC-licensed photos — no key needed'
+            : 'Free stock photos — credit shown per image'}
+        </span>
+      </div>
+      {media.busy ? (
+        <div className={styles.status}>Searching stock photos…</div>
+      ) : null}
       {results.length > 0 ? (
         <div className={styles.grid}>
           {results.map(result => (
@@ -423,7 +503,11 @@ function StockTab({ media }: { media: UseVdzMedia }) {
               type="button"
               className={styles.gridCell}
               onClick={() => onPick(result)}
-              title={`Add "${result.name}" to bin`}
+              title={
+                result.credit
+                  ? `Add "${result.name}" — by ${result.credit} on ${stockSourceLabel(result.provider)}`
+                  : `Add "${result.name}" to bin`
+              }
             >
               <img
                 className={styles.gridImage}
@@ -431,13 +515,25 @@ function StockTab({ media }: { media: UseVdzMedia }) {
                 alt={result.name}
                 loading="lazy"
               />
-              <span className={styles.gridCellOverlay}>Add to bin</span>
+              <span className={styles.gridCellOverlay}>
+                <span style={overlayStackStyle}>
+                  <span>Add to bin</span>
+                  <span style={overlayCreditStyle}>
+                    {result.credit ? `${result.credit} · ` : ''}
+                    {stockSourceLabel(result.provider) || 'stock'}
+                  </span>
+                </span>
+              </span>
             </button>
           ))}
         </div>
       ) : !media.busy ? (
         <div className={styles.emptyHint}>
-          Search Unsplash and click a photo to add it to the bin.
+          {media.error
+            ? 'Try a different source, or search again in a moment.'
+            : searched
+              ? `No results${query.trim() ? ` for “${query.trim()}”` : ''} — try another keyword or source.`
+              : 'Search free stock photos and click one to add it to the bin. Openverse works out of the box.'}
         </div>
       ) : null}
     </>
