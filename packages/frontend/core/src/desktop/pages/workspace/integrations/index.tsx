@@ -1,5 +1,10 @@
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import {
+  type Flow,
+  type FlowRun,
+  useFlows,
+} from '@affine/core/modules/integrations/use-flows';
+import {
   ViewBody,
   ViewHeader,
   ViewIcon,
@@ -14,6 +19,14 @@ import {
   useRef,
   useState,
 } from 'react';
+
+// The zero-dep flow canvas (CANVAS-FE) — pure/presentational: it takes a Flow +
+// the toolkits `catalog` + an onChange(flow) and renders the draggable node
+// graph / palette / inspector. FLOW-FE owns the fetching (use-flows) and mounts
+// it here.
+import { FlowCanvas } from './flow-canvas';
+// The Runs tab view (this package) — runs list + detail timeline + DLQ replay.
+import { FlowRunsView } from './flow-runs';
 
 // ---------------------------------------------------------------------------
 // ClickDz Integrations (Composio) — DARK by default.
@@ -112,6 +125,10 @@ const C = {
 // Initial page load vs. subsequent (search/filter reload) vs. hard error.
 type LoadState = 'loading' | 'ready' | 'error';
 
+// In-page tabs. Catalog is the original WS14 surface (unchanged); Flows is the
+// zero-dep builder; Runs is the observability view.
+type TabKey = 'catalog' | 'flows' | 'runs';
+
 const IntegrationsPage = () => {
   // ---- catalog state ----
   const [state, setState] = useState<LoadState>('loading');
@@ -141,6 +158,23 @@ const IntegrationsPage = () => {
   const [runError, setRunError] = useState<string | null>(null);
   const [runErrorKind, setRunErrorKind] = useState<RunErrorKind>(null);
   const [result, setResult] = useState<RunResponse | null>(null);
+
+  // ---- in-page tabs (Catalog | Flows | Runs) ----
+  const [tab, setTab] = useState<TabKey>('catalog');
+
+  // ---- Flows tab state (all fetching lives in the useFlows hook) ----
+  const flowsApi = useFlows();
+  const [flowsLoadedOnce, setFlowsLoadedOnce] = useState(false);
+  // The flow currently open in the canvas (a local, editable draft). null = the
+  // flow list is shown instead.
+  const [editingFlow, setEditingFlow] = useState<Flow | null>(null);
+  // True while the open draft has unsaved edits (drives the Save button state).
+  const [flowDirty, setFlowDirty] = useState(false);
+  const [savingFlow, setSavingFlow] = useState(false);
+  const [runningFlow, setRunningFlow] = useState(false);
+  const [flowNotice, setFlowNotice] = useState<string | null>(null);
+  // After a successful Run we switch to the Runs tab and focus this run id.
+  const [focusRunId, setFocusRunId] = useState<string | null>(null);
 
   // A monotonically-increasing token so a slow in-flight request from a stale
   // query (old search/category) can't clobber the results of a newer one.
@@ -288,8 +322,11 @@ const IntegrationsPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, category]);
 
-  // Infinite scroll: observe a sentinel at the end of the grid.
+  // Infinite scroll: observe a sentinel at the end of the grid. `tab` is a dep
+  // so the observer re-attaches to the freshly-mounted sentinel when the user
+  // returns to the Catalog tab (the node is recreated on tab switch).
   useEffect(() => {
+    if (tab !== 'catalog') return;
     const node = sentinelRef.current;
     if (!node || !nextCursor || state !== 'ready' || !enabled) return;
     const io = new IntersectionObserver(
@@ -300,7 +337,7 @@ const IntegrationsPage = () => {
     );
     io.observe(node);
     return () => io.disconnect();
-  }, [nextCursor, state, enabled, loadMore]);
+  }, [nextCursor, state, enabled, loadMore, tab]);
 
   // Re-fetch the current first page (same search/category) to pull fresh
   // `connected` flags after a connect attempt, WITHOUT resetting scroll for the
@@ -440,6 +477,141 @@ const IntegrationsPage = () => {
     [knownCategories]
   );
 
+  // ---- Flows tab: load / create / open / rename / delete / save / run ------
+
+  // Pull the stable handles out of the hook so the callbacks below have precise
+  // deps (the hook memoizes each fn).
+  const {
+    flows,
+    load: loadFlows,
+    save: saveFlowFn,
+    remove: removeFlowFn,
+    run: runFlowFn,
+    runs,
+    loadRuns,
+    getRun,
+    dlq,
+    loadDlq,
+    replay,
+    loading: flowsLoading,
+    error: flowsError,
+  } = flowsApi;
+
+  // Load the flows list the first time the Flows tab is opened.
+  useEffect(() => {
+    if (tab !== 'flows' || flowsLoadedOnce) return;
+    setFlowsLoadedOnce(true);
+    void loadFlows().catch(() => {});
+  }, [tab, flowsLoadedOnce, loadFlows]);
+
+  // Resolve a flowId → display name for the Runs view (falls back to the id).
+  const flowNameById = useCallback(
+    (flowId: string) => {
+      const f = flows.find(x => x.id === flowId);
+      return f ? f.name : `flow ${flowId.slice(0, 8)}`;
+    },
+    [flows]
+  );
+
+  // Create a fresh, unsaved draft (id 'new' → the backend mints on first PUT).
+  const newFlow = useCallback(() => {
+    const now = Date.now();
+    setEditingFlow({
+      id: 'new',
+      name: 'Untitled flow',
+      nodes: [],
+      edges: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+    setFlowDirty(true); // a brand-new flow is unsaved by definition
+    setFlowNotice(null);
+  }, []);
+
+  const openFlow = useCallback((flow: Flow) => {
+    // Clone so canvas edits don't mutate the list entry until we persist.
+    setEditingFlow({
+      ...flow,
+      nodes: flow.nodes.map(n => ({ ...n })),
+      edges: flow.edges.map(e => ({ ...e })),
+    });
+    setFlowDirty(false);
+    setFlowNotice(null);
+  }, []);
+
+  const closeFlow = useCallback(() => {
+    setEditingFlow(null);
+    setFlowDirty(false);
+    setFlowNotice(null);
+  }, []);
+
+  // CANVAS-FE hands back the full updated Flow on every change (C2 shape).
+  const onCanvasChange = useCallback((next: Flow) => {
+    setEditingFlow(next);
+    setFlowDirty(true);
+  }, []);
+
+  const renameEditingFlow = useCallback((name: string) => {
+    setEditingFlow(prev => (prev ? { ...prev, name } : prev));
+    setFlowDirty(true);
+  }, []);
+
+  const deleteFlow = useCallback(
+    async (flow: Flow) => {
+      // A never-saved draft ('new') isn't on the server — just drop it locally.
+      if (!flow.id || flow.id === 'new') {
+        if (editingFlow && editingFlow.id === flow.id) closeFlow();
+        return;
+      }
+      try {
+        await removeFlowFn(flow.id);
+        if (editingFlow && editingFlow.id === flow.id) closeFlow();
+      } catch {
+        /* error surfaced via flowsError */
+      }
+    },
+    [removeFlowFn, editingFlow, closeFlow]
+  );
+
+  const saveEditingFlow = useCallback(async () => {
+    if (!editingFlow || savingFlow) return;
+    setSavingFlow(true);
+    setFlowNotice(null);
+    try {
+      const saved = await saveFlowFn(editingFlow);
+      setEditingFlow(saved); // adopt the canonical id/timestamps from the server
+      setFlowDirty(false);
+      setFlowNotice('Flow saved.');
+    } catch {
+      /* error surfaced via flowsError */
+    } finally {
+      setSavingFlow(false);
+    }
+  }, [editingFlow, savingFlow, saveFlowFn]);
+
+  // Run the open flow: persist first if there are unsaved edits (or it's new),
+  // then POST /flows/:id/run, then switch to the Runs tab focused on the run.
+  const runEditingFlow = useCallback(async () => {
+    if (!editingFlow || runningFlow) return;
+    setRunningFlow(true);
+    setFlowNotice(null);
+    try {
+      let target = editingFlow;
+      if (flowDirty || !target.id || target.id === 'new') {
+        target = await saveFlowFn(editingFlow);
+        setEditingFlow(target);
+        setFlowDirty(false);
+      }
+      const record: FlowRun = await runFlowFn(target.id);
+      setFocusRunId(record.id);
+      setTab('runs');
+    } catch {
+      /* error surfaced via flowsError */
+    } finally {
+      setRunningFlow(false);
+    }
+  }, [editingFlow, runningFlow, flowDirty, saveFlowFn, runFlowFn]);
+
   return (
     <>
       <ViewTitle title="Integrations" />
@@ -518,6 +690,14 @@ const IntegrationsPage = () => {
               </p>
             </header>
 
+            {/* In-page tabs: Catalog | Flows | Runs ------------------------- */}
+            <TabBar tab={tab} onChange={setTab} />
+
+            {/* ============================= CATALOG ======================= */}
+            {/* The original WS14 catalog surface, untouched — search, category */}
+            {/* filter, cursor pagination, Connect, and the ▶ Run orchestrator. */}
+            {tab === 'catalog' ? (
+              <>
             {/* Status banner ------------------------------------------------ */}
             {state === 'loading' ? (
               <Banner tone="info">Loading integrations…</Banner>
@@ -1124,6 +1304,60 @@ const IntegrationsPage = () => {
                 </div>
               ) : null}
             </section>
+              </>
+            ) : null}
+
+            {/* ============================== FLOWS ======================== */}
+            {tab === 'flows' ? (
+              editingFlow ? (
+                <FlowEditor
+                  flow={editingFlow}
+                  catalog={toolkits}
+                  enabled={enabled}
+                  dirty={flowDirty}
+                  saving={savingFlow}
+                  running={runningFlow}
+                  notice={flowNotice}
+                  error={flowsError}
+                  onChange={onCanvasChange}
+                  onRename={renameEditingFlow}
+                  onBack={closeFlow}
+                  onSave={() => void saveEditingFlow()}
+                  onRun={() => void runEditingFlow()}
+                  onDelete={() => void deleteFlow(editingFlow)}
+                />
+              ) : (
+                <FlowList
+                  flows={flows}
+                  enabled={enabled}
+                  loading={flowsLoading}
+                  loadedOnce={flowsLoadedOnce}
+                  error={flowsError}
+                  onNew={newFlow}
+                  onOpen={openFlow}
+                  onRename={(flow, name) => void saveFlowFn({ ...flow, name })}
+                  onDelete={flow => void deleteFlow(flow)}
+                  onRefresh={() => void loadFlows()}
+                />
+              )
+            ) : null}
+
+            {/* =============================== RUNS ======================== */}
+            {tab === 'runs' ? (
+              <FlowRunsView
+                runs={runs}
+                dlq={dlq}
+                loading={flowsLoading}
+                error={flowsError}
+                enabled={enabled}
+                loadRuns={loadRuns}
+                loadDlq={loadDlq}
+                getRun={getRun}
+                replay={replay}
+                flowName={flowNameById}
+                focusRunId={focusRunId}
+              />
+            ) : null}
           </div>
         </div>
       </ViewBody>
@@ -1237,6 +1471,470 @@ const StepRow = ({ step, index }: { step: RunStep; index: number }) => {
           {step.resultPreview || '(empty result)'}
         </pre>
       ) : null}
+    </div>
+  );
+};
+
+// ---- Flows / tabs UI (FLOW-FE) --------------------------------------------
+
+// The in-page tab bar. Pure inline-styled buttons matching the category chips.
+const TAB_LABELS: Record<TabKey, string> = {
+  catalog: 'Catalog',
+  flows: 'Flows',
+  runs: 'Runs',
+};
+
+const TabBar = ({
+  tab,
+  onChange,
+}: {
+  tab: TabKey;
+  onChange: (t: TabKey) => void;
+}) => (
+  <div
+    role="tablist"
+    aria-label="Integrations sections"
+    style={{
+      display: 'flex',
+      gap: 4,
+      padding: 4,
+      borderRadius: 12,
+      background: C.panel,
+      border: `1px solid ${C.border}`,
+      alignSelf: 'flex-start',
+    }}
+  >
+    {(['catalog', 'flows', 'runs'] as TabKey[]).map(key => {
+      const on = tab === key;
+      return (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={on}
+          onClick={() => onChange(key)}
+          style={{
+            appearance: 'none',
+            cursor: 'pointer',
+            padding: '7px 16px',
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 600,
+            color: on ? '#fff' : C.text,
+            background: on ? C.accent : 'transparent',
+            border: 'none',
+            transition: 'background 150ms ease, color 150ms ease',
+          }}
+        >
+          {TAB_LABELS[key]}
+        </button>
+      );
+    })}
+  </div>
+);
+
+// The Flows list (name · node count · updated) + New / open / rename / delete.
+const FlowList = ({
+  flows,
+  enabled,
+  loading,
+  loadedOnce,
+  error,
+  onNew,
+  onOpen,
+  onRename,
+  onDelete,
+  onRefresh,
+}: {
+  flows: Flow[];
+  enabled: boolean;
+  loading: boolean;
+  loadedOnce: boolean;
+  error: string | null;
+  onNew: () => void;
+  onOpen: (flow: Flow) => void;
+  onRename: (flow: Flow, name: string) => void;
+  onDelete: (flow: Flow) => void;
+  onRefresh: () => void;
+}) => {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState('');
+
+  const startRename = (flow: Flow) => {
+    setRenamingId(flow.id);
+    setDraftName(flow.name);
+  };
+  const commitRename = (flow: Flow) => {
+    const name = draftName.trim();
+    setRenamingId(null);
+    if (name && name !== flow.name) onRename(flow, name);
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <h2
+            style={{
+              margin: 0,
+              fontSize: 15,
+              fontWeight: 700,
+              color: C.text,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            <span>🧭</span> Flows
+          </h2>
+          <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>
+            Chain your connected tools into an automation. Open one to edit it on
+            the canvas, then Save or Run it.
+          </p>
+        </div>
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={onNew}
+          style={{
+            appearance: 'none',
+            border: 'none',
+            borderRadius: 8,
+            padding: '8px 16px',
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: 'pointer',
+            color: '#fff',
+            background: C.accent,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          + New flow
+        </button>
+      </div>
+
+      {!enabled ? (
+        <Banner tone="warn">
+          Running flows is disabled until an owner sets{' '}
+          <code style={codeStyle}>COMPOSIO_API_KEY</code>. You can still design
+          and save flows.
+        </Banner>
+      ) : null}
+
+      {!loadedOnce && loading ? (
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 13,
+            color: C.muted,
+            padding: '20px 0',
+          }}
+        >
+          <Spinner dark /> Loading flows…
+        </div>
+      ) : error && flows.length === 0 ? (
+        <Banner tone="error">
+          {error}{' '}
+          <button style={linkBtnStyle} onClick={onRefresh}>
+            Retry
+          </button>
+        </Banner>
+      ) : flows.length === 0 ? (
+        <div
+          style={{
+            padding: '24px 16px',
+            borderRadius: 10,
+            fontSize: 13,
+            textAlign: 'center',
+            background: C.panel,
+            border: `1px dashed ${C.border}`,
+            color: C.muted,
+          }}
+        >
+          No flows yet. Press <strong>+ New flow</strong> to build your first
+          automation.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {flows.map(flow => (
+            <div
+              key={flow.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '12px 14px',
+                borderRadius: 10,
+                background: C.panel,
+                border: `1px solid ${C.border}`,
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+                {renamingId === flow.id ? (
+                  <input
+                    autoFocus
+                    value={draftName}
+                    onChange={e => setDraftName(e.target.value)}
+                    onBlur={() => commitRename(flow)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') commitRename(flow);
+                      else if (e.key === 'Escape') setRenamingId(null);
+                    }}
+                    aria-label="Flow name"
+                    style={{
+                      width: '100%',
+                      boxSizing: 'border-box',
+                      padding: '4px 8px',
+                      borderRadius: 6,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      fontFamily: 'inherit',
+                      color: C.text,
+                      background: C.bg,
+                      border: `1px solid ${C.accent}`,
+                      outline: 'none',
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onOpen(flow)}
+                    style={{
+                      appearance: 'none',
+                      border: 'none',
+                      background: 'transparent',
+                      padding: 0,
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      font: 'inherit',
+                      fontWeight: 600,
+                      fontSize: 13,
+                      color: C.text,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={flow.name}
+                  >
+                    {flow.name}
+                  </button>
+                )}
+                <span style={{ fontSize: 11.5, color: C.muted }}>
+                  {flow.nodes.length} node{flow.nodes.length === 1 ? '' : 's'} ·{' '}
+                  {flow.edges.length} edge{flow.edges.length === 1 ? '' : 's'} ·
+                  updated{' '}
+                  {(() => {
+                    try {
+                      return new Date(flow.updatedAt).toLocaleString();
+                    } catch {
+                      return '—';
+                    }
+                  })()}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onOpen(flow)}
+                style={miniBtnStyle(false)}
+              >
+                Open
+              </button>
+              <button
+                type="button"
+                onClick={() => startRename(flow)}
+                style={miniBtnStyle(false)}
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(flow)}
+                style={miniBtnStyle(true)}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// A small pill button used in the flow list rows. `danger` tints it red.
+const miniBtnStyle = (danger: boolean): CSSProperties => ({
+  appearance: 'none',
+  flexShrink: 0,
+  borderRadius: 8,
+  padding: '6px 12px',
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: 'pointer',
+  color: danger ? 'var(--affine-error-color, #eb4b4b)' : C.text,
+  background: 'transparent',
+  border: `1px solid ${danger ? C.errBorder : C.border}`,
+});
+
+// The flow editor: a rename field + Save/Run/Delete/Back controls above the
+// zero-dep FlowCanvas (mounted with the toolkits catalog + the editable Flow).
+const FlowEditor = ({
+  flow,
+  catalog,
+  enabled,
+  dirty,
+  saving,
+  running,
+  notice,
+  error,
+  onChange,
+  onRename,
+  onBack,
+  onSave,
+  onRun,
+  onDelete,
+}: {
+  flow: Flow;
+  catalog: CdzToolkit[];
+  enabled: boolean;
+  dirty: boolean;
+  saving: boolean;
+  running: boolean;
+  notice: string | null;
+  error: string | null;
+  onChange: (flow: Flow) => void;
+  onRename: (name: string) => void;
+  onBack: () => void;
+  onSave: () => void;
+  onRun: () => void;
+  onDelete: () => void;
+}) => {
+  const isNew = !flow.id || flow.id === 'new';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          onClick={onBack}
+          style={{
+            appearance: 'none',
+            borderRadius: 8,
+            padding: '7px 12px',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            color: C.text,
+            background: 'transparent',
+            border: `1px solid ${C.border}`,
+          }}
+        >
+          ← Flows
+        </button>
+        <input
+          value={flow.name}
+          onChange={e => onRename(e.target.value)}
+          placeholder="Flow name"
+          aria-label="Flow name"
+          style={{
+            flex: 1,
+            minWidth: 160,
+            boxSizing: 'border-box',
+            padding: '8px 12px',
+            borderRadius: 8,
+            fontSize: 14,
+            fontWeight: 600,
+            fontFamily: 'inherit',
+            color: C.text,
+            background: C.panel,
+            border: `1px solid ${C.border}`,
+            outline: 'none',
+          }}
+        />
+        <button
+          type="button"
+          disabled={saving || (!dirty && !isNew)}
+          onClick={onSave}
+          style={{
+            appearance: 'none',
+            borderRadius: 8,
+            padding: '8px 16px',
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: saving || (!dirty && !isNew) ? 'default' : 'pointer',
+            color: C.text,
+            background: 'transparent',
+            border: `1px solid ${C.border}`,
+            opacity: saving || (!dirty && !isNew) ? 0.5 : 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          {saving ? (
+            <>
+              <Spinner dark /> Saving…
+            </>
+          ) : dirty || isNew ? (
+            'Save'
+          ) : (
+            'Saved'
+          )}
+        </button>
+        <button
+          type="button"
+          disabled={!enabled || running}
+          onClick={onRun}
+          title={!enabled ? 'Set COMPOSIO_API_KEY to run flows' : 'Run this flow'}
+          style={{
+            appearance: 'none',
+            border: 'none',
+            borderRadius: 8,
+            padding: '8px 18px',
+            fontSize: 13,
+            fontWeight: 700,
+            cursor: !enabled || running ? 'default' : 'pointer',
+            color: '#fff',
+            background: C.accent,
+            opacity: !enabled || running ? 0.5 : 1,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          {running ? (
+            <>
+              <Spinner /> Running…
+            </>
+          ) : (
+            <>▶ Run</>
+          )}
+        </button>
+        <button type="button" onClick={onDelete} style={miniBtnStyle(true)}>
+          Delete
+        </button>
+      </div>
+
+      {notice ? <Banner tone="ok">{notice}</Banner> : null}
+      {error ? <Banner tone="error">{error}</Banner> : null}
+
+      {/* The zero-dep canvas (CANVAS-FE). It owns node drag / edge draw / */}
+      {/* palette / inspector and hands the full updated Flow back via onChange. */}
+      <div
+        style={{
+          position: 'relative',
+          height: 560,
+          borderRadius: 12,
+          overflow: 'hidden',
+          background: C.bg,
+          border: `1px solid ${C.border}`,
+        }}
+      >
+        <FlowCanvas flow={flow} catalog={catalog} onChange={onChange} />
+      </div>
     </div>
   );
 };

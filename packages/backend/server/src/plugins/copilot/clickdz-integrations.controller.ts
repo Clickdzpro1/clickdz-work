@@ -1,5 +1,17 @@
-import { Body, Controller, Get, Logger, Post, Query, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Put,
+  Query,
+  Res,
+} from '@nestjs/common';
 import type { Response } from 'express';
+import { randomUUID } from 'node:crypto';
 
 import { CurrentUser } from '../../core/auth';
 // Typed errors from ../../base (raw HttpException is coerced to a generic 500
@@ -7,8 +19,13 @@ import { CurrentUser } from '../../core/auth';
 // For the contract's non-standard status + typed-body responses (409 / 502)
 // we therefore write them directly via the injected Express Response
 // (@Res()), exactly like ClickDzBridgeController's chatCompletions/tts routes.
-// BadRequest stays available for genuinely malformed input (typed 400).
-import { BadRequest, Throttle } from '../../base';
+// BadRequest stays available for genuinely malformed input (typed 400);
+// NotFound for a missing flow/run (typed 404). `Cache` is the @Global
+// JSON-wrapped Redis provider (get<T>/set with a PX ttl + map/list ops —
+// fail-soft: undefined/false/[] on any error, never throws) — the SAME
+// provider ClickDzHermesController persists its per-user config through
+// (hermesConfigKey idiom). Flows/runs/DLQ are persisted per-user through it.
+import { BadRequest, Cache, NotFound, Throttle } from '../../base';
 
 // SECURITY / CONFIG: the ONE switch. Without COMPOSIO_API_KEY every enabled
 // code path below is unreachable — the controller reports {enabled:false} and
@@ -103,6 +120,124 @@ const CONDENSED_TOOLS_CHAR_CAP = 6_000;
 const STEP_PREVIEW_CHAR_CAP = 2_000;
 const RESULT_FEEDBACK_CHAR_CAP = 2_000;
 const PLANNER_MAX_TOKENS = 700;
+
+// ---------------------------------------------------------------------------
+// C2/C3 — Flows (persisted graph) + run observability + retry/backoff/DLQ.
+// All persisted per-user through the @Global JSON `Cache` provider. Keys are
+// ALWAYS namespaced by the authenticated `user.id` (never a body-supplied id).
+// ---------------------------------------------------------------------------
+
+// Per-user persistence keys (mirrors hermesConfigKey(userId) namespacing).
+const flowKey = (userId: string, flowId: string) =>
+  `clickdz:flow:${userId}:${flowId}`;
+const flowIndexKey = (userId: string) => `clickdz:flowindex:${userId}`;
+const flowRunKey = (userId: string, runId: string) =>
+  `clickdz:flowrun:${userId}:${runId}`;
+const flowRunIndexKey = (userId: string) => `clickdz:flowrunindex:${userId}`;
+const flowDlqKey = (userId: string) => `clickdz:flowdlq:${userId}`;
+
+// TTLs are in MILLISECONDS (CacheProvider.set uses PX). Sliding — refreshed on
+// each PUT (flow) / write (run). Flows live ~90d; runs ~30d.
+const FLOW_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const FLOW_RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+// Caps.
+const FLOW_NAME_MAX = 120;
+const FLOW_NODES_MAX = 50;
+const FLOW_EDGES_MAX = 200;
+const FLOW_CONFIG_BYTES_MAX = 8_192; // bound a node's static config payload
+const FLOW_RUN_INDEX_CAP = 50; // newest N run summaries retained per user
+const FLOW_DLQ_CAP = 50; // newest N failed-run refs retained per user
+
+// SYNC-bounded flow-run budgets: a per-node cap and a whole-run wall clock so a
+// flow /run stays within the request lifecycle (like /run's RUN_WALL_CLOCK_MS).
+const FLOW_NODE_TIMEOUT_MS = 20_000;
+const FLOW_RUN_WALL_CLOCK_MS = 90_000;
+
+// Retry / full-jitter backoff (C3).
+const RETRY_MAX_ATTEMPTS = 4;
+const RETRY_BASE_MS = 500; // 500 → 1000 → 2000 → 4000, capped at RETRY_CAP_MS
+const RETRY_CAP_MS = 8_000;
+
+interface FlowNode {
+  id: string;
+  type: 'trigger' | 'action' | 'condition';
+  toolkit?: string;
+  action?: string;
+  config?: Record<string, unknown>;
+  x: number;
+  y: number;
+}
+
+interface FlowEdge {
+  id: string;
+  from: string;
+  to: string;
+}
+
+interface Flow {
+  id: string;
+  name: string;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+// A summary row stored in the per-user flow index hash (id → summary).
+interface FlowIndexEntry {
+  name: string;
+  updatedAt: number;
+}
+
+// One executed flow-run step (a superset of RunStep so the FE StepRow renders
+// both timelines): adds nodeId/attempts/ms/status/error.
+interface FlowRunStep {
+  nodeId: string;
+  tool: string;
+  status: 'ok' | 'error' | 'retrying';
+  attempts: number;
+  ms: number;
+  resultPreview: string;
+  error?: string;
+}
+
+interface FlowRun {
+  id: string;
+  flowId: string;
+  startedAt: number;
+  finishedAt?: number;
+  status: 'running' | 'ok' | 'error' | 'partial';
+  steps: FlowRunStep[];
+}
+
+// A compact run summary row stored in the per-user run index hash.
+interface FlowRunSummary {
+  id: string;
+  flowId: string;
+  startedAt: number;
+  finishedAt?: number;
+  status: FlowRun['status'];
+  stepCount: number;
+}
+
+// A DLQ entry stored in the per-user DLQ hash (runId → ref).
+interface FlowDlqEntry {
+  runId: string;
+  flowId: string;
+  failedNodeId?: string;
+  startedAt: number;
+  enqueuedAt: number;
+}
+
+// The numeric-status raw result of one Composio execute — what the retry
+// classifier needs (executeTool swallows the HTTP status into a string).
+interface RawExecuteResult {
+  status: number; // HTTP status, or 0 for a network/abort error
+  ok: boolean;
+  preview: string; // truncated success payload OR error detail
+  detail?: string; // error detail (when !ok)
+}
 
 interface CdzToolkit {
   slug: string;
@@ -313,16 +448,55 @@ function normalizeToolkit(t: any): CdzToolkit | null {
 }
 
 /**
+ * Defensively pull the account's OWN user/entity id out of a Composio v3
+ * connected-account object, tolerant of the field-name drift across versions
+ * (`user_id`, `userId`, `entity_id`, `entityId`, nested `user.id`/`entity.id`).
+ * Returns a trimmed string or ''. Used by the C1 defense-in-depth filter below.
+ */
+function extractAccountUserId(acct: any): string {
+  const raw =
+    typeof acct?.user_id === 'string'
+      ? acct.user_id
+      : typeof acct?.userId === 'string'
+        ? acct.userId
+        : typeof acct?.entity_id === 'string'
+          ? acct.entity_id
+          : typeof acct?.entityId === 'string'
+            ? acct.entityId
+            : typeof acct?.user?.id === 'string'
+              ? acct.user.id
+              : typeof acct?.entity?.id === 'string'
+                ? acct.entity.id
+                : '';
+  return raw.trim();
+}
+
+/**
  * Defensively pull the set of connected toolkit slugs out of a Composio v3
  * connected_accounts list payload so the catalog can badge `connected:true`.
  * Each account references its toolkit under one of several keys across API
  * versions (`toolkit_slug`, `toolkit.slug`, `app_name`, `appName`, `toolkit`
  * as a bare string). Lower-cased for case-insensitive matching. Never throws.
+ *
+ * C1 DEFENSE-IN-DEPTH (WS17): when `callerUserId` is provided, keep ONLY
+ * accounts whose OWN user/entity id equals the caller's `user.id`. Even if a
+ * future Composio param rename silently reverts the `user_ids` query filter to
+ * an unfiltered project-wide list, the badge stays correct — the isolation
+ * invariant is enforced client-of-Composio-side, not merely trusted. Accounts
+ * whose user id is unreadable (field drift) are excluded when a caller id is
+ * given — fail closed to "not mine" rather than risk a cross-user badge. When
+ * `callerUserId` is omitted the historical unfiltered behavior is preserved.
  */
-function extractConnectedSlugs(data: any): Set<string> {
+function extractConnectedSlugs(
+  data: any,
+  callerUserId?: string
+): Set<string> {
   const slugs = new Set<string>();
   const list = extractToolkitList(data); // same container shapes (items|data|…)
+  const caller = typeof callerUserId === 'string' ? callerUserId.trim() : '';
   for (const acct of list) {
+    // Defense-in-depth: drop accounts that are not the caller's own.
+    if (caller && extractAccountUserId(acct) !== caller) continue;
     const raw =
       typeof acct?.toolkit_slug === 'string'
         ? acct.toolkit_slug
@@ -440,6 +614,279 @@ function truncatePreview(
   return s.slice(0, cap) + `… [truncated ${s.length - cap} chars]`;
 }
 
+// ---------------------------------------------------------------------------
+// C2/C3 pure helpers (module-level, no `this`, no I/O).
+// ---------------------------------------------------------------------------
+
+/** Promise-based sleep (used by the full-jitter retry backoff). */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, Math.max(0, ms)));
+}
+
+/**
+ * Retry classifier: a Composio execute failure is TRANSIENT (worth retrying)
+ * for 408 (timeout), 429 (rate limit), any 5xx, or a network/abort error
+ * (status 0). Every other 4xx (400/401/403/404/409/422 …) is PERMANENT →
+ * fail fast (mirrors the /run planner rule that tells the user to connect the
+ * toolkit rather than hammering a not-connected/auth error).
+ */
+function isTransientStatus(status: number): boolean {
+  return status === 0 || status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * Full-jitter exponential backoff delay for a given (1-based) attempt number:
+ * base * 2^(attempt-1), capped, then a uniform random in [0, cap]. Bounded by
+ * `remainingMs` at the call site so a retry never overruns the wall clock.
+ */
+function fullJitterBackoffMs(attempt: number): number {
+  const exp = RETRY_BASE_MS * Math.pow(2, Math.max(0, attempt - 1));
+  const capped = Math.min(exp, RETRY_CAP_MS);
+  return Math.floor(Math.random() * capped);
+}
+
+/**
+ * Kahn topological sort of a flow graph. Returns node ids in a dependency-safe
+ * order, or null if the graph has a cycle (the caller maps null → typed 400
+ * {error:'flow_has_cycle'}). Edges referencing unknown node ids are ignored
+ * (defensive — a stale edge never corrupts the ordering). Deterministic:
+ * initial roots and each layer preserve the node array order.
+ */
+function topoSortFlow(nodes: FlowNode[], edges: FlowEdge[]): string[] | null {
+  const ids = nodes.map(n => n.id);
+  const idSet = new Set(ids);
+  const indegree = new Map<string, number>();
+  const adj = new Map<string, string[]>();
+  for (const id of ids) {
+    indegree.set(id, 0);
+    adj.set(id, []);
+  }
+  for (const e of edges) {
+    if (!e || !idSet.has(e.from) || !idSet.has(e.to)) continue;
+    // Guard against duplicate edges inflating indegree past its real fan-in.
+    const outs = adj.get(e.from)!;
+    if (outs.includes(e.to)) continue;
+    outs.push(e.to);
+    indegree.set(e.to, (indegree.get(e.to) ?? 0) + 1);
+  }
+  // Seed the queue with indegree-0 nodes IN NODE-ARRAY ORDER (stable output).
+  const queue: string[] = ids.filter(id => (indegree.get(id) ?? 0) === 0);
+  const order: string[] = [];
+  while (queue.length) {
+    const id = queue.shift()!;
+    order.push(id);
+    for (const next of adj.get(id) ?? []) {
+      const d = (indegree.get(next) ?? 0) - 1;
+      indegree.set(next, d);
+      if (d === 0) queue.push(next);
+    }
+  }
+  return order.length === ids.length ? order : null; // shorter ⇒ cycle
+}
+
+/** Compute the direct upstream (predecessor) node ids of `nodeId`. */
+function upstreamNodeIds(nodeId: string, edges: FlowEdge[]): string[] {
+  const out: string[] = [];
+  for (const e of edges) {
+    if (e && e.to === nodeId && typeof e.from === 'string') out.push(e.from);
+  }
+  return out;
+}
+
+/**
+ * Normalize + validate an untrusted Flow body for a PUT upsert. Enforces the
+ * caps (name<=120, nodes<=50, edges<=200, per-node config byte budget) and
+ * coerces every field to the pinned shape. Returns {flow} on success or
+ * {error} with a machine string the route maps to a typed 400. Never throws.
+ * `id`/timestamps are assigned by the route, not trusted from the body.
+ */
+function normalizeFlowInput(
+  body: any
+): { flow: Omit<Flow, 'id' | 'createdAt' | 'updatedAt'> } | { error: string } {
+  if (!body || typeof body !== 'object') return { error: 'invalid_flow' };
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name || name.length > FLOW_NAME_MAX) return { error: 'invalid_name' };
+
+  const rawNodes = Array.isArray(body.nodes) ? body.nodes : [];
+  if (rawNodes.length > FLOW_NODES_MAX) return { error: 'too_many_nodes' };
+  const rawEdges = Array.isArray(body.edges) ? body.edges : [];
+  if (rawEdges.length > FLOW_EDGES_MAX) return { error: 'too_many_edges' };
+
+  const nodes: FlowNode[] = [];
+  const nodeIds = new Set<string>();
+  for (const n of rawNodes) {
+    if (!n || typeof n !== 'object') return { error: 'invalid_node' };
+    const id = typeof n.id === 'string' ? n.id.trim() : '';
+    if (!id || nodeIds.has(id)) return { error: 'invalid_node_id' };
+    const type =
+      n.type === 'trigger' || n.type === 'action' || n.type === 'condition'
+        ? n.type
+        : null;
+    if (!type) return { error: 'invalid_node_type' };
+    const node: FlowNode = {
+      id,
+      type,
+      x: Number.isFinite(n.x) ? Number(n.x) : 0,
+      y: Number.isFinite(n.y) ? Number(n.y) : 0,
+    };
+    if (typeof n.toolkit === 'string' && n.toolkit.trim())
+      node.toolkit = n.toolkit.trim();
+    if (typeof n.action === 'string' && n.action.trim())
+      node.action = n.action.trim();
+    if (n.config && typeof n.config === 'object' && !Array.isArray(n.config)) {
+      // Bound the config payload so a single node can't blow the record budget.
+      let bytes = 0;
+      try {
+        bytes = JSON.stringify(n.config).length;
+      } catch {
+        return { error: 'invalid_node_config' };
+      }
+      if (bytes > FLOW_CONFIG_BYTES_MAX) return { error: 'node_config_too_big' };
+      node.config = n.config as Record<string, unknown>;
+    }
+    nodes.push(node);
+    nodeIds.add(id);
+  }
+
+  const edges: FlowEdge[] = [];
+  const edgePairs = new Set<string>();
+  for (const e of rawEdges) {
+    if (!e || typeof e !== 'object') return { error: 'invalid_edge' };
+    const from = typeof e.from === 'string' ? e.from.trim() : '';
+    const to = typeof e.to === 'string' ? e.to.trim() : '';
+    if (!from || !to) return { error: 'invalid_edge' };
+    // Edges must reference declared nodes (no dangling refs persisted).
+    if (!nodeIds.has(from) || !nodeIds.has(to)) return { error: 'edge_dangling' };
+    const pair = JSON.stringify([from, to]);
+    if (edgePairs.has(pair)) continue; // dedupe
+    edgePairs.add(pair);
+    const id =
+      typeof e.id === 'string' && e.id.trim() ? e.id.trim() : `${from}-${to}`;
+    edges.push({ id, from, to });
+  }
+
+  return { flow: { name, nodes, edges } };
+}
+
+/**
+ * Substitute `${nodeId.path}` / `${nodeId}` tokens inside a node's static
+ * config against the accumulated upstream outputs, plus a convenience
+ * `${previous}` alias for the single direct-predecessor output (the simple
+ * {previous} context the contract asks for). Non-matching tokens are left
+ * verbatim. Pure — deep-clones so the stored flow config is never mutated.
+ */
+function resolveNodeArgs(
+  config: Record<string, unknown> | undefined,
+  outputs: Map<string, unknown>,
+  previous: unknown
+): Record<string, unknown> {
+  if (!config) return {};
+  const readPath = (root: unknown, path: string): unknown => {
+    if (!path) return root;
+    let cur: any = root;
+    for (const seg of path.split('.')) {
+      if (cur == null) return undefined;
+      cur = cur[seg];
+    }
+    return cur;
+  };
+  const resolveToken = (expr: string): unknown => {
+    const trimmed = expr.trim();
+    if (trimmed === 'previous') return previous;
+    if (trimmed.startsWith('previous.'))
+      return readPath(previous, trimmed.slice('previous.'.length));
+    const dot = trimmed.indexOf('.');
+    const nodeId = dot === -1 ? trimmed : trimmed.slice(0, dot);
+    const path = dot === -1 ? '' : trimmed.slice(dot + 1);
+    if (!outputs.has(nodeId)) return undefined;
+    return readPath(outputs.get(nodeId), path);
+  };
+  const walk = (val: unknown): unknown => {
+    if (typeof val === 'string') {
+      // Whole-string single token → return the raw (possibly non-string) value.
+      const whole = /^\$\{([^}]+)\}$/.exec(val);
+      if (whole) {
+        const resolved = resolveToken(whole[1]);
+        return resolved === undefined ? val : resolved;
+      }
+      // Otherwise interpolate tokens into the string.
+      return val.replace(/\$\{([^}]+)\}/g, (m, expr) => {
+        const resolved = resolveToken(String(expr));
+        if (resolved === undefined) return m;
+        return typeof resolved === 'string'
+          ? resolved
+          : (() => {
+              try {
+                return JSON.stringify(resolved);
+              } catch {
+                return String(resolved);
+              }
+            })();
+      });
+    }
+    if (Array.isArray(val)) return val.map(walk);
+    if (val && typeof val === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val)) out[k] = walk(v);
+      return out;
+    }
+    return val;
+  };
+  return walk(config) as Record<string, unknown>;
+}
+
+/**
+ * Evaluate a condition node against the accumulated outputs (+ the direct
+ * predecessor's output as `previous`). Pure, no I/O. Supported (all optional
+ * in `config`):
+ *   { left:'${node.path}'|literal, op:'eq'|'ne'|'gt'|'gte'|'lt'|'lte'|
+ *     'truthy'|'falsy'|'contains'|'exists', right?:... }
+ * Defaults to `truthy` on `left`. Unknown ops → false (fail closed: the branch
+ * simply does not open). Returns whether downstream nodes should proceed.
+ */
+function evaluateCondition(
+  config: Record<string, unknown> | undefined,
+  outputs: Map<string, unknown>,
+  previous: unknown
+): boolean {
+  const cfg = config ?? {};
+  const resolveSide = (v: unknown): unknown => {
+    const r = resolveNodeArgs({ v }, outputs, previous) as { v: unknown };
+    return r.v;
+  };
+  const left = resolveSide((cfg as any).left);
+  const op = typeof (cfg as any).op === 'string' ? (cfg as any).op : 'truthy';
+  const right = resolveSide((cfg as any).right);
+  const num = (x: unknown): number => Number(x);
+  switch (op) {
+    case 'truthy':
+      return !!left;
+    case 'falsy':
+      return !left;
+    case 'exists':
+      return left !== undefined && left !== null;
+    case 'eq':
+      return left === right;
+    case 'ne':
+      return left !== right;
+    case 'gt':
+      return num(left) > num(right);
+    case 'gte':
+      return num(left) >= num(right);
+    case 'lt':
+      return num(left) < num(right);
+    case 'lte':
+      return num(left) <= num(right);
+    case 'contains':
+      if (typeof left === 'string')
+        return left.includes(String(right ?? ''));
+      if (Array.isArray(left)) return left.includes(right as never);
+      return false;
+    default:
+      return false; // unknown op → gate stays closed
+  }
+}
+
 /**
  * ClickDz Integrations (Composio) — DARK by default.
  *
@@ -457,6 +904,12 @@ export class ClickDzIntegrationsController {
   // planner call is actually attempted (lazy — never at import), never repeated.
   // Path only, no key material.
   private plannerUrlLogged = false;
+
+  // C2/C3: the @Global JSON-wrapped Redis provider (get<T>/set with a PX ttl +
+  // map/list ops) is injected for per-user flow/run/DLQ persistence. Constructor
+  // DI works without a CopilotModule change because Cache is a @Global provider
+  // (same as ClickDzHermesController). Fail-soft by contract — never throws.
+  constructor(private readonly cache: Cache) {}
 
   /** Small helper: fetch with a hard AbortController timeout (default 8s). */
   private async fetchWithTimeout(
@@ -600,7 +1053,17 @@ export class ClickDzIntegrationsController {
   private async fetchConnectedSlugs(userId: string): Promise<Set<string>> {
     try {
       const params = new URLSearchParams();
-      params.set('user_id', userId);
+      // C1 CRITICAL ISOLATION FIX (WS17): Composio v3 `GET connected_accounts`
+      // ONLY honors the ARRAY filter `user_ids`; the singular `user_id` is an
+      // unrecognized param → SILENTLY IGNORED → the request degrades to "list
+      // ALL connected accounts in the project" (cross-user disclosure leak).
+      // Filter by the caller's user id via the array form so the badge reflects
+      // ONLY this user's connections. (Write paths — initiateConnect /
+      // executeTool — correctly send singular `user_id` in the POST body and are
+      // left untouched.) `URLSearchParams` renders this as `user_ids=<uuid>`, a
+      // valid single-element array filter; a mis-shaped param would soft-fail to
+      // an EMPTY set (nothing badged — the safe direction), never re-leak.
+      params.set('user_ids', userId);
       params.set('limit', String(CONNECTED_ACCOUNTS_SCAN_LIMIT));
       const response = await this.fetchWithTimeout(
         `${COMPOSIO_CONNECTED_ACCOUNTS_URL}?${params.toString()}`,
@@ -619,7 +1082,9 @@ export class ClickDzIntegrationsController {
         return new Set<string>();
       }
       const data: any = await response.json().catch(() => null);
-      return extractConnectedSlugs(data);
+      // C1 defense-in-depth: pass the caller's id so only their own accounts'
+      // slugs survive even if the server-side `user_ids` filter ever regresses.
+      return extractConnectedSlugs(data, userId);
     } catch (err) {
       this.logger.warn(
         `[integrations] connected_accounts fetch failed: ${(err as Error)?.message ?? err}`
@@ -1164,6 +1629,80 @@ export class ClickDzIntegrationsController {
   }
 
   /**
+   * C3: execute one Composio tool and return the NUMERIC HTTP status alongside
+   * the outcome — what the retry classifier needs. `executeTool` (the /run
+   * orchestrator's helper, left byte-identical below) swallows the status into a
+   * string; this parallel helper exposes it. Same per-user `user_id` body,
+   * headers, timeout, and defensive parse as executeTool. Never throws:
+   *  - success → { status, ok:true, preview:<truncated payload> }
+   *  - non-2xx → { status, ok:false, preview:<detail>, detail }
+   *  - network/abort → { status:0, ok:false, preview:<msg>, detail }
+   *
+   * `idempotencyKey` (when given) is passed BOTH as an `X-Idempotency-Key`
+   * header and inside `arguments.idempotency_key` so retried writes de-dupe
+   * upstream where the toolkit supports it (non-idempotent toolkits retry
+   * at-least-once — documented behavior).
+   */
+  private async executeToolRaw(
+    toolSlug: string,
+    args: Record<string, unknown>,
+    userId: string,
+    remainingMs: number,
+    idempotencyKey?: string
+  ): Promise<RawExecuteResult> {
+    const timeoutMs = Math.max(1, Math.min(FLOW_NODE_TIMEOUT_MS, remainingMs));
+    const execArgs =
+      idempotencyKey && !('idempotency_key' in args)
+        ? { ...args, idempotency_key: idempotencyKey }
+        : args;
+    const headers: Record<string, string> = {
+      'x-api-key': COMPOSIO_API_KEY,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (idempotencyKey) headers['X-Idempotency-Key'] = idempotencyKey;
+    try {
+      const response = await this.fetchWithTimeout(
+        `${COMPOSIO_TOOLS_EXECUTE_URL}/${encodeURIComponent(toolSlug)}`,
+        {
+          method: 'POST',
+          headers,
+          // Per-user isolation: the caller's user.id on EVERY execute.
+          body: JSON.stringify({ user_id: userId, arguments: execArgs }),
+        },
+        timeoutMs
+      );
+      const data: any = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail =
+          typeof data?.error?.message === 'string'
+            ? data.error.message
+            : typeof data?.error === 'string'
+              ? data.error
+              : typeof data?.message === 'string'
+                ? data.message
+                : `composio responded ${response.status}`;
+        return {
+          status: response.status,
+          ok: false,
+          preview: truncatePreview(detail),
+          detail: String(detail),
+        };
+      }
+      const payload = data?.data ?? data?.response_data ?? data;
+      return {
+        status: response.status,
+        ok: true,
+        preview: truncatePreview(payload),
+      };
+    } catch (err) {
+      const detail = (err as Error)?.message ?? 'tool_execute_failed';
+      // status 0 ⇒ classified transient (network/abort) by isTransientStatus.
+      return { status: 0, ok: false, preview: truncatePreview(detail), detail };
+    }
+  }
+
+  /**
    * Execute one Composio tool (20s, capped by remaining wall-clock). Always
    * returns a RunStep — execution errors are captured as ok:false steps whose
    * text is fed back to the model so the loop can recover.
@@ -1239,5 +1778,581 @@ export class ClickDzIntegrationsController {
     return `I ran ${steps.length} tool step(s) (${okCount} succeeded): ${parts.join(
       '; '
     )}. Reached the step/time limit before a final summary — review the steps above for details.`;
+  }
+
+  // =========================================================================
+  // C2 — FLOWS: per-user CRUD + graph run.  C3 — run observability + DLQ.
+  //
+  // Persistence (all via the @Global JSON `Cache`, fail-soft, per-user keys):
+  //   clickdz:flow:<userId>:<flowId>        → Flow           (~90d, refreshed on PUT)
+  //   clickdz:flowindex:<userId>            → hash id→{name,updatedAt}
+  //   clickdz:flowrun:<userId>:<runId>      → FlowRun        (~30d)
+  //   clickdz:flowrunindex:<userId>         → hash runId→summary (cap ~50)
+  //   clickdz:flowdlq:<userId>              → hash runId→FlowDlqEntry (cap ~50)
+  //
+  // Routes (all auth'd via the global guard + @CurrentUser; typed errors — a
+  // missing flow/run is `throw new NotFound(...)` (typed 404), a bad body is
+  // `throw new BadRequest(...)` (typed 400), non-standard bodies via @Res()):
+  //   GET    /api/v1/integrations/flows            → Flow[]  (bare array)
+  //   GET    /api/v1/integrations/flows/:id        → Flow
+  //   PUT    /api/v1/integrations/flows/:id        → Flow    (upsert; :id 'new' mints)
+  //   DELETE /api/v1/integrations/flows/:id        → {ok}
+  //   POST   /api/v1/integrations/flows/:id/run    → FlowRun
+  //   GET    /api/v1/integrations/runs             → FlowRunSummary[] (bare array)
+  //   GET    /api/v1/integrations/runs/:id         → FlowRun
+  //   GET    /api/v1/integrations/dlq              → FlowDlqEntry[]   (bare array)
+  //   POST   /api/v1/integrations/dlq/:runId/replay→ FlowRun (fresh run)
+  //
+  // Every Composio execute inside runFlow uses executeNodeWithRetry(node, args,
+  // user.id) — the caller's user.id on EVERY execute (isolation preserved). The
+  // existing /run orchestrator + executeTool are UNCHANGED (byte-identical).
+  // =========================================================================
+
+  // ---- flow persistence (fail-soft) --------------------------------------
+
+  /** Read one persisted Flow (normalized shape) or null. Never throws. */
+  private async readFlow(userId: string, flowId: string): Promise<Flow | null> {
+    try {
+      const raw = await this.cache.get<Flow>(flowKey(userId, flowId));
+      if (!raw || typeof raw !== 'object') return null;
+      // Trust-but-verify the persisted shape (we wrote it, but be defensive).
+      return {
+        id: typeof raw.id === 'string' ? raw.id : flowId,
+        name: typeof raw.name === 'string' ? raw.name : 'Untitled flow',
+        nodes: Array.isArray(raw.nodes) ? raw.nodes : [],
+        edges: Array.isArray(raw.edges) ? raw.edges : [],
+        createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+        updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Persist a Flow + refresh its index entry (sliding TTL). Never throws. */
+  private async writeFlow(userId: string, flow: Flow): Promise<void> {
+    await this.cache.set(flowKey(userId, flow.id), flow, { ttl: FLOW_TTL_MS });
+    await this.cache.mapSet<FlowIndexEntry>(flowIndexKey(userId), flow.id, {
+      name: flow.name,
+      updatedAt: flow.updatedAt,
+    });
+  }
+
+  /** Persist a FlowRun + upsert its capped index summary. Never throws. */
+  private async writeRun(userId: string, run: FlowRun): Promise<void> {
+    await this.cache.set(flowRunKey(userId, run.id), run, {
+      ttl: FLOW_RUN_TTL_MS,
+    });
+    const summary: FlowRunSummary = {
+      id: run.id,
+      flowId: run.flowId,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      status: run.status,
+      stepCount: run.steps.length,
+    };
+    await this.cache.mapSet<FlowRunSummary>(
+      flowRunIndexKey(userId),
+      run.id,
+      summary
+    );
+    // Trim the index to the newest FLOW_RUN_INDEX_CAP by startedAt (best-effort).
+    await this.trimIndex<FlowRunSummary>(
+      flowRunIndexKey(userId),
+      FLOW_RUN_INDEX_CAP,
+      s => s.startedAt
+    );
+  }
+
+  /**
+   * Generic newest-N trim of a per-user index hash: if the hash holds more than
+   * `cap` entries, delete the oldest (by `orderOf`) down to `cap`. Best-effort,
+   * fail-soft — a failed trim never breaks the write.
+   */
+  private async trimIndex<T>(
+    mapKey: string,
+    cap: number,
+    orderOf: (entry: T) => number
+  ): Promise<void> {
+    try {
+      const ids = await this.cache.mapKeys(mapKey);
+      if (ids.length <= cap) return;
+      const entries: Array<{ id: string; order: number }> = [];
+      for (const id of ids) {
+        const v = await this.cache.mapGet<T>(mapKey, id);
+        entries.push({ id, order: v ? orderOf(v) : 0 });
+      }
+      entries.sort((a, b) => b.order - a.order); // newest first
+      for (const stale of entries.slice(cap)) {
+        await this.cache.mapDelete(mapKey, stale.id);
+      }
+    } catch {
+      /* fail-soft */
+    }
+  }
+
+  // ---- flow CRUD routes ---------------------------------------------------
+
+  /**
+   * GET /flows — the caller's flows as a BARE Flow[] (full objects, newest
+   * first). Reads the index hash then hydrates each flow; entries whose flow
+   * record has expired are skipped (and pruned from the index). Never throws;
+   * degrades to [] on any read failure.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/integrations/flows')
+  async listFlows(@CurrentUser() user: CurrentUser): Promise<Flow[]> {
+    try {
+      const ids = await this.cache.mapKeys(flowIndexKey(user.id));
+      const flows: Flow[] = [];
+      for (const id of ids) {
+        const flow = await this.readFlow(user.id, id);
+        if (flow) flows.push(flow);
+        else await this.cache.mapDelete(flowIndexKey(user.id), id); // prune stale
+      }
+      flows.sort((a, b) => b.updatedAt - a.updatedAt);
+      return flows;
+    } catch {
+      return [];
+    }
+  }
+
+  /** GET /flows/:id — one Flow, or typed 404. */
+  @Throttle('strict')
+  @Get('/api/v1/integrations/flows/:id')
+  async getFlow(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string
+  ): Promise<Flow> {
+    const flow = await this.readFlow(user.id, id);
+    if (!flow) throw new NotFound(`flow "${id}" not found`);
+    return flow;
+  }
+
+  /**
+   * PUT /flows/:id — upsert. `:id === 'new'` (or a body with no persisted match)
+   * MINTS a fresh id (randomUUID) + createdAt; an existing id keeps its
+   * createdAt and bumps updatedAt. Validates + caps the body (typed 400 on a bad
+   * shape). Returns the persisted Flow.
+   */
+  @Throttle('strict')
+  @Put('/api/v1/integrations/flows/:id')
+  async upsertFlow(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() body: any
+  ): Promise<Flow> {
+    const parsed = normalizeFlowInput(body);
+    if ('error' in parsed) throw new BadRequest(parsed.error);
+
+    const now = Date.now();
+    const isNew = !id || id === 'new';
+    const existing = isNew ? null : await this.readFlow(user.id, id);
+    const flowId = isNew || !existing ? randomUUID() : existing.id;
+    const createdAt = existing ? existing.createdAt : now;
+
+    const flow: Flow = {
+      id: flowId,
+      name: parsed.flow.name,
+      nodes: parsed.flow.nodes,
+      edges: parsed.flow.edges,
+      createdAt,
+      updatedAt: now,
+    };
+    await this.writeFlow(user.id, flow);
+    return flow;
+  }
+
+  /** DELETE /flows/:id — remove the flow + its index entry. Idempotent {ok}. */
+  @Throttle('strict')
+  @Delete('/api/v1/integrations/flows/:id')
+  async deleteFlow(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string
+  ): Promise<{ ok: boolean }> {
+    await this.cache.delete(flowKey(user.id, id));
+    await this.cache.mapDelete(flowIndexKey(user.id), id);
+    return { ok: true };
+  }
+
+  // ---- flow run (topo-sort + per-node retry) ------------------------------
+
+  /**
+   * POST /flows/:id/run — execute the flow graph and return the persisted
+   * FlowRun. Typed 404 if the flow is missing; typed 400 {error:'flow_has_cycle'}
+   * (via @Res) if the graph has a cycle. Every Composio execute threads
+   * user.id (isolation). SYNC-bounded by FLOW_RUN_WALL_CLOCK_MS.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/integrations/flows/:id/run')
+  async runFlowRoute(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+    const flow = await this.readFlow(user.id, id);
+    if (!flow) {
+      // Typed 404 body via @Res (NotFound is fine too; keep it explicit here).
+      res.status(404).json({ error: 'flow_not_found' });
+      return;
+    }
+    const order = topoSortFlow(flow.nodes, flow.edges);
+    if (!order) {
+      res.status(400).json({ error: 'flow_has_cycle' });
+      return;
+    }
+    const run = await this.runFlow(flow, user.id, order);
+    res.status(200).json(run);
+  }
+
+  /**
+   * The graph executor (shared by /flows/:id/run and DLQ replay). Runs nodes in
+   * topological order:
+   *  - trigger nodes: skipped (manual run = the entry point).
+   *  - condition nodes: evaluated in-process (no Composio call) against prior
+   *    outputs; when a condition is false, its downstream (transitively) is
+   *    gated (skipped) for the rest of the run.
+   *  - action nodes: executeNodeWithRetry(node, resolvedArgs, userId) — the
+   *    caller's user.id on EVERY execute. Config `${node.path}`/`${previous}`
+   *    refs are resolved against accumulated upstream outputs.
+   * Persists the FlowRun (running → terminal) and, on failure, enqueues a DLQ
+   * entry. Bounded by FLOW_RUN_WALL_CLOCK_MS overall + FLOW_NODE_TIMEOUT_MS per
+   * node. Returns the final FlowRun.
+   */
+  private async runFlow(
+    flow: Flow,
+    userId: string,
+    precomputedOrder?: string[]
+  ): Promise<FlowRun> {
+    const order = precomputedOrder ?? topoSortFlow(flow.nodes, flow.edges) ?? [];
+    const nodeById = new Map(flow.nodes.map(n => [n.id, n]));
+    const deadline = Date.now() + FLOW_RUN_WALL_CLOCK_MS;
+
+    const run: FlowRun = {
+      id: randomUUID(),
+      flowId: flow.id,
+      startedAt: Date.now(),
+      status: 'running',
+      steps: [],
+    };
+    // Persist the running record up front so a GET /runs/:id works mid-flight.
+    await this.writeRun(userId, run);
+
+    // Outputs available to downstream nodes as `${nodeId.path}` / `${previous}`.
+    const outputs = new Map<string, unknown>();
+    // Nodes whose upstream gate (condition false / failed dependency) closed.
+    const gated = new Set<string>();
+    let sawError = false;
+    let sawSuccess = false;
+    let lastOutputNodeId: string | null = null;
+
+    const gateDownstream = (fromId: string) => {
+      // Mark every node reachable from `fromId` as gated (BFS over edges).
+      const stack = [fromId];
+      while (stack.length) {
+        const cur = stack.pop()!;
+        for (const e of flow.edges) {
+          if (e.from === cur && !gated.has(e.to)) {
+            gated.add(e.to);
+            stack.push(e.to);
+          }
+        }
+      }
+    };
+
+    for (const nodeId of order) {
+      if (Date.now() >= deadline) {
+        sawError = true; // ran out of wall-clock before finishing
+        break;
+      }
+      const node = nodeById.get(nodeId);
+      if (!node) continue;
+      if (gated.has(nodeId)) continue; // an upstream gate/failure closed this
+
+      // Determine the direct-predecessor output for the {previous} context.
+      const preds = upstreamNodeIds(nodeId, flow.edges);
+      const previous =
+        preds.length && outputs.has(preds[preds.length - 1])
+          ? outputs.get(preds[preds.length - 1])
+          : lastOutputNodeId
+            ? outputs.get(lastOutputNodeId)
+            : undefined;
+
+      if (node.type === 'trigger') {
+        continue; // manual run: the trigger is just the entry marker
+      }
+
+      if (node.type === 'condition') {
+        const pass = evaluateCondition(node.config, outputs, previous);
+        outputs.set(node.id, { condition: pass });
+        if (!pass) gateDownstream(node.id); // gate the branch that shouldn't run
+        continue;
+      }
+
+      // action node
+      if (!node.action) {
+        // Misconfigured node (no tool slug) → record an error step, gate below.
+        run.steps.push({
+          nodeId: node.id,
+          tool: '(unconfigured)',
+          status: 'error',
+          attempts: 0,
+          ms: 0,
+          resultPreview: '',
+          error: 'node_missing_action',
+        });
+        sawError = true;
+        gateDownstream(node.id);
+        await this.writeRun(userId, run);
+        continue;
+      }
+
+      const args = resolveNodeArgs(node.config, outputs, previous);
+      const step = await this.executeNodeWithRetry(
+        node,
+        args,
+        userId,
+        run.id,
+        deadline
+      );
+      run.steps.push(step);
+      await this.writeRun(userId, run); // persist incrementally (live polling)
+
+      if (step.status === 'ok') {
+        sawSuccess = true;
+        // Downstream nodes read this node's raw payload via `${nodeId.path}`.
+        outputs.set(node.id, this.previewToOutput(step.resultPreview));
+        lastOutputNodeId = node.id;
+      } else {
+        sawError = true;
+        gateDownstream(node.id); // a failed action gates everything after it
+      }
+    }
+
+    run.finishedAt = Date.now();
+    run.status = sawError
+      ? sawSuccess
+        ? 'partial'
+        : 'error'
+      : 'ok';
+    await this.writeRun(userId, run);
+
+    // C3: any run that ended not-ok goes to the DLQ for replay.
+    if (run.status !== 'ok') {
+      await this.enqueueDlq(userId, run);
+    }
+    return run;
+  }
+
+  /**
+   * Best-effort: turn a step's (already-truncated) resultPreview back into a
+   * value downstream nodes can path into. The preview is JSON when the payload
+   * was an object/array; parse it, else fall back to the raw string.
+   */
+  private previewToOutput(preview: string): unknown {
+    const s = String(preview ?? '');
+    const t = s.trim();
+    if (t.startsWith('{') || t.startsWith('[')) {
+      try {
+        return JSON.parse(t);
+      } catch {
+        return s;
+      }
+    }
+    return s;
+  }
+
+  /**
+   * C3 retry/backoff wrapper around executeToolRaw for a single action node.
+   * Full-jitter exponential backoff (500ms→8s, max 4 attempts). Transient
+   * failures (408/429/5xx/network) retry; permanent 4xx fail fast. Bounded by
+   * the run `deadline`. `idempotency_key = ${runId}:${nodeId}` is threaded so
+   * retried writes de-dupe where the toolkit supports it. Returns a FlowRunStep
+   * with the total attempt count + elapsed ms. Never throws.
+   */
+  private async executeNodeWithRetry(
+    node: FlowNode,
+    args: Record<string, unknown>,
+    userId: string,
+    runId: string,
+    deadline: number
+  ): Promise<FlowRunStep> {
+    const tool = node.action ?? '';
+    const idempotencyKey = `${runId}:${node.id}`;
+    const t0 = Date.now();
+    let attempt = 0;
+    let last: RawExecuteResult | null = null;
+
+    while (attempt < RETRY_MAX_ATTEMPTS) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break; // out of wall-clock
+      attempt++;
+      last = await this.executeToolRaw(
+        tool,
+        args,
+        userId,
+        remaining,
+        idempotencyKey
+      );
+      if (last.ok) {
+        return {
+          nodeId: node.id,
+          tool,
+          status: 'ok',
+          attempts: attempt,
+          ms: Date.now() - t0,
+          resultPreview: last.preview,
+        };
+      }
+      // Permanent (non-transient 4xx) OR out of attempts → stop now.
+      if (!isTransientStatus(last.status) || attempt >= RETRY_MAX_ATTEMPTS) {
+        break;
+      }
+      // Transient → full-jitter backoff, bounded by the remaining wall-clock.
+      const backoff = Math.min(
+        fullJitterBackoffMs(attempt),
+        Math.max(0, deadline - Date.now())
+      );
+      if (backoff <= 0 && deadline - Date.now() <= 0) break;
+      await sleep(backoff);
+    }
+
+    return {
+      nodeId: node.id,
+      tool,
+      status: 'error',
+      attempts: attempt,
+      ms: Date.now() - t0,
+      resultPreview: last?.preview ?? '',
+      error: last?.detail ?? 'node_execute_failed',
+    };
+  }
+
+  // ---- observability routes ----------------------------------------------
+
+  /**
+   * GET /runs — the caller's run summaries as a BARE array, newest first.
+   * Never throws; degrades to [].
+   */
+  @Throttle('strict')
+  @Get('/api/v1/integrations/runs')
+  async listRuns(
+    @CurrentUser() user: CurrentUser
+  ): Promise<FlowRunSummary[]> {
+    try {
+      const ids = await this.cache.mapKeys(flowRunIndexKey(user.id));
+      const runs: FlowRunSummary[] = [];
+      for (const id of ids) {
+        const s = await this.cache.mapGet<FlowRunSummary>(
+          flowRunIndexKey(user.id),
+          id
+        );
+        if (s) runs.push(s);
+      }
+      runs.sort((a, b) => b.startedAt - a.startedAt);
+      return runs;
+    } catch {
+      return [];
+    }
+  }
+
+  /** GET /runs/:id — one full FlowRun, or typed 404. */
+  @Throttle('strict')
+  @Get('/api/v1/integrations/runs/:id')
+  async getRun(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string
+  ): Promise<FlowRun> {
+    const run = await this.cache.get<FlowRun>(flowRunKey(user.id, id));
+    if (!run || typeof run !== 'object') {
+      throw new NotFound(`run "${id}" not found`);
+    }
+    return run;
+  }
+
+  // ---- DLQ ----------------------------------------------------------------
+
+  /** Enqueue a failed run into the per-user DLQ hash (capped). Never throws. */
+  private async enqueueDlq(userId: string, run: FlowRun): Promise<void> {
+    const failedNodeId = run.steps.find(s => s.status === 'error')?.nodeId;
+    const entry: FlowDlqEntry = {
+      runId: run.id,
+      flowId: run.flowId,
+      failedNodeId,
+      startedAt: run.startedAt,
+      enqueuedAt: Date.now(),
+    };
+    await this.cache.mapSet<FlowDlqEntry>(flowDlqKey(userId), run.id, entry);
+    await this.trimIndex<FlowDlqEntry>(
+      flowDlqKey(userId),
+      FLOW_DLQ_CAP,
+      e => e.enqueuedAt
+    );
+  }
+
+  /**
+   * GET /dlq — the caller's dead-lettered failed runs as a BARE array, newest
+   * first. Never throws; degrades to [].
+   */
+  @Throttle('strict')
+  @Get('/api/v1/integrations/dlq')
+  async listDlq(@CurrentUser() user: CurrentUser): Promise<FlowDlqEntry[]> {
+    try {
+      const ids = await this.cache.mapKeys(flowDlqKey(user.id));
+      const entries: FlowDlqEntry[] = [];
+      for (const id of ids) {
+        const e = await this.cache.mapGet<FlowDlqEntry>(flowDlqKey(user.id), id);
+        if (e) entries.push(e);
+      }
+      entries.sort((a, b) => b.enqueuedAt - a.enqueuedAt);
+      return entries;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * POST /dlq/:runId/replay — re-run the flow the failed run belonged to (a
+   * FRESH runId). On a successful ('ok') replay the DLQ entry is cleared; a
+   * still-failing replay stays queued (its own new run also lands in the DLQ).
+   * Typed 404 if the DLQ entry or its flow is gone (@Res bodies). Every execute
+   * threads user.id (isolation).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/integrations/dlq/:runId/replay')
+  async replayDlq(
+    @CurrentUser() user: CurrentUser,
+    @Param('runId') runId: string,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+    const entry = await this.cache.mapGet<FlowDlqEntry>(
+      flowDlqKey(user.id),
+      runId
+    );
+    if (!entry) {
+      res.status(404).json({ error: 'dlq_entry_not_found' });
+      return;
+    }
+    const flow = await this.readFlow(user.id, entry.flowId);
+    if (!flow) {
+      // The flow was deleted after failing — drop the orphan DLQ entry.
+      await this.cache.mapDelete(flowDlqKey(user.id), runId);
+      res.status(404).json({ error: 'flow_not_found' });
+      return;
+    }
+    const replay = await this.runFlow(flow, user.id);
+    // Clear the ORIGINAL DLQ entry once the replay succeeds cleanly.
+    if (replay.status === 'ok') {
+      await this.cache.mapDelete(flowDlqKey(user.id), runId);
+    }
+    res.status(200).json(replay);
   }
 }
