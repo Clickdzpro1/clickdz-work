@@ -184,6 +184,10 @@ jobs:
           path: ./packages/backend/native
       - name: List server-native files
         run: ls -alh ./packages/backend/native
+      - name: ClickDz boot-crash gate (decorator-import + named-export)
+        run: |
+          git fetch --deepen=1 2>/dev/null || true
+          node scripts/cdz-boot-gate.mjs
       - name: Build Server
         run: yarn workspace @affine/server build
       - name: Upload server dist
