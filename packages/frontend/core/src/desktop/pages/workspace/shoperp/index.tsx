@@ -6,6 +6,7 @@ import {
 } from '@affine/core/modules/workbench';
 import { useCallback, useEffect, useState } from 'react';
 
+import { type DashboardSection, ErpDashboard } from './dashboard';
 import { ManageView } from './manage';
 import {
   Banner,
@@ -21,9 +22,11 @@ import { ShopWizard } from './wizard';
 // ClickDz ShopERP — a real, end-to-end surface for creating and managing online
 // shops (+ their paired ERP dashboards). Follows the Integrations page scaffold
 // exactly: ViewTitle/ViewIcon/ViewHeader/ViewBody + inline styles, no i18n, no
-// new .css.ts. Two states, driven by GET /api/v1/apps/mine:
+// new .css.ts. Three states, driven by GET /api/v1/apps/mine:
 //   • no apps yet → onboarding wizard (per-user customized shop creation)
-//   • apps exist  → management list (open / delete / new shop)
+//   • apps exist  → management list (dashboard / open / delete / new shop)
+//   • store selected → in-app ERP dashboard (live KPIs + orders/stock/settings
+//     admin over the store's data namespace — see dashboard.tsx)
 // Every button hits the real /api/v1/apps/* backend — nothing is stubbed.
 // ---------------------------------------------------------------------------
 
@@ -34,6 +37,12 @@ const ShopErpPage = () => {
   const [apps, setApps] = useState<MineApp[]>([]);
   // When true, force the wizard even though apps already exist ("New shop").
   const [forceWizard, setForceWizard] = useState(false);
+  // Non-null → the in-app ERP dashboard for that store is open.
+  const [dashboard, setDashboard] = useState<{
+    slug: string;
+    section: DashboardSection;
+    url?: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -56,8 +65,19 @@ const ShopErpPage = () => {
     void load();
   }, [load]);
 
+  // Enter/leave the in-app dashboard (mutually exclusive with the wizard).
+  const openDashboard = useCallback(
+    (slug: string, section: DashboardSection = 'overview', url?: string) => {
+      setForceWizard(false);
+      setDashboard({ slug, section, ...(url ? { url } : {}) });
+    },
+    []
+  );
+  const closeDashboard = useCallback(() => setDashboard(null), []);
+
   const hasApps = apps.length > 0;
   const showWizard = state === 'ready' && (!hasApps || forceWizard);
+  const showDashboard = state === 'ready' && !showWizard && dashboard !== null;
 
   return (
     <>
@@ -109,7 +129,9 @@ const ShopErpPage = () => {
         >
           <div
             style={{
-              maxWidth: 960,
+              // The dashboard benefits from a wider canvas; the wizard and
+              // management list keep their original measure.
+              maxWidth: showDashboard ? 1120 : 960,
               margin: '0 auto',
               padding: '28px 24px 48px',
               display: 'flex',
@@ -117,25 +139,29 @@ const ShopErpPage = () => {
               gap: 20,
             }}
           >
-            <header style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <h1
-                style={{
-                  margin: 0,
-                  fontSize: 24,
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  color: C.text,
-                }}
+            {showDashboard ? null : (
+              <header
+                style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
               >
-                <span aria-hidden>🛍️</span> Shop ERP
-              </h1>
-              <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
-                Launch an online store — cash-on-delivery, WhatsApp checkout —
-                and manage it alongside a paired ERP dashboard.
-              </p>
-            </header>
+                <h1
+                  style={{
+                    margin: 0,
+                    fontSize: 24,
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    color: C.text,
+                  }}
+                >
+                  <span aria-hidden>🛍️</span> Shop ERP
+                </h1>
+                <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
+                  Launch an online store — cash-on-delivery, WhatsApp checkout
+                  — and manage it alongside a paired ERP dashboard.
+                </p>
+              </header>
+            )}
 
             {/* State machine ------------------------------------------------ */}
             {state === 'loading' ? (
@@ -163,11 +189,21 @@ const ShopErpPage = () => {
                 onDone={handleWizardDone}
                 onCancel={hasApps ? () => setForceWizard(false) : undefined}
               />
+            ) : showDashboard && dashboard ? (
+              <ErpDashboard
+                // Remount per store so no state leaks between shops.
+                key={dashboard.slug}
+                slug={dashboard.slug}
+                url={dashboard.url}
+                initialSection={dashboard.section}
+                onBack={closeDashboard}
+              />
             ) : (
               <ManageView
                 apps={apps}
                 onNewShop={() => setForceWizard(true)}
                 onChanged={() => void load()}
+                onOpenDashboard={openDashboard}
               />
             )}
           </div>

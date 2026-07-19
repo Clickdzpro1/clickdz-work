@@ -7,6 +7,7 @@ import {
   deleteApp,
   KindBadge,
   type MineApp,
+  miniBtnStyle,
   Spinner,
 } from './shoperp-shared';
 
@@ -14,18 +15,33 @@ import {
 // ShopERP management view — the state shown when the user already has published
 // apps. Lists them (from GET /api/v1/apps/mine) with Shop/ERP/App badges, the
 // paired storeSlug, an open-in-browser link, and a confirm-gated delete
-// (DELETE /api/v1/apps/:slug). "New shop" re-enters the onboarding wizard.
+// (DELETE /api/v1/apps/:slug). Each store group also gets Dashboard / Manage
+// actions that open the IN-APP ERP dashboard for that storeSlug (the slug is
+// the store's data namespace). "New shop" re-enters the onboarding wizard.
 // ---------------------------------------------------------------------------
+
+// Prefer the storefront URL for the dashboard's "Open live" link.
+const pickShopUrl = (group: MineApp[]): string | undefined => {
+  const shop = group.find(a => a.kind === 'shop' && !!a.url);
+  return (shop ?? group.find(a => !!a.url))?.url || undefined;
+};
 
 export const ManageView = ({
   apps,
   onNewShop,
   onChanged,
+  onOpenDashboard,
 }: {
   apps: MineApp[];
   onNewShop: () => void;
   // Called after a delete so the parent can refetch /apps/mine.
   onChanged: () => void;
+  // Opens the in-app ERP dashboard for a store (slug == data namespace).
+  onOpenDashboard: (
+    slug: string,
+    section?: 'overview' | 'orders',
+    url?: string
+  ) => void;
 }) => {
   // Group by storeSlug so a shop + its ERP sit together; unpaired apps last.
   const paired = new Map<string, MineApp[]>();
@@ -84,6 +100,37 @@ export const ManageView = ({
             >
               <span aria-hidden>🔗</span>
               Store · {storeSlug}
+              {/* Reset the header's uppercase/tracking for the action cluster */}
+              <div
+                style={{
+                  marginLeft: 'auto',
+                  display: 'flex',
+                  gap: 6,
+                  textTransform: 'none',
+                  letterSpacing: 'normal',
+                  fontWeight: 400,
+                  flexShrink: 0,
+                }}
+              >
+                <button
+                  style={miniBtnStyle('primary')}
+                  onClick={() =>
+                    onOpenDashboard(storeSlug, 'overview', pickShopUrl(group))
+                  }
+                  title="Open the in-app ERP dashboard"
+                >
+                  📊 Dashboard
+                </button>
+                <button
+                  style={miniBtnStyle('secondary')}
+                  onClick={() =>
+                    onOpenDashboard(storeSlug, 'orders', pickShopUrl(group))
+                  }
+                  title="Manage orders, stock and settings in-app"
+                >
+                  Manage
+                </button>
+              </div>
             </div>
             {group.map(app => (
               <AppRow key={app.slug} app={app} onChanged={onChanged} grouped />
@@ -101,7 +148,22 @@ export const ManageView = ({
             }}
           >
             {loose.map(app => (
-              <AppRow key={app.slug} app={app} onChanged={onChanged} />
+              <AppRow
+                key={app.slug}
+                app={app}
+                onChanged={onChanged}
+                // An unpaired shop/ERP's own slug IS its data namespace.
+                onOpenDashboard={
+                  app.kind === 'shop' || app.kind === 'erp'
+                    ? () =>
+                        onOpenDashboard(
+                          app.slug,
+                          'overview',
+                          app.url || undefined
+                        )
+                    : undefined
+                }
+              />
             ))}
           </div>
         ) : null}
@@ -114,10 +176,13 @@ const AppRow = ({
   app,
   onChanged,
   grouped = false,
+  onOpenDashboard,
 }: {
   app: MineApp;
   onChanged: () => void;
   grouped?: boolean;
+  // Present only for unpaired shop/ERP rows (groups get header-level actions).
+  onOpenDashboard?: () => void;
 }) => {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -184,6 +249,15 @@ const AppRow = ({
             {app.url || '(no URL)'}
           </a>
         </div>
+        {onOpenDashboard ? (
+          <button
+            style={btnStyle('secondary')}
+            onClick={onOpenDashboard}
+            title="Open the in-app ERP dashboard"
+          >
+            📊 Dashboard
+          </button>
+        ) : null}
         {app.url ? (
           <a
             href={app.url}

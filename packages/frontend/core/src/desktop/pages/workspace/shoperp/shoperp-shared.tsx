@@ -1,5 +1,10 @@
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
-import { type CSSProperties, type PropsWithChildren, useState } from 'react';
+import {
+  type CSSProperties,
+  type PropsWithChildren,
+  type ReactNode,
+  useState,
+} from 'react';
 
 // ---------------------------------------------------------------------------
 // ClickDz ShopERP — shared palette, small inline-styled helpers, and the thin
@@ -213,6 +218,335 @@ export async function deleteApp(slug: string): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
+// ERP data layer — the in-app dashboard reads the SAME live data the deployed
+// shop writes. Summary + admin mutations go through the authed owner-only
+// bridge routes (/api/v1/apps/:slug/erp/*); full collection reads use the
+// public per-slug data API (GET needs no token, same origin). The order/
+// product/settings shapes mirror the shop + ERP templates exactly — status
+// strings are the ACCENTED French values ('Livrée', not 'Livree') and product
+// titles tolerate both `title` (shop) and `name` (ERP) fields.
+// ---------------------------------------------------------------------------
+
+/** The five order pipeline states — exact accented strings from the templates. */
+export const ORDER_STATUSES = [
+  'Nouvelle',
+  'Confirmée',
+  'Expédiée',
+  'Livrée',
+  'Retournée',
+] as const;
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
+
+/** Forward flow; 'Retournée' is reachable from any state as the return branch. */
+export const NEXT_STATUS: Partial<Record<OrderStatus, OrderStatus>> = {
+  Nouvelle: 'Confirmée',
+  'Confirmée': 'Expédiée',
+  'Expédiée': 'Livrée',
+};
+
+/** Per-status colors (mirrors the ERP template's info/brand/violet/ok/bad). */
+export const STATUS_COLORS: Record<OrderStatus, string> = {
+  Nouvelle: '#38bdf8',
+  'Confirmée': '#2f6bff',
+  'Expédiée': '#8b5cf6',
+  'Livrée': '#22c55e',
+  'Retournée': '#ef4444',
+};
+
+/** Valid status-advance targets from a given state (forward + return branch). */
+export function statusTargets(status: string | undefined): OrderStatus[] {
+  const out: OrderStatus[] = [];
+  const next = NEXT_STATUS[status as OrderStatus];
+  if (next) out.push(next);
+  if (status && status !== 'Retournée') out.push('Retournée');
+  return out;
+}
+
+export interface ErpSettings {
+  key?: string;
+  shopName?: string;
+  tagline?: string;
+  whatsapp?: string;
+  deliveryFee?: number;
+  adminPin?: string;
+  accent?: string;
+  currency?: string;
+}
+
+export interface ErpOrderItem {
+  id?: string;
+  title?: string;
+  name?: string;
+  product?: string;
+  price?: number;
+  qty?: number;
+}
+
+export interface ErpOrder {
+  id?: string;
+  ref?: string;
+  status?: string;
+  customer?: string;
+  phone?: string;
+  wilaya?: string;
+  commune?: string;
+  address?: string;
+  note?: string;
+  items?: ErpOrderItem[];
+  subtotal?: number;
+  deliveryFee?: number;
+  total?: number;
+  orderedAt?: string;
+  date?: string;
+  createdAt?: string;
+  type?: string;
+}
+
+export interface ErpProduct {
+  id?: string;
+  type?: string;
+  sku?: string;
+  title?: string;
+  name?: string;
+  price?: number;
+  stock?: number;
+  reorderAt?: number;
+  category?: string;
+  description?: string;
+  imageUrl?: string;
+  active?: boolean;
+  createdAt?: string;
+}
+
+export interface ErpKpis {
+  revenueMonth: number;
+  pendingCount: number;
+  avgBasket: number;
+  expensesMonth: number;
+  margin: number;
+  lowStockCount: number;
+  ordersTotal: number;
+}
+
+/** GET /api/v1/apps/:slug/erp/summary response (C6 contract). */
+export interface ErpSummary {
+  settings: ErpSettings;
+  currency: string;
+  kpis: ErpKpis;
+  ordersByStatus: Record<string, number>;
+  revenueByDay: Array<{ date: string; revenue: number }>;
+  lowStock: ErpProduct[];
+  recentOrders: ErpOrder[];
+  topProducts: Array<{ title: string; qty: number; revenue: number }>;
+}
+
+/** Coerce anything numeric-ish to a finite number (template `num()` mirror). */
+export function num(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** `fmtDZD` mirror: rounded fr-DZ grouping + currency suffix (always DZD). */
+export function fmtDZD(v: number, currency = 'DZD'): string {
+  const n = Math.round(num(v));
+  let s: string;
+  try {
+    s = n.toLocaleString('fr-DZ');
+  } catch {
+    s = String(n);
+  }
+  return `${s} ${currency}`;
+}
+
+/** Template `orderTotal()` mirror — total field, else sum of items. */
+export function orderTotal(o: ErpOrder): number {
+  if (o.total != null && Number.isFinite(Number(o.total))) return num(o.total);
+  const items = Array.isArray(o.items) ? o.items : [];
+  return items.reduce(
+    (s, it) => s + num(it.price) * (it.qty != null ? num(it.qty) : 1),
+    0
+  );
+}
+
+/** Template `parseDate()` mirror — stable business date, YYYY-MM-DD. */
+export function orderDate(o: ErpOrder): string {
+  return String(o.orderedAt || o.date || o.createdAt || '').slice(0, 10);
+}
+
+/** Shop products use `title`, ERP products use `name` — read both. */
+export function productTitle(p: ErpProduct): string {
+  return String(p.title || p.name || 'Article');
+}
+
+/** A product is low when stock ≤ reorderAt (and a threshold is set). */
+export function isLowStock(p: ErpProduct): boolean {
+  return p.reorderAt != null && num(p.stock) <= num(p.reorderAt);
+}
+
+export type ErpSummaryOutcome =
+  | { status: 'ok'; summary: ErpSummary }
+  | { status: 'error'; message: string };
+
+/** GET the authed per-shop ERP summary (KPIs, charts, recent orders…). */
+export async function fetchErpSummary(slug: string): Promise<ErpSummaryOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/summary`),
+      { method: 'GET', headers: { Accept: 'application/json' } }
+    );
+  } catch {
+    return {
+      status: 'error',
+      message: 'Network error while loading the dashboard.',
+    };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<ErpSummary> & { message?: string })
+    | null;
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in to view this dashboard.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : res.status === 404
+            ? 'This shop was not found — it may have been deleted.'
+            : typeof data?.message === 'string'
+              ? data.message
+              : `Could not load the dashboard (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const kpis = (data?.kpis ?? {}) as Partial<ErpKpis>;
+  return {
+    status: 'ok',
+    summary: {
+      settings: (data?.settings && typeof data.settings === 'object'
+        ? data.settings
+        : {}) as ErpSettings,
+      currency:
+        typeof data?.currency === 'string' && data.currency
+          ? data.currency
+          : 'DZD',
+      kpis: {
+        revenueMonth: num(kpis.revenueMonth),
+        pendingCount: num(kpis.pendingCount),
+        avgBasket: num(kpis.avgBasket),
+        expensesMonth: num(kpis.expensesMonth),
+        margin: num(kpis.margin),
+        lowStockCount: num(kpis.lowStockCount),
+        ordersTotal: num(kpis.ordersTotal),
+      },
+      ordersByStatus: (data?.ordersByStatus &&
+      typeof data.ordersByStatus === 'object'
+        ? data.ordersByStatus
+        : {}) as Record<string, number>,
+      revenueByDay: Array.isArray(data?.revenueByDay) ? data.revenueByDay : [],
+      lowStock: Array.isArray(data?.lowStock) ? data.lowStock : [],
+      recentOrders: Array.isArray(data?.recentOrders) ? data.recentOrders : [],
+      topProducts: Array.isArray(data?.topProducts) ? data.topProducts : [],
+    },
+  };
+}
+
+/**
+ * GET a full collection from the public per-slug data API (no token needed for
+ * reads — same design the deployed shop/ERP uses). Newest-first, capped at 500.
+ */
+export async function fetchErpCollection<T = Record<string, unknown>>(
+  storeSlug: string,
+  collection: string
+): Promise<T[]> {
+  const res = await fetch(
+    cdzApiUrl(
+      `/api/v2/apps-data/${encodeURIComponent(storeSlug)}/${encodeURIComponent(collection)}?limit=500`
+    ),
+    { method: 'GET', headers: { Accept: 'application/json' } }
+  );
+  if (!res.ok) {
+    throw new Error(`Could not load ${collection} (${res.status})`);
+  }
+  const data = (await res.json().catch(() => null)) as unknown;
+  return Array.isArray(data) ? (data as T[]) : [];
+}
+
+// Admin mutations return a discriminated outcome; 'unavailable' means the
+// server can't derive the write token (C6 fallback) → the UI goes read-only
+// but keeps every read working.
+export type ErpMutateOutcome<T> =
+  | { status: 'ok'; data: T }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+async function erpMutate<T>(
+  slug: string,
+  path: 'order-status' | 'product' | 'settings',
+  body: Record<string, unknown>
+): Promise<ErpMutateOutcome<T>> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/${path}`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was changed.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in again.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : res.status === 404
+            ? 'Not found — it may have been changed elsewhere. Refresh and retry.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `The change failed (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: data as T };
+}
+
+/** POST /erp/order-status — advance one order (delete+recreate by ref). */
+export function postOrderStatus(
+  slug: string,
+  ref: string,
+  status: OrderStatus
+): Promise<ErpMutateOutcome<{ ok?: boolean; order?: ErpOrder }>> {
+  return erpMutate(slug, 'order-status', { ref, status });
+}
+
+/** POST /erp/product — upsert a product by sku/title (delete+recreate). */
+export function postErpProduct(
+  slug: string,
+  product: ErpProduct
+): Promise<ErpMutateOutcome<{ ok?: boolean; product?: ErpProduct }>> {
+  // The data API assigns fresh id/createdAt on recreate; business keys
+  // (sku/title) drive the upsert, so never send stale identity fields.
+  const { id: _id, createdAt: _createdAt, ...body } = product;
+  return erpMutate(slug, 'product', { product: body });
+}
+
+/** POST /erp/settings — merge a patch into the settings singleton. */
+export function postErpSettings(
+  slug: string,
+  patch: Partial<ErpSettings>
+): Promise<ErpMutateOutcome<{ ok?: boolean; settings?: ErpSettings }>> {
+  return erpMutate(slug, 'settings', { patch });
+}
+
+// ---------------------------------------------------------------------------
 // Client-side settings validation — mirrors the C5 server rules so the wizard
 // blocks bad input before any network call (the server re-validates anyway).
 // ---------------------------------------------------------------------------
@@ -305,6 +639,20 @@ export function btnStyle(
   };
 }
 
+// Compact button variant for dense rows (management list, admin tables).
+export function miniBtnStyle(
+  variant: 'primary' | 'secondary' | 'danger',
+  disabled = false
+): CSSProperties {
+  return {
+    ...btnStyle(variant, disabled),
+    padding: '5px 11px',
+    fontSize: 12,
+    borderRadius: 7,
+    gap: 6,
+  };
+}
+
 export const inputStyle: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
@@ -331,6 +679,25 @@ export const hintStyle: CSSProperties = {
   fontSize: 12,
   color: C.muted,
   lineHeight: 1.5,
+};
+
+// Dense data-table cell styles (dashboard + admin tables).
+export const thStyle: CSSProperties = {
+  textAlign: 'left',
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: C.muted,
+  padding: '6px 10px',
+  whiteSpace: 'nowrap',
+};
+
+export const tdStyle: CSSProperties = {
+  padding: '8px 10px',
+  borderTop: `1px solid ${C.border}`,
+  color: C.text,
+  verticalAlign: 'middle',
 };
 
 export const Banner = ({
@@ -404,6 +771,93 @@ export const KindBadge = ({ kind }: { kind?: AppKind }) => {
     </span>
   );
 };
+
+// Order-status pill — keeps the exact accented French label as the data value.
+export const StatusBadge = ({ status }: { status?: string }) => {
+  const color =
+    (STATUS_COLORS as Record<string, string>)[status || ''] ?? '#9aa0a6';
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '2px 9px',
+        borderRadius: 999,
+        whiteSpace: 'nowrap',
+        color,
+        background: `color-mix(in srgb, ${color} 15%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
+      }}
+    >
+      {status || '—'}
+    </span>
+  );
+};
+
+// Titled panel card — the building block of the dashboard + admin sections.
+export const Panel = ({
+  title,
+  action,
+  children,
+}: PropsWithChildren<{ title: string; action?: ReactNode }>) => (
+  <div
+    style={{
+      background: C.panel,
+      border: `1px solid ${C.border}`,
+      borderRadius: 12,
+      overflow: 'hidden',
+      minWidth: 0,
+    }}
+  >
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '9px 14px',
+        borderBottom: `1px solid ${C.border}`,
+        background: C.panel2,
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: C.muted,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {title}
+      </div>
+      {action}
+    </div>
+    <div style={{ padding: 14 }}>{children}</div>
+  </div>
+);
+
+// Centered muted placeholder for empty panels (no data yet).
+export const EmptyNote = ({ children }: PropsWithChildren) => (
+  <div
+    style={{
+      padding: '18px 8px',
+      textAlign: 'center',
+      fontSize: 12.5,
+      color: C.muted,
+      lineHeight: 1.6,
+    }}
+  >
+    {children}
+  </div>
+);
 
 // A small controlled text input row with label + optional hint + inline error.
 export const Field = ({
