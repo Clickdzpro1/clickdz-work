@@ -26,17 +26,44 @@ const COMPOSIO_LINK_URL =
 const COMPOSIO_TOOLS_URL = 'https://backend.composio.dev/api/v3/tools';
 const COMPOSIO_TOOLS_EXECUTE_URL =
   'https://backend.composio.dev/api/v3/tools/execute';
+// Auth configs (per-toolkit blueprint the hosted auth-link session requires).
+// Composio v3 rejects `connected_accounts/link` with "Auth config not found"
+// until a toolkit has at least one auth config; we GET (filter by toolkit_slug)
+// then POST a Composio-managed one on demand (see connect()).
+const COMPOSIO_AUTH_CONFIGS_URL =
+  'https://backend.composio.dev/api/v3/auth_configs';
 
 const COMPOSIO_TIMEOUT_MS = 8_000;
 
 // --- CDZ_AI direct-path envs (mirrors clickdz-bridge.controller.ts:179-193 &
 // conversation/compact.ts). The OpenAI-compatible `cdz-flash` catalog served by
 // CDZ_AI_BASE_URL is the planner brain for the /run tool loop. ---
-const CDZ_AI_BASE_URL = (
-  process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
-).replace(/\/+$/, '');
+//
+// ROOT CAUSE of the prod `planner non-ok (404)` (2026-07-18): the ONE CDZ_AI
+// env present in prod is CDZ_AI_BASE_URL (CDZ_AI_URL is absent — never existed).
+// The copilot provider bootstrap (scripts/cdz-ai-config.mjs) treats
+// CDZ_AI_BASE_URL as an OpenAI `baseURL` that ALREADY carries the `/v1` version
+// segment (its own default is `https://api.clickdz.ai/v1`), and that is the
+// value the operator set in prod. This controller then appended a SECOND
+// `/v1/chat/completions`, producing `…/v1/v1/chat/completions` → 404. We
+// normalize by stripping a trailing `/v1` (and any trailing slashes) so the
+// origin is clean whether the operator set it WITH or WITHOUT `/v1`, then append
+// the single canonical path below — the exact effective URL the working
+// bridge/compact/pulse/vdz callers hit. Absent env still defaults to the bare
+// host, preserving today's behavior; the replace() chain never crashes at
+// import.
+const CDZ_AI_BASE_URL = (process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai')
+  .replace(/\/+$/, '')
+  .replace(/\/v1$/, '')
+  .replace(/\/+$/, '');
 const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
 const CDZ_PLANNER_MODEL = process.env.CDZ_PLANNER_MODEL || 'cdz-flash';
+// The single canonical OpenAI-compatible endpoint path — the SAME segment the
+// working cdz-flash callers hit: normalized `${CDZ_AI_BASE_URL}` + this. Kept as
+// consts so the resolved base+path is logged once and the URL is built in
+// exactly one place.
+const CDZ_PLANNER_PATH = '/v1/chat/completions';
+const CDZ_PLANNER_URL = `${CDZ_AI_BASE_URL}${CDZ_PLANNER_PATH}`;
 
 // --- /run orchestrator budgets (AbortControllers everywhere) ---
 // Per-toolkit tool discovery timeout, per-planner-call timeout, per-execute
@@ -160,6 +187,38 @@ function extractToolList(data: any): any[] {
   return [];
 }
 
+/**
+ * Defensively pull an auth config id out of BOTH Composio v3 auth_configs
+ * shapes: the LIST response ({items|data|auth_configs:[{id}]} or a bare array)
+ * and the CREATE response (nested {auth_config:{id}} or flat {id}). Returns the
+ * first non-empty string id, or null. Mirrors the tolerant items|data parsing
+ * the controller already uses for tools.
+ */
+function extractAuthConfigId(data: any): string | null {
+  const pickId = (obj: any): string | null =>
+    obj && typeof obj.id === 'string' && obj.id.length ? obj.id : null;
+  // Create response: {auth_config:{id}} or flat {id}.
+  const nested = pickId(data?.auth_config);
+  if (nested) return nested;
+  const flat = pickId(data);
+  if (flat) return flat;
+  // List response: first item's id across the tolerated container keys.
+  const list: any[] = Array.isArray(data?.items)
+    ? data.items
+    : Array.isArray(data?.data)
+      ? data.data
+      : Array.isArray(data?.auth_configs)
+        ? data.auth_configs
+        : Array.isArray(data)
+          ? data
+          : [];
+  for (const item of list) {
+    const id = pickId(item);
+    if (id) return id;
+  }
+  return null;
+}
+
 /** Map one raw Composio tool object to a normalized CdzTool (or null). */
 function normalizeTool(t: any): CdzTool | null {
   const slug =
@@ -239,6 +298,11 @@ function truncatePreview(
 @Controller()
 export class ClickDzIntegrationsController {
   private readonly logger = new Logger(ClickDzIntegrationsController.name);
+
+  // One-shot flag so the resolved planner base+path is logged the FIRST time a
+  // planner call is actually attempted (lazy — never at import), never repeated.
+  // Path only, no key material.
+  private plannerUrlLogged = false;
 
   /** Small helper: fetch with a hard AbortController timeout (default 8s). */
   private async fetchWithTimeout(
@@ -340,9 +404,17 @@ export class ClickDzIntegrationsController {
   /**
    * POST connect {toolkit, authConfigId?}.
    *  - disabled -> 409 {error:'not_configured'}
-   *  - enabled  -> best-effort Composio v3.1 auth-link session; success returns
-   *    {redirectUrl}; any failure is wrapped to a typed 502
-   *    {error:'composio_error', detail}.
+   *  - enabled  -> Composio v3.1 auth-link session; success returns {redirectUrl}.
+   *
+   * Composio v3 requires a per-toolkit AUTH CONFIG to exist before it will
+   * initiate a connected account; without one, `connected_accounts/link` fails
+   * with "Auth config not found" (the repeated 2026-07-18 prod error). So on
+   * that specific failure (or when the caller passed no explicit auth config)
+   * we GET the toolkit's auth configs, POST a Composio-managed one if none
+   * exists, and retry initiate exactly ONCE. If it STILL fails we return a
+   * passthrough {error:'toolkit_auth_unconfigured', toolkit} (502) so the UI can
+   * point the owner at the Composio dashboard — never a raw HttpException, and
+   * every other failure still collapses to the typed 502 {error:'composio_error'}.
    */
   @Throttle('strict')
   @Post('/api/v1/integrations/connect')
@@ -362,67 +434,216 @@ export class ClickDzIntegrationsController {
       return;
     }
 
-    // The hosted auth-link session needs an auth_config_id (per-toolkit auth
-    // config the workspace owner sets up in Composio). We accept it from the
-    // body when present; otherwise fall back to the toolkit slug so the call
-    // is still well-formed. Either way this is BEST-EFFORT: any non-2xx or
-    // transport failure collapses to a single typed 502.
-    const authConfigId =
+    // An explicit auth_config_id from the caller (rare) wins for the first
+    // attempt. Otherwise we resolve/create one against the toolkit slug below.
+    const explicitAuthConfigId =
       typeof body?.authConfigId === 'string' && body.authConfigId.length
         ? body.authConfigId
-        : toolkit;
+        : null;
     const callbackUrl =
       typeof body?.callbackUrl === 'string' && body.callbackUrl.length
         ? body.callbackUrl
         : undefined;
 
     try {
-      const payload: Record<string, unknown> = {
-        auth_config_id: authConfigId,
-        user_id: user.id,
-      };
-      if (callbackUrl) payload.callback_url = callbackUrl;
+      // Resolve the auth config id for the FIRST attempt. When the caller gave
+      // us nothing, proactively ensure one exists (GET then POST-managed) so we
+      // avoid the guaranteed "Auth config not found" round-trip for a toolkit
+      // that has never been configured. ensureAuthConfig returns null on a soft
+      // failure (logged) — we still attempt initiate with the slug so behaviour
+      // never regresses below today's best-effort.
+      let authConfigId =
+        explicitAuthConfigId ?? (await this.ensureAuthConfig(toolkit)) ?? toolkit;
 
-      const response = await this.fetchWithTimeout(COMPOSIO_LINK_URL, {
+      let attempt = await this.initiateConnect(
+        authConfigId,
+        user.id,
+        callbackUrl
+      );
+
+      // Recovery: initiate said the auth config is missing. Create/find one and
+      // retry EXACTLY once. (Guarded so we don't loop if we just created it.)
+      if (!attempt.ok && attempt.authNotFound) {
+        this.logger.warn(
+          `[integrations] connect ${toolkit}: auth config missing — provisioning managed config`
+        );
+        const ensuredId = await this.ensureAuthConfig(toolkit);
+        if (ensuredId && ensuredId !== authConfigId) {
+          authConfigId = ensuredId;
+          attempt = await this.initiateConnect(
+            authConfigId,
+            user.id,
+            callbackUrl
+          );
+        }
+      }
+
+      if (attempt.ok && attempt.redirectUrl) {
+        res.status(200).json({ redirectUrl: attempt.redirectUrl });
+        return;
+      }
+
+      // Still no auth config after the retry -> actionable passthrough body the
+      // frontend maps to a "configure this toolkit in Composio" surface.
+      if (attempt.authNotFound) {
+        this.logger.warn(
+          `[integrations] connect ${toolkit} failed: toolkit_auth_unconfigured`
+        );
+        res.status(502).json({ error: 'toolkit_auth_unconfigured', toolkit });
+        return;
+      }
+
+      const detail = attempt.detail ?? 'composio_request_failed';
+      this.logger.warn(`[integrations] connect ${toolkit} failed: ${detail}`);
+      res.status(502).json({ error: 'composio_error', detail });
+    } catch (err) {
+      const detail = (err as Error)?.message ?? 'composio_request_failed';
+      this.logger.warn(`[integrations] connect ${toolkit} threw: ${detail}`);
+      res.status(502).json({ error: 'composio_error', detail });
+    }
+  }
+
+  // ---- connect internals --------------------------------------------------
+
+  /**
+   * Initiate a hosted auth-link session for {authConfigId, userId}. Returns a
+   * normalized result rather than throwing: {ok, redirectUrl?} on success, or
+   * {ok:false, detail, authNotFound} where `authNotFound` flags the specific
+   * "Auth config not found" case so the caller can provision one and retry.
+   * Same header/timeout idioms as the other Composio calls.
+   */
+  private async initiateConnect(
+    authConfigId: string,
+    userId: string,
+    callbackUrl: string | undefined
+  ): Promise<{
+    ok: boolean;
+    redirectUrl?: string;
+    detail?: string;
+    authNotFound?: boolean;
+  }> {
+    const payload: Record<string, unknown> = {
+      auth_config_id: authConfigId,
+      user_id: userId,
+    };
+    if (callbackUrl) payload.callback_url = callbackUrl;
+
+    const response = await this.fetchWithTimeout(COMPOSIO_LINK_URL, {
+      method: 'POST',
+      headers: {
+        'x-api-key': COMPOSIO_API_KEY,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data: any = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail =
+        typeof data?.error?.message === 'string'
+          ? data.error.message
+          : typeof data?.message === 'string'
+            ? data.message
+            : `composio responded ${response.status}`;
+      // Composio phrases this as "Auth config not found" (404); match loosely so
+      // minor wording/casing drift still triggers the provision-and-retry path.
+      const authNotFound = /auth config not found/i.test(String(detail));
+      return { ok: false, detail, authNotFound };
+    }
+
+    const redirectUrl =
+      typeof data?.redirect_url === 'string'
+        ? data.redirect_url
+        : typeof data?.redirectUrl === 'string'
+          ? data.redirectUrl
+          : '';
+    if (!redirectUrl) {
+      return { ok: false, detail: 'no_redirect_url' };
+    }
+    return { ok: true, redirectUrl };
+  }
+
+  /**
+   * Ensure a Composio auth config exists for `toolkit`, returning its id (or
+   * null on soft failure — logged, never throws). GETs the toolkit's auth
+   * configs first (defensive items|data parse, same as tools discovery); if any
+   * exists returns the first id, otherwise POSTs a Composio-managed one
+   * (managed-auth shape) and returns the created id (defensive parse of the
+   * nested {auth_config:{id}} / flat {id} response shapes).
+   */
+  private async ensureAuthConfig(toolkit: string): Promise<string | null> {
+    // 1) List existing configs for this toolkit.
+    try {
+      const listUrl = `${COMPOSIO_AUTH_CONFIGS_URL}?toolkit_slug=${encodeURIComponent(
+        toolkit
+      )}`;
+      const listRes = await this.fetchWithTimeout(listUrl, {
+        method: 'GET',
+        headers: {
+          'x-api-key': COMPOSIO_API_KEY,
+          Accept: 'application/json',
+        },
+      });
+      if (listRes.ok) {
+        const listData: any = await listRes.json().catch(() => ({}));
+        const existing = extractAuthConfigId(listData);
+        if (existing) return existing;
+      } else {
+        this.logger.warn(
+          `[integrations] auth_configs list ${toolkit} HTTP ${listRes.status}`
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[integrations] auth_configs list ${toolkit} failed: ${(err as Error)?.message ?? err}`
+      );
+    }
+
+    // 2) None found — create a Composio-managed one. Body per v3:
+    //    {toolkit:{slug}, auth_config:{type:'use_composio_managed_auth'}}.
+    try {
+      const createRes = await this.fetchWithTimeout(COMPOSIO_AUTH_CONFIGS_URL, {
         method: 'POST',
         headers: {
           'x-api-key': COMPOSIO_API_KEY,
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          toolkit: { slug: toolkit },
+          auth_config: { type: 'use_composio_managed_auth' },
+        }),
       });
-
-      const data: any = await response.json().catch(() => ({}));
-      if (!response.ok) {
+      const createData: any = await createRes.json().catch(() => ({}));
+      if (!createRes.ok) {
         const detail =
-          typeof data?.error?.message === 'string'
-            ? data.error.message
-            : typeof data?.message === 'string'
-              ? data.message
-              : `composio responded ${response.status}`;
-        this.logger.warn(`[integrations] connect ${toolkit} failed: ${detail}`);
-        res.status(502).json({ error: 'composio_error', detail });
-        return;
+          typeof createData?.error?.message === 'string'
+            ? createData.error.message
+            : typeof createData?.message === 'string'
+              ? createData.message
+              : `composio responded ${createRes.status}`;
+        this.logger.warn(
+          `[integrations] auth_configs create ${toolkit} failed: ${detail}`
+        );
+        return null;
       }
-
-      const redirectUrl =
-        typeof data?.redirect_url === 'string'
-          ? data.redirect_url
-          : typeof data?.redirectUrl === 'string'
-            ? data.redirectUrl
-            : '';
-      if (!redirectUrl) {
-        res
-          .status(502)
-          .json({ error: 'composio_error', detail: 'no_redirect_url' });
-        return;
+      const created = extractAuthConfigId(createData);
+      if (created) {
+        this.logger.log(
+          `[integrations] created managed auth config for ${toolkit}`
+        );
+        return created;
       }
-      res.status(200).json({ redirectUrl });
+      this.logger.warn(
+        `[integrations] auth_configs create ${toolkit}: no id in response`
+      );
+      return null;
     } catch (err) {
-      const detail = (err as Error)?.message ?? 'composio_request_failed';
-      this.logger.warn(`[integrations] connect ${toolkit} threw: ${detail}`);
-      res.status(502).json({ error: 'composio_error', detail });
+      this.logger.warn(
+        `[integrations] auth_configs create ${toolkit} failed: ${(err as Error)?.message ?? err}`
+      );
+      return null;
     }
   }
 
@@ -669,10 +890,18 @@ export class ClickDzIntegrationsController {
     if (!CDZ_AI_KEY) {
       return null;
     }
+    // Lazy, once-only: surface the resolved planner base+path (NO key) so a
+    // future 404/misconfig self-diagnoses from a single log line.
+    if (!this.plannerUrlLogged) {
+      this.plannerUrlLogged = true;
+      this.logger.log(
+        `[integrations] planner resolved: base=${CDZ_AI_BASE_URL} path=${CDZ_PLANNER_PATH} model=${CDZ_PLANNER_MODEL}`
+      );
+    }
     const timeoutMs = Math.max(1, Math.min(RUN_PLANNER_TIMEOUT_MS, remainingMs));
     try {
       const response = await this.fetchWithTimeout(
-        `${CDZ_AI_BASE_URL}/v1/chat/completions`,
+        CDZ_PLANNER_URL,
         {
           method: 'POST',
           headers: {
@@ -688,13 +917,15 @@ export class ClickDzIntegrationsController {
         },
         timeoutMs
       );
-      const data = (await response.json()) as any;
+      const data = (await response.json().catch(() => null)) as any;
       const content = data?.choices?.[0]?.message?.content;
       if (response.ok && typeof content === 'string' && content.trim()) {
         return { raw: content };
       }
+      // Include upstream status + the exact path we hit so the next incident is
+      // self-diagnosing (e.g. a 404 vs a 401, and against which path segment).
       this.logger.warn(
-        `[integrations] planner non-ok (${response.status}) or empty content`
+        `[integrations] planner non-ok (${response.status}) or empty content [POST ${CDZ_PLANNER_PATH}]`
       );
       return null;
     } catch (err) {

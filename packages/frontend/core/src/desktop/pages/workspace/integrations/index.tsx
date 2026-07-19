@@ -52,6 +52,19 @@ interface RunResponse {
   iterations: number;
 }
 
+// A structured connect failure. `auth_unconfigured` maps to the backend's
+// {error:'toolkit_auth_unconfigured'} (needs Composio dashboard setup);
+// `generic` carries the server's own error detail for every other failure.
+interface ConnectError {
+  toolkit: string;
+  kind: 'auth_unconfigured' | 'generic';
+  detail?: string;
+}
+
+// Run failure kinds that need a bespoke surface: 'planner' = AI planner
+// unreachable (retryable). null = no error / generic (handled via runError text).
+type RunErrorKind = 'planner' | null;
+
 // Max toolkits the orchestrator accepts (mirrors backend RUN_MAX_TOOLKITS).
 const RUN_MAX_TOOLKITS = 5;
 const RUN_PROMPT_MAX = 4_000;
@@ -81,12 +94,18 @@ const IntegrationsPage = () => {
   const [toolkits, setToolkits] = useState<CdzToolkit[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<string | null>(null);
+  // Structured connect failure (so we can render a distinct, actionable surface
+  // with a retry button rather than a flat notice string).
+  const [connectError, setConnectError] = useState<ConnectError | null>(null);
 
   // ---- ▶ Run orchestrator state ----
   const [prompt, setPrompt] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
+  // Distinguishes the planner-unreachable case (retryable) from other run
+  // failures so the run banner can offer a Retry affordance for it.
+  const [runErrorKind, setRunErrorKind] = useState<RunErrorKind>(null);
   const [result, setResult] = useState<RunResponse | null>(null);
 
   const load = useCallback(async () => {
@@ -120,6 +139,7 @@ const IntegrationsPage = () => {
   const connect = useCallback(async (slug: string) => {
     setConnecting(slug);
     setNotice(null);
+    setConnectError(null);
     try {
       const res = await fetch(cdzApiUrl('/api/v1/integrations/connect'), {
         method: 'POST',
@@ -137,13 +157,16 @@ const IntegrationsPage = () => {
       }
       if (data.error === 'not_configured') {
         setNotice('Integrations are not configured yet — ask the owner to set COMPOSIO_API_KEY.');
+      } else if (data.error === 'toolkit_auth_unconfigured') {
+        // This toolkit has no auth config in Composio yet — distinct, actionable
+        // surface (with retry) rather than a generic failure.
+        setConnectError({ toolkit: slug, kind: 'auth_unconfigured' });
       } else {
-        setNotice(
-          `Could not start the connection${data.detail ? `: ${data.detail}` : ''}. Please try again.`
-        );
+        // Surface the server's own error message rather than swallowing it.
+        setConnectError({ toolkit: slug, kind: 'generic', detail: data.detail });
       }
     } catch {
-      setNotice('Could not start the connection. Please try again.');
+      setConnectError({ toolkit: slug, kind: 'generic' });
     } finally {
       setConnecting(null);
     }
@@ -163,6 +186,7 @@ const IntegrationsPage = () => {
     if (!trimmed || running) return;
     setRunning(true);
     setRunError(null);
+    setRunErrorKind(null);
     setResult(null);
     try {
       const res = await fetch(cdzApiUrl('/api/v1/integrations/run'), {
@@ -178,7 +202,9 @@ const IntegrationsPage = () => {
         return;
       }
       if (res.status === 502 || data.error === 'planner_unavailable') {
-        setRunError("The integrations agent is unavailable right now. Please try again in a moment.");
+        // Distinct, retryable surface for the AI planner being unreachable.
+        setRunErrorKind('planner');
+        setRunError('AI planner unreachable — try again shortly.');
         return;
       }
       if (!res.ok || !data.ok) {
@@ -306,6 +332,38 @@ const IntegrationsPage = () => {
             )}
 
             {notice ? <Banner tone="info">{notice}</Banner> : null}
+
+            {/* Connect error surfaces (distinct + retryable) ---------------- */}
+            {connectError ? (
+              <Banner tone={connectError.kind === 'auth_unconfigured' ? 'warn' : 'error'}>
+                {(() => {
+                  const name =
+                    toolkits.find(t => t.slug === connectError.toolkit)?.name ??
+                    connectError.toolkit;
+                  return connectError.kind === 'auth_unconfigured' ? (
+                    <>
+                      <strong>{name}</strong> needs auth setup in the Composio
+                      dashboard before it can be connected. Ask the owner to add
+                      an auth config for this toolkit, then retry.
+                    </>
+                  ) : (
+                    <>
+                      Could not start the connection for <strong>{name}</strong>
+                      {connectError.detail ? `: ${connectError.detail}` : '.'}
+                    </>
+                  );
+                })()}
+                <div style={{ marginTop: 8 }}>
+                  <button
+                    style={linkBtnStyle}
+                    disabled={connecting === connectError.toolkit}
+                    onClick={() => void connect(connectError.toolkit)}
+                  >
+                    {connecting === connectError.toolkit ? 'Retrying…' : 'Retry'}
+                  </button>
+                </div>
+              </Banner>
+            ) : null}
 
             {/* Toolkit grid ------------------------------------------------- */}
             {state === 'ready' && enabled ? (
@@ -544,8 +602,24 @@ const IntegrationsPage = () => {
                 </span>
               </div>
 
-              {/* Run error states (409 / 502 / network) */}
-              {runError ? <Banner tone="error">{runError}</Banner> : null}
+              {/* Run error states (409 / 502 / network). The planner-unreachable
+                  case gets a distinct, retryable surface. */}
+              {runError ? (
+                <Banner tone={runErrorKind === 'planner' ? 'warn' : 'error'}>
+                  {runError}
+                  {runErrorKind === 'planner' ? (
+                    <div style={{ marginTop: 8 }}>
+                      <button
+                        style={linkBtnStyle}
+                        disabled={running}
+                        onClick={() => void run()}
+                      >
+                        {running ? 'Retrying…' : 'Retry'}
+                      </button>
+                    </div>
+                  ) : null}
+                </Banner>
+              ) : null}
 
               {/* Results panel */}
               {result ? (
