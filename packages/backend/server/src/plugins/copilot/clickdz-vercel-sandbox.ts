@@ -9,8 +9,10 @@ import { Logger } from '@nestjs/common';
  * REST surface (verified against the public vercel/sandbox SDK source, which
  * is itself a thin wrapper over these endpoints):
  *  - Sandbox API base:  https://vercel.com/api      (NOTE: not api.vercel.com)
- *      POST /v2/sandboxes                          create { projectId, runtime, timeout }
+ *      POST /v2/sandboxes                          create { projectId, runtime, timeout, ports? }
  *      GET  /v2/sandboxes?project=…&limit=1        cheap list (capability probe)
+ *      GET  /v2/sandboxes/sessions/:sid            session status + routes
+ *      POST /v2/sandboxes/sessions/:sid/extend-timeout  { duration } (ADDITIVE ms)
  *      POST /v2/sandboxes/sessions/:sid/cmd        start command (omit `wait` → JSON)
  *      GET  /v2/sandboxes/sessions/:sid/cmd/:cid   poll until exitCode !== null
  *      GET  /v2/sandboxes/sessions/:sid/cmd/:cid/logs   ndjson {stream,data} lines
@@ -36,6 +38,13 @@ import { Logger } from '@nestjs/common';
  * still plan/generate code and honestly mark it "not executed". The imperative
  * functions (createSession/writeFile/runCommand) throw SandboxError, whose
  * `code` lets callers distinguish "feature not enabled" from runtime errors.
+ *
+ * C4 additions (OPENCLAW live console — persistent sandbox, preview, file ops,
+ * background + streaming commands): createSessionWithPorts, getPreviewUrl,
+ * extendSession, sessionStatus, readFile, listFiles, runCommandBackground,
+ * runCommandStreaming. All dep-free (plain fetch + the existing helpers), all
+ * carry teamId + Bearer + AbortSignal.timeout, all defensive, token never
+ * logged. The 8 legacy exports below are unchanged (byte-compatible).
  */
 
 // --- env (read once at module load, same idiom as the bridge's VERCEL_TOKEN) ---
@@ -73,6 +82,20 @@ const UPSTREAM_MSG_CAP = 300;
 const CAPABILITY_OK_TTL_MS = 300_000;
 const CAPABILITY_FAIL_TTL_MS = 60_000;
 
+// --- C4 budgets (persistent-session + streaming ops) ---
+const EXTEND_TIMEOUT_MS = 10_000; // extend-timeout control call
+const SESSION_STATUS_TIMEOUT_MS = 10_000; // GET session
+const READ_FILE_TIMEOUT_MS = 30_000; // cat via runCommand
+const LIST_FILES_TIMEOUT_MS = 30_000; // find via runCommand
+const LIST_FILES_DEFAULT_MAX = 500; // cap enumerated paths
+// Streaming (live terminal) — poll cadence + a generous default wall since a
+// build/dev step can legitimately run for minutes; caller passes timeoutMs.
+const STREAM_POLL_INTERVAL_MS = 500;
+const STREAM_DEFAULT_TIMEOUT_MS = 300_000;
+const STREAM_MIN_TIMEOUT_MS = 1_000;
+const STREAM_MAX_TIMEOUT_MS = 1_800_000;
+const MIN_EXTEND_MS = 1_000;
+
 const logger = new Logger('ClickDzVercelSandbox');
 
 // ---------------------------------------------------------------------------
@@ -102,6 +125,17 @@ export interface SandboxSession {
   sessionId: string;
   runtime: string;
 }
+
+/** A publicly-routable port exposed by the sandbox (create/get response). */
+export interface SandboxRoute {
+  url: string;
+  subdomain: string;
+  port: number;
+}
+
+/** Session lifecycle status as reported by GET …/sessions/{id}. Anything the
+ * upstream enum doesn't map cleanly to → 'unknown' so callers recreate. */
+export type SandboxStatus = 'running' | 'stopped' | 'failed' | 'unknown';
 
 // ---------------------------------------------------------------------------
 // Small pure helpers
@@ -193,6 +227,27 @@ function clamp(value: number, min: number, max: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Normalize the create/get response `routes` array into the SandboxRoute
+ * shape, dropping any malformed entries. Upstream shape (validators.ts):
+ * `{ url:string; subdomain:string; port:number }`.
+ */
+function parseRoutes(raw: any): SandboxRoute[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SandboxRoute[] = [];
+  for (const r of raw) {
+    if (
+      r &&
+      typeof r.url === 'string' &&
+      typeof r.subdomain === 'string' &&
+      typeof r.port === 'number'
+    ) {
+      out.push({ url: r.url, subdomain: r.subdomain, port: r.port });
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +435,163 @@ export async function createSession(opts?: {
   return { sessionId, runtime: actualRuntime };
 }
 
+/**
+ * Create a sandbox microVM WITH public ports exposed (C4) — the live-preview
+ * variant of createSession. `ports` is a top-level field on POST /v2/sandboxes
+ * (sandboxes can expose up to 4 ports). Returns the session handle PLUS the
+ * `routes` array from the create response so OPENCLAW can derive an iframe URL
+ * (see getPreviewUrl) and persist it on the thread. Defaults to port 3000
+ * (the OPENCLAW dev-server convention). Throws SandboxError like createSession.
+ */
+export async function createSessionWithPorts(opts?: {
+  runtime?: string;
+  ports?: number[];
+  timeoutMs?: number;
+}): Promise<{ sessionId: string; runtime: string; routes: SandboxRoute[] }> {
+  const projectId = await ensureProjectId();
+  const runtime = opts?.runtime || DEFAULT_RUNTIME;
+  const timeout = clamp(
+    opts?.timeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS,
+    MIN_SESSION_TIMEOUT_MS,
+    MAX_SESSION_TIMEOUT_MS
+  );
+  // De-dupe + keep only sane port numbers; cap at 4 (upstream limit). Default
+  // to [3000] so OPENCLAW always has a preview route without extra plumbing.
+  const requested =
+    Array.isArray(opts?.ports) && opts!.ports!.length ? opts!.ports! : [3000];
+  const ports = Array.from(
+    new Set(
+      requested.filter(
+        p => Number.isInteger(p) && p > 0 && p < 65536
+      )
+    )
+  ).slice(0, 4);
+  const res = await vFetch(`${SANDBOX_API_BASE}/v2/sandboxes`, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ projectId, runtime, timeout, ports }),
+  }, CREATE_SANDBOX_TIMEOUT_MS);
+  const data = await readJson(res);
+  if (!res.ok) {
+    throw statusToError(res.status, data, 'sandbox create (ports)');
+  }
+  const sessionId = typeof data?.session?.id === 'string' ? data.session.id : '';
+  if (!sessionId) {
+    throw new SandboxError(
+      'api_error',
+      'Vercel sandbox create succeeded but returned no session id'
+    );
+  }
+  const actualRuntime =
+    typeof data?.session?.runtime === 'string' ? data.session.runtime : runtime;
+  const routes = parseRoutes(data?.routes);
+  logger.log(
+    `[sandbox] session created with ports: runtime=${actualRuntime} routes=${routes.length}`
+  );
+  return { sessionId, runtime: actualRuntime, routes };
+}
+
+/**
+ * Resolve the public preview URL for a given port from a routes array (C4).
+ * Pure helper (mirrors the SDK's `domain(port)`): prefer the ready-to-use
+ * `route.url`; fall back to constructing `https://<subdomain>.vercel.run`.
+ * Returns null when no route matches (caller degrades — no throw).
+ */
+export function getPreviewUrl(
+  routes: { url: string; subdomain?: string; port: number }[],
+  port: number
+): string | null {
+  if (!Array.isArray(routes)) return null;
+  const route = routes.find(r => r && r.port === port);
+  if (!route) return null;
+  if (typeof route.url === 'string' && route.url) return route.url;
+  if (typeof route.subdomain === 'string' && route.subdomain) {
+    return `https://${route.subdomain}.vercel.run`;
+  }
+  return null;
+}
+
+/**
+ * Push a running session's expiry forward (C4 keep-alive). `addMs` is the
+ * number of milliseconds to ADD to the current deadline (additive, NOT the
+ * new total — matches the upstream extend-timeout semantics). Called each turn
+ * by OPENCLAW so a thread's persistent microVM survives between messages.
+ * Throws SandboxError on a non-2xx so the caller can fall back to recreate.
+ */
+export async function extendSession(
+  sessionId: string,
+  addMs: number
+): Promise<void> {
+  if (!VERCEL_TOKEN) {
+    throw new SandboxError(
+      'not_configured',
+      'VERCEL_TOKEN is not configured on the server — add a Vercel access token to enable sandbox execution'
+    );
+  }
+  if (!sessionId) {
+    throw new SandboxError('api_error', 'extendSession requires a sessionId');
+  }
+  const duration = Math.max(MIN_EXTEND_MS, Math.floor(addMs) || 0);
+  const res = await vFetch(
+    `${SANDBOX_API_BASE}/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/extend-timeout`,
+    {
+      method: 'POST',
+      headers: authHeaders(true),
+      body: JSON.stringify({ duration }),
+    },
+    EXTEND_TIMEOUT_MS
+  );
+  if (!res.ok) {
+    throw statusToError(res.status, await readJson(res), 'session extend');
+  }
+}
+
+/**
+ * Report a session's lifecycle status (C4 reuse-vs-recreate decision). GET
+ * …/sessions/{id} → `session.status`, normalized to the small set OPENCLAW
+ * cares about. Only 'running' means "reuse this microVM". A 404 (session gone)
+ * or any transport/parse failure → 'unknown' so the caller recreates. This
+ * function is DEFENSIVE and never throws.
+ */
+export async function sessionStatus(
+  sessionId: string
+): Promise<SandboxStatus> {
+  if (!VERCEL_TOKEN || !sessionId) return 'unknown';
+  try {
+    const res = await vFetch(
+      `${SANDBOX_API_BASE}/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}`,
+      { headers: authHeaders() },
+      SESSION_STATUS_TIMEOUT_MS
+    );
+    if (res.status === 404) return 'stopped';
+    if (!res.ok) {
+      logger.warn(`[sandbox] session status non-ok (${res.status})`);
+      return 'unknown';
+    }
+    const data = await readJson(res);
+    const raw = typeof data?.session?.status === 'string' ? data.session.status : '';
+    // Upstream enum: pending|running|stopping|stopped|failed|aborted|snapshotting
+    switch (raw) {
+      case 'running':
+        return 'running';
+      case 'stopped':
+      case 'stopping':
+      case 'aborted':
+        return 'stopped';
+      case 'failed':
+        return 'failed';
+      default:
+        // pending / snapshotting / unrecognized → not safe to reuse yet
+        return 'unknown';
+    }
+  } catch (err) {
+    logger.warn(
+      `[sandbox] session status failed: ${(err as Error)?.message ?? String(err)}`
+    );
+    return 'unknown';
+  }
+}
+
 /** Best-effort microVM release — swallows every error (sandboxes also
  * auto-expire at their create-time timeout, so leaks are bounded). */
 export async function stopSession(sessionId: string): Promise<void> {
@@ -475,6 +687,181 @@ export async function runCommand(
 }
 
 /**
+ * Start a command NON-BLOCKING and return its id immediately (C4) — the SDK's
+ * "detached"/background semantics are just POST …/cmd WITHOUT `wait`, which
+ * returns `{ command: { id, exitCode:null } }` and does NOT poll. Use this for
+ * long-lived processes (e.g. `npm run dev`) that must keep running while the
+ * session is alive; the caller derives the preview URL and later reads live
+ * output via runCommandStreaming or the cmd logs endpoint. We deliberately do
+ * NOT send a `timeout` (which would cap the dev server sandbox-side) — the
+ * process lives until the session expires. Throws SandboxError on a bad start.
+ */
+export async function runCommandBackground(
+  sessionId: string,
+  command: string,
+  args: string[],
+  opts?: { cwd?: string }
+): Promise<{ cmdId: string }> {
+  if (!VERCEL_TOKEN) {
+    throw new SandboxError(
+      'not_configured',
+      'VERCEL_TOKEN is not configured on the server — add a Vercel access token to enable sandbox execution'
+    );
+  }
+  if (!sessionId) {
+    throw new SandboxError('api_error', 'runCommandBackground requires a sessionId');
+  }
+  const cmdBase = `${SANDBOX_API_BASE}/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/cmd`;
+  // No `wait`, no `timeout` → fire-and-return; undefined cwd dropped by stringify.
+  const startRes = await vFetch(cmdBase, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({
+      command,
+      args: Array.isArray(args) ? args : [],
+      cwd: opts?.cwd,
+    }),
+  }, CONTROL_TIMEOUT_MS);
+  const started = await readJson(startRes);
+  if (!startRes.ok) {
+    throw statusToError(
+      startRes.status,
+      started,
+      `background command start (${command})`
+    );
+  }
+  const cmdId =
+    typeof started?.command?.id === 'string' ? started.command.id : '';
+  if (!cmdId) {
+    throw new SandboxError(
+      'api_error',
+      'Sandbox background command start succeeded but returned no command id'
+    );
+  }
+  return { cmdId };
+}
+
+/**
+ * Run a command while streaming its output live (C4 live terminal). Starts the
+ * command non-blocking, then loops on ~500ms cadence: polls GET …/cmd/{id} for
+ * `exitCode` while re-tailing GET …/cmd/{id}/logs, invoking `opts.onLog` for
+ * ONLY newly-appended lines (an offset over the concatenated stdout+stderr
+ * stream is tracked so nothing is re-emitted). Resolves `{ exitCode }` when the
+ * command finishes; bounded by `opts.timeoutMs`. A non-zero exit is NOT an
+ * error (returned to the caller); a hard timeout / transport error throws
+ * SandboxError.
+ *
+ * NOTE: the logs endpoint returns the FULL log so far on each fetch; we diff
+ * against the count already delivered. `onLog` failures are swallowed so a
+ * flaky consumer can't abort the run.
+ */
+export async function runCommandStreaming(
+  sessionId: string,
+  command: string,
+  args: string[],
+  opts: {
+    onLog: (l: { stream: 'stdout' | 'stderr'; data: string }) => void;
+    timeoutMs?: number;
+    cwd?: string;
+  }
+): Promise<{ exitCode: number }> {
+  if (!VERCEL_TOKEN) {
+    throw new SandboxError(
+      'not_configured',
+      'VERCEL_TOKEN is not configured on the server — add a Vercel access token to enable sandbox execution'
+    );
+  }
+  if (!sessionId) {
+    throw new SandboxError('api_error', 'runCommandStreaming requires a sessionId');
+  }
+  const timeoutMs = clamp(
+    opts?.timeoutMs ?? STREAM_DEFAULT_TIMEOUT_MS,
+    STREAM_MIN_TIMEOUT_MS,
+    STREAM_MAX_TIMEOUT_MS
+  );
+  const deadline = Date.now() + timeoutMs;
+  const cmdBase = `${SANDBOX_API_BASE}/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/cmd`;
+
+  // 1) start non-blocking (also cap sandbox-side via `timeout`).
+  const startRes = await vFetch(cmdBase, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({
+      command,
+      args: Array.isArray(args) ? args : [],
+      cwd: opts?.cwd,
+      timeout: timeoutMs,
+    }),
+  }, CONTROL_TIMEOUT_MS);
+  const started = await readJson(startRes);
+  if (!startRes.ok) {
+    throw statusToError(
+      startRes.status,
+      started,
+      `streaming command start (${command})`
+    );
+  }
+  const cmdId =
+    typeof started?.command?.id === 'string' ? started.command.id : '';
+  if (!cmdId) {
+    throw new SandboxError(
+      'api_error',
+      'Sandbox streaming command start succeeded but returned no command id'
+    );
+  }
+  let exitCode: number | null =
+    typeof started?.command?.exitCode === 'number'
+      ? started.command.exitCode
+      : null;
+
+  // Offset over the ordered log lines already handed to onLog.
+  let emitted = 0;
+
+  const emitNew = async (): Promise<void> => {
+    const lines = await fetchCommandLogLines(sessionId, cmdId);
+    for (let i = emitted; i < lines.length; i++) {
+      const l = lines[i];
+      try {
+        opts.onLog(l);
+      } catch {
+        // a flaky consumer must never abort the sandbox run
+      }
+    }
+    if (lines.length > emitted) emitted = lines.length;
+  };
+
+  // 2) poll for exit while tailing logs; emit only the new deltas.
+  while (exitCode === null) {
+    if (Date.now() >= deadline) {
+      // surface whatever we have, then fail with a timeout.
+      await emitNew().catch(() => {});
+      throw new SandboxError(
+        'timeout',
+        `Sandbox command "${command}" did not finish within ${timeoutMs}ms`
+      );
+    }
+    await emitNew().catch(() => {});
+    await sleep(STREAM_POLL_INTERVAL_MS);
+    const pollRes = await vFetch(
+      `${cmdBase}/${encodeURIComponent(cmdId)}`,
+      { headers: authHeaders() },
+      CONTROL_TIMEOUT_MS
+    );
+    const polled = await readJson(pollRes);
+    if (!pollRes.ok) {
+      throw statusToError(pollRes.status, polled, 'streaming command poll');
+    }
+    if (typeof polled?.command?.exitCode === 'number') {
+      exitCode = polled.command.exitCode;
+    }
+  }
+
+  // 3) final flush — the last log lines may land after exit is observed.
+  await emitNew().catch(() => {});
+  return { exitCode };
+}
+
+/**
  * GET …/cmd/{id}/logs → application/x-ndjson. Each line is
  * `{stream:'stdout'|'stderr', data:string}` (data is plain text — the SDK
  * concatenates it as-is) or `{stream:'error', data:{code,message}}`.
@@ -530,6 +917,130 @@ async function fetchCommandLogs(
   }
 }
 
+/**
+ * Like fetchCommandLogs but returns the ORDERED sequence of parsed log lines
+ * (preserving stdout/stderr interleaving) instead of two concatenated blobs —
+ * used by runCommandStreaming to tail incrementally by index. The logs
+ * endpoint returns the full log so far on each call; the streaming loop diffs
+ * against the count already emitted. Malformed lines are skipped; a non-ok /
+ * failed fetch returns `[]` (the loop simply re-tails next tick).
+ */
+async function fetchCommandLogLines(
+  sessionId: string,
+  cmdId: string
+): Promise<{ stream: 'stdout' | 'stderr'; data: string }[]> {
+  const out: { stream: 'stdout' | 'stderr'; data: string }[] = [];
+  try {
+    const res = await vFetch(
+      `${SANDBOX_API_BASE}/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/cmd/${encodeURIComponent(cmdId)}/logs`,
+      { headers: authHeaders() },
+      LOGS_TIMEOUT_MS
+    );
+    if (!res.ok) {
+      logger.warn(`[sandbox] stream logs fetch non-ok (${res.status})`);
+      return out;
+    }
+    const text = await res.text().catch(() => '');
+    for (const line of text.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        continue; // defensive: skip malformed ndjson lines
+      }
+      if (parsed?.stream === 'stdout' && typeof parsed.data === 'string') {
+        out.push({ stream: 'stdout', data: parsed.data });
+      } else if (parsed?.stream === 'stderr' && typeof parsed.data === 'string') {
+        out.push({ stream: 'stderr', data: parsed.data });
+      } else if (parsed?.stream === 'error') {
+        const code = parsed?.data?.code ?? 'error';
+        const message = parsed?.data?.message ?? '';
+        out.push({ stream: 'stderr', data: `\n[sandbox:${code}] ${message}\n` });
+      }
+    }
+    return out;
+  } catch (err) {
+    logger.warn(
+      `[sandbox] stream logs fetch failed: ${(err as Error)?.message ?? String(err)}`
+    );
+    return out;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// File reads / listing (C4) — via runCommand (dep-free; no fs REST needed)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a text file back out of the sandbox (C4 editor round-trip). Uses
+ * `cat <path>` via the existing runner (the SDK's own filesystem helpers shell
+ * out the same way; the fs/read REST endpoint returns octet-stream and is only
+ * needed for binary fidelity). Returns the file text, or an EMPTY STRING when
+ * the file is missing / unreadable (non-zero cat exit) so the editor degrades
+ * gracefully rather than throwing. Real transport/timeout failures from the
+ * underlying runCommand still propagate as SandboxError.
+ */
+export async function readFile(
+  sessionId: string,
+  path: string
+): Promise<string> {
+  if (!sessionId || !path) return '';
+  const target = shellQuote(path);
+  const result = await runCommand(
+    sessionId,
+    'bash',
+    ['-c', `cat ${target}`],
+    { timeoutMs: READ_FILE_TIMEOUT_MS }
+  );
+  // Missing file / permission error → cat exits non-zero; treat as empty.
+  if (result.exitCode !== 0) return '';
+  return result.stdout;
+}
+
+/**
+ * Enumerate files in the sandbox for the file-tree (C4). Runs
+ * `find <cwd> -type f -not -path './node_modules/*' -not -path './.git/*'`
+ * (mirrors the SDK's readdir approach — there is no fs/list REST endpoint),
+ * caps the result set (~500 by default), and returns `{ path }[]`. `bytes` is
+ * intentionally omitted here to keep this a single cheap `find` (the caller can
+ * stat individually if it needs sizes). Defensive: a non-zero find exit or
+ * empty output yields `[]`.
+ */
+export async function listFiles(
+  sessionId: string,
+  opts?: { cwd?: string; max?: number }
+): Promise<{ path: string; bytes?: number }[]> {
+  if (!sessionId) return [];
+  const cwd = opts?.cwd && opts.cwd.trim() ? opts.cwd.trim() : '.';
+  const max =
+    Number.isInteger(opts?.max) && (opts!.max as number) > 0
+      ? (opts!.max as number)
+      : LIST_FILES_DEFAULT_MAX;
+  const dir = shellQuote(cwd);
+  // Single quotes preserve the literal glob patterns for find (no shell expand).
+  const script =
+    `find ${dir} -type f ` +
+    `-not -path '*/node_modules/*' ` +
+    `-not -path '*/.git/*'`;
+  const result = await runCommand(
+    sessionId,
+    'bash',
+    ['-c', script],
+    { timeoutMs: LIST_FILES_TIMEOUT_MS }
+  );
+  if (result.exitCode !== 0) return [];
+  const out: { path: string; bytes?: number }[] = [];
+  for (const raw of result.stdout.split('\n')) {
+    const p = raw.trim();
+    if (!p) continue;
+    out.push({ path: p });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // File writes — base64 command method (NOT the SDK's tar fs/write endpoint)
 // ---------------------------------------------------------------------------
@@ -570,5 +1081,21 @@ export async function writeFile(
         `Sandbox writeFile failed for ${path} (exit ${result.exitCode}): ${result.stderr.slice(0, UPSTREAM_MSG_CAP)}`
       );
     }
+  }
+}
+
+/**
+ * Convenience multi-file write (C4, dep-free) — loops writeFile per entry
+ * (the recon deliberately keeps the base64 approach over the SDK's tar
+ * fs/write). Writes sequentially so a failure reports the exact offending
+ * path; propagates the first SandboxError.
+ */
+export async function writeFiles(
+  sessionId: string,
+  files: { path: string; content: string }[]
+): Promise<void> {
+  for (const f of Array.isArray(files) ? files : []) {
+    if (!f || typeof f.path !== 'string') continue;
+    await writeFile(sessionId, f.path, typeof f.content === 'string' ? f.content : '');
   }
 }

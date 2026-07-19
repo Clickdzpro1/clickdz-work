@@ -1,3 +1,4 @@
+import { ClickDzAgentRuntime } from './clickdz-agent-runtime';
 import { CopilotAccessPolicy } from './access';
 import {
   ByokEntitlementPolicy,
@@ -151,6 +152,7 @@ export const COPILOT_MCP_PROVIDERS = [WorkspaceMcpProvider];
 export const COPILOT_KERNEL_PROVIDERS = [
   ...COPILOT_PROVIDER_PROVIDERS,
   ...COPILOT_RUNTIME_PROVIDERS,
+  ClickDzAgentRuntime,
 ];
 
 export const COPILOT_FEATURE_PROVIDERS = [

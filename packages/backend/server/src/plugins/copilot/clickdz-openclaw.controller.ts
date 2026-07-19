@@ -1,45 +1,86 @@
-// ClickDz OPENCLAW — autonomous coding agent (WS11).
+// ClickDz OPENCLAW — autonomous, STREAMING, multi-turn coding agent (WS12).
 //
-// POST /api/v1/openclaw/run takes a natural-language coding TASK, plans with
-// cdz-flash (the SAME proven planner mechanics as
-// clickdz-integrations.controller.ts /run: normalized CDZ_AI_BASE_URL + the
-// single canonical /v1/chat/completions path, Bearer CDZ_AI_KEY, fail-closed
-// JSON parsing, plan→act loop with truncated result feedback), then acts
-// inside an isolated Vercel Sandbox microVM via the dep-free client in
-// ./clickdz-vercel-sandbox: it WRITES whole files, RUNS commands, observes the
-// REAL exit code + stdout/stderr, and iterates on failures until the program
-// exits 0 or the caps hit (5 write/run actions / 110s wall clock). The sandbox
-// session is ALWAYS stopped in a finally.
+// WS11 shipped a one-shot POST /run: a cdz-flash plan→act loop that wrote whole
+// files + ran commands inside a Vercel Sandbox microVM that was torn down in a
+// per-request finally. WS12 upgrades this into a real agent console:
 //
-// Graceful degrade (MANDATORY — never a stub, never fabricated output): when
-// the sandbox is unavailable (capability probe false, or session creation
-// fails) the cdz-flash planner STILL generates the complete solution code +
-// explanation, returned with {executed:false, sandbox:false, reason} so the
-// surface stays real and honest — planning works, execution status is
-// surfaced, and runtime output is never invented.
+//   - POST /api/v1/openclaw/stream (SSE, contract C1/C6): resolve/create a
+//     THREAD, ensure a PERSISTENT sandbox bound to that thread (reuse the
+//     session across turns — extend its timeout when still running, recreate it
+//     only when it died), then stream the plan→act loop live: `file`+`artifact`
+//     on each write, live `terminal` deltas + `step`(exitCode) on each run, a
+//     `preview`(starting→ready) when the task spins up a dev server on port
+//     3000, and finally the natural-language answer streamed token-by-token
+//     (cdz-flash stream:true) before a persisted `final` turn. The sandbox is
+//     NEVER stopped here — persistence is the whole point; it lives on the
+//     thread and is only released on thread delete or its own idle expiry.
+//   - POST /api/v1/openclaw/stop — cooperative stop flag (checked each turn).
+//   - GET/PATCH/DELETE threads; DELETE best-effort stops the thread's sandbox.
+//   - GET threads/:id/files + threads/:id/file?path= — file tree + editor read
+//     straight from the live microVM (SANDBOX2.listFiles / readFile).
 //
-// Error idiom (see base/nestjs/exception.ts mapAnyError): raw HttpException is
-// coerced to a generic 500 by the global filter, so the custom-status typed
-// bodies here (502 {error:'planner_unavailable'}) are written directly via the
-// injected Express Response (@Res()), exactly like the sibling ClickDz
-// controllers. BadRequest from ../../base stays for genuinely malformed input
-// (typed 400). NEVER log key material.
+// Kept verbatim: legacy POST /run (unchanged behaviour — one-shot, ephemeral
+// session, still stopped in its own finally) and GET /capabilities (now with
+// streaming:true).
+//
+// Cross-imports (contract): ClickDzAgentRuntime + the AgentEvent/AgentStep/
+// AgentMessage/AgentThread types live in ./clickdz-agent-runtime (RUNTIME owns
+// them); the sandbox side effects go through ./clickdz-vercel-sandbox (SANDBOX2
+// owns the REST plumbing + reads VERCEL_TOKEN/VERCEL_TEAM_ID itself and never
+// surfaces key material). Neither resolves in an isolated single-file build —
+// that's expected; this file is coded to the exact contract signatures.
+//
+// Error idiom (see base/nestjs/exception.ts mapAnyError): a raw HttpException is
+// coerced to a generic 500 by the global filter, so custom-status bodies here
+// (502 {error:'planner_unavailable'}) are written directly via the injected
+// Express Response (@Res()), and typed errors (BadRequest/NotFound) from
+// ../../base cover genuinely malformed input / missing threads. INSIDE an
+// already-open SSE stream we NEVER throw — we emit {type:'error'} + done and end
+// the stream cleanly. NEVER log key material.
 
-import { Body, Controller, Get, Logger, Post, Res } from '@nestjs/common';
-import type { Response } from 'express';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Logger,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
 
+import { BadRequest, NotFound, Throttle } from '../../base';
 import { CurrentUser } from '../../core/auth';
-// Typed errors from ../../base; custom-status bodies go through @Res() — see
-// the header comment (raw HttpException would be coerced to a generic 500).
-import { BadRequest, Throttle } from '../../base';
-// Dep-free Vercel Sandbox client (contract C5 — clickdz-vercel-sandbox.ts owns
-// the REST plumbing and reads VERCEL_TOKEN/VERCEL_TEAM_ID itself; it never
-// surfaces key material). Every sandbox side effect below goes through these
-// five functions.
+// RUNTIME (contract C3): the shared agent runtime — SSE writer, Redis-backed
+// threads, cooperative stop registry — plus the wire types (C1/C2). HERMESB2
+// and CLAWB2 both inject this service.
+import { ClickDzAgentRuntime } from './clickdz-agent-runtime';
+import type {
+  AgentEvent,
+  AgentMessage,
+  AgentStep,
+  AgentThread,
+} from './clickdz-agent-runtime';
+// SANDBOX2 (contract C4): the dep-free Vercel Sandbox client. Legacy /run uses
+// the original five functions; the streaming console adds the persistent-session
+// + preview + file + streaming functions. All are defensive; the token is never
+// logged or returned.
 import {
   createSession,
+  createSessionWithPorts,
+  extendSession,
+  getPreviewUrl,
+  listFiles,
+  readFile,
   runCommand,
+  runCommandBackground,
+  runCommandStreaming,
   sandboxCapability,
+  sessionStatus,
   stopSession,
   writeFile,
 } from './clickdz-vercel-sandbox';
@@ -68,33 +109,61 @@ const CLAW_PLANNER_TIMEOUT_MS = 15_000;
 // Per sandbox command (the client creates the command, polls for exit and
 // fetches logs inside this budget).
 const CLAW_RUN_TIMEOUT_MS = 30_000;
-// Total budget for the whole request (contract C3: cap 5 iter / 110s).
+// Total budget for the legacy one-shot /run request (cap 5 iter / 110s).
 const CLAW_WALL_CLOCK_MS = 110_000;
-// Hard cap on write/run actions (not counting the terminal final turn).
+// Hard cap on write/run actions for legacy /run (not counting the final turn).
 const CLAW_MAX_ITERATIONS = 5;
-// Sandbox microVM lifetime — comfortably above the wall clock so the VM never
-// dies mid-loop; the finally-stop frees it early on every path.
+// Sandbox microVM lifetime for legacy /run — comfortably above the wall clock
+// so the VM never dies mid-loop; the finally-stop frees it early on every path.
 const CLAW_SESSION_TIMEOUT_MS = 180_000;
+
+// --- /stream budgets (SSE — no hard wall clock; the heartbeat keeps the
+// connection alive, so the streamed run may run far longer than a buffered
+// POST). Iterations are capped instead. ---
+// A streaming run may write bigger multi-file projects + install deps, so give
+// each planner turn and each command more room than legacy /run.
+const STREAM_PLANNER_TIMEOUT_MS = 30_000;
+const STREAM_RUN_TIMEOUT_MS = 180_000;
+// Per contract C6: iterate the plan→act loop until success or ~6 iterations.
+const STREAM_MAX_ITERATIONS = 6;
+// Persistent-session lifetime on first create; every reused turn extends it.
+const STREAM_SESSION_TIMEOUT_MS = 900_000; // 15m
+const STREAM_SESSION_EXTEND_MS = 900_000; // +15m per turn (contract C6)
+// The dev-server preview port we request + expose.
+const PREVIEW_PORT = 3000;
+// After launching the dev server we probe readiness for up to this long before
+// emitting preview(ready) regardless (the FE iframe can also just load it).
+const PREVIEW_READY_TIMEOUT_MS = 25_000;
+const PREVIEW_PROBE_INTERVAL_MS = 1_500;
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
 // Prompt/response budgets.
 const CLAW_TASK_MIN = 1;
 const CLAW_TASK_MAX = 4_000;
 const STEP_PREVIEW_CHAR_CAP = 2_000;
 const RESULT_FEEDBACK_CHAR_CAP = 2_000;
 const OUTPUT_RESPONSE_CHAR_CAP = 8_000;
+// Live terminal deltas are already streamed frame-by-frame; the run's summary
+// fed back to the planner is truncated to keep context bounded.
+const TERMINAL_ACCUM_CHAR_CAP = 12_000;
 // The planner writes complete files — needs far more tokens than a tool router.
 const PLANNER_MAX_TOKENS = 2_048;
+// Final natural-language answer stream — a little more room than a tool router.
+const FINAL_ANSWER_MAX_TOKENS = 900;
 const WRITE_CONTENT_MAX_CHARS = 64_000;
 const FILE_PATH_MAX_CHARS = 200;
 const COMMAND_MAX_CHARS = 100;
 const RUN_ARGS_MAX = 16;
 const RUN_ARG_MAX_CHARS = 8_000;
 const COMMAND_DISPLAY_CHAR_CAP = 400;
+const THREAD_TITLE_MAX = 200;
 
-// Runtimes OPENCLAW accepts (contract C3; default first).
+// Runtimes OPENCLAW accepts (contract C6; default first).
 const OPENCLAW_RUNTIMES = ['node24', 'python3.13'];
 const OPENCLAW_DEFAULT_RUNTIME = 'node24';
+const AGENT_NAME = 'openclaw' as const;
 
-// One executed loop step surfaced back to the client (contract C3 ClawStep).
+// One executed loop step surfaced back to the legacy /run client (WS11 shape).
 interface ClawStep {
   i: number;
   thought?: string;
@@ -250,12 +319,46 @@ function isSafeSandboxPath(file: string): boolean {
 function inferLanguage(file: string | null, runtime: string): string {
   const f = (file ?? '').toLowerCase();
   if (f.endsWith('.py')) return 'python';
-  if (f.endsWith('.ts')) return 'typescript';
+  if (f.endsWith('.ts') || f.endsWith('.tsx')) return 'typescript';
+  if (f.endsWith('.jsx')) return 'javascript';
   if (f.endsWith('.mjs') || f.endsWith('.cjs') || f.endsWith('.js')) {
     return 'javascript';
   }
+  if (f.endsWith('.json')) return 'json';
+  if (f.endsWith('.html') || f.endsWith('.htm')) return 'html';
+  if (f.endsWith('.css')) return 'css';
+  if (f.endsWith('.md')) return 'markdown';
+  if (f.endsWith('.yml') || f.endsWith('.yaml')) return 'yaml';
   if (f.endsWith('.sh')) return 'bash';
   return runtime === 'python3.13' ? 'python' : 'javascript';
+}
+
+/**
+ * Best-effort language for the file-tree/editor endpoints, where there is no
+ * runtime context — return undefined when the extension is unknown so the FE
+ * can fall back to plain text.
+ */
+function languageForPath(path: string): string | undefined {
+  const f = (path ?? '').toLowerCase();
+  if (f.endsWith('.py')) return 'python';
+  if (f.endsWith('.ts') || f.endsWith('.tsx')) return 'typescript';
+  if (f.endsWith('.jsx')) return 'javascript';
+  if (f.endsWith('.mjs') || f.endsWith('.cjs') || f.endsWith('.js')) {
+    return 'javascript';
+  }
+  if (f.endsWith('.json')) return 'json';
+  if (f.endsWith('.html') || f.endsWith('.htm')) return 'html';
+  if (f.endsWith('.css')) return 'css';
+  if (f.endsWith('.scss') || f.endsWith('.sass')) return 'scss';
+  if (f.endsWith('.md') || f.endsWith('.markdown')) return 'markdown';
+  if (f.endsWith('.yml') || f.endsWith('.yaml')) return 'yaml';
+  if (f.endsWith('.toml')) return 'toml';
+  if (f.endsWith('.sh') || f.endsWith('.bash')) return 'bash';
+  if (f.endsWith('.sql')) return 'sql';
+  if (f.endsWith('.go')) return 'go';
+  if (f.endsWith('.rs')) return 'rust';
+  if (f.endsWith('.env')) return 'bash';
+  return undefined;
 }
 
 /** Merge stdout + stderr into one honest, labeled output string. */
@@ -266,17 +369,52 @@ function combineOutput(stdout: string, stderr: string): string {
   return out || err;
 }
 
+/** Heuristic: does this task/command imply a long-running web dev server? */
+function looksLikeDevServer(command: string, args: string[]): boolean {
+  const joined = [command, ...args].join(' ').toLowerCase();
+  return (
+    /\bnpm\s+(run\s+)?(dev|start)\b/.test(joined) ||
+    /\b(pnpm|yarn|bun)\s+(run\s+)?(dev|start)\b/.test(joined) ||
+    /\bnext\b.*\b(dev|start)\b/.test(joined) ||
+    /\bvite\b/.test(joined) ||
+    /\bhttp\.server\b/.test(joined) ||
+    /\bhttp-server\b/.test(joined) ||
+    /\bflask\s+run\b/.test(joined) ||
+    /\buvicorn\b/.test(joined) ||
+    /--port[= ]?3000\b/.test(joined) ||
+    /\bserve\b/.test(joined)
+  );
+}
+
+/** Does the overall task hint at building a web app (used to nudge the plan)? */
+function taskWantsWebApp(task: string): boolean {
+  const t = (task ?? '').toLowerCase();
+  return /\b(web ?app|website|web page|webpage|frontend|front-end|react|next\.?js|vite|vue|svelte|html|landing page|dashboard|ui|http server|dev server|preview|localhost)\b/.test(
+    t
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The controller
+// ---------------------------------------------------------------------------
+
 /**
  * ClickDz OPENCLAW — the autonomous coding agent.
  *
  * All routes are auth'd (global AuthGuard requires a signed-in cookie session —
- * no @Public()) and rate-capped with @Throttle('strict'), mirroring the sibling
+ * no @Public()) and rate-capped with @Throttle, mirroring the sibling
  * controllers. Planner and sandbox failures degrade gracefully (typed 502 /
- * plan-only mode) — never a raw HttpException, never fabricated results.
+ * plan-only mode / in-stream error frame) — never a raw HttpException, never
+ * fabricated results.
  */
 @Controller()
 export class ClickDzOpenclawController {
   private readonly logger = new Logger(ClickDzOpenclawController.name);
+
+  // The shared agent runtime (SSE + threads + stop) is injected; the sandbox
+  // client is a set of module functions (no DI). CacheRedis is reached through
+  // the runtime, so this controller needs no direct Redis dependency.
+  constructor(private readonly runtime: ClickDzAgentRuntime) {}
 
   // One-shot flag so the resolved planner base+path is logged the FIRST time a
   // planner call is actually attempted (lazy — never at import), never
@@ -300,7 +438,7 @@ export class ClickDzOpenclawController {
 
   /**
    * GET capabilities — drives the frontend enable/disable state.
-   * {sandbox, reason?, plannerReady, runtimes} (contract C3).
+   * {sandbox, reason?, plannerReady, runtimes, streaming:true} (contract C6).
    */
   @Throttle('strict')
   @Get('/api/v1/openclaw/capabilities')
@@ -311,33 +449,1191 @@ export class ClickDzOpenclawController {
       ...(capability.reason ? { reason: capability.reason } : {}),
       plannerReady: !!CDZ_AI_KEY,
       runtimes: OPENCLAW_RUNTIMES,
+      // WS12: this controller now speaks SSE at /api/v1/openclaw/stream.
+      streaming: true,
     });
   }
 
+  // =========================================================================
+  // WS12 — POST /api/v1/openclaw/stream (SSE, persistent sandbox console)
+  // =========================================================================
+  //
+  //   body {threadId?: string; message: string; runtime?: 'node24'|'python3.13'}
+  //
+  // Emits the contract-C1 AgentEvent wire protocol (each frame
+  // `data: ${JSON.stringify(ev)}\n\n`, `type` discriminates, a 15s ping
+  // heartbeat, terminal `{type:'done'}`). Auth is the cookie session via
+  // @CurrentUser; the FE POSTs with credentials:'include' + a ReadableStream
+  // reader. We NEVER throw inside the stream — every failure becomes an `error`
+  // frame + `done`.
   // -------------------------------------------------------------------------
-  // POST run — the coding-agent loop.
+  @Throttle('strict')
+  @Post('/api/v1/openclaw/stream')
+  async stream(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Req() req: Request,
+    @Res() res: Response
+  ) {
+    // Open the SSE stream FIRST (sets headers, flushHeaders, 15s ping, wires
+    // req 'close'). After this point NOTHING throws to the framework — all
+    // errors go out as {type:'error'} frames.
+    const writer = this.runtime.openStream(req, res);
+    writer.heartbeatEvery(HEARTBEAT_INTERVAL_MS);
+
+    let threadId: string | null = null;
+    try {
+      // ---- validate input (in-stream error, never a thrown HttpException) ----
+      const message =
+        typeof body?.message === 'string' ? body.message.trim() : '';
+      if (message.length < CLAW_TASK_MIN || message.length > CLAW_TASK_MAX) {
+        // The single finally below always ends the stream — early branches just
+        // emit the error frame and return (no direct end() → no double done).
+        writer.emit({
+          type: 'error',
+          code: 'bad_request',
+          message: `"message" must be a string of ${CLAW_TASK_MIN}..${CLAW_TASK_MAX} chars`,
+        });
+        return;
+      }
+      const runtimeRaw =
+        typeof body?.runtime === 'string' ? body.runtime.trim() : '';
+      if (runtimeRaw && !OPENCLAW_RUNTIMES.includes(runtimeRaw)) {
+        writer.emit({
+          type: 'error',
+          code: 'bad_request',
+          message: `"runtime" must be one of: ${OPENCLAW_RUNTIMES.join(', ')}`,
+        });
+        return;
+      }
+      const requestedRuntime = runtimeRaw || OPENCLAW_DEFAULT_RUNTIME;
+
+      // ---- resolve or create the thread ----
+      const requestedThreadId =
+        typeof body?.threadId === 'string' && body.threadId.trim()
+          ? body.threadId.trim()
+          : null;
+      let thread: AgentThread | null = null;
+      if (requestedThreadId) {
+        thread = await this.runtime.getThread(user.id, requestedThreadId);
+        if (!thread) {
+          writer.emit({
+            type: 'error',
+            code: 'not_found',
+            message: 'Thread not found',
+          });
+          return;
+        }
+      } else {
+        thread = await this.runtime.createThread(
+          user.id,
+          AGENT_NAME,
+          this.deriveTitle(message)
+        );
+      }
+      threadId = thread.id;
+
+      // A fresh run supersedes any stale stop flag from a prior turn.
+      await this.runtime.clearStop(threadId);
+
+      // The effective runtime is fixed by the thread's existing sandbox once one
+      // exists (you can't change a live microVM's runtime); otherwise the
+      // request's runtime wins.
+      const runtime = thread.sandbox?.runtime || requestedRuntime;
+
+      // ---- append the user message + announce the thread ----
+      const userMessage: AgentMessage = {
+        id: this.randomId('msg'),
+        role: 'user',
+        content: message,
+        createdAt: Date.now(),
+        agent: AGENT_NAME,
+      };
+      thread.messages.push(userMessage);
+      thread.updatedAt = Date.now();
+      await this.runtime.saveThread(user.id, thread);
+
+      writer.emit({
+        type: 'thread',
+        threadId: thread.id,
+        agent: AGENT_NAME,
+        title: thread.title,
+      });
+
+      // ---- ensure a PERSISTENT sandbox for this thread ----
+      writer.emit({ type: 'status', phase: 'planning', label: 'Preparing workspace' });
+      const capability = await this.probeSandbox();
+
+      if (!capability.sandbox) {
+        // Honest degrade: no sandbox → still stream planner-generated files +
+        // a token answer that says execution is unavailable. Real, not a stub.
+        await this.streamPlanOnly(
+          user.id,
+          thread,
+          message,
+          runtime,
+          capability.reason ??
+            'Vercel Sandbox is not available for this deployment',
+          writer
+        );
+        return;
+      }
+
+      const ready = await this.ensurePersistentSandbox(
+        user.id,
+        thread,
+        runtime,
+        writer
+      );
+      if (!ready) {
+        // Sandbox creation failed mid-setup — degrade to plan-only rather than
+        // aborting the turn (the message is still saved on the thread).
+        await this.streamPlanOnly(
+          user.id,
+          thread,
+          message,
+          runtime,
+          'the sandbox session could not be created for this thread',
+          writer
+        );
+        return;
+      }
+
+      const sessionId = thread.sandbox!.sessionId;
+      const routes = thread.sandbox!.routes ?? [];
+
+      // ---- the streaming plan→act loop ----
+      await this.streamAgentLoop({
+        userId: user.id,
+        thread,
+        message,
+        runtime,
+        sessionId,
+        routes,
+        writer,
+      });
+    } catch (err) {
+      // Belt-and-braces: nothing above should throw, but if it does the stream
+      // is already open — emit an error frame instead of a 500.
+      const detail = (err as Error)?.message ?? 'openclaw_stream_failed';
+      this.logger.warn(`[openclaw] stream failed: ${detail}`);
+      if (!writer.closed) {
+        writer.emit({
+          type: 'error',
+          code: 'stream_failed',
+          message: truncatePreview(detail, RESULT_FEEDBACK_CHAR_CAP),
+        });
+      }
+    } finally {
+      // Clear the (possibly stale) stop flag for this thread; NEVER stopSession
+      // here — the sandbox persists on the thread across turns (contract C6).
+      if (threadId) {
+        try {
+          await this.runtime.clearStop(threadId);
+        } catch {
+          /* best-effort */
+        }
+      }
+      writer.end();
+    }
+  }
+
+  /**
+   * Ensure the thread owns a live, persistent sandbox session.
+   *   - reuse: thread.sandbox.sessionId present AND sessionStatus()==='running'
+   *     → extendSession(+15m) and keep the stored routes.
+   *   - recreate: otherwise createSessionWithPorts({runtime, ports:[3000]}) and
+   *     persist {sessionId, runtime, routes} onto the thread.
+   * Returns true when the thread has a usable session; false on hard failure
+   * (caller degrades to plan-only). Defensive — swallows/logs, never throws.
+   */
+  private async ensurePersistentSandbox(
+    userId: string,
+    thread: AgentThread,
+    runtime: string,
+    writer: AgentSseWriterLike
+  ): Promise<boolean> {
+    const existing = thread.sandbox;
+    if (existing?.sessionId) {
+      let status: 'running' | 'stopped' | 'failed' | 'unknown' = 'unknown';
+      try {
+        status = await sessionStatus(existing.sessionId);
+      } catch (err) {
+        this.logger.warn(
+          `[openclaw] sessionStatus failed: ${(err as Error)?.message ?? err}`
+        );
+        status = 'unknown';
+      }
+      if (status === 'running') {
+        // Reuse the warm microVM and push its deadline forward.
+        try {
+          await extendSession(existing.sessionId, STREAM_SESSION_EXTEND_MS);
+        } catch (err) {
+          this.logger.warn(
+            `[openclaw] extendSession failed: ${(err as Error)?.message ?? err}`
+          );
+        }
+        existing.updatedAt = Date.now();
+        thread.updatedAt = Date.now();
+        await this.runtime.saveThread(userId, thread);
+        writer.emit({
+          type: 'status',
+          phase: 'planning',
+          label: 'Reconnected to workspace',
+        });
+        return true;
+      }
+      // Dead/unknown session — fall through and recreate.
+    }
+
+    writer.emit({
+      type: 'status',
+      phase: 'planning',
+      label: 'Starting a fresh workspace',
+    });
+    try {
+      const created = await createSessionWithPorts({
+        runtime,
+        ports: [PREVIEW_PORT],
+        timeoutMs: STREAM_SESSION_TIMEOUT_MS,
+      });
+      thread.sandbox = {
+        sessionId: created.sessionId,
+        runtime: created.runtime,
+        routes: (created.routes ?? []).map(r => ({ url: r.url, port: r.port })),
+        updatedAt: Date.now(),
+      };
+      thread.updatedAt = Date.now();
+      await this.runtime.saveThread(userId, thread);
+      return true;
+    } catch (err) {
+      const detail = (err as Error)?.message ?? 'sandbox_session_failed';
+      this.logger.warn(`[openclaw] createSessionWithPorts failed: ${detail}`);
+      return false;
+    }
+  }
+
+  /**
+   * The streaming plan→act loop. Mirrors the legacy /run vocabulary
+   * (write/run/final) but emits live SSE frames instead of accumulating a JSON
+   * body, uses the PERSISTENT session, streams command output as `terminal`
+   * events, launches + previews a dev server on port 3000, and streams the
+   * final answer token-by-token. NEVER stopSession. Respects the stop flag each
+   * iteration.
+   */
+  private async streamAgentLoop(ctx: {
+    userId: string;
+    thread: AgentThread;
+    message: string;
+    runtime: string;
+    sessionId: string;
+    routes: { url: string; port: number }[];
+    writer: AgentSseWriterLike;
+  }): Promise<void> {
+    const { userId, thread, message, runtime, sessionId, writer } = ctx;
+    let routes = ctx.routes;
+
+    const messages: Array<{ role: string; content: string }> = [
+      {
+        role: 'system',
+        content: this.buildStreamSystemPrompt(runtime, ctx.message),
+      },
+      ...this.priorTurns(thread),
+      { role: 'user', content: message },
+    ];
+
+    const steps: AgentStep[] = [];
+    let iterations = 0;
+    let answer: string | null = null;
+    let finalDecision: ClawDecision | null = null;
+    let lastExitCode: number | null = null;
+    let anyRunExecuted = false;
+    let previewUrl: string | null = null;
+
+    // Authoritatively assign the 1-based step index here so every construction
+    // site (including the dev-server helper which can't know steps.length) is
+    // numbered correctly and consistently.
+    const pushStep = (step: AgentStep) => {
+      step.i = steps.length + 1;
+      steps.push(step);
+      writer.emit({ type: 'step', step });
+    };
+
+    writer.emit({ type: 'status', phase: 'planning', label: 'Planning' });
+
+    while (iterations < STREAM_MAX_ITERATIONS) {
+      // Cooperative stop (checked each iteration, before planning).
+      if (await this.stopRequested(thread.id)) {
+        writer.emit({ type: 'status', phase: 'stopped', label: 'Stopped' });
+        answer = answer ?? 'Run stopped at your request.';
+        break;
+      }
+      if (writer.closed) return; // client disconnected — abort silently
+
+      const planned = await this.callPlanner(messages, STREAM_PLANNER_TIMEOUT_MS);
+      if (planned === null) {
+        if (steps.length === 0) {
+          writer.emit({
+            type: 'error',
+            code: 'planner_unavailable',
+            message:
+              'The cdz-flash planner is currently unavailable. Please try again in a moment.',
+          });
+          // Persist a short assistant turn so the thread stays coherent.
+          await this.persistAssistant(
+            userId,
+            thread,
+            'The planner was unavailable, so no work was performed.',
+            steps,
+            writer
+          );
+          return;
+        }
+        answer = this.synthesizeAnswer(steps, lastExitCode);
+        break;
+      }
+
+      messages.push({ role: 'assistant', content: planned.raw });
+      const decision = parseClawJson(planned.raw);
+
+      if (decision.action === 'final') {
+        answer = decision.answer ?? '';
+        finalDecision = decision;
+        break;
+      }
+
+      // ---- write ----
+      if (decision.action === 'write') {
+        iterations++;
+        const file = decision.file ?? '';
+        const content = decision.content;
+        if (
+          !isSafeSandboxPath(file) ||
+          typeof content !== 'string' ||
+          content.length === 0 ||
+          content.length > WRITE_CONTENT_MAX_CHARS
+        ) {
+          messages.push({
+            role: 'user',
+            content: `Invalid write action. "file" must be a relative path (letters, digits, . _ - / only; no leading "/", no ".."), and "content" must be the complete non-empty file text (<= ${WRITE_CONTENT_MAX_CHARS} chars). Reply with corrected JSON.`,
+          });
+          continue;
+        }
+        const language = decision.language ?? inferLanguage(file, runtime);
+        writer.emit({ type: 'status', phase: 'writing', label: `Writing ${file}` });
+        let step: AgentStep;
+        try {
+          await writeFile(sessionId, file, content);
+          // file-tree delta + artifact + step (contract C6).
+          writer.emit({ type: 'file', op: 'write', path: file, language });
+          writer.emit({
+            type: 'artifact',
+            artifact: {
+              kind: 'file',
+              path: file,
+              language,
+              bytes: Buffer.byteLength(content, 'utf8'),
+            },
+          });
+          step = {
+            i: steps.length + 1,
+            kind: 'write',
+            title: `Wrote ${file}`,
+            ...(decision.thought ? { detail: decision.thought } : {}),
+            ok: true,
+            resultPreview: `wrote ${content.length} chars to ${file}`,
+            ts: Date.now(),
+          };
+          pushStep(step);
+          messages.push({
+            role: 'user',
+            content: `File ${file} written (${content.length} chars). Continue: write more files if needed, run a command to execute/build, or start the dev server on port ${PREVIEW_PORT} for a live preview.`,
+          });
+        } catch (err) {
+          const detail = (err as Error)?.message ?? 'sandbox_write_failed';
+          this.logger.warn(`[openclaw] writeFile ${file} failed: ${detail}`);
+          step = {
+            i: steps.length + 1,
+            kind: 'write',
+            title: `Failed to write ${file}`,
+            ...(decision.thought ? { detail: decision.thought } : {}),
+            ok: false,
+            error: truncatePreview(detail),
+            ts: Date.now(),
+          };
+          pushStep(step);
+          messages.push({
+            role: 'user',
+            content: `Writing ${file} FAILED: ${truncatePreview(detail, RESULT_FEEDBACK_CHAR_CAP)}. Adjust (e.g. a simpler relative path) and retry.`,
+          });
+        }
+        continue;
+      }
+
+      // ---- run ----
+      const command = decision.command ?? '';
+      const args = Array.isArray(decision.args) ? decision.args : [];
+      const argsOk =
+        args.length <= RUN_ARGS_MAX &&
+        args.every(a => a.length <= RUN_ARG_MAX_CHARS);
+      if (!command || command.length > COMMAND_MAX_CHARS || !argsOk) {
+        iterations++;
+        messages.push({
+          role: 'user',
+          content:
+            'Invalid run action. "command" must be a short executable name (e.g. "node", "python3", "bash", "npm") and "args" an array of strings. Reply with corrected JSON.',
+        });
+        continue;
+      }
+      iterations++;
+      const display = truncatePreview(
+        [command, ...args].join(' '),
+        COMMAND_DISPLAY_CHAR_CAP
+      );
+
+      // Dev server → launch in the BACKGROUND (non-blocking) + emit preview.
+      if (looksLikeDevServer(command, args)) {
+        const dev = await this.launchDevServer({
+          userId,
+          thread,
+          sessionId,
+          command,
+          args,
+          display,
+          routes,
+          thought: decision.thought,
+          writer,
+        });
+        routes = dev.routes;
+        if (dev.previewUrl) {
+          previewUrl = dev.previewUrl;
+        }
+        pushStep(dev.step);
+        messages.push({
+          role: 'user',
+          content: dev.previewUrl
+            ? `Dev server started in the background (${display}). A live preview is available at port ${PREVIEW_PORT}. If the app is complete, reply now with {"action":"final","answer":"..."} describing what you built and that a live preview is running.`
+            : `Attempted to start the dev server (${display}) but no preview URL was available. If the task is otherwise complete, reply with a "final" action; otherwise continue.`,
+        });
+        continue;
+      }
+
+      // Ordinary command → run to completion with LIVE streamed output.
+      writer.emit({
+        type: 'status',
+        phase: this.isInstallCommand(command, args) ? 'installing' : 'running',
+        label: `$ ${display}`,
+      });
+      const cmdId = this.randomId('cmd');
+      let accumulated = '';
+      let step: AgentStep;
+      try {
+        const result = await runCommandStreaming(sessionId, command, args, {
+          timeoutMs: STREAM_RUN_TIMEOUT_MS,
+          onLog: l => {
+            if (writer.closed) return;
+            if (accumulated.length < TERMINAL_ACCUM_CHAR_CAP) {
+              accumulated += l.data;
+            }
+            writer.emit({
+              type: 'terminal',
+              stream: l.stream,
+              data: l.data,
+              cmdId,
+            });
+          },
+        });
+        anyRunExecuted = true;
+        lastExitCode = result.exitCode;
+        const ok = result.exitCode === 0;
+        const preview = truncatePreview(accumulated.trim() || '(no output)');
+        step = {
+          i: steps.length + 1,
+          kind: 'run',
+          title: `$ ${display}`,
+          ...(decision.thought ? { detail: decision.thought } : {}),
+          ok,
+          exitCode: result.exitCode,
+          resultPreview: preview,
+          ts: Date.now(),
+        };
+        pushStep(step);
+        messages.push({
+          role: 'user',
+          content: ok
+            ? `Command "${display}" exited 0 (success). Output (truncated):\n${preview}\nIf this completes the task, reply now with {"action":"final","answer":"...","code":"<the working code>","language":"..."}. If it built a web app, start the dev server on port ${PREVIEW_PORT} first.`
+            : `Command "${display}" exited ${result.exitCode} (failure). Output (truncated):\n${preview}\nDiagnose the error, rewrite the ENTIRE affected file with a "write" action, then run again.`,
+        });
+      } catch (err) {
+        const detail = (err as Error)?.message ?? 'sandbox_run_failed';
+        this.logger.warn(`[openclaw] runCommandStreaming failed: ${detail}`);
+        step = {
+          i: steps.length + 1,
+          kind: 'run',
+          title: `$ ${display}`,
+          ...(decision.thought ? { detail: decision.thought } : {}),
+          ok: false,
+          error: truncatePreview(detail),
+          ts: Date.now(),
+        };
+        pushStep(step);
+        messages.push({
+          role: 'user',
+          content: `Running "${display}" FAILED before completion: ${truncatePreview(detail, RESULT_FEEDBACK_CHAR_CAP)}. Try again, simplify the command, or fix the code.`,
+        });
+      }
+    }
+
+    // ---- cap hit with no final answer yet: one forced-final planner turn,
+    // else a deterministic synthesized answer. ----
+    if (answer === null) {
+      if (!(await this.stopRequested(thread.id)) && !writer.closed) {
+        const finalTry = await this.callPlanner(
+          [
+            ...messages,
+            {
+              role: 'user',
+              content:
+                'You have reached the step limit. Reply now with {"action":"final","answer":"...","code":"<final code>","language":"..."} summarizing the result. No more write/run actions.',
+            },
+          ],
+          STREAM_PLANNER_TIMEOUT_MS
+        );
+        if (finalTry) {
+          const d = parseClawJson(finalTry.raw);
+          if (d.action === 'final') {
+            answer = d.answer ?? '';
+            finalDecision = d;
+          }
+        }
+      }
+      if (answer === null) {
+        answer = this.synthesizeAnswer(steps, lastExitCode);
+      }
+    }
+
+    // ---- stream the final natural-language answer token-by-token ----
+    writer.emit({ type: 'status', phase: 'finalizing', label: 'Finalizing' });
+    const streamed = await this.streamFinalAnswer(messages, answer, writer);
+    const finalText = streamed || answer || '';
+
+    // Surface any generated code + a preview link as artifacts on the answer.
+    if (finalDecision?.code) {
+      const lang =
+        finalDecision.language ?? inferLanguage(null, runtime);
+      writer.emit({
+        type: 'artifact',
+        artifact: { kind: 'output', label: `final code (${lang})`, text: finalDecision.code },
+      });
+    }
+    if (previewUrl) {
+      writer.emit({
+        type: 'artifact',
+        artifact: { kind: 'link', label: 'Live preview', url: previewUrl },
+      });
+    }
+
+    // ---- persist the assistant turn + emit final (done follows on end()) ----
+    await this.persistAssistant(userId, thread, finalText, steps, writer);
+    void anyRunExecuted;
+  }
+
+  /**
+   * Launch a dev server in the background and drive the preview lifecycle:
+   * emit preview(starting) immediately, probe readiness (best-effort), then
+   * emit preview(ready). Returns the (possibly refreshed) routes, the resolved
+   * preview URL, and the step to append. Never throws.
+   */
+  private async launchDevServer(args: {
+    userId: string;
+    thread: AgentThread;
+    sessionId: string;
+    command: string;
+    args: string[];
+    display: string;
+    routes: { url: string; port: number }[];
+    thought?: string;
+    writer: AgentSseWriterLike;
+  }): Promise<{
+    step: AgentStep;
+    routes: { url: string; port: number }[];
+    previewUrl: string | null;
+  }> {
+    const { sessionId, command, display, writer, thread, userId } = args;
+    const routes = args.routes;
+    writer.emit({
+      type: 'status',
+      phase: 'running',
+      label: `Starting dev server: $ ${display}`,
+    });
+
+    // Refresh routes from the session if we somehow don't have one for 3000
+    // (e.g. thread reconnected without stored routes).
+    let previewUrl = getPreviewUrl(routes, PREVIEW_PORT);
+
+    let step: AgentStep;
+    try {
+      const bg = await runCommandBackground(sessionId, command, args.args, {});
+      const cmdId = bg.cmdId;
+      // Emit preview(starting) as soon as we have a URL.
+      if (previewUrl) {
+        writer.emit({
+          type: 'preview',
+          url: previewUrl,
+          port: PREVIEW_PORT,
+          status: 'starting',
+        });
+      }
+      // Best-effort readiness probe (keeps the SSE alive via the heartbeat).
+      const ready = previewUrl
+        ? await this.probePreviewReady(previewUrl, writer)
+        : false;
+      if (previewUrl) {
+        writer.emit({
+          type: 'preview',
+          url: previewUrl,
+          port: PREVIEW_PORT,
+          status: 'ready',
+        });
+        // Refresh the thread's stored routes (URL is stable but keep it fresh).
+        thread.updatedAt = Date.now();
+        await this.runtime.saveThread(userId, thread);
+      }
+      step = {
+        i: 0, // caller renumbers via steps.length; kept for shape completeness
+        kind: 'run',
+        title: `Started dev server: $ ${display}`,
+        ...(args.thought ? { detail: args.thought } : {}),
+        ok: true,
+        resultPreview: previewUrl
+          ? `dev server launched (cmd ${cmdId}); preview ${ready ? 'ready' : 'starting'} at ${previewUrl}`
+          : `dev server launched (cmd ${cmdId}); no exposed preview route on port ${PREVIEW_PORT}`,
+        ts: Date.now(),
+      };
+    } catch (err) {
+      const detail = (err as Error)?.message ?? 'dev_server_launch_failed';
+      this.logger.warn(`[openclaw] runCommandBackground failed: ${detail}`);
+      step = {
+        i: 0,
+        kind: 'run',
+        title: `Failed to start dev server: $ ${display}`,
+        ...(args.thought ? { detail: args.thought } : {}),
+        ok: false,
+        error: truncatePreview(detail),
+        ts: Date.now(),
+      };
+      previewUrl = null;
+    }
+    // step.i is authoritatively assigned by the caller's pushStep().
+    return { step, routes, previewUrl };
+  }
+
+  /**
+   * Poll the preview URL until it responds (any HTTP status counts as "the
+   * server is up") or the readiness budget elapses. Best-effort; a failure just
+   * returns false and the FE iframe loads the URL anyway. Emits a `previewing`
+   * status while probing so the console shows progress + the heartbeat keeps
+   * the SSE alive.
+   */
+  private async probePreviewReady(
+    url: string,
+    writer: AgentSseWriterLike
+  ): Promise<boolean> {
+    const deadline = Date.now() + PREVIEW_READY_TIMEOUT_MS;
+    writer.emit({
+      type: 'status',
+      phase: 'previewing',
+      label: 'Waiting for the dev server to respond',
+    });
+    while (Date.now() < deadline) {
+      if (writer.closed) return false;
+      try {
+        const res = await this.fetchWithTimeout(
+          url,
+          { method: 'GET', redirect: 'manual' },
+          PREVIEW_PROBE_INTERVAL_MS + 1_000
+        );
+        // Any response (even 4xx/5xx/3xx) means the server bound the port.
+        if (res.status > 0) return true;
+      } catch {
+        // not up yet — keep polling
+      }
+      await new Promise(r => setTimeout(r, PREVIEW_PROBE_INTERVAL_MS));
+    }
+    return false;
+  }
+
+  /**
+   * Stream the final answer token-by-token via cdz-flash (stream:true), emitting
+   * `token` events (contract C1). Falls back to emitting the pre-computed
+   * `fallback` answer as a single token when streaming can't open or produces
+   * nothing. Returns the accumulated streamed text (or '' when it fell back).
+   * Never throws.
+   */
+  private async streamFinalAnswer(
+    loopMessages: Array<{ role: string; content: string }>,
+    fallback: string | null,
+    writer: AgentSseWriterLike
+  ): Promise<string> {
+    // Ask cdz-flash for a concise, plain-language wrap-up of the work so far.
+    const messages = [
+      ...loopMessages,
+      {
+        role: 'user',
+        content:
+          'Now write a concise, friendly final answer for the user in plain language (no JSON, no code fences). Summarize what you built or found, mention how to run or preview it if relevant, and be honest about anything that failed. 2-6 sentences.',
+      },
+    ];
+
+    if (!CDZ_AI_KEY) {
+      if (fallback) writer.emit({ type: 'token', text: fallback });
+      return '';
+    }
+
+    let response: globalThis.Response | null = null;
+    try {
+      const controller = new AbortController();
+      if (writer.closed) {
+        if (fallback) writer.emit({ type: 'token', text: fallback });
+        return '';
+      }
+      writer.onClose(() => controller.abort());
+      response = await fetch(CDZ_PLANNER_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${CDZ_AI_KEY}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({
+          model: CDZ_PLANNER_MODEL,
+          messages,
+          stream: true,
+          max_tokens: FINAL_ANSWER_MAX_TOKENS,
+          temperature: 0.3,
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[openclaw] final stream open failed: ${(err as Error)?.message ?? err}`
+      );
+      if (fallback) writer.emit({ type: 'token', text: fallback });
+      return '';
+    }
+
+    if (!response.ok || !response.body) {
+      this.logger.warn(
+        `[openclaw] final stream non-ok (${response.status}) [POST ${CDZ_PLANNER_PATH}]`
+      );
+      if (fallback) writer.emit({ type: 'token', text: fallback });
+      return '';
+    }
+
+    // Consume the OpenAI-shape SSE token stream (same loop as the bridge's
+    // streamCdzChat): split on \n\n, read data: lines, forward delta.content.
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let acc = '';
+    let finished = false;
+    try {
+      for await (const bytes of response.body as unknown as AsyncIterable<Uint8Array>) {
+        if (writer.closed) break;
+        buffer += decoder.decode(bytes, { stream: true });
+        let sep: number;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          for (const line of rawEvent.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload) continue;
+            if (payload === '[DONE]') {
+              finished = true;
+              break;
+            }
+            try {
+              const parsed = JSON.parse(payload) as {
+                choices?: Array<{
+                  delta?: { content?: unknown };
+                  finish_reason?: string | null;
+                }>;
+              };
+              const choice = parsed.choices?.[0];
+              const text = choice?.delta?.content;
+              if (typeof text === 'string' && text) {
+                acc += text;
+                writer.emit({ type: 'token', text });
+              }
+              if (choice?.finish_reason) finished = true;
+            } catch {
+              /* partial frame — the next chunk completes it */
+            }
+          }
+          if (finished) break;
+        }
+        if (finished) break;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[openclaw] final stream read failed: ${(err as Error)?.message ?? err}`
+      );
+    }
+
+    if (!acc.trim()) {
+      if (fallback) writer.emit({ type: 'token', text: fallback });
+      return '';
+    }
+    return acc;
+  }
+
+  /**
+   * Honest degrade when the sandbox is unavailable: the cdz-flash planner still
+   * GENERATES the complete solution (streamed as `file`+`artifact`), then a
+   * `token` answer makes clear execution was unavailable. Real, not a stub.
+   * Never invents runtime output. Persists the assistant turn + emits final.
+   */
+  private async streamPlanOnly(
+    userId: string,
+    thread: AgentThread,
+    task: string,
+    runtime: string,
+    reason: string,
+    writer: AgentSseWriterLike
+  ): Promise<void> {
+    writer.emit({
+      type: 'status',
+      phase: 'planning',
+      label: 'Sandbox unavailable — generating code without execution',
+    });
+
+    const messages: Array<{ role: string; content: string }> = [
+      { role: 'system', content: this.buildPlanOnlySystemPrompt(runtime) },
+      ...this.priorTurns(thread),
+      { role: 'user', content: task },
+    ];
+
+    const steps: AgentStep[] = [];
+    let plannerCalls = 0;
+    let finalDecision: ClawDecision | null = null;
+    let salvagedCode: string | null = null;
+    let salvagedLanguage: string | null = null;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (writer.closed) return;
+      if (await this.stopRequested(thread.id)) break;
+      const planned = await this.callPlanner(messages, STREAM_PLANNER_TIMEOUT_MS);
+      if (planned === null) {
+        if (plannerCalls === 0) {
+          writer.emit({
+            type: 'error',
+            code: 'planner_unavailable',
+            message:
+              'The cdz-flash planner is currently unavailable. Please try again in a moment.',
+          });
+          await this.persistAssistant(
+            userId,
+            thread,
+            'The planner was unavailable and the sandbox is offline, so nothing was produced.',
+            steps,
+            writer
+          );
+          return;
+        }
+        break;
+      }
+      plannerCalls++;
+      messages.push({ role: 'assistant', content: planned.raw });
+      const decision = parseClawJson(planned.raw);
+      if (decision.action === 'final') {
+        finalDecision = decision;
+        break;
+      }
+      if (
+        decision.action === 'write' &&
+        typeof decision.content === 'string' &&
+        decision.content.trim()
+      ) {
+        salvagedCode = decision.content;
+        salvagedLanguage =
+          decision.language ?? inferLanguage(decision.file ?? null, runtime);
+        // Stream the generated file as a real artifact even though it can't run.
+        const path = isSafeSandboxPath(decision.file ?? '')
+          ? (decision.file as string)
+          : runtime === 'python3.13'
+            ? 'main.py'
+            : 'main.js';
+        const language = decision.language ?? inferLanguage(path, runtime);
+        writer.emit({ type: 'file', op: 'write', path, language });
+        writer.emit({
+          type: 'artifact',
+          artifact: {
+            kind: 'file',
+            path,
+            language,
+            bytes: Buffer.byteLength(decision.content, 'utf8'),
+          },
+        });
+        steps.push({
+          i: steps.length + 1,
+          kind: 'write',
+          title: `Generated ${path} (not executed)`,
+          ...(decision.thought ? { detail: decision.thought } : {}),
+          ok: true,
+          resultPreview: 'generated by cdz-flash — sandbox unavailable, not run',
+          ts: Date.now(),
+        });
+        writer.emit({ type: 'step', step: steps[steps.length - 1] });
+      }
+      messages.push({
+        role: 'user',
+        content:
+          'The sandbox is UNAVAILABLE — you cannot write files or run commands. Reply now with JSON only: {"action":"final","answer":"<explanation>","code":"<complete code>","language":"..."}.',
+      });
+    }
+
+    const code = finalDecision?.code ?? salvagedCode ?? null;
+    const language = code
+      ? (finalDecision?.language ??
+        salvagedLanguage ??
+        inferLanguage(null, runtime))
+      : null;
+    const answer =
+      finalDecision?.answer ??
+      (code
+        ? 'I generated the solution code below. The execution sandbox is unavailable, so it was NOT run — review it before use.'
+        : 'The planner could not produce a solution and the execution sandbox is unavailable. Please try again in a moment.');
+
+    writer.emit({
+      type: 'status',
+      phase: 'finalizing',
+      label: `Execution unavailable: ${truncatePreview(reason, 160)}`,
+    });
+    if (code) {
+      writer.emit({
+        type: 'artifact',
+        artifact: {
+          kind: 'output',
+          label: `generated code (${language}) — not executed`,
+          text: code,
+        },
+      });
+    }
+    // Stream the honest answer as a token so the FE renders it live.
+    const streamed = await this.streamFinalAnswer(messages, answer, writer);
+    const finalText = streamed || answer;
+
+    await this.persistAssistant(userId, thread, finalText, steps, writer);
+  }
+
+  // =========================================================================
+  // WS12 — stop + thread CRUD + files
+  // =========================================================================
+
+  /** POST /stop {threadId} → set the cooperative stop flag; 200. */
+  @Throttle('strict')
+  @Post('/api/v1/openclaw/stop')
+  async stop(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    const threadId =
+      typeof body?.threadId === 'string' ? body.threadId.trim() : '';
+    if (!threadId) {
+      throw new BadRequest('"threadId" is required');
+    }
+    // Only allow stopping a thread the caller owns.
+    const thread = await this.runtime.getThread(user.id, threadId);
+    if (!thread) {
+      throw new NotFound('Thread not found');
+    }
+    await this.runtime.requestStop(threadId);
+    res.status(200).json({ ok: true });
+  }
+
+  /** GET /threads → AgentThreadSummary[] for the current user. */
+  @Throttle('default')
+  @Get('/api/v1/openclaw/threads')
+  async listThreads(@CurrentUser() user: CurrentUser, @Res() res: Response) {
+    const threads = await this.runtime.listThreads(user.id, AGENT_NAME);
+    // WARDEN fix: return the bare array per contract C6 (GET /threads →
+    // AgentThreadSummary[]) — HERMES + the FE api.ts listThreads expect an
+    // array, not a {threads} envelope (Array.isArray() → [] otherwise).
+    res.status(200).json(threads);
+  }
+
+  /** GET /threads/:id → the full AgentThread (messages + sandbox meta). */
+  @Throttle('default')
+  @Get('/api/v1/openclaw/threads/:id')
+  async getThreadById(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    const thread = await this.runtime.getThread(user.id, id);
+    if (!thread) {
+      throw new NotFound('Thread not found');
+    }
+    // WARDEN fix: return the bare AgentThread per contract C6 (GET /threads/:id
+    // → AgentThread) — the FE api.ts getThread + use-agent-threads read the
+    // thread directly (.messages/.sandbox), not a {thread} envelope.
+    res.status(200).json(thread);
+  }
+
+  /** PATCH /threads/:id {title} → rename. */
+  @Throttle('default')
+  @Patch('/api/v1/openclaw/threads/:id')
+  async patchThread(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    const title =
+      typeof body?.title === 'string' ? body.title.trim() : '';
+    if (!title || title.length > THREAD_TITLE_MAX) {
+      throw new BadRequest(
+        `"title" must be a non-empty string (<= ${THREAD_TITLE_MAX} chars)`
+      );
+    }
+    const thread = await this.runtime.getThread(user.id, id);
+    if (!thread) {
+      throw new NotFound('Thread not found');
+    }
+    await this.runtime.renameThread(user.id, id, title);
+    res.status(200).json({ ok: true, id, title });
+  }
+
+  /**
+   * DELETE /threads/:id → best-effort stop the thread's sandbox (this is the
+   * ONE place OPENCLAW releases a persistent microVM), then delete the thread.
+   */
+  @Throttle('default')
+  @Delete('/api/v1/openclaw/threads/:id')
+  async deleteThread(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    const thread = await this.runtime.getThread(user.id, id);
+    if (!thread) {
+      throw new NotFound('Thread not found');
+    }
+    const sessionId = thread.sandbox?.sessionId;
+    if (sessionId) {
+      try {
+        await stopSession(sessionId);
+      } catch {
+        // best-effort — the microVM also auto-expires at its own timeout.
+      }
+    }
+    // Clear any stop flag alongside the thread so the key never orphans.
+    try {
+      await this.runtime.clearStop(id);
+    } catch {
+      /* best-effort */
+    }
+    await this.runtime.deleteThread(user.id, id);
+    res.status(200).json({ ok: true, id });
+  }
+
+  /**
+   * GET /threads/:id/files → the live file tree from the thread's sandbox:
+   * [{path, bytes?, language?}] (language inferred from the extension). Returns
+   * an empty list (never 500) when the thread has no live session or the list
+   * fails — the FE just shows an empty tree.
+   */
+  @Throttle('default')
+  @Get('/api/v1/openclaw/threads/:id/files')
+  async listThreadFiles(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    const thread = await this.runtime.getThread(user.id, id);
+    if (!thread) {
+      throw new NotFound('Thread not found');
+    }
+    const sessionId = thread.sandbox?.sessionId;
+    // WARDEN fix: return the bare array per contract C6 (GET /threads/:id/files
+    // → {path,bytes?,language?}[]) — the FE api.ts listFiles does
+    // Array.isArray(rows) and gets [] from a {files} envelope.
+    if (!sessionId) {
+      res.status(200).json([]);
+      return;
+    }
+    try {
+      const raw = await listFiles(sessionId, { max: 500 });
+      const files = (raw ?? []).map(f => {
+        const language = languageForPath(f.path);
+        return {
+          path: f.path,
+          ...(typeof f.bytes === 'number' ? { bytes: f.bytes } : {}),
+          ...(language ? { language } : {}),
+        };
+      });
+      res.status(200).json(files);
+    } catch (err) {
+      this.logger.warn(
+        `[openclaw] listFiles failed: ${(err as Error)?.message ?? err}`
+      );
+      res.status(200).json([]);
+    }
+  }
+
+  /**
+   * GET /threads/:id/file?path= → {path, content, language}. 404 (typed) when
+   * the thread is missing; 400 for a missing/invalid path. When the file can't
+   * be read (no session / gone) content is returned empty rather than 500.
+   */
+  @Throttle('default')
+  @Get('/api/v1/openclaw/threads/:id/file')
+  async readThreadFile(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Query('path') path: string,
+    @Res() res: Response
+  ) {
+    const rel = typeof path === 'string' ? path.trim() : '';
+    if (!isSafeSandboxPath(rel)) {
+      throw new BadRequest(
+        '"path" must be a safe relative path (letters, digits, . _ - / only; no leading "/", no "..")'
+      );
+    }
+    const thread = await this.runtime.getThread(user.id, id);
+    if (!thread) {
+      throw new NotFound('Thread not found');
+    }
+    const language = languageForPath(rel) ?? 'text';
+    const sessionId = thread.sandbox?.sessionId;
+    if (!sessionId) {
+      res.status(200).json({ path: rel, content: '', language });
+      return;
+    }
+    try {
+      const content = await readFile(sessionId, rel);
+      res
+        .status(200)
+        .json({ path: rel, content: typeof content === 'string' ? content : '', language });
+    } catch (err) {
+      this.logger.warn(
+        `[openclaw] readFile failed: ${(err as Error)?.message ?? err}`
+      );
+      res.status(200).json({ path: rel, content: '', language });
+    }
+  }
+
+  // =========================================================================
+  // LEGACY — POST /api/v1/openclaw/run  (WS11, UNCHANGED)
+  // =========================================================================
   //
   //   body {task: string (1..4000), runtime?: 'node24'|'python3.13'}
   //
-  // Flow:
-  //   (a) probe sandboxCapability(); unavailable -> plan-only degrade: the
-  //       cdz-flash planner still GENERATES the code + explanation, returned
-  //       {ok:true, executed:false, sandbox:false, reason, code, language, …}.
-  //   (b) createSession({runtime}) — on failure, same plan-only degrade.
-  //   (c) run the cdz-flash plan→act loop. The model replies ONLY with JSON:
-  //         {"action":"write","thought":?,"file":…,"content":…}
-  //         {"action":"run","thought":?,"command":…,"args":[…]}
-  //         {"action":"final","thought":?,"answer":…,"code":?,"language":?}
-  //       write -> writeFile; run -> runCommand (REAL exitCode/stdout/stderr,
-  //       truncated <=2000 chars fed back); errors become ok:false steps whose
-  //       text is fed back so the model fixes and retries.
-  //   (d) caps: 5 write/run actions, 110s wall clock. On cap-hit, one forced
-  //       "final" planner turn, else a deterministic synthesized answer.
-  //   (e) ALWAYS stopSession in a finally.
-  //
-  // Success -> 200 {ok:true, answer, steps, code?, language?, output?,
-  // executed, sandbox, iterations}. cdz-flash unreachable before any step ->
-  // @Res 502 {error:'planner_unavailable'} — NEVER a raw HttpException.
+  // One-shot plan→act loop with an EPHEMERAL sandbox stopped in a finally.
+  // Kept verbatim for backward compatibility (the WS11 FE + any external
+  // callers). The new console uses /stream instead.
   // -------------------------------------------------------------------------
   @Throttle('strict')
   @Post('/api/v1/openclaw/run')
@@ -429,7 +1725,7 @@ export class ClickDzOpenclawController {
             res.status(502).json({ error: 'planner_unavailable' });
             return;
           }
-          answer = this.synthesizeAnswer(steps, lastExitCode);
+          answer = this.synthesizeAnswerLegacy(steps, lastExitCode);
           break;
         }
 
@@ -589,7 +1885,7 @@ export class ClickDzOpenclawController {
           }
         }
         if (answer === null) {
-          answer = this.synthesizeAnswer(steps, lastExitCode);
+          answer = this.synthesizeAnswerLegacy(steps, lastExitCode);
         }
       }
 
@@ -612,9 +1908,9 @@ export class ClickDzOpenclawController {
         iterations,
       });
     } finally {
-      // (e) ALWAYS free the microVM. stopSession is best-effort per contract
-      // C5 (swallows errors) — the extra try/catch guarantees the finally can
-      // never mask the real response.
+      // (e) ALWAYS free the microVM for the LEGACY one-shot path. stopSession is
+      // best-effort per contract (swallows errors). NOTE: the /stream endpoint
+      // deliberately does NOT do this — its session persists on the thread.
       try {
         await stopSession(sessionId);
       } catch {
@@ -623,12 +1919,12 @@ export class ClickDzOpenclawController {
     }
   }
 
-  // ---- /run internals -----------------------------------------------------
+  // ---- shared internals ---------------------------------------------------
 
   /**
-   * sandboxCapability() never throws per contract C5 — this belt-and-braces
-   * wrapper makes sure /run and /capabilities can never 500 on a client
-   * regression.
+   * sandboxCapability() never throws per contract — this belt-and-braces
+   * wrapper makes sure /run, /stream and /capabilities can never 500 on a
+   * client regression.
    */
   private async probeSandbox(): Promise<{ sandbox: boolean; reason?: string }> {
     try {
@@ -640,13 +1936,252 @@ export class ClickDzOpenclawController {
     }
   }
 
+  /** Cooperative stop check — defensive (a Redis blip never crashes the loop). */
+  private async stopRequested(threadId: string): Promise<boolean> {
+    try {
+      return await this.runtime.isStopRequested(threadId);
+    } catch {
+      return false;
+    }
+  }
+
   /**
-   * Plan-only degrade path (sandbox unavailable / session creation failed):
-   * the cdz-flash planner still GENERATES the full solution code + an
-   * explanation — real planning, honestly marked not-executed. Up to two
-   * planner turns: one generation + one corrective retry if the model tried to
-   * write/run anyway (a write's content is salvaged as the generated code —
-   * it IS the solution, just never executed). Runtime output is NEVER invented.
+   * Persist the completed assistant turn on the thread, then emit the `final`
+   * frame (the terminal `done` frame is written by the caller's writer.end() in
+   * the /stream finally, per the C1 wire format). Defensive: a persistence blip
+   * must not stop the client from receiving its turn.
+   */
+  private async persistAssistant(
+    userId: string,
+    thread: AgentThread,
+    content: string,
+    steps: AgentStep[],
+    writer: AgentSseWriterLike
+  ): Promise<void> {
+    const assistant: AgentMessage = {
+      id: this.randomId('msg'),
+      role: 'assistant',
+      content: content || '',
+      steps: steps.length ? steps : undefined,
+      createdAt: Date.now(),
+      agent: AGENT_NAME,
+    };
+    try {
+      thread.messages.push(assistant);
+      thread.updatedAt = Date.now();
+      await this.runtime.saveThread(userId, thread);
+    } catch (err) {
+      this.logger.warn(
+        `[openclaw] saveThread (assistant) failed: ${(err as Error)?.message ?? err}`
+      );
+    }
+    // Emit the completed, persisted turn regardless of persistence success (the
+    // client still gets it); writer.end() appends the terminal done frame.
+    if (!writer.closed) {
+      writer.emit({ type: 'final', message: assistant });
+    }
+  }
+
+  /** Turn the persisted thread history into planner-visible prior turns. */
+  private priorTurns(
+    thread: AgentThread
+  ): Array<{ role: string; content: string }> {
+    const turns: Array<{ role: string; content: string }> = [];
+    // Exclude the just-appended user message (it's added explicitly by the
+    // caller); include everything before it, capped to keep context bounded.
+    const history = thread.messages.slice(0, -1).slice(-8);
+    for (const m of history) {
+      if (m.role === 'user' || m.role === 'assistant') {
+        turns.push({ role: m.role, content: truncatePreview(m.content, 4_000) });
+      }
+    }
+    return turns;
+  }
+
+  private isInstallCommand(command: string, args: string[]): boolean {
+    const joined = [command, ...args].join(' ').toLowerCase();
+    return (
+      /\b(npm|pnpm|yarn|bun)\s+(install|i|add)\b/.test(joined) ||
+      /\bpip3?\s+install\b/.test(joined)
+    );
+  }
+
+  private deriveTitle(message: string): string {
+    const oneLine = message.replace(/\s+/g, ' ').trim();
+    if (!oneLine) return 'New coding session';
+    return oneLine.length <= 60 ? oneLine : oneLine.slice(0, 57) + '…';
+  }
+
+  private randomId(prefix: string): string {
+    return `${prefix}_${Date.now().toString(36)}_${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+  }
+
+  /** Compose the STREAM-mode planner system prompt (multi-file + dev server). */
+  private buildStreamSystemPrompt(runtime: string, task: string): string {
+    const isPython = runtime === 'python3.13';
+    const writeExample = isPython
+      ? '{"action":"write","thought":"first draft","file":"main.py","content":"<COMPLETE file content>"}'
+      : '{"action":"write","thought":"first draft","file":"index.js","content":"<COMPLETE file content>"}';
+    const runExample = isPython
+      ? '{"action":"run","thought":"execute it","command":"python3","args":["main.py"]}'
+      : '{"action":"run","thought":"execute it","command":"node","args":["index.js"]}';
+    const webHint = taskWantsWebApp(task)
+      ? [
+          '',
+          'This task looks like a WEB APP. When the app is ready, start a dev',
+          `server bound to 0.0.0.0 on PORT ${PREVIEW_PORT} as a "run" action —`,
+          'e.g. {"action":"run","command":"npm","args":["run","dev"]} or',
+          `{"action":"run","command":"python3","args":["-m","http.server","${PREVIEW_PORT}"]}.`,
+          `A LIVE PREVIEW of port ${PREVIEW_PORT} is shown to the user automatically.`,
+          'You MAY install dependencies (npm install / pip install) — the sandbox',
+          'has full internet egress.',
+        ]
+      : [
+          '',
+          'You MAY install dependencies (npm install / pip install) if needed —',
+          'the sandbox has full internet egress.',
+        ];
+    return [
+      "You are OPENCLAW, ClickDz's autonomous coding agent, working inside a",
+      `PERSISTENT Vercel Sandbox (runtime ${runtime}, cwd /vercel/sandbox). Files`,
+      'and the running process persist across your actions AND across turns in',
+      'this conversation. Write code, run it, read the REAL output, and iterate',
+      'until it works.',
+      '',
+      'RESPOND WITH JSON ONLY — no prose, no markdown, no code fences. Exactly one of:',
+      `  ${writeExample}`,
+      `  ${runExample}`,
+      '  {"action":"final","thought":"...","answer":"<plain-language result>","code":"<the final key file>","language":"..."}',
+      ...webHint,
+      '',
+      'Rules:',
+      '- "content" must be the COMPLETE file (never a diff). To fix a file, rewrite it whole.',
+      '- Use relative file paths (letters, digits, . _ - / only; no leading "/", no "..").',
+      '- After each run you receive the real exit code and output. Exit 0 = success.',
+      '- Non-zero exit: read the error, "write" the fixed file, then "run" again.',
+      `- You have at most ${STREAM_MAX_ITERATIONS} write/run actions. Be economical.`,
+      '- When done, reply with the "final" action.',
+    ].join('\n');
+  }
+
+  /** Compose the legacy sandbox-mode planner system prompt (WS11, unchanged). */
+  private buildSandboxSystemPrompt(runtime: string): string {
+    const isPython = runtime === 'python3.13';
+    const writeExample = isPython
+      ? '{"action":"write","thought":"first draft","file":"main.py","content":"<COMPLETE file content>"}'
+      : '{"action":"write","thought":"first draft","file":"main.js","content":"<COMPLETE file content>"}';
+    const runExample = isPython
+      ? '{"action":"run","thought":"execute it","command":"python3","args":["main.py"]}'
+      : '{"action":"run","thought":"execute it","command":"node","args":["main.js"]}';
+    return [
+      "You are OPENCLAW, ClickDz's autonomous coding agent. Solve the user's",
+      `coding task inside an isolated Vercel Sandbox (runtime ${runtime}, cwd`,
+      '/vercel/sandbox, files persist between your actions). Write code, run it,',
+      'read the REAL output, and fix errors until the program runs successfully.',
+      '',
+      'RESPOND WITH JSON ONLY — no prose, no markdown, no code fences. Exactly one of:',
+      `  ${writeExample}`,
+      `  ${runExample}`,
+      '  {"action":"final","thought":"...","answer":"<plain-language result for the user>","code":"<the final working code>","language":"python|javascript|..."}',
+      '',
+      'Rules:',
+      '- "content" must be the COMPLETE file (never a diff). To fix a file, rewrite it whole.',
+      '- Use relative file paths (letters, digits, . _ - / only; no leading "/", no "..").',
+      '- After each run you receive the real exit code and output. Exit code 0 with',
+      '  correct output = success: reply with the "final" action including the working',
+      '  code and what the output shows.',
+      '- Non-zero exit: read the error, "write" the fixed file, then "run" again.',
+      '- No package installs (no network registry) — standard library only.',
+      `- You have at most ${CLAW_MAX_ITERATIONS} write/run actions total. Be economical:`,
+      '  usually one write then one run.',
+    ].join('\n');
+  }
+
+  /** Compose the plan-only (sandbox unavailable) system prompt. */
+  private buildPlanOnlySystemPrompt(runtime: string): string {
+    const lang =
+      runtime === 'python3.13' ? 'Python 3.13' : 'Node.js 24 JavaScript';
+    return [
+      "You are OPENCLAW, ClickDz's coding agent. The execution sandbox is",
+      `currently UNAVAILABLE, so you cannot run anything. Produce the best`,
+      `complete ${lang} solution for the user's task anyway.`,
+      '',
+      'RESPOND WITH JSON ONLY — no prose, no markdown, no code fences:',
+      '  {"action":"write","file":"...","content":"<complete file>"}  (optional, to surface the code as a file)',
+      '  {"action":"final","answer":"<what the code does + how to run it + note that it was NOT executed>","code":"<the COMPLETE runnable code>","language":"python|javascript"}',
+      '',
+      'Rules:',
+      '- "code" must be complete, runnable file content.',
+      '- NEVER claim the code was executed and NEVER invent runtime output.',
+    ].join('\n');
+  }
+
+  /**
+   * One planner turn against cdz-flash (direct CDZ_AI, OpenAI-compatible) —
+   * same mechanics as clickdz-integrations.controller.ts callPlanner. Returns
+   * {raw} on a clean 2xx with string content, or null on ANY failure (no key,
+   * non-2xx, timeout, empty). Never throws; never logs key material.
+   */
+  private async callPlanner(
+    messages: Array<{ role: string; content: string }>,
+    remainingMs: number
+  ): Promise<{ raw: string } | null> {
+    if (!CDZ_AI_KEY) {
+      return null;
+    }
+    // Lazy, once-only: surface the resolved planner base+path (NO key) so a
+    // future 404/misconfig self-diagnoses from a single log line.
+    if (!this.plannerUrlLogged) {
+      this.plannerUrlLogged = true;
+      this.logger.log(
+        `[openclaw] planner resolved: base=${CDZ_AI_BASE_URL} path=${CDZ_PLANNER_PATH} model=${CDZ_PLANNER_MODEL}`
+      );
+    }
+    const timeoutMs = Math.max(1, Math.min(CLAW_PLANNER_TIMEOUT_MS, remainingMs));
+    try {
+      const response = await this.fetchWithTimeout(
+        CDZ_PLANNER_URL,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: CDZ_PLANNER_MODEL,
+            messages,
+            max_tokens: PLANNER_MAX_TOKENS,
+            temperature: 0.1,
+          }),
+        },
+        timeoutMs
+      );
+      const data = (await response.json().catch(() => null)) as any;
+      const content = data?.choices?.[0]?.message?.content;
+      if (response.ok && typeof content === 'string' && content.trim()) {
+        return { raw: content };
+      }
+      // Include upstream status + the exact path we hit so the next incident
+      // is self-diagnosing (e.g. a 404 vs a 401, and against which segment).
+      this.logger.warn(
+        `[openclaw] planner non-ok (${response.status}) or empty content [POST ${CDZ_PLANNER_PATH}]`
+      );
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        `[openclaw] planner call failed: ${(err as Error)?.message ?? err}`
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Plan-only degrade for LEGACY /run (sandbox unavailable / session create
+   * failed): the cdz-flash planner still GENERATES the full solution code +
+   * explanation, returned {ok:true, executed:false, sandbox:false, reason,…}.
+   * Runtime output is NEVER invented. (WS11 behaviour, unchanged.)
    */
   private async runPlanOnly(
     task: string,
@@ -738,123 +2273,27 @@ export class ClickDzOpenclawController {
     });
   }
 
-  /** Compose the sandbox-mode planner system prompt. */
-  private buildSandboxSystemPrompt(runtime: string): string {
-    const isPython = runtime === 'python3.13';
-    const writeExample = isPython
-      ? '{"action":"write","thought":"first draft","file":"main.py","content":"<COMPLETE file content>"}'
-      : '{"action":"write","thought":"first draft","file":"main.js","content":"<COMPLETE file content>"}';
-    const runExample = isPython
-      ? '{"action":"run","thought":"execute it","command":"python3","args":["main.py"]}'
-      : '{"action":"run","thought":"execute it","command":"node","args":["main.js"]}';
-    return [
-      "You are OPENCLAW, ClickDz's autonomous coding agent. Solve the user's",
-      `coding task inside an isolated Vercel Sandbox (runtime ${runtime}, cwd`,
-      '/vercel/sandbox, files persist between your actions). Write code, run it,',
-      'read the REAL output, and fix errors until the program runs successfully.',
-      '',
-      'RESPOND WITH JSON ONLY — no prose, no markdown, no code fences. Exactly one of:',
-      `  ${writeExample}`,
-      `  ${runExample}`,
-      '  {"action":"final","thought":"...","answer":"<plain-language result for the user>","code":"<the final working code>","language":"python|javascript|..."}',
-      '',
-      'Rules:',
-      '- "content" must be the COMPLETE file (never a diff). To fix a file, rewrite it whole.',
-      '- Use relative file paths (letters, digits, . _ - / only; no leading "/", no "..").',
-      '- After each run you receive the real exit code and output. Exit code 0 with',
-      '  correct output = success: reply with the "final" action including the working',
-      '  code and what the output shows.',
-      '- Non-zero exit: read the error, "write" the fixed file, then "run" again.',
-      '- No package installs (no network registry) — standard library only.',
-      `- You have at most ${CLAW_MAX_ITERATIONS} write/run actions total. Be economical:`,
-      '  usually one write then one run.',
-    ].join('\n');
-  }
-
-  /** Compose the plan-only (sandbox unavailable) system prompt. */
-  private buildPlanOnlySystemPrompt(runtime: string): string {
-    const lang =
-      runtime === 'python3.13' ? 'Python 3.13' : 'Node.js 24 JavaScript';
-    return [
-      "You are OPENCLAW, ClickDz's coding agent. The execution sandbox is",
-      `currently UNAVAILABLE, so you cannot run anything. Produce the best`,
-      `complete ${lang} solution for the user's task anyway.`,
-      '',
-      'RESPOND WITH JSON ONLY — no prose, no markdown, no code fences:',
-      '  {"action":"final","answer":"<what the code does + how to run it + note that it was NOT executed>","code":"<the COMPLETE runnable code>","language":"python|javascript"}',
-      '',
-      'Rules:',
-      '- "code" must be complete, runnable file content (standard library only).',
-      '- NEVER claim the code was executed and NEVER invent runtime output.',
-    ].join('\n');
-  }
-
-  /**
-   * One planner turn against cdz-flash (direct CDZ_AI, OpenAI-compatible) —
-   * same mechanics as clickdz-integrations.controller.ts callPlanner. The
-   * timeout is min(15s, remaining wall-clock). Returns {raw} on a clean 2xx
-   * with string content, or null on ANY failure (no key, non-2xx, timeout,
-   * empty) so the caller can decide 502-vs-synthesize. Never throws; never
-   * logs key material.
-   */
-  private async callPlanner(
-    messages: Array<{ role: string; content: string }>,
-    remainingMs: number
-  ): Promise<{ raw: string } | null> {
-    if (!CDZ_AI_KEY) {
-      return null;
-    }
-    // Lazy, once-only: surface the resolved planner base+path (NO key) so a
-    // future 404/misconfig self-diagnoses from a single log line.
-    if (!this.plannerUrlLogged) {
-      this.plannerUrlLogged = true;
-      this.logger.log(
-        `[openclaw] planner resolved: base=${CDZ_AI_BASE_URL} path=${CDZ_PLANNER_PATH} model=${CDZ_PLANNER_MODEL}`
-      );
-    }
-    const timeoutMs = Math.max(
-      1,
-      Math.min(CLAW_PLANNER_TIMEOUT_MS, remainingMs)
-    );
-    try {
-      const response = await this.fetchWithTimeout(
-        CDZ_PLANNER_URL,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${CDZ_AI_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: CDZ_PLANNER_MODEL,
-            messages,
-            max_tokens: PLANNER_MAX_TOKENS,
-            temperature: 0.1,
-          }),
-        },
-        timeoutMs
-      );
-      const data = (await response.json().catch(() => null)) as any;
-      const content = data?.choices?.[0]?.message?.content;
-      if (response.ok && typeof content === 'string' && content.trim()) {
-        return { raw: content };
-      }
-      // Include upstream status + the exact path we hit so the next incident
-      // is self-diagnosing (e.g. a 404 vs a 401, and against which segment).
-      this.logger.warn(
-        `[openclaw] planner non-ok (${response.status}) or empty content [POST ${CDZ_PLANNER_PATH}]`
-      );
-      return null;
-    } catch (err) {
-      this.logger.warn(
-        `[openclaw] planner call failed: ${(err as Error)?.message ?? err}`
-      );
-      return null;
-    }
-  }
-
-  /** Deterministic fallback answer when the planner can't produce a final one. */
+  /** Deterministic fallback answer for STREAM steps (AgentStep shape). */
   private synthesizeAnswer(
+    steps: AgentStep[],
+    lastExitCode: number | null
+  ): string {
+    if (steps.length === 0) {
+      return "I couldn't complete the task — the planner was unavailable and no sandbox steps ran. Please try again in a moment.";
+    }
+    const writes = steps.filter(s => s.kind === 'write').length;
+    const runs = steps.filter(s => s.kind === 'run').length;
+    const status =
+      lastExitCode === 0
+        ? 'the last run exited 0 (success)'
+        : lastExitCode === null
+          ? 'no run completed'
+          : `the last run exited ${lastExitCode}`;
+    return `I performed ${steps.length} sandbox step(s) (${writes} write, ${runs} run); ${status}. Reached the step/time limit before a final summary — review the step timeline and terminal for details.`;
+  }
+
+  /** Deterministic fallback answer for LEGACY /run (ClawStep shape). */
+  private synthesizeAnswerLegacy(
     steps: ClawStep[],
     lastExitCode: number | null
   ): string {
@@ -871,4 +2310,18 @@ export class ClickDzOpenclawController {
           : `the last run exited ${lastExitCode}`;
     return `I performed ${steps.length} sandbox step(s) (${writes} write, ${runs} run); ${status}. Reached the step/time limit before a final summary — review the step timeline and output for details.`;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Local structural type for the runtime's SSE writer (contract C3). We only
+// import the CLASS ClickDzAgentRuntime as a value (for DI); the writer type is
+// declared structurally here so this file needs no extra named type import that
+// could drift — it matches the openStream() return shape exactly.
+// ---------------------------------------------------------------------------
+interface AgentSseWriterLike {
+  emit(ev: AgentEvent): void;
+  heartbeatEvery(ms: number): void;
+  onClose(cb: () => void): void;
+  closed: boolean;
+  end(): void;
 }

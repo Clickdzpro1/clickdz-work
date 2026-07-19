@@ -1,18 +1,43 @@
-import { Body, Controller, Get, Logger, Post, Res } from '@nestjs/common';
-import type { Response } from 'express';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Logger,
+  Param,
+  Patch,
+  Post,
+  Req,
+  Res,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
 
 import { CurrentUser } from '../../core/auth';
 // Typed errors from ../../base (raw HttpException is coerced to a generic 500
 // by AFFiNE's GlobalExceptionFilter — see base/nestjs/exception.ts mapAnyError).
 // For the contract's non-standard status + typed-body responses (502) we write
 // them directly via the injected Express Response (@Res()), exactly like
-// ClickDzIntegrationsController's /run route. BadRequest stays available for
-// genuinely malformed input (typed 400).
-import { BadRequest, Throttle } from '../../base';
+// ClickDzIntegrationsController's /run route. BadRequest/NotFound stay available
+// for genuinely malformed input / missing threads (typed 4xx).
+import { BadRequest, NotFound, Throttle } from '../../base';
 // CacheRedis is a @Global provider (same injection style as
 // ClickDzDataController / ClickDzVdzController) — the internal read tools below
 // read the SAME Redis records the bridge + data API expose.
 import { CacheRedis } from '../../base/redis';
+// WS12/C3+C5: the shared agent runtime service (SSE writer + Redis threads +
+// stop/approval registries) owned by RUNTIME. HERMESB2 injects it and drives
+// the streaming console through it. Types (AgentEvent/AgentStep/AgentMessage/
+// AgentThread/AgentThreadSummary/AgentName) are re-exported by the runtime so
+// both agent controllers + the FE parse an identical wire protocol (C1/C2).
+import {
+  type AgentEvent,
+  type AgentMessage,
+  type AgentStep,
+  type AgentThread,
+  type AgentThreadSummary,
+  ClickDzAgentRuntime,
+} from './clickdz-agent-runtime';
 
 // ---------------------------------------------------------------------------
 // HERMES — ClickDz autonomous OPERATIONS agent.
@@ -29,13 +54,19 @@ import { CacheRedis } from '../../base/redis';
 //   - same typed 502 {error:'planner_unavailable'} via manual @Res writes —
 //     NEVER a raw HttpException.
 //
+// WS12 upgrade (C5): the loop now ALSO drives a live SSE console via the shared
+// ClickDzAgentRuntime — server-persisted multi-turn threads, live step/token
+// streaming, human-in-the-loop approvals for consequential tools, and a
+// cooperative stop flag. The legacy POST /run stays byte-identical for
+// back-compat; /capabilities gains `streaming:true`.
+//
 // Tool catalog (REAL surfaces, never fabricated results):
 //   shops_list        — the caller's published apps (Redis set the bridge owns)
 //   shop_erp_summary  — compact KPIs from the shop/ERP shared datastore
 //                       (clickdz:appdata:<slug>:<collection> hashes)
 //   composio_discover — GET api/v3/tools?toolkit_slug= (x-api-key)
-//   composio_execute  — POST api/v3/tools/execute/<slug> {user_id, arguments}
-//   make_agent_run    — POST Make.com ai-agents run (Token auth, MAKE_* envs)
+//   composio_execute  — POST api/v3/tools/execute/<slug> {user_id, arguments}   [CONSEQUENTIAL]
+//   make_agent_run    — POST Make.com ai-agents run (Token auth, MAKE_* envs)   [CONSEQUENTIAL]
 // A tool whose env key is missing is advertised available:false in
 // /capabilities, excluded from the planner prompt, and guarded in the loop —
 // the agent degrades gracefully, it never crashes and never pretends.
@@ -84,7 +115,7 @@ const CDZ_PLANNER_URL = `${CDZ_AI_BASE_URL}${CDZ_PLANNER_PATH}`;
 
 // --- Loop budgets (AbortController-backed timeouts everywhere; every per-call
 // timeout is additionally clamped to the remaining wall clock). C2 contract:
-// cap 6 tool iterations / 90s wall. ---
+// cap 6 tool iterations / 90s wall for the LEGACY buffered /run. ---
 const HERMES_PLANNER_TIMEOUT_MS = 10_000;
 const HERMES_COMPOSIO_DISCOVER_TIMEOUT_MS = 8_000;
 const HERMES_COMPOSIO_EXECUTE_TIMEOUT_MS = 20_000;
@@ -99,6 +130,17 @@ const STEP_PREVIEW_CHAR_CAP = 2_000;
 const RESULT_FEEDBACK_CHAR_CAP = 2_000;
 const PLANNER_MAX_TOKENS = 700;
 const DISCOVER_TOOLS_LIMIT = 25;
+
+// --- Streaming (C5) budgets. The SSE console has NO hard wall clock — the
+// runtime's 15s heartbeat keeps the connection alive through proxies, so the
+// only bound is a generous per-planner-call timeout + a step-count cap so a
+// runaway plan can't loop forever. Approval waits are long (the FE user is in
+// the loop) but bounded. ---
+const HERMES_STREAM_PLANNER_TIMEOUT_MS = 30_000;
+const HERMES_STREAM_MAX_ITERATIONS = 8;
+const HERMES_APPROVAL_TIMEOUT_MS = 120_000;
+const HERMES_FINAL_STREAM_TIMEOUT_MS = 60_000;
+const HERMES_TITLE_MAX = 80;
 
 // --- Internal-data mirrors. These consts intentionally mirror (NOT import —
 // both live in controllers we must not touch) the bridge's published-apps set
@@ -125,7 +167,7 @@ const ORDER_STATUSES = [
   'Retournée',
 ] as const;
 
-// One executed loop step surfaced back to the client (C2 HermesStep).
+// One executed loop step surfaced back to the client (legacy HermesStep shape).
 interface HermesStep {
   i: number;
   thought?: string;
@@ -146,13 +188,16 @@ interface PlannerDecision {
 }
 
 // One advertised HERMES tool: slug + human label + planner-facing description
-// + argument hint + availability (env-gated).
+// + argument hint + availability (env-gated) + `consequential` (C5): true when
+// the tool WRITES/SENDS (Composio execute, Make run) and therefore needs a
+// human approval gate in the streaming console's 'ask' mode. Reads are false.
 interface HermesTool {
   slug: string;
   label: string;
   description: string;
   argsHint: string;
   available: boolean;
+  consequential: boolean;
 }
 
 // A published-app record as stored by the bridge (parsed defensively).
@@ -320,6 +365,10 @@ function orderTotal(o: Record<string, unknown>): number {
  * marks the tool unavailable (skipped by the planner prompt + loop guard) —
  * the agent degrades gracefully instead of faking or crashing. Internal Redis
  * reads have no external dependency and are always available.
+ *
+ * `consequential` (C5): true for tools that WRITE/SEND to the outside world
+ * (Composio execute, Make run). The streaming console gates every consequential
+ * call behind a human `approval_request` in 'ask' mode. Reads = false.
  */
 function buildToolCatalog(): HermesTool[] {
   const makeAvailable = !!(MAKE_API_KEY && MAKE_TEAM_ID && MAKE_AGENT_ID);
@@ -331,6 +380,7 @@ function buildToolCatalog(): HermesTool[] {
         "List the signed-in user's published ClickDz apps (slug, url, kind shop/erp/app, storeSlug pairing).",
       argsHint: '{}',
       available: true,
+      consequential: false,
     },
     {
       slug: 'shop_erp_summary',
@@ -339,6 +389,7 @@ function buildToolCatalog(): HermesTool[] {
         "Read a compact business summary for ONE of the user's shops: revenue this month, pending orders, orders by status, low-stock products, recent orders. Use shops_list first to get valid slugs.",
       argsHint: '{"slug":"<one of the user\'s app slugs>"}',
       available: true,
+      consequential: false,
     },
     {
       slug: 'composio_discover',
@@ -347,6 +398,7 @@ function buildToolCatalog(): HermesTool[] {
         'Discover executable Composio tools for one toolkit (e.g. gmail, googlesheets, github, slack, notion). Returns tool slugs + required params to use with composio_execute.',
       argsHint: '{"toolkit":"<toolkit slug, e.g. gmail>"}',
       available: !!COMPOSIO_API_KEY,
+      consequential: false,
     },
     {
       slug: 'composio_execute',
@@ -355,6 +407,8 @@ function buildToolCatalog(): HermesTool[] {
         'Execute one Composio tool by its EXACT tool slug (e.g. GMAIL_SEND_EMAIL) on behalf of the user. Discover slugs with composio_discover first when unsure. Fails with an auth message if the user has not connected that toolkit on the Integrations page.',
       argsHint: '{"tool":"<TOOL_SLUG>","arguments":{...tool inputs...}}',
       available: !!COMPOSIO_API_KEY,
+      // WRITES/SENDS to external accounts (email, sheets, github…). Gated.
+      consequential: true,
     },
     {
       slug: 'make_agent_run',
@@ -363,6 +417,8 @@ function buildToolCatalog(): HermesTool[] {
         'Delegate a sub-task to a Make.com AI agent (long-form reasoning, drafting, automation know-how). Buffered text reply. Optional "agent" picks a specialist: default | code | builder | arabic.',
       argsHint: '{"prompt":"<sub-task>","agent":"default"}',
       available: makeAvailable,
+      // Triggers a Make.com automation run (may fire scenarios/webhooks). Gated.
+      consequential: true,
     },
   ];
 }
@@ -375,10 +431,22 @@ function buildToolBlock(tools: HermesTool[]): string {
     .join('\n');
 }
 
+/** A short, safe thread title derived from the user's first message. */
+function deriveThreadTitle(message: string): string {
+  const one = String(message ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!one) return 'New conversation';
+  return one.length <= HERMES_TITLE_MAX
+    ? one
+    : one.slice(0, HERMES_TITLE_MAX - 1).trimEnd() + '…';
+}
+
 /**
  * ClickDz HERMES — autonomous operations agent. All routes are auth'd (global
- * AuthGuard requires a signed-in cookie session — no @Public()); the run route
- * is rate-capped with @Throttle('strict'), mirroring the sibling controllers.
+ * AuthGuard requires a signed-in cookie session — no @Public()); the run +
+ * streaming routes are rate-capped with @Throttle('strict'), reads with
+ * @Throttle('default'), mirroring the sibling controllers.
  */
 @Controller()
 export class ClickDzHermesController {
@@ -389,7 +457,14 @@ export class ClickDzHermesController {
   // Path only, no key material.
   private plannerUrlLogged = false;
 
-  constructor(private readonly redis: CacheRedis) {}
+  // WS12/C5: inject the shared agent runtime (SSE writer + Redis threads +
+  // stop/approval registries) ALONGSIDE the existing CacheRedis the legacy read
+  // tools use. CacheRedis stays for the internal shops/ERP reads; the runtime
+  // owns thread persistence + streaming coordination.
+  constructor(
+    private readonly redis: CacheRedis,
+    private readonly runtime: ClickDzAgentRuntime
+  ) {}
 
   /** Small helper: fetch with a hard AbortController timeout. */
   private async fetchWithTimeout(
@@ -408,7 +483,9 @@ export class ClickDzHermesController {
 
   /**
    * GET capabilities — drives the HERMES UI enable/disable state.
-   * {tools:[{slug,label,available}], plannerReady}. Never throws; env-derived.
+   * {tools:[{slug,label,available,consequential}], plannerReady, streaming}.
+   * Never throws; env-derived. WS12: adds `streaming:true` + per-tool
+   * `consequential` so the FE can show the approval affordance.
    */
   @Throttle('default')
   @Get('/api/v1/hermes/capabilities')
@@ -417,12 +494,15 @@ export class ClickDzHermesController {
       slug: t.slug,
       label: t.label,
       available: t.available,
+      consequential: t.consequential,
     }));
-    res.status(200).json({ tools, plannerReady: !!CDZ_AI_KEY });
+    res
+      .status(200)
+      .json({ tools, plannerReady: !!CDZ_AI_KEY, streaming: true });
   }
 
   // -------------------------------------------------------------------------
-  // POST run — the HERMES orchestrator.
+  // POST run — the LEGACY (back-compat) HERMES orchestrator. UNCHANGED.
   //
   //   body {goal: string (1..4000), dryRun?: boolean}
   //
@@ -606,6 +686,728 @@ export class ClickDzHermesController {
     res.status(200).json({ ok: true, answer, steps, iterations });
   }
 
+  // =========================================================================
+  // WS12 / C5 — STREAMING MULTI-TURN AGENT (SSE via ClickDzAgentRuntime)
+  // =========================================================================
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/hermes/stream — the live console run.
+  //
+  //   body {threadId?: string; message: string; mode?: 'auto'|'ask'|'dry'}
+  //
+  // Opens an SSE stream (runtime.openStream sets headers + 15s heartbeat +
+  // req 'close' wiring), resolves/creates the thread, appends the user turn,
+  // emits `thread`, then runs the SAME plan→act loop as /run but EMITS live:
+  //   - `status` planning/executing/finalizing/waiting_approval/stopped/done
+  //   - `tool_call` + `tool_result` bracketing each real tool exec
+  //   - `step` per completed step (append to the in-progress assistant message)
+  //   - `approval_request` (mode 'ask', before a CONSEQUENTIAL tool) → await
+  //     the FE decision (runtime.awaitApproval, 120s); deny/timeout → skip the
+  //     tool with a noted step
+  //   - `token` events streaming the FINAL natural-language answer from a
+  //     separate cdz-flash `stream:true` call
+  //   - `final` (persisted assistant message w/ steps) then `done`
+  // mode 'dry' plans only (executes nothing). `isStopRequested` is checked each
+  // iteration → `status stopped` + partial `final` + `done`. EVERYTHING is
+  // wrapped so any error emits `{type:'error'}` + `done` — never throws out of
+  // an open stream (the global filter can't help once headers are flushed).
+  // -------------------------------------------------------------------------
+  @Throttle('strict')
+  @Post('/api/v1/hermes/stream')
+  async stream(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Req() req: Request,
+    @Res() res: Response
+  ) {
+    // The runtime writer owns headers/heartbeat/close. Once opened, we NEVER
+    // throw out — all failures become an `error` event + `done`.
+    const writer = this.runtime.openStream(req, res);
+    const emit = (ev: AgentEvent) => {
+      if (!writer.closed) writer.emit(ev);
+    };
+
+    // Validate INSIDE the stream (headers already sent → can't 400). A bad
+    // message ends the stream cleanly with an error frame.
+    const message = typeof body?.message === 'string' ? body.message.trim() : '';
+    const modeRaw = typeof body?.mode === 'string' ? body.mode : 'auto';
+    const mode: 'auto' | 'ask' | 'dry' =
+      modeRaw === 'ask' || modeRaw === 'dry' ? modeRaw : 'auto';
+    const threadIdIn =
+      typeof body?.threadId === 'string' && body.threadId.trim()
+        ? body.threadId.trim()
+        : undefined;
+
+    if (message.length < HERMES_GOAL_MIN || message.length > HERMES_GOAL_MAX) {
+      emit({
+        type: 'error',
+        code: 'bad_request',
+        message: `"message" must be a string of ${HERMES_GOAL_MIN}..${HERMES_GOAL_MAX} chars`,
+      });
+      writer.end();
+      return;
+    }
+
+    try {
+      // ---- resolve/create the thread (runtime-owned Redis persistence) ----
+      let thread: AgentThread | null = null;
+      if (threadIdIn) {
+        thread = await this.runtime.getThread(user.id, threadIdIn);
+      }
+      if (!thread) {
+        thread = await this.runtime.createThread(
+          user.id,
+          'hermes',
+          deriveThreadTitle(message)
+        );
+      }
+      // A fresh stream must never inherit a stale stop flag from a prior run.
+      await this.runtime.clearStop(thread.id);
+
+      // ---- append the user turn + emit `thread` ----
+      const userMsg: AgentMessage = {
+        id: randomUUID(),
+        role: 'user',
+        content: message,
+        createdAt: Date.now(),
+        agent: 'hermes',
+      };
+      thread.messages.push(userMsg);
+      await this.runtime.saveThread(user.id, thread);
+      emit({
+        type: 'thread',
+        threadId: thread.id,
+        agent: 'hermes',
+        title: thread.title,
+      });
+
+      // ---- run the streaming plan→act loop ----
+      const { steps, answer, stopped } = await this.runStreamingLoop(
+        emit,
+        writer,
+        user.id,
+        thread,
+        message,
+        mode
+      );
+
+      // ---- build + persist the assistant turn ----
+      const assistantMsg: AgentMessage = {
+        id: randomUUID(),
+        role: 'assistant',
+        content: answer,
+        steps,
+        createdAt: Date.now(),
+        agent: 'hermes',
+      };
+      thread.messages.push(assistantMsg);
+      await this.runtime.saveThread(user.id, thread);
+      // Best-effort: a completed run clears any lingering stop flag.
+      await this.runtime.clearStop(thread.id);
+
+      emit({ type: 'final', message: assistantMsg });
+      emit({
+        type: 'status',
+        phase: stopped ? 'stopped' : 'done',
+        label: stopped ? 'Stopped' : 'Done',
+      });
+      writer.end();
+    } catch (err) {
+      // Never throw out of an open SSE stream — emit a terminal error + done.
+      this.logger.warn(
+        `[hermes] stream failed: ${(err as Error)?.message ?? err}`
+      );
+      emit({
+        type: 'error',
+        code: 'stream_failed',
+        message: 'The agent run failed unexpectedly. Please try again.',
+      });
+      writer.end();
+    }
+  }
+
+  /**
+   * The streaming plan→act loop. Mirrors the legacy /run loop's decision logic
+   * (same planner, same fail-closed parsing, same unknown-slug guard, same
+   * result-feedback) but emits live SSE events and adds the C5 approval gate +
+   * cooperative stop. Returns the accumulated steps + final answer text +
+   * whether it stopped early. NEVER throws (every tool exec is already caught).
+   */
+  private async runStreamingLoop(
+    emit: (ev: AgentEvent) => void,
+    writer: { closed: boolean },
+    userId: string,
+    thread: AgentThread,
+    message: string,
+    mode: 'auto' | 'ask' | 'dry'
+  ): Promise<{ steps: AgentStep[]; answer: string; stopped: boolean }> {
+    const dryRun = mode === 'dry';
+    const catalog = buildToolCatalog();
+    const knownSlugs = new Set(
+      catalog.filter(t => t.available).map(t => t.slug)
+    );
+    const consequentialSlugs = new Set(
+      catalog.filter(t => t.consequential).map(t => t.slug)
+    );
+
+    const systemPrompt = this.buildPlannerSystemPrompt(
+      buildToolBlock(catalog),
+      dryRun
+    );
+
+    // Rehydrate prior turns so the stream is genuinely multi-turn. The just-
+    // appended user message is already the last element of thread.messages.
+    const messages: Array<{ role: string; content: string }> = [
+      { role: 'system', content: systemPrompt },
+    ];
+    for (const m of thread.messages) {
+      if (m.role === 'user' || m.role === 'assistant') {
+        messages.push({ role: m.role, content: m.content });
+      }
+    }
+
+    const steps: AgentStep[] = [];
+    let iterations = 0;
+    let answer: string | null = null;
+    let stopped = false;
+
+    const pushStep = (step: AgentStep) => {
+      steps.push(step);
+      emit({ type: 'step', step });
+    };
+
+    emit({ type: 'status', phase: 'planning', label: 'Planning' });
+
+    while (iterations < HERMES_STREAM_MAX_ITERATIONS) {
+      // Cooperative stop + client-disconnect checks each iteration.
+      if (writer.closed) {
+        stopped = true;
+        break;
+      }
+      if (await this.runtime.isStopRequested(thread.id)) {
+        stopped = true;
+        break;
+      }
+
+      const planned = await this.callPlanner(
+        messages,
+        HERMES_STREAM_PLANNER_TIMEOUT_MS
+      );
+
+      if (planned === null) {
+        // Planner unreachable. With no steps yet there is nothing to salvage —
+        // surface a clear error status; the caller still streams a final turn.
+        if (steps.length === 0) {
+          emit({
+            type: 'status',
+            phase: 'error',
+            label: 'Planner unavailable',
+          });
+          answer =
+            "I couldn't reach the planner just now, so I didn't run anything. Please try again in a moment.";
+          break;
+        }
+        answer = this.synthesizeAnswer(steps as HermesStep[], dryRun);
+        break;
+      }
+
+      messages.push({ role: 'assistant', content: planned.raw });
+      const decision = parsePlannerJson(planned.raw);
+
+      if (decision.action === 'final') {
+        answer = decision.answer ?? '';
+        break;
+      }
+
+      // action === 'call'
+      const toolSlug = decision.tool ?? '';
+      const args = decision.arguments ?? {};
+
+      // Unknown/unavailable tool → honest ok:false step + correction feedback.
+      if (!knownSlugs.has(toolSlug)) {
+        iterations++;
+        pushStep({
+          i: steps.length + 1,
+          kind: 'tool',
+          title: `Unknown tool: ${toolSlug || '(none)'}`,
+          detail: decision.thought,
+          tool: toolSlug,
+          args,
+          ok: false,
+          error: 'unknown_or_unavailable_tool',
+          ts: Date.now(),
+        });
+        messages.push({
+          role: 'user',
+          content: `Tool "${toolSlug}" is not in the available tools. Choose one of the listed tool slugs, or finish with {"action":"final","answer":"..."}.`,
+        });
+        continue;
+      }
+
+      iterations++;
+
+      // dry-run: record the intended call, execute nothing.
+      if (dryRun) {
+        pushStep({
+          i: steps.length + 1,
+          kind: 'tool',
+          title: `Planned: ${toolSlug}`,
+          detail: decision.thought,
+          tool: toolSlug,
+          args,
+          ok: true,
+          resultPreview: '[dry-run] planned call — not executed',
+          ts: Date.now(),
+        });
+        messages.push({
+          role: 'user',
+          content: `Dry-run mode: the call to ${toolSlug} was recorded but NOT executed, so you have no real result. Plan the next intended step, or finish with {"action":"final","answer":"..."} summarizing the full plan.`,
+        });
+        continue;
+      }
+
+      // ---- C5 approval gate: pause before a CONSEQUENTIAL tool in 'ask' mode ----
+      if (mode === 'ask' && consequentialSlugs.has(toolSlug)) {
+        const approvalId = randomUUID();
+        emit({
+          type: 'approval_request',
+          id: approvalId,
+          tool: toolSlug,
+          title: `Approve ${toolSlug}?`,
+          summary: this.approvalSummary(toolSlug, args),
+          args,
+        });
+        emit({
+          type: 'status',
+          phase: 'waiting_approval',
+          label: 'Waiting for approval',
+        });
+
+        const decisionResult = await this.runtime.awaitApproval(
+          thread.id,
+          approvalId,
+          HERMES_APPROVAL_TIMEOUT_MS
+        );
+
+        if (decisionResult !== 'approve') {
+          // deny OR timeout → skip the tool, note it, feed the model a correction.
+          const reason =
+            decisionResult === 'timeout'
+              ? 'approval_timed_out'
+              : 'denied_by_user';
+          pushStep({
+            i: steps.length + 1,
+            kind: 'tool',
+            title: `Skipped: ${toolSlug}`,
+            detail: decision.thought,
+            tool: toolSlug,
+            args,
+            ok: false,
+            error: reason,
+            ts: Date.now(),
+          });
+          messages.push({
+            role: 'user',
+            content: `The user did NOT approve the call to ${toolSlug} (${reason}). Do not attempt it again. Continue with a different approach or finish with {"action":"final","answer":"..."} explaining what still needs the user's approval.`,
+          });
+          emit({ type: 'status', phase: 'executing', label: 'Executing' });
+          continue;
+        }
+        // approved → fall through to execute.
+        emit({ type: 'status', phase: 'executing', label: 'Executing' });
+      } else {
+        emit({ type: 'status', phase: 'executing', label: 'Executing' });
+      }
+
+      // ---- execute the tool, bracketed by tool_call / tool_result ----
+      const callId = randomUUID();
+      const startedAt = Date.now();
+      emit({
+        type: 'tool_call',
+        id: callId,
+        tool: toolSlug,
+        title: this.toolTitle(toolSlug),
+        args,
+      });
+
+      // Streaming has no hard wall clock (the heartbeat keeps SSE alive); give
+      // each tool its full per-surface budget rather than a shrinking remainder.
+      const outcome = await this.executeTool(
+        toolSlug,
+        args,
+        userId,
+        this.toolTimeout(toolSlug)
+      );
+      const durationMs = Date.now() - startedAt;
+
+      const resultPreview =
+        outcome.resultPreview !== undefined
+          ? truncatePreview(outcome.resultPreview)
+          : undefined;
+      const errorPreview =
+        outcome.error !== undefined
+          ? truncatePreview(outcome.error, 500)
+          : undefined;
+
+      emit({
+        type: 'tool_result',
+        id: callId,
+        ok: outcome.ok,
+        ...(resultPreview !== undefined ? { resultPreview } : {}),
+        ...(errorPreview !== undefined ? { error: errorPreview } : {}),
+        durationMs,
+      });
+
+      pushStep({
+        i: steps.length + 1,
+        kind: 'tool',
+        title: this.toolTitle(toolSlug),
+        detail: decision.thought,
+        tool: toolSlug,
+        args,
+        ok: outcome.ok,
+        ...(resultPreview !== undefined ? { resultPreview } : {}),
+        ...(errorPreview !== undefined ? { error: errorPreview } : {}),
+        ts: Date.now(),
+      });
+
+      const feedback = outcome.ok
+        ? `Result of ${toolSlug} (ok): ${truncatePreview(outcome.resultPreview ?? '', RESULT_FEEDBACK_CHAR_CAP)}`
+        : `Error from ${toolSlug} (failed): ${truncatePreview(outcome.error ?? 'tool_failed', RESULT_FEEDBACK_CHAR_CAP)}`;
+      messages.push({ role: 'user', content: feedback });
+    }
+
+    // Stopped early → return whatever partial answer we have (or a note).
+    if (stopped) {
+      const partial =
+        answer ??
+        (steps.length
+          ? this.synthesizeAnswer(steps as HermesStep[], dryRun)
+          : 'Stopped before completing the task.');
+      return { steps, answer: partial, stopped: true };
+    }
+
+    // No final answer yet (cap hit / planner gap): stream a forced final turn.
+    emit({ type: 'status', phase: 'finalizing', label: 'Finalizing' });
+
+    if (answer === null) {
+      const forced = await this.streamFinalAnswer(
+        emit,
+        writer,
+        [
+          ...messages,
+          {
+            role: 'user',
+            content:
+              'You have reached the step limit. Reply now in plain language, summarizing what you did or what the user should do next. No JSON, no tool calls.',
+          },
+        ]
+      );
+      answer =
+        forced ?? this.synthesizeAnswer(steps as HermesStep[], dryRun);
+      return { steps, answer, stopped: false };
+    }
+
+    // We DO have a final answer from a planner `final` action — re-voice it as a
+    // clean natural-language turn streamed token-by-token (the planner's `final`
+    // JSON answer is already plain text, so stream it directly if the polish
+    // call is unavailable). This gives the FE live typing on the answer.
+    const polished = await this.streamFinalAnswer(
+      emit,
+      writer,
+      [
+        {
+          role: 'system',
+          content:
+            'You are HERMES, an operations assistant. Rewrite the assistant\'s final answer below as a clear, friendly, plain-language reply for the user. Keep all facts; do not invent new ones. No JSON, no markdown fences.',
+        },
+        { role: 'user', content: answer },
+      ],
+      answer
+    );
+    return { steps, answer: polished ?? answer, stopped: false };
+  }
+
+  /**
+   * Stream a FINAL natural-language answer from cdz-flash with `stream:true`,
+   * emitting each delta as a `token` event (the exact SSE-token consumer from
+   * RECON-STREAMING §2 / clickdz-bridge streamCdzChat). Returns the full
+   * accumulated text, or `fallback` (streamed as one token if provided) when
+   * upstream is unavailable — so the FE always sees the answer typed out.
+   * NEVER throws; never logs key material.
+   */
+  private async streamFinalAnswer(
+    emit: (ev: AgentEvent) => void,
+    writer: { closed: boolean },
+    messages: Array<{ role: string; content: string }>,
+    fallback?: string
+  ): Promise<string | null> {
+    // No key → can't stream. Emit the fallback as a single token so the FE still
+    // renders an answer (honest degrade, not a stub).
+    if (!CDZ_AI_KEY) {
+      if (fallback) emit({ type: 'token', text: fallback });
+      return fallback ?? null;
+    }
+
+    let response: globalThis.Response;
+    try {
+      response = await this.fetchWithTimeout(
+        CDZ_PLANNER_URL,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+          },
+          body: JSON.stringify({
+            model: CDZ_PLANNER_MODEL,
+            messages,
+            stream: true,
+            max_tokens: PLANNER_MAX_TOKENS,
+            temperature: 0.2,
+          }),
+        },
+        HERMES_FINAL_STREAM_TIMEOUT_MS
+      );
+    } catch {
+      if (fallback) emit({ type: 'token', text: fallback });
+      return fallback ?? null;
+    }
+
+    if (!response.ok || !response.body) {
+      this.logger.warn(
+        `[hermes] final stream non-ok (${response.status}) [POST ${CDZ_PLANNER_PATH}]`
+      );
+      if (fallback) emit({ type: 'token', text: fallback });
+      return fallback ?? null;
+    }
+
+    // ---- SSE-token consumer (async-iterate the body, split on \n\n, read
+    // `data:` payloads, handle [DONE] / finish_reason, forward delta.content).
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let acc = '';
+    let finished = false;
+    let sawAny = false;
+    try {
+      for await (const bytes of response.body as unknown as AsyncIterable<Uint8Array>) {
+        if (writer.closed) break;
+        buffer += decoder.decode(bytes, { stream: true });
+        let sep: number;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          for (const line of rawEvent.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload) continue;
+            if (payload === '[DONE]') {
+              finished = true;
+              break;
+            }
+            try {
+              const parsed = JSON.parse(payload) as {
+                choices?: Array<{
+                  delta?: { content?: unknown };
+                  finish_reason?: string | null;
+                }>;
+              };
+              const choice = parsed.choices?.[0];
+              const text = choice?.delta?.content;
+              if (typeof text === 'string' && text) {
+                sawAny = true;
+                acc += text;
+                emit({ type: 'token', text });
+              }
+              if (choice?.finish_reason) finished = true;
+            } catch {
+              // partial frame; the next chunk completes it
+            }
+          }
+          if (finished) break;
+        }
+        if (finished) break;
+      }
+    } catch (err) {
+      // Mid-stream failure. If we already emitted tokens, keep them; else fall
+      // back so the FE isn't left with a blank answer.
+      this.logger.warn(
+        `[hermes] final stream read error: ${(err as Error)?.message ?? err}`
+      );
+    }
+
+    if (!sawAny) {
+      if (fallback) emit({ type: 'token', text: fallback });
+      return fallback ?? null;
+    }
+    return acc;
+  }
+
+  /** A short, human summary of a consequential call for the approval prompt. */
+  private approvalSummary(
+    toolSlug: string,
+    args: Record<string, unknown>
+  ): string {
+    if (toolSlug === 'composio_execute') {
+      const tool = typeof args.tool === 'string' ? args.tool : '(unknown tool)';
+      return `Run the Composio action ${tool} on your connected account. This may send or write real data.`;
+    }
+    if (toolSlug === 'make_agent_run') {
+      const which = typeof args.agent === 'string' ? args.agent : 'default';
+      return `Trigger the Make.com "${which}" agent, which may run automation scenarios.`;
+    }
+    return `Run ${toolSlug}, which performs a write/send action.`;
+  }
+
+  /** Human title for a tool (used on tool_call + step cards). */
+  private toolTitle(toolSlug: string): string {
+    const found = buildToolCatalog().find(t => t.slug === toolSlug);
+    return found ? found.label : toolSlug;
+  }
+
+  /** Per-surface timeout for the streaming loop (no shrinking wall clock). */
+  private toolTimeout(toolSlug: string): number {
+    switch (toolSlug) {
+      case 'composio_discover':
+        return HERMES_COMPOSIO_DISCOVER_TIMEOUT_MS;
+      case 'composio_execute':
+        return HERMES_COMPOSIO_EXECUTE_TIMEOUT_MS;
+      case 'make_agent_run':
+        return HERMES_MAKE_TIMEOUT_MS;
+      default:
+        // internal Redis reads are fast; give them the planner-ish budget.
+        return HERMES_PLANNER_TIMEOUT_MS;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/hermes/stop {threadId} → cooperative stop (checked each loop
+  // iteration by an in-flight stream). Idempotent; always 200 {ok:true}.
+  // -------------------------------------------------------------------------
+  @Throttle('default')
+  @Post('/api/v1/hermes/stop')
+  async stop(
+    @CurrentUser() _user: CurrentUser,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<{ ok: boolean }> {
+    const threadId =
+      typeof body?.threadId === 'string' ? body.threadId.trim() : '';
+    if (!threadId) {
+      res.status(400).json({ ok: false, error: 'threadId is required' });
+      return { ok: false };
+    }
+    await this.runtime.requestStop(threadId);
+    return { ok: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // POST /api/v1/hermes/approve {threadId, approvalId, decision} → resolve a
+  // pending approval_request. The in-flight stream's awaitApproval consumes it.
+  // decision is 'approve' | 'deny'. Always 200 {ok:true} on a valid shape.
+  // -------------------------------------------------------------------------
+  @Throttle('default')
+  @Post('/api/v1/hermes/approve')
+  async approve(
+    @CurrentUser() _user: CurrentUser,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<{ ok: boolean }> {
+    const threadId =
+      typeof body?.threadId === 'string' ? body.threadId.trim() : '';
+    const approvalId =
+      typeof body?.approvalId === 'string' ? body.approvalId.trim() : '';
+    const decision = body?.decision === 'approve' ? 'approve' : 'deny';
+    if (!threadId || !approvalId) {
+      res
+        .status(400)
+        .json({ ok: false, error: 'threadId and approvalId are required' });
+      return { ok: false };
+    }
+    await this.runtime.resolveApproval(threadId, approvalId, decision);
+    return { ok: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Thread CRUD (runtime-owned Redis persistence, per-user scoped).
+  //   GET    /api/v1/hermes/threads        → AgentThreadSummary[]
+  //   GET    /api/v1/hermes/threads/:id    → AgentThread (full, w/ messages)
+  //   PATCH  /api/v1/hermes/threads/:id    {title} → renamed AgentThreadSummary
+  //   DELETE /api/v1/hermes/threads/:id    → {ok:true}
+  // All auth via @CurrentUser (cookie session). Typed 404/400 for missing
+  // threads / bad input via @Res passthrough — NEVER a raw HttpException.
+  // -------------------------------------------------------------------------
+  @Throttle('default')
+  @Get('/api/v1/hermes/threads')
+  async listThreads(
+    @CurrentUser() user: CurrentUser
+  ): Promise<AgentThreadSummary[]> {
+    return this.runtime.listThreads(user.id, 'hermes');
+  }
+
+  @Throttle('default')
+  @Get('/api/v1/hermes/threads/:id')
+  async getThread(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string
+  ): Promise<AgentThread> {
+    const thread = await this.runtime.getThread(user.id, id);
+    if (!thread || thread.agent !== 'hermes') {
+      throw new NotFound(`thread "${id}" not found`);
+    }
+    return thread;
+  }
+
+  @Throttle('default')
+  @Patch('/api/v1/hermes/threads/:id')
+  async renameThread(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<AgentThreadSummary | { ok: false; error: string }> {
+    const title =
+      typeof body?.title === 'string' ? body.title.trim() : '';
+    if (!title || title.length > HERMES_TITLE_MAX) {
+      res.status(400).json({
+        ok: false,
+        error: `"title" must be a string of 1..${HERMES_TITLE_MAX} chars`,
+      });
+      return { ok: false, error: 'invalid_title' };
+    }
+    const existing = await this.runtime.getThread(user.id, id);
+    if (!existing || existing.agent !== 'hermes') {
+      throw new NotFound(`thread "${id}" not found`);
+    }
+    await this.runtime.renameThread(user.id, id, title);
+    const summaries = await this.runtime.listThreads(user.id, 'hermes');
+    const updated = summaries.find(s => s.id === id);
+    return (
+      updated ?? {
+        id,
+        agent: 'hermes',
+        title,
+        createdAt: existing.createdAt,
+        updatedAt: Date.now(),
+        messageCount: existing.messages.length,
+      }
+    );
+  }
+
+  @Throttle('default')
+  @Delete('/api/v1/hermes/threads/:id')
+  async deleteThread(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string
+  ): Promise<{ ok: boolean }> {
+    // Best-effort stop of any in-flight run on this thread, then delete.
+    await this.runtime.requestStop(id);
+    await this.runtime.deleteThread(user.id, id);
+    return { ok: true };
+  }
+
   // ---- /run internals -----------------------------------------------------
 
   /** Compose the planner system prompt from the tool block (+ dry-run note). */
@@ -649,9 +1451,10 @@ export class ClickDzHermesController {
 
   /**
    * One planner turn against cdz-flash (direct CDZ_AI, OpenAI-compatible). The
-   * timeout is min(10s, remaining wall-clock). Returns {raw} on a clean 2xx with
-   * string content, or null on ANY failure (no key, non-2xx, timeout, empty) so
-   * the caller can decide 502-vs-synthesize. Never throws; never logs key material.
+   * timeout is min(configured, remaining wall-clock). Returns {raw} on a clean
+   * 2xx with string content, or null on ANY failure (no key, non-2xx, timeout,
+   * empty) so the caller can decide 502-vs-synthesize. Never throws; never logs
+   * key material.
    */
   private async callPlanner(
     messages: Array<{ role: string; content: string }>,
