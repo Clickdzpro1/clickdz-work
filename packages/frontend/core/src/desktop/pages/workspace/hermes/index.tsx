@@ -26,35 +26,41 @@ import {
   useState,
 } from 'react';
 
+import { HermesConfigPanel } from './config-panel';
+import { HermesDashboard } from './dashboard';
 import { HermesConnectionsPanel } from './hermes-connections';
+import {
+  Banner,
+  btnStyle,
+  C as SC,
+  fetchConfig,
+  type HermesConfig,
+  Spinner as SharedSpinner,
+} from './hermes-shared';
 import { HermesWorkflowsPanel } from './hermes-workflows';
+import { HermesWizard } from './wizard';
 
 // ---------------------------------------------------------------------------
-// ClickDz Hermes — streaming autonomous operations-agent console.
+// ClickDz Hermes — per-user studio. Mirrors the ShopERP state machine
+// (shoperp/index.tsx): on mount GET /api/v1/hermes/config, then:
+//   • !provisioned            → the ONBOARDING WIZARD (set up your own Hermes)
+//   • provisioned (default)   → the DASHBOARD (runs, tools, saved workflows,
+//                               stats) with the streaming console one click away
+//   • console                 → the live streaming ops-agent console (below)
+//   • settings                → an inline config editor (PUT the config)
 //
-// Layout: a ThreadSidebar (left) + a main column (live ConversationThread over
-// a Composer). A turn is streamed back over SSE via useAgentStream: the
-// in-progress assistant message renders its plan/act steps and its final answer
-// token-by-token, its phase surfaces via StatusBar, and a Stop button is live
-// while running. When the agent needs sign-off before a consequential tool it
-// emits `approval_request` — the hook exposes it as `pendingApproval` and we
-// surface SHELL's ApprovalPrompt inline (as renderExtras on the streaming
-// message) and resolve it through approve(id, decision).
+// The streaming CONSOLE is the original shipping surface, preserved intact and
+// only lightly parametrized: it accepts an optional `initialInput` (a workflow
+// goal to seed the composer), an optional `initialThreadId` (open a specific
+// run from the dashboard), and an `onBack` affordance to return to the
+// dashboard. Everything else — SSE streaming via useAgentStream, threads via
+// useAgentThreads, inline approvals, the mode toggle, planner-offline notices —
+// is unchanged from the shipped console.
 //
-// The Composer mode toggle drives the run policy: auto (execute freely),
-// ask (pause for approval on writes/sends) or dry (plan only, execute nothing).
-//
-// On mount we fetch capabilities (via the STREAMCLIENT api) to reflect tool
-// availability and, when the planner is offline, a clear blocking notice. The
-// empty state (no active thread) hosts a hero plus the two HERMESX panels:
-// HermesWorkflowsPanel (curated goals → composer) and HermesConnectionsPanel
-// (Composio / Make / internal tool status from `capabilities`).
-//
-// House rules: inline styles only, no new deps, SHELL palette, and every
-// surface degrades gracefully with loading / empty / error states. Motion is
-// kept to short opacity/transform transitions and disabled for
-// prefers-reduced-motion users (SHELL primitives honour that; this shell's own
-// keyframes are guarded below).
+// House rules: inline styles only, no new deps, SHELL palette, boot-safe icons
+// (ChatWithAiIcon), and every surface degrades gracefully with loading / empty
+// / error states. If the config endpoint is unavailable the page degrades to
+// the console directly so the user is never locked out.
 // ---------------------------------------------------------------------------
 
 const AGENT = 'hermes' as const;
@@ -136,7 +142,24 @@ function normalizeCaps(raw: Record<string, unknown>): HermesCaps {
   };
 }
 
-const HermesConsole = () => {
+// ===========================================================================
+// The streaming console (the original shipping surface, parametrized).
+// ===========================================================================
+const HermesConsole = ({
+  defaultMode,
+  initialInput,
+  initialThreadId,
+  onBack,
+}: {
+  // Seed the composer's mode toggle from the user's saved config.
+  defaultMode?: AgentMode;
+  // Seed the composer with a workflow goal (from the dashboard).
+  initialInput?: string;
+  // Open a specific existing run when entering from the dashboard.
+  initialThreadId?: string;
+  // Return to the dashboard (only shown when the console is reached from it).
+  onBack?: () => void;
+}) => {
   // ---- threads (list / load / rename / delete / new) ----------------------
   const {
     threads,
@@ -156,12 +179,14 @@ const HermesConsole = () => {
   const [capabilities, setCapabilities] = useState<HermesCaps | null>(null);
 
   // ---- composer state -----------------------------------------------------
-  const [input, setInput] = useState('');
-  const [mode, setMode] = useState<AgentMode>('ask');
+  const [input, setInput] = useState(initialInput ?? '');
+  const [mode, setMode] = useState<AgentMode>(defaultMode ?? 'ask');
 
   // Guards a one-shot reload after a run finishes (fires when finalMessage
   // lands / running flips false), so thread history + the sidebar refresh.
   const reloadedForFinalRef = useRef<string | null>(null);
+  // Guards a one-shot open of the initial thread when entering from dashboard.
+  const openedInitialRef = useRef(false);
 
   // ---- live stream (send / stop / approve + in-progress assistant turn) ---
   // `onEvent` is a PARAM here (not a return value): we watch minted-thread and
@@ -207,6 +232,14 @@ const HermesConsole = () => {
   useEffect(() => {
     void loadCaps();
   }, [loadCaps]);
+
+  // Open the initial thread once (dashboard → "open this run").
+  useEffect(() => {
+    if (openedInitialRef.current) return;
+    if (!initialThreadId) return;
+    openedInitialRef.current = true;
+    void loadThread(initialThreadId);
+  }, [initialThreadId, loadThread]);
 
   const plannerReady = !!capabilities?.plannerReady;
 
@@ -294,205 +327,192 @@ const HermesConsole = () => {
   );
 
   return (
-    <>
-      <ViewTitle title="Hermes" />
-      <ViewIcon icon="edgeless" />
-      <ViewHeader>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            height: '100%',
-            padding: '0 16px',
-            fontSize: 14,
-            fontWeight: 600,
-            color: P.text,
-          }}
-        >
-          <ChatWithAiIcon style={{ fontSize: 16 }} />
-          Hermes
-          <span
+    <div
+      style={{
+        height: '100%',
+        width: '100%',
+        display: 'flex',
+        overflow: 'hidden',
+        background: P.bg,
+        color: P.text,
+        fontSize: 13,
+        lineHeight: 1.5,
+      }}
+    >
+      <style>{GLOBAL_CSS}</style>
+
+      {/* ---- Left: thread rail -------------------------------------- */}
+      <ThreadSidebar
+        threads={threads}
+        activeId={activeId}
+        onSelect={handleSelectThread}
+        onNew={handleNewThread}
+        onRename={handleRename}
+        onDelete={handleDelete}
+        loading={loadingThreads}
+        title="Conversations"
+        width={264}
+      />
+
+      {/* ---- Right: conversation + composer ------------------------- */}
+      <main
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+        }}
+      >
+        {/* Back-to-dashboard strip (only when reached from the dashboard). */}
+        {onBack ? (
+          <div
             style={{
-              fontSize: 10,
-              fontWeight: 700,
-              lineHeight: '15px',
-              padding: '0 6px',
-              borderRadius: 5,
-              letterSpacing: '0.05em',
-              color: P.muted,
-              backgroundColor:
-                'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 14px',
+              borderBottom: `1px solid ${P.border}`,
+              background: P.bg,
             }}
           >
-            béta
-          </span>
-        </div>
-      </ViewHeader>
-      <ViewBody>
-        <div
-          style={{
-            height: '100%',
-            width: '100%',
-            display: 'flex',
-            overflow: 'hidden',
-            background: P.bg,
-            color: P.text,
-            fontSize: 13,
-            lineHeight: 1.5,
-          }}
-        >
-          <style>{GLOBAL_CSS}</style>
+            <button
+              type="button"
+              onClick={onBack}
+              style={{
+                appearance: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '5px 11px',
+                borderRadius: 7,
+                fontSize: 12,
+                fontWeight: 600,
+                fontFamily: 'inherit',
+                cursor: 'pointer',
+                color: P.text,
+                background: 'transparent',
+                border: `1px solid ${P.border}`,
+              }}
+            >
+              ← Dashboard
+            </button>
+            <span style={{ fontSize: 12, color: P.muted }}>Streaming console</span>
+          </div>
+        ) : null}
 
-          {/* ---- Left: thread rail -------------------------------------- */}
-          <ThreadSidebar
-            threads={threads}
-            activeId={activeId}
-            onSelect={handleSelectThread}
-            onNew={handleNewThread}
-            onRename={handleRename}
-            onDelete={handleDelete}
-            loading={loadingThreads}
-            title="Conversations"
-            width={264}
+        {/* Planner-offline notice pins to the top of the column so it is
+            visible from the empty state through an active thread. */}
+        {capsState === 'ready' && !plannerReady ? (
+          <div className="cdz-hermes-fade" role="alert" style={noticeStyle}>
+            <strong>Planner offline.</strong>&nbsp;Hermes can’t plan runs
+            until the owner configures{' '}
+            <code style={codeStyle}>CDZ_AI_KEY</code> on the server. Threads
+            and tools still load; sending is disabled.
+          </div>
+        ) : null}
+        {capsState === 'error' ? (
+          <div className="cdz-hermes-fade" role="alert" style={noticeStyle}>
+            <strong>Couldn’t load agent capabilities.</strong>&nbsp;Tool
+            availability is unknown.{' '}
+            <button style={linkBtnStyle} onClick={() => void loadCaps()}>
+              Retry
+            </button>
+          </div>
+        ) : null}
+        {error ? (
+          <div className="cdz-hermes-fade" role="alert" style={noticeStyle}>
+            <strong>Run error.</strong>&nbsp;{error}
+          </div>
+        ) : null}
+
+        {/* Conversation region (SHELL owns scroll + empty-state slot) */}
+        {hasConversation ? (
+          <ConversationThread
+            messages={messages}
+            streamingMessage={streamingMessage}
+            renderExtras={renderExtras}
+            style={{ flex: 1, minHeight: 0 }}
           />
-
-          {/* ---- Right: conversation + composer ------------------------- */}
-          <main
+        ) : (
+          // ---- Empty state: hero + HERMESX panels --------------------
+          <div
             style={{
               flex: 1,
-              minWidth: 0,
+              minHeight: 0,
+              overflow: 'auto',
               display: 'flex',
               flexDirection: 'column',
-              minHeight: 0,
             }}
           >
-            {/* Planner-offline notice pins to the top of the column so it is
-                visible from the empty state through an active thread. */}
-            {capsState === 'ready' && !plannerReady ? (
-              <div
-                className="cdz-hermes-fade"
-                role="alert"
-                style={noticeStyle}
+            <div
+              className="cdz-hermes-fade"
+              style={{
+                maxWidth: 900,
+                width: '100%',
+                margin: '0 auto',
+                padding: '32px 24px 40px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 24,
+              }}
+            >
+              <EmptyState
+                icon={<ChatWithAiIcon style={{ fontSize: 26 }} />}
+                title="Hermes — your operations agent"
+                subtitle="Give Hermes a goal. It plans the steps, calls the right tools across your shops and connected apps, and reports back — streaming every step live. Pick a workflow to start, or type your own below."
+                examples={EXAMPLE_GOALS}
+                onPickExample={handlePick}
               >
-                <strong>Planner offline.</strong>&nbsp;Hermes can’t plan runs
-                until the owner configures{' '}
-                <code style={codeStyle}>CDZ_AI_KEY</code> on the server. Threads
-                and tools still load; sending is disabled.
-              </div>
-            ) : null}
-            {capsState === 'error' ? (
-              <div
-                className="cdz-hermes-fade"
-                role="alert"
-                style={noticeStyle}
-              >
-                <strong>Couldn’t load agent capabilities.</strong>&nbsp;Tool
-                availability is unknown.{' '}
-                <button style={linkBtnStyle} onClick={() => void loadCaps()}>
-                  Retry
-                </button>
-              </div>
-            ) : null}
-            {error ? (
-              <div
-                className="cdz-hermes-fade"
-                role="alert"
-                style={noticeStyle}
-              >
-                <strong>Run error.</strong>&nbsp;{error}
-              </div>
-            ) : null}
-
-            {/* Conversation region (SHELL owns scroll + empty-state slot) */}
-            {hasConversation ? (
-              <ConversationThread
-                messages={messages}
-                streamingMessage={streamingMessage}
-                renderExtras={renderExtras}
-                style={{ flex: 1, minHeight: 0 }}
-              />
-            ) : (
-              // ---- Empty state: hero + HERMESX panels --------------------
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 0,
-                  overflow: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}
-              >
+                {/* Curated operations workflows (HERMESX). Picking a card
+                    seeds the composer. */}
                 <div
-                  className="cdz-hermes-fade"
                   style={{
-                    maxWidth: 900,
-                    width: '100%',
-                    margin: '0 auto',
-                    padding: '32px 24px 40px',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 24,
+                    textAlign: 'left',
                   }}
                 >
-                  <EmptyState
-                    icon={<ChatWithAiIcon style={{ fontSize: 26 }} />}
-                    title="Hermes — your operations agent"
-                    subtitle="Give Hermes a goal. It plans the steps, calls the right tools across your shops and connected apps, and reports back — streaming every step live. Pick a workflow to start, or type your own below."
-                    examples={EXAMPLE_GOALS}
-                    onPickExample={handlePick}
-                  >
-                    {/* Curated operations workflows (HERMESX). Picking a card
-                        seeds the composer. */}
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 24,
-                        textAlign: 'left',
-                      }}
-                    >
-                      <HermesWorkflowsPanel onPick={handlePick} />
-                      {/* Tools / connections status derived from capabilities
-                          (HERMESX). Renders its own skeleton when null. */}
-                      <HermesConnectionsPanel capabilities={capabilities} />
-                    </div>
-                  </EmptyState>
+                  <HermesWorkflowsPanel onPick={handlePick} />
+                  {/* Tools / connections status derived from capabilities
+                      (HERMESX). Renders its own skeleton when null. */}
+                  <HermesConnectionsPanel capabilities={capabilities} />
                 </div>
-              </div>
-            )}
+              </EmptyState>
+            </div>
+          </div>
+        )}
 
-            {/* Live status strip (phase chip + label + elapsed) while running */}
-            {running ? (
-              <StatusBar
-                phase={phase ?? 'planning'}
-                label={status ?? ''}
-                running={running}
-              />
-            ) : null}
+        {/* Live status strip (phase chip + label + elapsed) while running */}
+        {running ? (
+          <StatusBar
+            phase={phase ?? 'planning'}
+            label={status ?? ''}
+            running={running}
+          />
+        ) : null}
 
-            {/* Composer: textarea + send + Stop-while-running, with the mode
-                toggle in the left slot. Send is gated on planner readiness. */}
-            <Composer
-              value={input}
-              onChange={setInput}
-              onSend={doSend}
-              onStop={stop}
-              running={running}
-              disabled={composerDisabled}
-              placeholder={
-                composerDisabled
-                  ? 'Planner offline — sending is disabled'
-                  : 'Message Hermes — describe the outcome you want…'
-              }
-              leftSlot={
-                <ModeToggle mode={mode} disabled={running} onChange={setMode} />
-              }
-            />
-          </main>
-        </div>
-      </ViewBody>
-    </>
+        {/* Composer: textarea + send + Stop-while-running, with the mode
+            toggle in the left slot. Send is gated on planner readiness. */}
+        <Composer
+          value={input}
+          onChange={setInput}
+          onSend={doSend}
+          onStop={stop}
+          running={running}
+          disabled={composerDisabled}
+          placeholder={
+            composerDisabled
+              ? 'Planner offline — sending is disabled'
+              : 'Message Hermes — describe the outcome you want…'
+          }
+          leftSlot={
+            <ModeToggle mode={mode} disabled={running} onChange={setMode} />
+          }
+        />
+      </main>
+    </div>
   );
 };
 
@@ -598,6 +618,206 @@ const linkBtnStyle: CSSProperties = {
   textDecoration: 'underline',
 };
 
+// ===========================================================================
+// The page state machine — GET config on mount → wizard | dashboard | console
+// | settings. Mirrors shoperp/index.tsx (loading → error → wizard → dashboard).
+// ===========================================================================
+
+type PageState = 'loading' | 'error' | 'ready';
+// Which surface is showing once the config has loaded.
+type View =
+  | { kind: 'wizard' }
+  | { kind: 'dashboard' }
+  | { kind: 'console'; prefill?: string; threadId?: string }
+  | { kind: 'settings' };
+
+const HermesPage = () => {
+  const [state, setState] = useState<PageState>('loading');
+  const [config, setConfig] = useState<HermesConfig | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [view, setView] = useState<View>({ kind: 'dashboard' });
+
+  const load = useCallback(async () => {
+    setState('loading');
+    setLoadError(null);
+    const outcome = await fetchConfig();
+    if (outcome.status === 'ok') {
+      setConfig(outcome.config);
+      // Provisioned users land on the dashboard; new users get the wizard.
+      setView(outcome.config.provisioned ? { kind: 'dashboard' } : { kind: 'wizard' });
+      setState('ready');
+    } else {
+      setLoadError(outcome.message);
+      setState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // After the wizard finishes: reload config, land on the dashboard.
+  const handleWizardDone = useCallback(async () => {
+    await load();
+    setView({ kind: 'dashboard' });
+  }, [load]);
+
+  // After the settings panel saves: adopt the returned config, back to dash.
+  const handleSettingsSaved = useCallback((next: HermesConfig) => {
+    setConfig(next);
+    setView({ kind: 'dashboard' });
+  }, []);
+
+  const provisioned = !!config?.provisioned;
+
+  // Header badge label depends on the surface.
+  return (
+    <>
+      <ViewTitle title="Hermes" />
+      <ViewIcon icon="edgeless" />
+      <ViewHeader>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            height: '100%',
+            padding: '0 16px',
+            fontSize: 14,
+            fontWeight: 600,
+            color: P.text,
+          }}
+        >
+          <ChatWithAiIcon style={{ fontSize: 16 }} />
+          {config?.agentName || 'Hermes'}
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              lineHeight: '15px',
+              padding: '0 6px',
+              borderRadius: 5,
+              letterSpacing: '0.05em',
+              color: P.muted,
+              backgroundColor:
+                'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
+            }}
+          >
+            béta
+          </span>
+        </div>
+      </ViewHeader>
+      <ViewBody>
+        {/* The console needs the full-bleed flex layout; the wizard / dashboard
+            / settings live inside a scrolling, centered canvas (shoperp idiom). */}
+        {state === 'ready' && view.kind === 'console' ? (
+          <HermesConsole
+            defaultMode={config?.defaultMode}
+            initialInput={view.prefill}
+            initialThreadId={view.threadId}
+            // Only offer "back to dashboard" when the user is provisioned.
+            onBack={provisioned ? () => setView({ kind: 'dashboard' }) : undefined}
+          />
+        ) : (
+          <div
+            style={{
+              height: '100%',
+              width: '100%',
+              overflow: 'auto',
+              background: P.bg,
+              color: P.text,
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            <div
+              style={{
+                maxWidth:
+                  state === 'ready' &&
+                  (view.kind === 'dashboard' || view.kind === 'settings')
+                    ? 1120
+                    : 960,
+                margin: '0 auto',
+                padding: '28px 24px 48px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 20,
+              }}
+            >
+              {state === 'loading' ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '28px 4px',
+                    color: P.muted,
+                  }}
+                >
+                  <SharedSpinner /> Loading your Hermes…
+                </div>
+              ) : state === 'error' ? (
+                <ErrorState message={loadError} onRetry={() => void load()} />
+              ) : view.kind === 'wizard' ? (
+                <HermesWizard
+                  hasConfig={provisioned}
+                  initialConfig={config}
+                  onDone={() => void handleWizardDone()}
+                  onCancel={
+                    provisioned ? () => setView({ kind: 'dashboard' }) : undefined
+                  }
+                />
+              ) : view.kind === 'settings' && config ? (
+                <HermesConfigPanel
+                  config={config}
+                  onSaved={handleSettingsSaved}
+                  onClose={() => setView({ kind: 'dashboard' })}
+                />
+              ) : config ? (
+                <HermesDashboard
+                  config={config}
+                  onOpenConsole={prefill =>
+                    setView({ kind: 'console', prefill })
+                  }
+                  onOpenThread={threadId =>
+                    setView({ kind: 'console', threadId })
+                  }
+                  onReconfigure={() => setView({ kind: 'settings' })}
+                />
+              ) : null}
+            </div>
+          </div>
+        )}
+      </ViewBody>
+    </>
+  );
+};
+
+// A load-failure state that still lets the user reach the console directly, so
+// a flaky config endpoint never locks anyone out of a working agent.
+const ErrorState = ({
+  message,
+  onRetry,
+}: {
+  message: string | null;
+  onRetry: () => void;
+}) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 560 }}>
+    <Banner tone="error">
+      {message || 'Couldn’t load your Hermes setup.'}
+    </Banner>
+    <div style={{ display: 'flex', gap: 10 }}>
+      <button style={btnStyle('primary')} onClick={onRetry}>
+        Retry
+      </button>
+    </div>
+    <p style={{ margin: 0, fontSize: 12.5, color: SC.muted, lineHeight: 1.5 }}>
+      Your setup is stored per-account. If this keeps failing, the streaming
+      console still works — reload the page to try again.
+    </p>
+  </div>
+);
+
 export const Component = () => {
-  return <HermesConsole />;
+  return <HermesPage />;
 };
