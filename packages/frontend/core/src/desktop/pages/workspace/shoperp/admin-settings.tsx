@@ -1,16 +1,23 @@
-import { useCallback, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useState } from 'react';
 
 import {
   ACCENT_RE,
   Banner,
   btnStyle,
   C,
+  type ChargilyMode,
+  type ChargilyStatus,
+  EmptyNote,
   type ErpSettings,
+  fetchChargilyStatus,
   Field,
+  hintStyle,
   inputStyle,
+  linkBtnStyle,
   num,
   Panel,
   postErpSettings,
+  putChargily,
   Spinner,
   validateAccent,
   validatePin,
@@ -285,6 +292,423 @@ export const SettingsAdmin = ({
           </div>
         </div>
       </Panel>
+
+      {/* Chargily online payments (C6) */}
+      <PaymentsSection
+        slug={slug}
+        settings={settings}
+        readOnly={readOnly}
+        onWritesBlocked={onWritesBlocked}
+        onMutated={onMutated}
+      />
     </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Payments section (C6) — Chargily keys + an "accept online payments" toggle.
+//   • The merchant SECRET lives in a PRIVATE store server-side; the FE only
+//     ever sends it (PUT /pay/chargily) and reads a MASKED view
+//     (GET /pay/chargily → {configured, mode, enabled, maskedKey}). The secret
+//     is never echoed back in full.
+//   • The "Accept online payments" flag is NON-sensitive → it rides the
+//     EXISTING erp/settings route as settings.onlinePay (postErpSettings).
+// Degrades gracefully:
+//   • Route not present on the server → a quiet "not available" note (the shop
+//     stays cash-on-delivery only); nothing breaks.
+//   • Not yet configured → a setup prompt (enter a secret to enable).
+// ---------------------------------------------------------------------------
+
+const toggleTrackStyle = (on: boolean, disabled: boolean): CSSProperties => ({
+  position: 'relative',
+  width: 42,
+  height: 24,
+  borderRadius: 999,
+  flexShrink: 0,
+  border: 'none',
+  cursor: disabled ? 'default' : 'pointer',
+  padding: 0,
+  background: on ? C.accent : C.panel2,
+  opacity: disabled ? 0.5 : 1,
+  transition: 'background 160ms ease',
+});
+
+const toggleKnobStyle = (on: boolean): CSSProperties => ({
+  position: 'absolute',
+  top: 2,
+  left: on ? 20 : 2,
+  width: 20,
+  height: 20,
+  borderRadius: '50%',
+  background: '#fff',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+  transition: 'left 160ms ease',
+});
+
+const Toggle = ({
+  on,
+  disabled,
+  onChange,
+  label,
+}: {
+  on: boolean;
+  disabled: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) => (
+  <button
+    type="button"
+    role="switch"
+    aria-checked={on}
+    aria-label={label}
+    disabled={disabled}
+    style={toggleTrackStyle(on, disabled)}
+    onClick={() => onChange(!on)}
+  >
+    <span aria-hidden style={toggleKnobStyle(on)} />
+  </button>
+);
+
+const selectStyle: CSSProperties = {
+  ...inputStyle,
+  padding: '9px 12px',
+  cursor: 'pointer',
+};
+
+const PaymentsSection = ({
+  slug,
+  settings,
+  readOnly,
+  onWritesBlocked,
+  onMutated,
+}: {
+  slug: string;
+  settings: ErpSettings;
+  readOnly: boolean;
+  onWritesBlocked: () => void;
+  onMutated: () => void;
+}) => {
+  const [phase, setPhase] = useState<
+    'loading' | 'ready' | 'unavailable' | 'error'
+  >('loading');
+  const [errMsg, setErrMsg] = useState('');
+  const [chargily, setChargily] = useState<ChargilyStatus | null>(null);
+
+  // Draft controls.
+  const [secret, setSecret] = useState('');
+  const [mode, setMode] = useState<ChargilyMode>('test');
+  const [enabled, setEnabled] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  // Online-pay flag (settings.onlinePay via the existing erp/settings route).
+  const [onlinePay, setOnlinePay] = useState(settings.onlinePay === true);
+  const [payToggling, setPayToggling] = useState(false);
+
+  const [notice, setNotice] = useState<{
+    tone: 'ok' | 'error';
+    text: string;
+  } | null>(null);
+
+  const load = useCallback(async () => {
+    setPhase('loading');
+    const out = await fetchChargilyStatus(slug);
+    if (out.status === 'ok') {
+      setChargily(out.chargily);
+      setMode(out.chargily.mode);
+      setEnabled(out.chargily.enabled);
+      setPhase('ready');
+    } else if (out.status === 'unavailable') {
+      setPhase('unavailable');
+    } else {
+      setErrMsg(out.message);
+      setPhase('error');
+    }
+  }, [slug]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Keep the local flag in sync if the summary refreshes with a new value.
+  useEffect(() => {
+    setOnlinePay(settings.onlinePay === true);
+  }, [settings.onlinePay]);
+
+  const saveChargily = useCallback(async () => {
+    if (readOnly || saving) return;
+    const trimmed = secret.trim();
+    // On first setup a secret is required; on update it's optional (keep stored).
+    if (!chargily?.configured && !trimmed) {
+      setNotice({
+        tone: 'error',
+        text: 'Enter your Chargily API secret to enable online payments.',
+      });
+      return;
+    }
+    setSaving(true);
+    setNotice(null);
+    const out = await putChargily(slug, {
+      ...(trimmed ? { apiSecret: trimmed } : {}),
+      mode,
+      enabled,
+    });
+    if (out.status === 'ok') {
+      setChargily(out.chargily);
+      setSecret(''); // never keep the raw secret around after a successful save
+      setNotice({ tone: 'ok', text: 'Payment settings saved.' });
+    } else if (out.status === 'unavailable') {
+      setPhase('unavailable');
+    } else {
+      setNotice({ tone: 'error', text: out.message });
+    }
+    setSaving(false);
+  }, [readOnly, saving, secret, chargily, slug, mode, enabled]);
+
+  const toggleOnlinePay = useCallback(
+    async (next: boolean) => {
+      if (readOnly || payToggling) return;
+      setPayToggling(true);
+      setNotice(null);
+      // Optimistic — revert on failure.
+      setOnlinePay(next);
+      const out = await postErpSettings(slug, { onlinePay: next });
+      if (out.status === 'ok') {
+        setNotice({
+          tone: 'ok',
+          text: next
+            ? 'Online payments enabled — the storefront shows a « Payer en ligne » option on next load.'
+            : 'Online payments disabled — the storefront stays cash-on-delivery only.',
+        });
+        onMutated();
+      } else if (out.status === 'unavailable') {
+        setOnlinePay(!next);
+        onWritesBlocked();
+      } else {
+        setOnlinePay(!next);
+        setNotice({ tone: 'error', text: out.message });
+      }
+      setPayToggling(false);
+    },
+    [readOnly, payToggling, slug, onMutated, onWritesBlocked]
+  );
+
+  return (
+    <Panel title="Online payments (Chargily)">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {notice ? (
+          <Banner tone={notice.tone === 'ok' ? 'ok' : 'error'}>
+            {notice.text}
+          </Banner>
+        ) : null}
+
+        {phase === 'loading' ? (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '16px 4px',
+              color: C.muted,
+            }}
+          >
+            <Spinner /> Loading payment settings…
+          </div>
+        ) : phase === 'unavailable' ? (
+          <EmptyNote>
+            Online payments aren’t available on this server — your shop keeps
+            taking <strong>cash on delivery</strong> as usual.
+          </EmptyNote>
+        ) : phase === 'error' ? (
+          <Banner tone="error">
+            {errMsg}{' '}
+            <button style={linkBtnStyle} onClick={() => void load()}>
+              Retry
+            </button>
+          </Banner>
+        ) : (
+          <>
+            {/* Configured / setup status */}
+            {chargily?.configured ? (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  fontSize: 12.5,
+                  color: C.muted,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: '0.04em',
+                    textTransform: 'uppercase',
+                    padding: '2px 9px',
+                    borderRadius: 999,
+                    color: '#fff',
+                    background: chargily.enabled ? C.accent : C.muted,
+                  }}
+                >
+                  {chargily.enabled ? 'Enabled' : 'Disabled'}
+                </span>
+                <span>
+                  Key on file:{' '}
+                  <span
+                    style={{
+                      fontFamily: 'var(--affine-font-code-family, monospace)',
+                      color: C.text,
+                    }}
+                  >
+                    {chargily.maskedKey || '••••'}
+                  </span>{' '}
+                  · mode <strong style={{ color: C.text }}>{chargily.mode}</strong>
+                </span>
+              </div>
+            ) : (
+              <Banner tone="info">
+                Connect your Chargily account to accept card / Edahabia / CIB
+                payments. Paste your API secret below — it’s stored securely and
+                never shown again in full.
+              </Banner>
+            )}
+
+            <Field
+              label={
+                chargily?.configured
+                  ? 'Replace API secret (optional)'
+                  : 'Chargily API secret'
+              }
+              hint={
+                chargily?.configured
+                  ? 'Leave blank to keep the stored key; enter a new one to replace it.'
+                  : 'From your Chargily dashboard → Developers → API keys.'
+              }
+            >
+              <input
+                style={{
+                  ...inputStyle,
+                  fontFamily: 'var(--affine-font-code-family, monospace)',
+                }}
+                type="password"
+                autoComplete="off"
+                value={secret}
+                placeholder={
+                  chargily?.configured ? '•••••••••••••••' : 'live_sk_… or test_sk_…'
+                }
+                onChange={e => setSecret(e.target.value)}
+                disabled={readOnly || saving}
+              />
+            </Field>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: 14,
+                alignItems: 'end',
+              }}
+            >
+              <Field label="Mode" hint="Use test until you’re ready to go live.">
+                <select
+                  style={selectStyle}
+                  value={mode}
+                  disabled={readOnly || saving}
+                  onChange={e => setMode(e.target.value as ChargilyMode)}
+                >
+                  <option value="test">Test</option>
+                  <option value="live">Live</option>
+                </select>
+              </Field>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  paddingBottom: 2,
+                }}
+              >
+                <Toggle
+                  on={enabled}
+                  disabled={readOnly || saving}
+                  onChange={setEnabled}
+                  label="Enable Chargily checkout"
+                />
+                <span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>
+                  Enable Chargily checkout
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button
+                style={btnStyle('primary', readOnly || saving)}
+                disabled={readOnly || saving}
+                onClick={() => void saveChargily()}
+              >
+                {saving ? (
+                  <>
+                    <Spinner dark /> Saving…
+                  </>
+                ) : (
+                  'Save payment settings'
+                )}
+              </button>
+              {readOnly ? (
+                <span style={{ fontSize: 12, color: C.muted }}>
+                  Read-only — admin changes are unavailable right now.
+                </span>
+              ) : null}
+            </div>
+
+            {/* Accept-online-payments storefront toggle (settings.onlinePay) */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 12,
+                padding: '12px 14px',
+                borderRadius: 10,
+                background: C.panel2,
+                border: `1px solid ${C.border}`,
+              }}
+            >
+              <Toggle
+                on={onlinePay}
+                disabled={readOnly || payToggling}
+                onChange={next => void toggleOnlinePay(next)}
+                label="Accept online payments on the storefront"
+              />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: C.text,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  Accept online payments
+                  {payToggling ? <Spinner /> : null}
+                </div>
+                <div style={{ ...hintStyle, marginTop: 2 }}>
+                  Shows a « Payer en ligne » button at checkout on your live shop.
+                  {!chargily?.configured || !chargily?.enabled ? (
+                    <>
+                      {' '}
+                      Configure and enable Chargily above first, or shoppers will
+                      fall back to cash on delivery.
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </Panel>
   );
 };

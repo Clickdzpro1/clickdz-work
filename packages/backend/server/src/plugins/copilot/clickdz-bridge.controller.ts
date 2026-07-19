@@ -10,13 +10,22 @@ import {
   Param,
   PayloadTooLargeException,
   Post,
+  Put,
   Query,
   Req,
   Res,
 } from '@nestjs/common';
+// C6 (CHARGILY WEBHOOK): RawBodyRequest exposes req.rawBody (a Buffer of the
+// exact bytes) when the app is bootstrapped with `rawBody: true` — which
+// server.ts does. The Stripe webhook controller uses this same type + field to
+// verify an HMAC signature against the UNPARSED body (a JSON-parsed object can't
+// reproduce the signed bytes). Type-only import (verbatimModuleSyntax).
+import type { RawBodyRequest } from '@nestjs/common';
 import type { Request, Response } from 'express';
 // SECURITY: cryptographically strong randomness for unguessable auto-slugs.
-import { randomBytes } from 'node:crypto';
+// C6: createHmac also powers the Chargily webhook signature check (HMAC-SHA256
+// of the raw body with the merchant's apiSecret, compared constant-time).
+import { createHmac, randomBytes } from 'node:crypto';
 
 // WS4 publish-cap: the global AuthGuard already authenticates these first-party
 // routes (no @Public / no bridge token). `CurrentUser` just RECEIVES the
@@ -41,7 +50,10 @@ import {
   type AppSelectionContext,
 } from './clickdz-app-prompt';
 // SECURITY: constant-time token compare + per-slug Data API write tokens.
-import { dataWriteToken, safeEqual } from './cdz-data-token';
+// C6: verifyDataToken gates the @Public() /pay/checkout route with the SAME
+// per-slug token the published shop already sends on data writes (checkout auth
+// == data-write auth), so no new secret/credential is introduced.
+import { dataWriteToken, safeEqual, verifyDataToken } from './cdz-data-token';
 // WS3 templates — COMPLETE single-file HTML apps authored in sibling files
 // (Merchant/Clerk own them, in parallel). We code against the export names; the
 // files may not exist locally yet. Each contains the SAME placeholder tokens the
@@ -1152,6 +1164,132 @@ function normalizeErpSettings(row: ErpRecord | undefined) {
       : ERP_DEFAULT_FONT,
     sections: sections ?? ERP_DEFAULT_SECTIONS,
   };
+}
+
+// ---------------------------------------------------------------------------
+// C4 — INVENTORY v2 (multi-warehouse, data-API collections).
+//
+// Two NET-NEW collections layered on the SAME per-slug data API the ERP admin
+// routes already use (server-side, with the re-derived write token):
+//   • `warehouses`            [{ id, name, location?, createdAt }] — bounded/tiny.
+//   • `movements-YYYYMM`      append-only ledger, ONE Redis hash per month:
+//        [{ id, ts, productKey, warehouseId, delta:int, reason, ref? }].
+// Per-(product,warehouse) stock = Σ delta across the read window; the product's
+// `stock` roll-up (total) is kept in sync via the existing erpUpsertProduct
+// delete+recreate path so the storefront cards + erpSummary/lowStock keep
+// working UNCHANGED (back-compat).
+//
+// WHY monthly partitions: the data API hard-caps a collection at 500 records
+// (BadRequest "Collection is full") and `list()` reads exactly ONE hash — an
+// append-only single `movements` collection would fill and start failing writes.
+// `:` is ILLEGAL in a collection name (COLLECTION_RE), so the partition suffix
+// uses a dash: `movements-YYYYMM` (16 chars, passes /^[a-z0-9_-]{1,32}$/). Reads
+// fan out over a bounded window of monthly partitions and merge (exactly how the
+// deployed ERP's loadAll() already fans one GET per collection).
+// ---------------------------------------------------------------------------
+// Movement reasons (the ledger's controlled vocabulary). Unknown reason → 400.
+const ERP_MOVEMENT_REASONS = [
+  'purchase',
+  'sale',
+  'adjust',
+  'return',
+  'transfer',
+] as const;
+type ErpMovementReason = (typeof ERP_MOVEMENT_REASONS)[number];
+// Rolling read window: how many monthly partitions the inventory GET merges
+// (current month + the previous 12 → last ~13 months). Bounds the fan-out so a
+// long-lived shop never reads an unbounded number of hashes per request.
+const ERP_MOVEMENT_MONTHS_READ = 13;
+// Defensive cap on the warehouse list (well under the data API's 500/collection).
+const ERP_MAX_WAREHOUSES = 100;
+// Per-field caps for warehouse records (kept tiny; 8KB record cap is belt-and-
+// braces on top of these).
+const ERP_WAREHOUSE_NAME_MAX = 80;
+const ERP_WAREHOUSE_LOCATION_MAX = 120;
+const ERP_MOVEMENT_REF_MAX = 120;
+// A movement delta is a signed integer; clamp its magnitude so a fat-finger
+// can't write an absurd number (and to keep the record small).
+const ERP_MOVEMENT_DELTA_MAX = 1_000_000;
+
+/** The current-month movements partition collection name (`movements-YYYYMM`). */
+function erpMovementCollection(d: Date = new Date()): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `movements-${y}${m}`;
+}
+
+/**
+ * The last `count` monthly movement partition names, NEWEST first (current
+ * month → older). Bounded by ERP_MOVEMENT_MONTHS_READ at the call sites.
+ */
+function erpMovementCollections(count: number): string[] {
+  const out: string[] = [];
+  const now = new Date();
+  const n = Math.max(1, Math.min(Math.floor(count), 60));
+  for (let i = 0; i < n; i++) {
+    out.push(
+      erpMovementCollection(
+        new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))
+      )
+    );
+  }
+  return out;
+}
+
+/**
+ * Canonical product key for the inventory ledger: prefer `sku` (ERP shape),
+ * else the display title (title||name), lowercased/trimmed. Matches the same
+ * business key erpUpsertProduct upserts by, so a movement's productKey and the
+ * product roll-up always line up.
+ */
+function erpProductKey(rec: ErpRecord): string {
+  const sku = erpStr(rec.sku).trim();
+  if (sku) return sku;
+  return erpDisplayTitle(rec).trim().toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
+// C6 — CHARGILY payments (merchant keys / checkout / webhook).
+//
+// The merchant's Chargily API secret is a REAL credential and MUST NOT live in
+// the public `settings` singleton (that collection is world-readable via the
+// @Public data GET — it already leaks adminPin/whatsapp). It lives in a PRIVATE
+// Redis key written only by an authed, owner-gated route and NEVER echoed in
+// full (masked to last-4). Same CacheRedis the published-apps set uses.
+// ---------------------------------------------------------------------------
+/** Private Redis key holding the per-slug Chargily config (never public). */
+const chargilyKey = (slug: string) => `clickdz:pay:chargily:${slug}`;
+/** Private Redis key for the OPTIONAL PIM audit trail (never a public collection). */
+const erpAuditKey = (slug: string) => `clickdz:erp:audit:${slug}`;
+// Chargily Pay v2 REST bases. Live vs test are DISTINCT hosts (test never
+// touches real money). Env-overridable for staging, defaulting to the documented
+// production hosts.
+const CHARGILY_LIVE_BASE = (
+  process.env.CHARGILY_LIVE_BASE || 'https://pay.chargily.net/api/v2'
+).replace(/\/+$/, '');
+const CHARGILY_TEST_BASE = (
+  process.env.CHARGILY_TEST_BASE || 'https://pay.chargily.net/test/api/v2'
+).replace(/\/+$/, '');
+const CHARGILY_TIMEOUT_MS = 15_000;
+// Cap the order reference we forward as Chargily metadata / echo back.
+const CHARGILY_ORDER_REF_MAX = 80;
+// The paid amount is in DZD (integer dinars); clamp to a sane range so a bad
+// caller can't create an absurd checkout.
+const CHARGILY_MAX_AMOUNT = 100_000_000;
+
+/** Chargily config as persisted in the private Redis key. */
+interface ChargilyConfig {
+  apiSecret: string;
+  mode: 'test' | 'live';
+  enabled: boolean;
+}
+
+/** Mask a secret to a hint (never returns more than the last 4 chars). */
+function maskSecret(secret: string): string {
+  const s = erpStr(secret);
+  if (!s) return '';
+  if (s.length <= 4) return '••••';
+  return `••••${s.slice(-4)}`;
 }
 
 @Controller()
@@ -3893,9 +4031,21 @@ export class ClickDzBridgeController {
     const avgBasket = deliveredAllCount
       ? deliveredAllTotal / deliveredAllCount
       : 0;
-    const lowStock = products.filter(
-      p => p.reorderAt != null && erpNum(p.stock) <= erpNum(p.reorderAt)
-    );
+    // C4: prefer per-warehouse totals from the inventory ledger where available,
+    // falling back to the product's `stock` roll-up. Best-effort + fail-open:
+    // when there are no movement partitions (or a read fails) the map is empty
+    // and EVERY product falls back to `erpNum(p.stock)` — i.e. byte-identical to
+    // the pre-C4 predicate. So `lowStock`/`lowStockCount` never regress.
+    const invTotals = await this.erpInventoryTotals(slug);
+    const lowStock = products.filter(p => {
+      if (p.reorderAt == null) return false;
+      const key = erpProductKey(p);
+      const onHand =
+        key && invTotals.has(key)
+          ? (invTotals.get(key) as number)
+          : erpNum(p.stock);
+      return onHand <= erpNum(p.reorderAt);
+    });
     const topProducts = [...topMap.values()]
       .sort((a, b) => b.revenue - a.revenue || b.qty - a.qty)
       .slice(0, ERP_TOP_PRODUCTS_MAX);
@@ -4305,5 +4455,958 @@ export class ClickDzBridgeController {
       `[erp] settings saved slug=${slug} user=${user.id} fields=${Object.keys(patch).join(',')}`
     );
     return { ok: true, settings: created.record };
+  }
+
+  // =========================================================================
+  // C4 — INVENTORY v2 (multi-warehouse ledger on the data API).
+  // Every route here is authed (@CurrentUser via the global AuthGuard) +
+  // owner-gated (assertOwnsErpApp) and reuses the SAME erpList/erpCreateRecord/
+  // erpDeleteRecord helpers (re-derived per-slug write token, delete+recreate,
+  // 8KB cap) as the ERP admin routes above. Typed errors / passthrough only.
+  // =========================================================================
+
+  /**
+   * Read the movements ledger across the rolling window and return
+   * per-(product,warehouse) stock plus a per-product total. Best-effort: a
+   * missing/empty partition is simply skipped; a partition whose read FAILS
+   * (data API down) is skipped too, so callers degrade gracefully rather than
+   * 502-ing a whole dashboard on one bad month. `read`/`failed` report how many
+   * partitions were read vs unreachable (the inventory GET surfaces `capped`).
+   */
+  private async erpReadMovements(
+    slug: string,
+    months: number
+  ): Promise<{
+    byProduct: Map<string, Map<string, number>>;
+    totals: Map<string, number>;
+    read: number;
+    failed: number;
+  }> {
+    const collections = erpMovementCollections(
+      Math.min(months, ERP_MOVEMENT_MONTHS_READ)
+    );
+    // Fan out one GET per monthly partition (like the ERP's loadAll()).
+    const results = await Promise.all(
+      collections.map(c => this.erpList(slug, c))
+    );
+    const byProduct = new Map<string, Map<string, number>>();
+    const totals = new Map<string, number>();
+    let read = 0;
+    let failed = 0;
+    for (const rows of results) {
+      if (rows === null) {
+        failed += 1;
+        continue;
+      }
+      read += 1;
+      for (const raw of rows) {
+        const m = (raw ?? {}) as ErpRecord;
+        const key = erpStr(m.productKey).trim();
+        const wid = erpStr(m.warehouseId).trim();
+        if (!key || !wid) continue;
+        const delta = Math.round(erpNum(m.delta));
+        if (!Number.isFinite(delta) || delta === 0) continue;
+        let per = byProduct.get(key);
+        if (!per) {
+          per = new Map<string, number>();
+          byProduct.set(key, per);
+        }
+        per.set(wid, (per.get(wid) ?? 0) + delta);
+        totals.set(key, (totals.get(key) ?? 0) + delta);
+      }
+    }
+    return { byProduct, totals, read, failed };
+  }
+
+  /**
+   * C4 helper for erpSummary: per-product on-hand totals from the ledger. Empty
+   * map when the ledger is unused/unreachable ⇒ the summary falls back to the
+   * product `stock` roll-up (byte-identical to the pre-C4 lowStock predicate).
+   */
+  private async erpInventoryTotals(slug: string): Promise<Map<string, number>> {
+    try {
+      const { totals } = await this.erpReadMovements(
+        slug,
+        ERP_MOVEMENT_MONTHS_READ
+      );
+      return totals;
+    } catch {
+      return new Map<string, number>();
+    }
+  }
+
+  /**
+   * C4 — GET /api/v1/apps/:slug/erp/inventory (auth'd, owner-only).
+   * Reads the `warehouses` collection + the last ~13 monthly movement
+   * partitions and returns:
+   *   { warehouses, stockByProduct:{[productKey]:{[warehouseId]:qty, total}},
+   *     lowStock:[...] }
+   * lowStock uses the SAME predicate as erpSummary but prefers the ledger total
+   * (fallback to product.stock). `partitionsRead`/`capped` report the read
+   * window so the UI can note truncation.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/inventory')
+  async erpInventory(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const [warehousesRaw, products] = await Promise.all([
+      this.erpList(slug, 'warehouses'),
+      this.erpList(slug, 'products'),
+    ]);
+    if (!warehousesRaw || !products) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const { byProduct, totals, read, failed } = await this.erpReadMovements(
+      slug,
+      ERP_MOVEMENT_MONTHS_READ
+    );
+    // Normalize warehouse records to the pinned shape (newest-first already).
+    const warehouses = warehousesRaw.map(w => ({
+      id: erpStr(w.id),
+      name: erpStr(w.name),
+      ...(erpStr(w.location) ? { location: erpStr(w.location) } : {}),
+      createdAt: erpStr(w.createdAt),
+    }));
+    // Build stockByProduct: {[productKey]: {[warehouseId]: qty, total}}.
+    const stockByProduct: Record<
+      string,
+      Record<string, number>
+    > = {};
+    for (const [key, per] of byProduct.entries()) {
+      const entry: Record<string, number> = {};
+      let total = 0;
+      for (const [wid, qty] of per.entries()) {
+        entry[wid] = qty;
+        total += qty;
+      }
+      entry.total = total;
+      stockByProduct[key] = entry;
+    }
+    // lowStock — same predicate as summary; prefer the ledger total.
+    const lowStock = products.filter(p => {
+      if (p.reorderAt == null) return false;
+      const key = erpProductKey(p);
+      const onHand =
+        key && totals.has(key) ? (totals.get(key) as number) : erpNum(p.stock);
+      return onHand <= erpNum(p.reorderAt);
+    });
+    this.logger.log(
+      `[erp] inventory slug=${slug} user=${user.id} warehouses=${warehouses.length} products=${products.length} partitions=${read}/${read + failed}`
+    );
+    return {
+      warehouses,
+      stockByProduct,
+      lowStock,
+      partitionsRead: read,
+      // `capped` = a partition in the window was unreachable OR we hit the read
+      // ceiling; the UI can hint that totals may be partial.
+      capped: failed > 0,
+    };
+  }
+
+  /**
+   * C4 — POST /api/v1/apps/:slug/erp/inventory/movement (auth'd, owner-only).
+   * BODY `{ productKey, warehouseId, delta, reason, ref? }` — appends a movement
+   * to the CURRENT-month partition (`movements-YYYYMM`) then recomputes the
+   * product's `stock` roll-up (Σ deltas across the read window) and writes it
+   * back via delete+recreate on the product's business key. Returns
+   * `{ ok, stock }` (the new roll-up total). Reuses erpCreateRecord/
+   * erpDeleteRecord + the 8KB pre-check; a full partition surfaces as the data
+   * API's own typed 400 (data_rejected) via erpWriteFailed.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/inventory/movement')
+  async erpInventoryMovement(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const productKey = erpStr(body?.productKey).trim().slice(0, 120);
+    if (!productKey) {
+      throw new BadRequest('"productKey" is required');
+    }
+    const warehouseId = erpStr(body?.warehouseId).trim();
+    if (!warehouseId) {
+      throw new BadRequest('"warehouseId" is required');
+    }
+    const reason = erpStr(body?.reason).trim();
+    if (!(ERP_MOVEMENT_REASONS as readonly string[]).includes(reason)) {
+      throw new BadRequest(
+        `"reason" must be one of: ${ERP_MOVEMENT_REASONS.join(', ')}`
+      );
+    }
+    const deltaNum = Number(body?.delta);
+    if (!Number.isFinite(deltaNum) || Math.round(deltaNum) === 0) {
+      throw new BadRequest('"delta" must be a non-zero integer');
+    }
+    const delta = Math.max(
+      -ERP_MOVEMENT_DELTA_MAX,
+      Math.min(ERP_MOVEMENT_DELTA_MAX, Math.round(deltaNum))
+    );
+    const ref = erpStr(body?.ref).trim().slice(0, ERP_MOVEMENT_REF_MAX);
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    // Warehouse must exist (a movement into an unknown warehouse is a client bug).
+    const warehouses = await this.erpList(slug, 'warehouses');
+    if (!warehouses) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    if (!warehouses.some(w => erpStr(w.id) === warehouseId)) {
+      throw new NotFound('Warehouse not found');
+    }
+    // Append the movement to the current-month partition.
+    const movement: ErpRecord = {
+      ts: new Date().toISOString(),
+      productKey,
+      warehouseId,
+      delta,
+      reason: reason as ErpMovementReason,
+      ...(ref ? { ref } : {}),
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(movement), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Movement record too large');
+    }
+    const collection = erpMovementCollection();
+    const created = await this.erpCreateRecord(
+      slug,
+      collection,
+      movement,
+      token
+    );
+    if (!created.ok) {
+      // 400 from the data API here most likely = partition full (500 records).
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    // Recompute the product roll-up (Σ deltas across the read window, which now
+    // includes the just-appended movement) and persist it to product.stock via
+    // delete+recreate on the business key (same shape erpUpsertProduct writes).
+    const { totals } = await this.erpReadMovements(
+      slug,
+      ERP_MOVEMENT_MONTHS_READ
+    );
+    const newStock = Math.max(0, Math.round(totals.get(productKey) ?? delta));
+    const rollup = await this.erpApplyStockRollup(
+      slug,
+      productKey,
+      newStock,
+      token
+    );
+    this.logger.log(
+      `[erp] movement slug=${slug} user=${user.id} product=${productKey.slice(0, 40)} wh=${warehouseId} delta=${delta} reason=${reason} -> stock=${newStock}${rollup.applied ? '' : ' (no product roll-up)'}`
+    );
+    return { ok: true, stock: newStock, movement: created.record };
+  }
+
+  /**
+   * C4 helper — write a product's `stock` roll-up by delete+recreate on its
+   * business key (sku exact, else display title case-insensitive). Preserves
+   * every other field. Returns { applied } — false when no product matches the
+   * key (the movement is still recorded; there is just no roll-up to update) or
+   * a write step fails (best-effort; the ledger remains the source of truth).
+   * NEVER logs the token.
+   */
+  private async erpApplyStockRollup(
+    slug: string,
+    productKey: string,
+    newStock: number,
+    token: string
+  ): Promise<{ applied: boolean }> {
+    const products = await this.erpList(slug, 'products');
+    if (!products) return { applied: false };
+    const wanted = productKey.toLowerCase();
+    const matches = products.filter(
+      p => erpProductKey(p) === productKey || erpProductKey(p) === wanted
+    );
+    const baseRec = matches[0];
+    if (!baseRec) return { applied: false };
+    const merged: ErpRecord = {};
+    for (const k of Object.keys(baseRec)) {
+      if (k !== 'id' && k !== 'createdAt') merged[k] = baseRec[k];
+    }
+    merged.stock = newStock;
+    if (
+      Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      return { applied: false };
+    }
+    for (const m of matches) {
+      const id = erpStr(m.id);
+      if (!id) continue;
+      if (!(await this.erpDeleteRecord(slug, 'products', id, token))) {
+        return { applied: false };
+      }
+    }
+    const created = await this.erpCreateRecord(slug, 'products', merged, token);
+    return { applied: created.ok };
+  }
+
+  /**
+   * C4 — POST /api/v1/apps/:slug/erp/warehouse (auth'd, owner-only).
+   * BODY `{ name, location? }` — creates a warehouse record
+   * `{ id, name, location?, createdAt }`. The data API mints id/createdAt, but
+   * we ALSO mint a stable `id` in the body so movements can reference it (the
+   * data API's own id lives alongside; movements key on our `id`). Caps the
+   * warehouse count defensively.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/warehouse')
+  async erpCreateWarehouse(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const name = erpStr(body?.name).trim().slice(0, ERP_WAREHOUSE_NAME_MAX);
+    if (!name) {
+      throw new BadRequest('"name" is required');
+    }
+    const location = erpStr(body?.location)
+      .trim()
+      .slice(0, ERP_WAREHOUSE_LOCATION_MAX);
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const existing = await this.erpList(slug, 'warehouses');
+    if (!existing) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    if (existing.length >= ERP_MAX_WAREHOUSES) {
+      throw new BadRequest(
+        `Too many warehouses (max ${ERP_MAX_WAREHOUSES})`
+      );
+    }
+    // Stable business id (independent of the data API's own record id) so
+    // movements can reference a warehouse durably across a delete+recreate.
+    const wid = `wh_${randomBytes(6).toString('hex')}`;
+    const record: ErpRecord = {
+      id: wid,
+      name,
+      ...(location ? { location } : {}),
+      createdAt: new Date().toISOString(),
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(record), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Warehouse record too large');
+    }
+    const created = await this.erpCreateRecord(
+      slug,
+      'warehouses',
+      record,
+      token
+    );
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] warehouse create slug=${slug} user=${user.id} id=${wid}`
+    );
+    // Echo OUR stable id (not the data API's field id) — movements key on this.
+    return { ok: true, warehouse: { ...record } };
+  }
+
+  /**
+   * C4 — DELETE /api/v1/apps/:slug/erp/warehouse/:id (auth'd, owner-only).
+   * Deletes the warehouse whose business `id` (our minted `wh_...`) matches.
+   * Movements that referenced it are left in the ledger (append-only history);
+   * they simply stop mapping to a live warehouse in stockByProduct's per-wh
+   * breakdown, which is harmless. Idempotent-ish: no match ⇒ 404.
+   */
+  @Throttle('strict')
+  @Delete('/api/v1/apps/:slug/erp/warehouse/:id')
+  async erpDeleteWarehouse(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const wid = erpStr(id).trim();
+    if (!wid) {
+      throw new BadRequest('"id" is required');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const warehouses = await this.erpList(slug, 'warehouses');
+    if (!warehouses) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    // Match on OUR business id; delete every data-API record carrying it (self-
+    // heals dupes). The data API's own record id is the deletion key.
+    const matches = warehouses.filter(w => erpStr(w.id) === wid);
+    if (matches.length === 0) {
+      throw new NotFound('Warehouse not found');
+    }
+    for (const m of matches) {
+      // The record's data-API id: warehouses we mint carry OUR id in `id`, but
+      // the data API also assigns its own field `id` on create — they are the
+      // SAME field here (we set `id` in the body, create() only sets it when
+      // absent). Delete by that value.
+      const recId = erpStr(m.id);
+      if (!recId) continue;
+      if (!(await this.erpDeleteRecord(slug, 'warehouses', recId, token))) {
+        res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
+        return;
+      }
+    }
+    this.logger.log(
+      `[erp] warehouse delete slug=${slug} user=${user.id} id=${wid}`
+    );
+    return { ok: true };
+  }
+
+  // =========================================================================
+  // C5 — PIM AI product descriptions (grounded, no invented facts).
+  // Reuses the bridge's cdz-flash idiom (summarizeEdit L~1615): same
+  // CDZ_AI_BASE_URL/CDZ_AI_KEY, /v1/chat/completions, fail-closed parse.
+  // =========================================================================
+
+  /**
+   * C5 — POST /api/v1/apps/:slug/erp/describe (auth'd, owner-only).
+   * BODY `{ productKey, tone?, lang? }` — grounds a cdz-flash prompt STRICTLY in
+   * the product's canonical attributes (title, price, category, specs — no
+   * invented facts) and returns `{ description, bullets? }`. Planner down / no
+   * key / unparseable ⇒ typed 502 (never a raw HttpException). Optional private
+   * audit trail in Redis (clickdz:erp:audit:<slug>) — NOT a public collection.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/describe')
+  async erpDescribe(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const productKey = erpStr(body?.productKey).trim().slice(0, 120);
+    if (!productKey) {
+      throw new BadRequest('"productKey" is required');
+    }
+    // tone/lang are OPTIONAL style knobs — validated to short allowlists so they
+    // can't be abused as a prompt-injection vector. Unknown ⇒ sensible default.
+    const tone = erpStr(body?.tone).trim().toLowerCase().slice(0, 24);
+    const lang = erpStr(body?.lang).trim().toLowerCase().slice(0, 12) || 'fr';
+    if (!CDZ_AI_KEY) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'planner_unavailable' });
+      return;
+    }
+    // Fetch the product to ground on its CANONICAL attributes only.
+    const products = await this.erpList(slug, 'products');
+    if (!products) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const wanted = productKey.toLowerCase();
+    const product = products.find(
+      p => erpProductKey(p) === productKey || erpProductKey(p) === wanted
+    );
+    if (!product) {
+      throw new NotFound('Product not found');
+    }
+    // Canonical, server-trusted facts — the ONLY grounding the model may use.
+    const title = erpDisplayTitle(product) || 'Produit';
+    const price = erpNum(product.price);
+    const category = erpStr(product.category).trim();
+    // Optional structured specs: accept a small string-map on the product OR the
+    // request body (caller-supplied), stringified compactly. No other free text.
+    const specsSource =
+      body?.specs && typeof body.specs === 'object' && !Array.isArray(body.specs)
+        ? body.specs
+        : product.specs && typeof product.specs === 'object'
+          ? product.specs
+          : null;
+    const specLines: string[] = [];
+    if (specsSource) {
+      for (const [k, v] of Object.entries(specsSource as Record<string, unknown>)) {
+        const kk = erpStr(k).trim().slice(0, 40);
+        const vv = erpStr(v).trim().slice(0, 120);
+        if (kk && vv) specLines.push(`${kk}: ${vv}`);
+        if (specLines.length >= 20) break;
+      }
+    }
+    const facts = [
+      `Title: ${title}`,
+      price > 0 ? `Price: ${price} DZD` : '',
+      category ? `Category: ${category}` : '',
+      ...specLines.map(s => `Spec — ${s}`),
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const prompt = [
+      'You are a product copywriter for an Algerian e-commerce shop.',
+      `Write a concise, appealing product description in ${lang === 'ar' ? 'Arabic' : lang === 'en' ? 'English' : 'French'}${tone ? ` with a ${tone} tone` : ''}.`,
+      'GROUND STRICTLY in the FACTS below. Do NOT invent specifications, materials,',
+      'sizes, origins, certifications, warranties, or any detail not present in the',
+      'facts. If a detail is unknown, omit it — never guess.',
+      'Return STRICT JSON only, no markdown, of the shape:',
+      '{"description": "<2-4 sentences>", "bullets": ["<short selling point>", ...]}',
+      'Provide 3-5 bullets, each grounded in a fact. No preamble.',
+      '',
+      'FACTS:',
+      facts,
+    ].join('\n');
+
+    let raw = '';
+    try {
+      const response = await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${CDZ_AI_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'cdz-flash',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: clampMaxTokens(500, 500),
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const data = (await response.json()) as any;
+      const content = data?.choices?.[0]?.message?.content;
+      if (response.ok && typeof content === 'string') {
+        raw = content;
+      }
+    } catch {
+      // fall through → typed 502 below
+    }
+    if (!raw.trim()) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'planner_unavailable' });
+      return;
+    }
+    // Fail-closed parse: pull the first JSON object; tolerate a fenced block.
+    const parsed = this.parseDescribeJson(raw);
+    if (!parsed) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'planner_unparseable' });
+      return;
+    }
+    const description = erpStr(parsed.description).trim().slice(0, 900);
+    const bullets = Array.isArray(parsed.bullets)
+      ? parsed.bullets
+          .map(b => erpStr(b).trim().slice(0, 160))
+          .filter(Boolean)
+          .slice(0, 8)
+      : [];
+    if (!description) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'planner_unparseable' });
+      return;
+    }
+    // OPTIONAL private audit trail (never a public collection; best-effort).
+    try {
+      await this.redis.lpush(
+        erpAuditKey(slug),
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          user: user.id,
+          productKey,
+          tone: tone || undefined,
+          lang,
+          len: description.length,
+        })
+      );
+      await this.redis.ltrim(erpAuditKey(slug), 0, 199);
+      await this.redis.expire(erpAuditKey(slug), PUBLISHED_APPS_TTL_SECONDS);
+    } catch {
+      // audit is best-effort; never fail the describe on a Redis hiccup.
+    }
+    this.logger.log(
+      `[erp] describe slug=${slug} user=${user.id} product=${productKey.slice(0, 40)} lang=${lang} len=${description.length}`
+    );
+    return {
+      description,
+      ...(bullets.length ? { bullets } : {}),
+    };
+  }
+
+  /**
+   * C5 helper — fail-closed JSON extraction from a model reply. Strips an
+   * optional ```json fence, then parses the first {...} object. Returns null on
+   * any failure (caller emits a typed 502) — NEVER throws.
+   */
+  private parseDescribeJson(
+    raw: string
+  ): { description?: unknown; bullets?: unknown } | null {
+    const cleaned = raw
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '');
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+    try {
+      const obj = JSON.parse(cleaned.slice(start, end + 1));
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        return obj as { description?: unknown; bullets?: unknown };
+      }
+    } catch {
+      /* fall through */
+    }
+    return null;
+  }
+
+  // =========================================================================
+  // C6 — CHARGILY payments (private keys / public checkout / public webhook).
+  // Merchant secret lives ONLY in private Redis (clickdz:pay:chargily:<slug>),
+  // NEVER echoed in full, NEVER in the public settings singleton. Checkout auth
+  // == the per-slug data write token (verifyDataToken). Webhook verifies an
+  // HMAC-SHA256 of the RAW body (req.rawBody) constant-time, never logs secrets.
+  // =========================================================================
+
+  /** External base for THIS app's routes (webhook endpoint / success URL). */
+  private erpAppBase(slug: string): string {
+    const externalBase = (
+      process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+    ).replace(/\/+$/, '');
+    return `${externalBase}/api/v1/apps/${slug}`;
+  }
+
+  /** Read + validate the private Chargily config; null when unset/corrupt. */
+  private async readChargilyConfig(
+    slug: string
+  ): Promise<ChargilyConfig | null> {
+    let raw: string | null = null;
+    try {
+      raw = await this.redis.get(chargilyKey(slug));
+    } catch {
+      return null;
+    }
+    if (!raw) return null;
+    try {
+      const obj = JSON.parse(raw) as Partial<ChargilyConfig>;
+      const apiSecret = typeof obj.apiSecret === 'string' ? obj.apiSecret : '';
+      const mode = obj.mode === 'live' ? 'live' : 'test';
+      const enabled = obj.enabled === true;
+      if (!apiSecret) return null;
+      return { apiSecret, mode, enabled };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * C6 — PUT /api/v1/apps/:slug/pay/chargily (auth'd, owner-only).
+   * BODY `{ apiSecret, mode:'test'|'live', enabled:boolean }` — stores the
+   * config in PRIVATE Redis. The secret is NEVER echoed (response returns the
+   * masked state only). A blank apiSecret with an existing config keeps the
+   * stored secret (lets the merchant toggle enabled/mode without re-entering it).
+   */
+  @Throttle('strict')
+  @Put('/api/v1/apps/:slug/pay/chargily')
+  async payChargilyPut(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const incomingSecret = erpStr(body?.apiSecret).trim();
+    const mode = body?.mode === 'live' ? 'live' : 'test';
+    const enabled = body?.enabled === true;
+    // Keep the existing secret when the caller submits a blank (masked) field.
+    const existing = await this.readChargilyConfig(slug);
+    const apiSecret = incomingSecret || existing?.apiSecret || '';
+    if (!apiSecret) {
+      throw new BadRequest('"apiSecret" is required');
+    }
+    if (apiSecret.length > 512) {
+      throw new BadRequest('"apiSecret" is too long');
+    }
+    const config: ChargilyConfig = { apiSecret, mode, enabled };
+    try {
+      // Rolling TTL (atomic EX) so a long-lived shop's key doesn't outlive its
+      // data window — same idiom as the vdz controller's transcript store.
+      await this.redis.set(
+        chargilyKey(slug),
+        JSON.stringify(config),
+        'EX',
+        PUBLISHED_APPS_TTL_SECONDS
+      );
+    } catch {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'store_unavailable' });
+      return;
+    }
+    // NEVER log or echo the secret — masked state only.
+    this.logger.log(
+      `[pay] chargily config saved slug=${slug} user=${user.id} mode=${mode} enabled=${enabled}`
+    );
+    return {
+      configured: true,
+      mode,
+      enabled,
+      maskedKey: maskSecret(apiSecret),
+    };
+  }
+
+  /**
+   * C6 — GET /api/v1/apps/:slug/pay/chargily (auth'd, owner-only).
+   * Returns `{ configured, mode, enabled, maskedKey }` — masked only, never the
+   * full secret.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/pay/chargily')
+  async payChargilyGet(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const config = await this.readChargilyConfig(slug);
+    if (!config) {
+      return { configured: false, mode: 'test', enabled: false, maskedKey: '' };
+    }
+    return {
+      configured: true,
+      mode: config.mode,
+      enabled: config.enabled,
+      maskedKey: maskSecret(config.apiSecret),
+    };
+  }
+
+  /**
+   * C6 — @Public() POST /api/v1/apps/:slug/pay/checkout.
+   * The PUBLISHED shop (no cookie) calls this with the per-slug data token it
+   * already holds. BODY `{ orderRef, amount, dataToken }` → verifies the token
+   * (== data-write auth) → creates a Chargily checkout → `{ checkout_url }`.
+   * Not configured/enabled ⇒ typed 400 {error:'pay_not_configured'}. Typed
+   * errors / passthrough only (a raw HttpException would become a 500).
+   */
+  @Public()
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/pay/checkout')
+  async payCheckout(
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'invalid_slug' });
+      return;
+    }
+    const dataToken = erpStr(body?.dataToken).trim();
+    // Same auth as the data-write path — constant-time verify of the per-slug
+    // token. On failure, a generic 401 (no detail leaked).
+    if (!dataToken || !verifyDataToken(slug, dataToken)) {
+      res.status(HttpStatus.UNAUTHORIZED).json({ error: 'unauthorized' });
+      return;
+    }
+    const orderRef = erpStr(body?.orderRef).trim().slice(0, CHARGILY_ORDER_REF_MAX);
+    if (!orderRef) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'orderRef_required' });
+      return;
+    }
+    const amount = Math.round(erpNum(body?.amount));
+    if (!Number.isFinite(amount) || amount <= 0 || amount > CHARGILY_MAX_AMOUNT) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'invalid_amount' });
+      return;
+    }
+    const config = await this.readChargilyConfig(slug);
+    if (!config || !config.enabled || !config.apiSecret) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'pay_not_configured' });
+      return;
+    }
+    const base = config.mode === 'live' ? CHARGILY_LIVE_BASE : CHARGILY_TEST_BASE;
+    const appBase = this.erpAppBase(slug);
+    let checkoutUrl = '';
+    try {
+      const response = await fetch(`${base}/checkouts`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.apiSecret}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          amount,
+          currency: 'dzd',
+          success_url: `${appBase}/pay/success`,
+          webhook_endpoint: `${appBase}/pay/webhook`,
+          metadata: { slug, orderRef },
+        }),
+        signal: AbortSignal.timeout(CHARGILY_TIMEOUT_MS),
+      });
+      const data = (await response.json().catch(() => null)) as any;
+      if (response.ok && data && typeof data.checkout_url === 'string') {
+        checkoutUrl = data.checkout_url;
+      } else {
+        // NEVER log the secret; log only the upstream status.
+        this.logger.warn(
+          `[pay] chargily checkout failed slug=${slug} status=${response.status}`
+        );
+      }
+    } catch {
+      this.logger.warn(`[pay] chargily checkout unreachable slug=${slug}`);
+    }
+    if (!checkoutUrl) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'checkout_failed' });
+      return;
+    }
+    this.logger.log(
+      `[pay] checkout slug=${slug} ref=${orderRef.slice(0, 40)} amount=${amount} mode=${config.mode}`
+    );
+    return { checkout_url: checkoutUrl };
+  }
+
+  /**
+   * C6 — @Public() POST /api/v1/apps/:slug/pay/webhook.
+   * Reads the RAW body (req.rawBody — populated because server.ts bootstraps
+   * with rawBody:true) and verifies the `signature` header equals
+   * HMAC-SHA256(rawBody, apiSecret) in CONSTANT TIME (safeEqual). On
+   * checkout.paid / invoice.paid it marks the order paid via the EXISTING erp
+   * order write helper (delete+recreate) — ADDING a `paid:true` field WITHOUT
+   * touching the 5 French status strings. Idempotent (a duplicate event that
+   * finds the order already paid is a no-op). NEVER logs the signature/secret.
+   * Always returns 200 for a VALID-signature event so the provider stops
+   * retrying; a bad/missing signature ⇒ typed 401.
+   */
+  @Public()
+  @Post('/api/v1/apps/:slug/pay/webhook')
+  async payWebhook(
+    @Param('slug') slug: string,
+    @Req() req: RawBodyRequest<Request>,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'invalid_slug' });
+      return;
+    }
+    const config = await this.readChargilyConfig(slug);
+    if (!config || !config.apiSecret) {
+      // No config ⇒ nothing to verify against. 400 (not 500) — never leak why.
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'pay_not_configured' });
+      return;
+    }
+    // RAW bytes are REQUIRED — a JSON-parsed body can't reproduce the signed
+    // digest. `req.rawBody` is the exact buffer captured by the body parser.
+    const raw = req.rawBody;
+    if (!raw || raw.length === 0) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'empty_body' });
+      return;
+    }
+    const signature = erpStr(req.headers['signature']).trim();
+    const expected = createHmac('sha256', config.apiSecret)
+      .update(raw)
+      .digest('hex');
+    // Constant-time compare (safeEqual hashes both sides → length-safe).
+    if (!signature || !safeEqual(expected, signature)) {
+      // NEVER log the signature or secret.
+      this.logger.warn(`[pay] webhook bad signature slug=${slug}`);
+      res.status(HttpStatus.UNAUTHORIZED).json({ error: 'bad_signature' });
+      return;
+    }
+    // Signature verified — parse the event from the RAW bytes.
+    let event: any = null;
+    try {
+      event = JSON.parse(raw.toString('utf8'));
+    } catch {
+      // Verified but unparseable — ack so it isn't retried forever.
+      res.status(HttpStatus.OK).json({ ok: true });
+      return;
+    }
+    const type = erpStr(event?.type).trim();
+    const paidTypes = new Set(['checkout.paid', 'invoice.paid']);
+    if (!paidTypes.has(type)) {
+      // A valid but non-terminal event (e.g. checkout.failed) — ack, no-op.
+      res.status(HttpStatus.OK).json({ ok: true });
+      return;
+    }
+    // Resolve the order ref from the Chargily metadata we set at checkout.
+    const data = (event?.data ?? {}) as Record<string, unknown>;
+    const meta = (data?.metadata ?? event?.metadata ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const orderRef = erpStr(meta?.orderRef).trim();
+    if (!orderRef) {
+      // Verified but no ref to act on — ack (no retry).
+      res.status(HttpStatus.OK).json({ ok: true });
+      return;
+    }
+    // Mark the order paid via the EXISTING delete+recreate order helper path.
+    // ADD `paid:true` (+ a paidAt timestamp); DO NOT change the French status.
+    const marked = await this.markOrderPaid(slug, orderRef);
+    this.logger.log(
+      `[pay] webhook slug=${slug} type=${type} ref=${orderRef.slice(0, 40)} -> ${marked}`
+    );
+    // Always 200 on a verified event so the provider stops retrying.
+    res.status(HttpStatus.OK).json({ ok: true });
+  }
+
+  /**
+   * C6 helper — flip an order's `paid` flag to true via delete+recreate on the
+   * business key `ref` (the SAME mechanism erpOrderStatus uses). Preserves every
+   * field including the exact French `status` string — only ADDS `paid:true` +
+   * `paidAt`. Idempotent: an order already `paid:true` is a no-op ('already').
+   * Returns a short status string for logging; NEVER throws (webhook must ack).
+   */
+  private async markOrderPaid(
+    slug: string,
+    orderRef: string
+  ): Promise<'paid' | 'already' | 'not_found' | 'write_failed' | 'no_token'> {
+    const token = dataWriteToken(slug);
+    if (!token) return 'no_token';
+    const orders = await this.erpList(slug, 'orders');
+    if (!orders) return 'write_failed';
+    const matches = orders.filter(o => erpStr(o.ref).trim() === orderRef);
+    if (matches.length === 0) return 'not_found';
+    // Idempotency: if EVERY matching copy is already paid, do nothing.
+    if (matches.every(o => o.paid === true)) return 'already';
+    const base = matches[0];
+    const next: ErpRecord = {};
+    for (const k of Object.keys(base)) {
+      if (k !== 'id' && k !== 'createdAt') next[k] = base[k];
+    }
+    // Additive ONLY: set paid; preserve the exact French status string.
+    next.paid = true;
+    if (!next.paidAt) next.paidAt = new Date().toISOString();
+    if (!next.orderedAt) next.orderedAt = erpParseDate(base);
+    if (Buffer.byteLength(JSON.stringify(next), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      return 'write_failed';
+    }
+    for (const m of matches) {
+      const id = erpStr(m.id);
+      if (!id) continue;
+      if (!(await this.erpDeleteRecord(slug, 'orders', id, token))) {
+        return 'write_failed';
+      }
+    }
+    const created = await this.erpCreateRecord(slug, 'orders', next, token);
+    return created.ok ? 'paid' : 'write_failed';
   }
 }
