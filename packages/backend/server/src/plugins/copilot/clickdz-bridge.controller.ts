@@ -26,7 +26,8 @@ import { CurrentUser, Public } from '../../core/auth';
 // AuthenticationRequired -> typed 401 (raw HttpException becomes a generic 500 here).
 // WS4: BadRequest/NotFound are the typed 4xx (a raw HttpException becomes a
 // generic 500 through the global filter — see the vdz controller / LANDMINES).
-import { AuthenticationRequired, BadRequest, NotFound, Throttle } from '../../base';
+// WS11/C6: ActionForbidden is the typed 403 for the ERP ownership gate.
+import { ActionForbidden, AuthenticationRequired, BadRequest, NotFound, Throttle } from '../../base';
 // WS4: per-owner published-apps set, mimicking the vdz controller's CacheRedis
 // pattern. RedisModule is @Global, so injecting it needs no module wiring.
 import { CacheRedis } from '../../base/redis';
@@ -879,6 +880,120 @@ function parsePlanClarification(raw: string): PlanClarification {
     options: ['Fast first version', 'Highest quality', 'Lowest risk'],
     steps,
     draftPlan: raw.trim() || steps.map(step => step.text).join('\n'),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// WS11/C6 — IN-APP ERP (KEEPER). Owner-only ERP endpoints over the SAME
+// per-slug Data API namespace the deployed shop/ERP templates read and write
+// (collections: orders / products / customers / expenses / settings).
+//   • Reads: the data GET is @Public (no token on v1 or v2) — the bridge
+//     fetches it SERVER-SIDE so the browser only ever talks to this authed
+//     surface and the per-slug write token never reaches the client.
+//   • Writes: the data API's v2 mutations require the per-slug HMAC write
+//     token. The bridge RE-DERIVES it with dataWriteToken(slug) — the exact
+//     mint clickdz-data.controller.ts verifies (HMAC-SHA256 over
+//     `appdata:${slug}` keyed by CDZ_DATA_SECRET, falling back to
+//     CLICKDZ_BRIDGE_TOKEN — see cdz-data-token.ts) and the same call the
+//     generate/template paths already use to bake tokens into app HTML.
+//   • No secret configured ⇒ dataWriteToken() returns '' ⇒ write endpoints
+//     answer a typed 501 {error:'admin_writes_unavailable'} (never a crash).
+// Field tolerance mirrors the templates: products carry `title` (shop shape)
+// or `name`/`sku` (ERP shape); expenses carry `montant` or `amount`; the
+// business date is orderedAt || date || createdAt. The KPI math mirrors the
+// deployed ERP template's metrics() verbatim so both dashboards agree.
+// There is NO record update op on the data API — every edit is delete +
+// recreate keyed on a stable BUSINESS key (order `ref`, product `sku`/title,
+// settings key='settings'), exactly like the deployed admin surfaces.
+// ---------------------------------------------------------------------------
+const ERP_ORDER_STATUSES = [
+  'Nouvelle',
+  'Confirmée',
+  'Expédiée',
+  'Livrée',
+  'Retournée',
+] as const;
+type ErpOrderStatus = (typeof ERP_ORDER_STATUSES)[number];
+/** One data-API record (schemaless JSON + server-managed id/createdAt). */
+type ErpRecord = Record<string, unknown>;
+const ERP_DATA_TIMEOUT_MS = 15_000;
+const ERP_REVENUE_DAYS = 14;
+const ERP_RECENT_ORDERS_MAX = 20;
+const ERP_TOP_PRODUCTS_MAX = 5;
+// Stay under the data API's 8KB/record cap WITH headroom for the id/createdAt
+// it appends — checked BEFORE the delete half of a delete+recreate so an
+// oversized replacement can never destroy the record it was replacing.
+const ERP_MAX_WRITE_BYTES = 8 * 1024 - 128;
+// Verbatim default tagline from the shop template's defaultSettings().
+const ERP_DEFAULT_TAGLINE =
+  'Produits de qualité, livrés partout en Algérie — paiement à la livraison.';
+
+/** Template `num()`: Number(v), non-finite → 0. */
+function erpNum(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Loose string read for schemaless records: null/undefined → ''. */
+function erpStr(v: unknown): string {
+  return typeof v === 'string' ? v : v == null ? '' : String(v);
+}
+
+/** Template todayISO(): UTC calendar day (the templates use the same slice). */
+function erpTodayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Template parseDate(): business date — orderedAt || date || createdAt. */
+function erpParseDate(r: ErpRecord): string {
+  const raw = erpStr(r.orderedAt) || erpStr(r.date) || erpStr(r.createdAt);
+  return raw.slice(0, 10) || erpTodayISO();
+}
+
+/** Template orderTotal(): stored total, else Σ item price×qty (qty ?? 1). */
+function erpOrderTotal(o: ErpRecord): number {
+  if (o.total != null && Number.isFinite(Number(o.total))) {
+    return erpNum(o.total);
+  }
+  const items = Array.isArray(o.items) ? (o.items as unknown[]) : [];
+  return items.reduce<number>((sum, raw) => {
+    const it = (raw ?? {}) as ErpRecord;
+    return sum + erpNum(it.price) * erpNum(it.qty != null ? it.qty : 1);
+  }, 0);
+}
+
+/** Shop products carry `title`, ERP products carry `name` — accept both. */
+function erpDisplayTitle(rec: ErpRecord): string {
+  return erpStr(rec.title).trim() || erpStr(rec.name).trim();
+}
+
+/**
+ * Normalize the settings singleton row into the full field set the deployed
+ * shop's saveSettings() writes ({key, shopName, tagline, whatsapp,
+ * deliveryFee, adminPin, accent, currency}) with the SAME defaults as its
+ * defaultSettings(), so a never-visited shop still yields a complete,
+ * render-ready object. The accent is regex-checked server-side because the
+ * dashboard injects it into inline styles.
+ */
+function normalizeErpSettings(row: ErpRecord | undefined) {
+  const accent = erpStr(row?.accent);
+  return {
+    key: 'settings',
+    shopName:
+      erpStr(row?.shopName).trim().slice(0, 60) || CDZ_TPL_DEFAULT_STORE_NAME,
+    tagline:
+      row?.tagline !== undefined
+        ? erpStr(row.tagline).slice(0, 200)
+        : ERP_DEFAULT_TAGLINE,
+    whatsapp:
+      erpStr(row?.whatsapp).replace(/[^0-9]/g, '') || CDZ_TPL_DEFAULT_WHATSAPP,
+    deliveryFee:
+      row?.deliveryFee != null
+        ? Math.max(0, Math.round(erpNum(row.deliveryFee)))
+        : 500,
+    adminPin: erpStr(row?.adminPin).slice(0, 12) || CDZ_TPL_DEFAULT_PIN,
+    accent: CDZ_ACCENT_RE.test(accent) ? accent : CDZ_TPL_DEFAULT_ACCENT,
+    currency: erpStr(row?.currency).trim() || 'DZD',
   };
 }
 
@@ -2902,5 +3017,656 @@ export class ClickDzBridgeController {
       ...(words.length > 0 ? { words } : {}),
       ...(language ? { language } : {}),
     });
+  }
+
+  // ===========================================================================
+  // WS11/C6 — IN-APP ERP (KEEPER): owner-only dashboard + admin endpoints.
+  // Every route: session auth (@CurrentUser via the global AuthGuard) + an
+  // ownership check against the caller's published-apps set. Typed errors
+  // only (BadRequest/NotFound/ActionForbidden) or hand-written passthrough
+  // bodies — NEVER a raw HttpException (the global filter coerces it to 500).
+  // ===========================================================================
+
+  /**
+   * Absolute per-slug Data API base — the SAME externalBase the
+   * generate/template paths bake into app HTML, so the in-app dashboard and
+   * the deployed shop/ERP hit one shared datastore.
+   */
+  private erpDataBase(slug: string): string {
+    const externalBase = (
+      process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+    ).replace(/\/+$/, '');
+    return `${externalBase}/api/v2/apps-data/${slug}`;
+  }
+
+  /**
+   * GET a whole collection server-side (≤500 records, newest-first — the data
+   * API's own sort/caps). Returns null when the data API is unreachable or
+   * answers malformed JSON; callers map that to a typed 502 body.
+   */
+  private async erpList(
+    slug: string,
+    collection: string
+  ): Promise<ErpRecord[] | null> {
+    const res = await fetch(
+      `${this.erpDataBase(slug)}/${collection}?limit=500`,
+      {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+      }
+    ).catch(() => null);
+    if (!res || !res.ok) {
+      this.logger.warn(
+        `[erp] list failed slug=${slug} coll=${collection} status=${res ? res.status : 'unreachable'}`
+      );
+      return null;
+    }
+    const data = (await res.json().catch(() => null)) as unknown;
+    return Array.isArray(data) ? (data as ErpRecord[]) : null;
+  }
+
+  /**
+   * DELETE one record using the re-derived per-slug write token (Bearer).
+   * NEVER logs the token. false ⇒ the delete did not go through — callers
+   * abort BEFORE the recreate half so a failed replace can't duplicate.
+   */
+  private async erpDeleteRecord(
+    slug: string,
+    collection: string,
+    id: string,
+    token: string
+  ): Promise<boolean> {
+    const res = await fetch(
+      `${this.erpDataBase(slug)}/${collection}/${encodeURIComponent(id)}`,
+      {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+      }
+    ).catch(() => null);
+    if (!res || !res.ok) {
+      this.logger.warn(
+        `[erp] delete failed slug=${slug} coll=${collection} id=${id} status=${res ? res.status : 'unreachable'}`
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * POST one record using the re-derived per-slug write token. On success
+   * returns the stored record (with the data API's fresh id/createdAt).
+   * status 0 = unreachable. NEVER logs the token.
+   */
+  private async erpCreateRecord(
+    slug: string,
+    collection: string,
+    record: ErpRecord,
+    token: string
+  ): Promise<{ ok: true; record: ErpRecord } | { ok: false; status: number }> {
+    const res = await fetch(`${this.erpDataBase(slug)}/${collection}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(record),
+      signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      const status = res ? res.status : 0;
+      this.logger.warn(
+        `[erp] create failed slug=${slug} coll=${collection} status=${status || 'unreachable'}`
+      );
+      return { ok: false, status };
+    }
+    const created = (await res.json().catch(() => null)) as ErpRecord | null;
+    return { ok: true, record: created ?? record };
+  }
+
+  /**
+   * Map a failed data-API create to this surface's typed JSON bodies (via
+   * passthrough res — a raw HttpException would be coerced to a 500).
+   */
+  private erpWriteFailed(res: Response, status: number): void {
+    if (status === 401) {
+      // The data API rejected OUR freshly-minted token ⇒ the write secret is
+      // not usable on this deployment (CDZ_DATA_SECRET / CLICKDZ_BRIDGE_TOKEN
+      // mismatch across replicas). Same contract body as the no-secret case
+      // so the frontend shows ONE clear "admin writes unavailable" notice.
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+    } else if (status === 400 || status === 413) {
+      // The data API's own typed validation said no (record too large /
+      // collection full / malformed) — surface as a client-fixable 400.
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'data_rejected', status });
+    } else {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'data_write_failed', ...(status ? { status } : {}) });
+    }
+  }
+
+  /**
+   * C6 ownership gate: the :slug must belong to the CALLER. Reuses the exact
+   * /apps/mine mechanism (readPublishedApps) — a record whose `slug` OR
+   * paired `storeSlug` matches proves ownership of the data namespace.
+   *
+   * Not-owner (403) vs unknown (404) without a global slug registry: the
+   * per-slug collections are publicly readable anyway (the data GET is
+   * @Public), so probing the settings collection leaks nothing new. A live
+   * shop seeds its settings singleton on first load, so data present ⇒ the
+   * namespace belongs to SOMEONE — just not the caller ⇒ typed 403. No
+   * records at all (or data API down, deny-path only) ⇒ typed 404.
+   */
+  private async assertOwnsErpApp(
+    user: CurrentUser,
+    slug: string
+  ): Promise<void> {
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      throw new BadRequest('Invalid app slug');
+    }
+    const records = await this.readPublishedApps(user.id);
+    if (records.some(r => r.slug === slug || r.storeSlug === slug)) {
+      return;
+    }
+    const probe = await this.erpList(slug, 'settings');
+    if (probe && probe.length > 0) {
+      throw new ActionForbidden('You do not own this app');
+    }
+    throw new NotFound('App not found');
+  }
+
+  /**
+   * C6 — GET /api/v1/apps/:slug/erp/summary (auth'd, owner-only). Fetches the
+   * shop's five collections server-side and computes the dashboard payload.
+   * KPI math mirrors the deployed ERP template's metrics() verbatim:
+   *   revenueMonth  Σ orderTotal of 'Livrée' orders this month
+   *   pendingCount  count of Nouvelle + Confirmée
+   *   avgBasket     all-time delivered total ÷ delivered count
+   *   expensesMonth Σ montant||amount of this month's expenses
+   *   margin        revenueMonth − expensesMonth
+   *   lowStock      products where stock <= reorderAt (reorderAt != null)
+   * plus ordersByStatus (5 French states), revenueByDay (last 14 days,
+   * oldest→newest, delivered only), recentOrders (≤20, newest-first) and
+   * topProducts (≤5 by delivered revenue, title||name tolerant).
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/summary')
+  async erpSummary(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    // All five collections in parallel — mirrors the deployed ERP's loadAll().
+    // `customers` is fetched for loadAll parity (and namespace health) even
+    // though the C6 summary shape derives everything from the other four.
+    const [orders, products, customers, expenses, settingsRows] =
+      await Promise.all([
+        this.erpList(slug, 'orders'),
+        this.erpList(slug, 'products'),
+        this.erpList(slug, 'customers'),
+        this.erpList(slug, 'expenses'),
+        this.erpList(slug, 'settings'),
+      ]);
+    if (!orders || !products || !customers || !expenses || !settingsRows) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'data_api_unavailable' });
+      return;
+    }
+
+    const month = erpTodayISO().slice(0, 7);
+    // Last 14 UTC days, oldest → newest, ending today (template chartRevenue).
+    const days: string[] = [];
+    const revenueOfDay = new Map<string, number>();
+    for (let i = ERP_REVENUE_DAYS - 1; i >= 0; i--) {
+      const day = new Date(Date.now() - i * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      days.push(day);
+      revenueOfDay.set(day, 0);
+    }
+
+    let revenueMonth = 0;
+    let pendingCount = 0;
+    let deliveredAllTotal = 0;
+    let deliveredAllCount = 0;
+    const ordersByStatus: Record<ErpOrderStatus, number> = {
+      Nouvelle: 0,
+      Confirmée: 0,
+      Expédiée: 0,
+      Livrée: 0,
+      Retournée: 0,
+    };
+    const topMap = new Map<
+      string,
+      { title: string; qty: number; revenue: number }
+    >();
+    for (const o of orders) {
+      const status = erpStr(o.status);
+      if ((ERP_ORDER_STATUSES as readonly string[]).includes(status)) {
+        ordersByStatus[status as ErpOrderStatus] += 1;
+      }
+      if (status === 'Nouvelle' || status === 'Confirmée') {
+        pendingCount += 1;
+      }
+      if (status !== 'Livrée') continue;
+      const total = erpOrderTotal(o);
+      const day = erpParseDate(o);
+      deliveredAllTotal += total;
+      deliveredAllCount += 1;
+      if (day.slice(0, 7) === month) revenueMonth += total;
+      if (revenueOfDay.has(day)) {
+        revenueOfDay.set(day, (revenueOfDay.get(day) ?? 0) + total);
+      }
+      // Top products from delivered order items (there is no per-product
+      // ledger in the datastore). Items carry title (shop) or name (ERP).
+      const items = Array.isArray(o.items) ? (o.items as unknown[]) : [];
+      for (const raw of items) {
+        const it = (raw ?? {}) as ErpRecord;
+        const title =
+          erpDisplayTitle(it) || erpStr(it.product).trim() || 'Article';
+        const qty = erpNum(it.qty != null ? it.qty : 1);
+        const key = title.toLowerCase();
+        const entry = topMap.get(key) ?? { title, qty: 0, revenue: 0 };
+        entry.qty += qty;
+        entry.revenue += erpNum(it.price) * qty;
+        topMap.set(key, entry);
+      }
+    }
+    let expensesMonth = 0;
+    for (const x of expenses) {
+      if (erpParseDate(x).slice(0, 7) === month) {
+        expensesMonth += erpNum(x.montant != null ? x.montant : x.amount);
+      }
+    }
+    const avgBasket = deliveredAllCount
+      ? deliveredAllTotal / deliveredAllCount
+      : 0;
+    const lowStock = products.filter(
+      p => p.reorderAt != null && erpNum(p.stock) <= erpNum(p.reorderAt)
+    );
+    const topProducts = [...topMap.values()]
+      .sort((a, b) => b.revenue - a.revenue || b.qty - a.qty)
+      .slice(0, ERP_TOP_PRODUCTS_MAX);
+    const settingsRow =
+      settingsRows.find(r => erpStr(r.key) === 'settings') ?? settingsRows[0];
+    const settings = normalizeErpSettings(settingsRow);
+    this.logger.log(
+      `[erp] summary slug=${slug} user=${user.id} orders=${orders.length} products=${products.length}`
+    );
+    return {
+      settings,
+      currency: settings.currency,
+      kpis: {
+        revenueMonth,
+        pendingCount,
+        avgBasket,
+        expensesMonth,
+        margin: revenueMonth - expensesMonth,
+        lowStockCount: lowStock.length,
+        ordersTotal: orders.length,
+      },
+      ordersByStatus,
+      revenueByDay: days.map(date => ({
+        date,
+        revenue: revenueOfDay.get(date) ?? 0,
+      })),
+      lowStock,
+      recentOrders: orders.slice(0, ERP_RECENT_ORDERS_MAX),
+      topProducts,
+    };
+  }
+
+  /**
+   * C6 — POST /api/v1/apps/:slug/erp/order-status (auth'd, owner-only).
+   * BODY `{ ref, status }` — advances an order through the pipeline
+   * (Nouvelle→Confirmée→Expédiée→Livrée, Retournée as the return branch).
+   * The data API has no update op, so this is the templates' delete+recreate
+   * on the STABLE business key `ref`: copy every field except server-managed
+   * id/createdAt, set the new status, preserve orderedAt (backfilled from the
+   * business date exactly like the ERP's advanceStatus). Deletes EVERY copy
+   * of the ref first, which self-heals duplicates left by crashed replaces.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/order-status')
+  async erpOrderStatus(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const ref = erpStr(body?.ref).trim();
+    if (!ref || ref.length > 80) {
+      throw new BadRequest('"ref" is required (the order reference)');
+    }
+    const status = erpStr(body?.status);
+    if (!(ERP_ORDER_STATUSES as readonly string[]).includes(status)) {
+      throw new BadRequest(
+        `"status" must be one of: ${ERP_ORDER_STATUSES.join(', ')}`
+      );
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const orders = await this.erpList(slug, 'orders');
+    if (!orders) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const matches = orders.filter(o => erpStr(o.ref).trim() === ref);
+    if (matches.length === 0) {
+      throw new NotFound('Order not found');
+    }
+    // Newest-first list ⇒ matches[0] is the authoritative copy if duplicates
+    // exist. Copy business fields, drop server-managed id/createdAt — the
+    // exact field handling of the ERP template's advanceStatus().
+    const base = matches[0];
+    const next: ErpRecord = {};
+    for (const k of Object.keys(base)) {
+      if (k !== 'id' && k !== 'createdAt') next[k] = base[k];
+    }
+    next.status = status;
+    if (!next.orderedAt) next.orderedAt = erpParseDate(base);
+    // Size-check BEFORE deleting: a rejected recreate must never cost the
+    // original record.
+    if (Buffer.byteLength(JSON.stringify(next), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Order record too large');
+    }
+    for (const m of matches) {
+      const id = erpStr(m.id);
+      if (!id) continue;
+      if (!(await this.erpDeleteRecord(slug, 'orders', id, token))) {
+        res
+          .status(HttpStatus.BAD_GATEWAY)
+          .json({ error: 'data_write_failed' });
+        return;
+      }
+    }
+    const created = await this.erpCreateRecord(slug, 'orders', next, token);
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] order-status slug=${slug} user=${user.id} ref=${ref.slice(0, 40)} -> ${status}`
+    );
+    return { ok: true, order: created.record };
+  }
+
+  /**
+   * C6 — POST /api/v1/apps/:slug/erp/product (auth'd, owner-only).
+   * BODY `{ product }` — upsert a product (stock edits included) by its
+   * stable business key: `sku` when present (ERP shape), else title||name
+   * (shop shape, case-insensitive). Fields are sanitized with the shop
+   * template's cleanProduct() rules (title≤120, imageUrl URL-ish ≤1500,
+   * category≤40, description≤900, non-negative ints, 8KB cap). Existing
+   * fields not present in the incoming product are PRESERVED (partial
+   * update); new products get cleanProduct-shape defaults so the deployed
+   * storefront renders them. `title`/`name` are kept in sync so the shop
+   * (reads title) and the deployed ERP (reads name) agree.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/product')
+  async erpUpsertProduct(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const raw = body?.product;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new BadRequest('"product" must be an object');
+    }
+    const p = raw as Record<string, unknown>;
+    const title = (erpStr(p.title).trim() || erpStr(p.name).trim()).slice(
+      0,
+      120
+    );
+    const sku = erpStr(p.sku).trim().slice(0, 60);
+    if (!title && !sku) {
+      throw new BadRequest(
+        '"product" needs a "title" (or "name"/"sku") to upsert by'
+      );
+    }
+    // Sanitize ONLY the provided fields (cleanProduct rules) — absent fields
+    // keep their stored values so a stock-only edit can't wipe the price.
+    const patch: ErpRecord = {};
+    if (title) patch.title = title;
+    if (sku) patch.sku = sku;
+    if (p.price !== undefined) {
+      patch.price = Math.max(0, Math.round(erpNum(p.price)));
+    }
+    if (p.stock !== undefined) {
+      patch.stock = Math.max(0, Math.round(erpNum(p.stock)));
+    }
+    if (p.reorderAt !== undefined) {
+      patch.reorderAt = Math.max(0, Math.round(erpNum(p.reorderAt)));
+    }
+    if (p.imageUrl !== undefined) {
+      let img = erpStr(p.imageUrl).trim();
+      if (img.length > 1500 || (img && !/^https?:\/\//i.test(img))) img = '';
+      patch.imageUrl = img;
+    }
+    if (p.category !== undefined) {
+      patch.category = erpStr(p.category).slice(0, 40);
+    }
+    if (p.description !== undefined) {
+      patch.description = erpStr(p.description).slice(0, 900);
+    }
+    if (p.active !== undefined) patch.active = p.active !== false;
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const products = await this.erpList(slug, 'products');
+    if (!products) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'data_api_unavailable' });
+      return;
+    }
+    // Business-key match: sku first (exact), else display title (title||name,
+    // case-insensitive). ALL matches are replaced by one clean record.
+    const titleKey = title.toLowerCase();
+    const bySku = sku
+      ? products.filter(x => erpStr(x.sku).trim() === sku)
+      : [];
+    const matches = bySku.length
+      ? bySku
+      : titleKey
+        ? products.filter(
+            x => erpDisplayTitle(x).toLowerCase() === titleKey
+          )
+        : [];
+    const baseRec: ErpRecord | undefined = matches[0];
+    if (!baseRec && !title) {
+      throw new BadRequest('A new product needs a "title" (or "name")');
+    }
+    const merged: ErpRecord = {};
+    if (baseRec) {
+      for (const k of Object.keys(baseRec)) {
+        if (k !== 'id' && k !== 'createdAt') merged[k] = baseRec[k];
+      }
+    }
+    Object.assign(merged, patch);
+    if (!baseRec) {
+      // cleanProduct-shape defaults so the storefront card is complete.
+      const defaults: ErpRecord = {
+        type: 'product',
+        price: 0,
+        imageUrl: '',
+        stock: 0,
+        reorderAt: 0,
+        category: '',
+        description: '',
+        active: true,
+      };
+      for (const [k, v] of Object.entries(defaults)) {
+        if (merged[k] === undefined) merged[k] = v;
+      }
+    }
+    // Keep the two template shapes in sync: shop reads `title`, ERP `name`.
+    const displayName = erpStr(merged.title).trim() || erpStr(merged.name).trim();
+    if (displayName) {
+      merged.title = displayName;
+      if (merged.name !== undefined) merged.name = displayName;
+    }
+    if (
+      Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Product record too large (8KB cap; use an image URL, not base64)');
+    }
+    for (const m of matches) {
+      const id = erpStr(m.id);
+      if (!id) continue;
+      if (!(await this.erpDeleteRecord(slug, 'products', id, token))) {
+        res
+          .status(HttpStatus.BAD_GATEWAY)
+          .json({ error: 'data_write_failed' });
+        return;
+      }
+    }
+    const created = await this.erpCreateRecord(slug, 'products', merged, token);
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] product upsert slug=${slug} user=${user.id} key=${(sku || titleKey).slice(0, 40)} ${baseRec ? 'replaced' : 'created'}`
+    );
+    return { ok: true, product: created.record };
+  }
+
+  /**
+   * C6 — POST /api/v1/apps/:slug/erp/settings (auth'd, owner-only).
+   * BODY `{ patch }` — merge into the settings singleton (delete+recreate on
+   * key='settings', like the shop admin's saveSettings). Supported fields:
+   * shopName (1–60), tagline (≤200), whatsapp (8–15 digits), deliveryFee
+   * (number ≥0), accent (#RRGGBB), adminPin (4–8 digits). An invalid field →
+   * 400 {error:'invalid_settings', field} — the SAME contract body
+   * /apps/template emits (passthrough res carries the field name). The merge
+   * base is the stored singleton normalized to the deployed shop's full field
+   * set, so unpatched fields keep their values (defaults when never set).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/settings')
+  async erpSaveSettings(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const raw = body?.patch;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new BadRequest('"patch" must be an object');
+    }
+    const s = raw as Record<string, unknown>;
+    const patch: ErpRecord = {};
+    let badField = '';
+    if (s.shopName != null) {
+      const name = typeof s.shopName === 'string' ? s.shopName.trim() : '';
+      if (!name || name.length > 60) badField = 'shopName';
+      else patch.shopName = name;
+    }
+    if (!badField && s.tagline != null) {
+      if (typeof s.tagline !== 'string') badField = 'tagline';
+      else patch.tagline = s.tagline.slice(0, 200);
+    }
+    if (!badField && s.whatsapp != null) {
+      if (typeof s.whatsapp !== 'string' || !CDZ_WHATSAPP_RE.test(s.whatsapp)) {
+        badField = 'whatsapp';
+      } else patch.whatsapp = s.whatsapp;
+    }
+    if (!badField && s.deliveryFee != null) {
+      const fee = Number(s.deliveryFee);
+      if (!Number.isFinite(fee) || fee < 0) badField = 'deliveryFee';
+      else patch.deliveryFee = Math.round(fee);
+    }
+    if (!badField && s.accent != null) {
+      if (typeof s.accent !== 'string' || !CDZ_ACCENT_RE.test(s.accent)) {
+        badField = 'accent';
+      } else patch.accent = s.accent;
+    }
+    if (!badField && s.adminPin != null) {
+      if (typeof s.adminPin !== 'string' || !CDZ_PIN_RE.test(s.adminPin)) {
+        badField = 'adminPin';
+      } else patch.adminPin = s.adminPin;
+    }
+    if (badField) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_settings', field: badField });
+      return;
+    }
+    if (Object.keys(patch).length === 0) {
+      throw new BadRequest(
+        '"patch" must include at least one of: shopName, tagline, whatsapp, deliveryFee, accent, adminPin'
+      );
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const rows = await this.erpList(slug, 'settings');
+    if (!rows) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const baseRow = rows.find(r => erpStr(r.key) === 'settings') ?? rows[0];
+    const merged: ErpRecord = {
+      ...normalizeErpSettings(baseRow),
+      ...patch,
+      key: 'settings',
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Settings record too large');
+    }
+    // Replace the singleton: drop EVERY existing row first (self-heals
+    // duplicate singletons left by crashed replaces), then recreate.
+    for (const row of rows) {
+      const id = erpStr(row.id);
+      if (!id) continue;
+      if (!(await this.erpDeleteRecord(slug, 'settings', id, token))) {
+        res
+          .status(HttpStatus.BAD_GATEWAY)
+          .json({ error: 'data_write_failed' });
+        return;
+      }
+    }
+    const created = await this.erpCreateRecord(slug, 'settings', merged, token);
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] settings saved slug=${slug} user=${user.id} fields=${Object.keys(patch).join(',')}`
+    );
+    return { ok: true, settings: created.record };
   }
 }
