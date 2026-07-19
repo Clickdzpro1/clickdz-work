@@ -19,9 +19,11 @@ import {
   YAxis,
 } from 'recharts';
 
+import { ClientsAdmin } from './admin-clients';
 import { OrdersAdmin } from './admin-orders';
 import { SettingsAdmin } from './admin-settings';
 import { StockAdmin } from './admin-stock';
+import { ShopAppearance } from './shop-appearance';
 import {
   Banner,
   C,
@@ -46,23 +48,35 @@ import {
 } from './shoperp-shared';
 
 // ---------------------------------------------------------------------------
-// In-app ERP dashboard for one store. Reads the LIVE data the deployed shop
-// writes, via the authed owner-only summary route (C6):
+// In-app ERP dashboard for one store — the managed STUDIO HOME for the owner's
+// shop. Reads the LIVE data the deployed shop writes, via the authed owner-only
+// summary route (C6):
 //   GET /api/v1/apps/:slug/erp/summary
 // Overview = KPI cards + recharts (14-day delivered revenue, orders by status)
-// + recent orders + low stock. The Orders / Stock / Settings sections are the
-// real admin surface (see admin-*.tsx) — every mutation goes through the
-// /erp/* bridge routes. If the server reports admin_writes_unavailable the
-// whole surface stays usable read-only, with a clear notice. Inline styles
-// only, matching the rest of the shoperp page.
+// + recent orders + low stock. The Orders / Stock / Clients / Settings /
+// Appearance sections are the real management surface (see admin-*.tsx +
+// shop-appearance.tsx) — every mutation goes through the /erp/* bridge routes.
+// Clients reads the customers collection (deriving from orders as a fallback);
+// Appearance edits theme/template/font/accent/sections on the settings
+// singleton (C7). If the server reports admin_writes_unavailable the whole
+// surface stays usable read-only, with a clear notice. Inline styles only,
+// matching the rest of the shoperp page.
 // ---------------------------------------------------------------------------
 
-export type DashboardSection = 'overview' | 'orders' | 'stock' | 'settings';
+export type DashboardSection =
+  | 'overview'
+  | 'orders'
+  | 'stock'
+  | 'clients'
+  | 'settings'
+  | 'appearance';
 
 const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'overview', label: 'Overview', icon: '📊' },
   { id: 'orders', label: 'Orders', icon: '📦' },
   { id: 'stock', label: 'Stock', icon: '🏷️' },
+  { id: 'clients', label: 'Clients', icon: '👥' },
+  { id: 'appearance', label: 'Appearance', icon: '🎨' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -290,6 +304,19 @@ export const ErpDashboard = ({
           <StockAdmin
             slug={slug}
             currency={currency}
+            readOnly={writesBlocked}
+            onWritesBlocked={handleWritesBlocked}
+            onMutated={refetch}
+          />
+        ) : section === 'clients' ? (
+          <ClientsAdmin slug={slug} currency={currency} />
+        ) : section === 'appearance' ? (
+          <ShopAppearance
+            slug={slug}
+            settings={summary.settings}
+            url={url}
+            // The managed shop's slug IS its store/pairing key + publish slug.
+            storeSlug={slug}
             readOnly={writesBlocked}
             onWritesBlocked={handleWritesBlocked}
             onMutated={refetch}
