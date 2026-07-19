@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Req,
   Res,
 } from '@nestjs/common';
@@ -20,7 +21,11 @@ import { CurrentUser } from '../../core/auth';
 // them directly via the injected Express Response (@Res()), exactly like
 // ClickDzIntegrationsController's /run route. BadRequest/NotFound stay available
 // for genuinely malformed input / missing threads (typed 4xx).
-import { BadRequest, NotFound, Throttle } from '../../base';
+// WS14/C5: `Cache` is the @Global JSON-wrapped Redis provider (get<T>/set with a
+// PX ttl — fail-soft: undefined/false on any error, never throws) — the SAME
+// provider ClickDzAgentRuntime uses for thread persistence. The per-user agent
+// config singleton is persisted through it, mirroring that Pattern-B idiom.
+import { BadRequest, Cache, NotFound, Throttle } from '../../base';
 // CacheRedis is a @Global provider (same injection style as
 // ClickDzDataController / ClickDzVdzController) — the internal read tools below
 // read the SAME Redis records the bridge + data API expose.
@@ -141,6 +146,43 @@ const HERMES_STREAM_MAX_ITERATIONS = 8;
 const HERMES_APPROVAL_TIMEOUT_MS = 120_000;
 const HERMES_FINAL_STREAM_TIMEOUT_MS = 60_000;
 const HERMES_TITLE_MAX = 80;
+
+// --- WS14 / C5: per-user agent CONFIG (onboarding persistence). A per-user
+// singleton (the "1 hermes" = one config each) persisted through the JSON Cache
+// under `clickdz:agent:config:<userId>:hermes`, ~90d TTL refreshed on write —
+// mirroring the runtime's Pattern-B thread persistence. Threads stay the runs
+// (no cap here). Field caps keep a single record well under the 8KB record
+// budget the data API enforces elsewhere. ---
+const HERMES_CONFIG_TTL_MS = 90 * 24 * 60 * 60 * 1000; // ~90 days
+const hermesConfigKey = (userId: string) =>
+  `clickdz:agent:config:${userId}:hermes`;
+const HERMES_AGENT_NAME_MAX = 60;
+const HERMES_PERSONA_GOAL_MAX = 2_000;
+const HERMES_ENABLED_TOOLS_MAX = 50;
+const HERMES_WORKFLOWS_MAX = 20;
+const HERMES_WORKFLOW_TITLE_MAX = 120;
+const HERMES_WORKFLOW_GOAL_MAX = 2_000;
+const HERMES_MODES = ['auto', 'ask', 'dry'] as const;
+type HermesMode = (typeof HERMES_MODES)[number];
+
+// One saved workflow (replaces/augments the static CATEGORIES for this user).
+interface HermesSavedWorkflow {
+  title: string;
+  goal: string;
+}
+
+// The persisted per-user Hermes config. `provisioned` drives the onboarding
+// gate (unprovisioned → wizard; provisioned → dashboard/console). All optional
+// fields are omitted when unset so the GET default is a clean {provisioned}.
+interface HermesConfig {
+  provisioned: boolean;
+  agentName?: string;
+  personaGoal?: string;
+  enabledTools?: string[];
+  defaultMode?: HermesMode;
+  savedWorkflows?: HermesSavedWorkflow[];
+  updatedAt?: number;
+}
 
 // --- Internal-data mirrors. These consts intentionally mirror (NOT import —
 // both live in controllers we must not touch) the bridge's published-apps set
@@ -431,6 +473,71 @@ function buildToolBlock(tools: HermesTool[]): string {
     .join('\n');
 }
 
+/** The set of REAL tool slugs (whole catalog, availability-agnostic) — the
+ * allowlist a persisted `enabledTools` is intersected against so a stored config
+ * can never reference an invented slug. Availability is still applied at read
+ * time in /capabilities; enabling an env-gated tool is allowed (it simply stays
+ * unavailable until its key is present). */
+function allToolSlugs(): Set<string> {
+  return new Set(buildToolCatalog().map(t => t.slug));
+}
+
+/**
+ * Sanitize a persisted (possibly partial/corrupt) Hermes config read back from
+ * the cache into the canonical GET shape. Unknown/invalid fields are dropped;
+ * enabledTools is intersected with the real catalog; the default when nothing is
+ * stored is {provisioned:false}. Pure, never throws.
+ */
+function normalizeHermesConfig(raw: unknown): HermesConfig {
+  if (!raw || typeof raw !== 'object') return { provisioned: false };
+  const o = raw as Record<string, unknown>;
+  const out: HermesConfig = { provisioned: o.provisioned === true };
+  if (typeof o.agentName === 'string' && o.agentName.trim()) {
+    out.agentName = o.agentName.trim().slice(0, HERMES_AGENT_NAME_MAX);
+  }
+  if (typeof o.personaGoal === 'string' && o.personaGoal.trim()) {
+    out.personaGoal = o.personaGoal.trim().slice(0, HERMES_PERSONA_GOAL_MAX);
+  }
+  if (Array.isArray(o.enabledTools)) {
+    const known = allToolSlugs();
+    const tools = o.enabledTools
+      .filter((s): s is string => typeof s === 'string')
+      .map(s => s.trim())
+      .filter(s => known.has(s));
+    out.enabledTools = Array.from(new Set(tools)).slice(
+      0,
+      HERMES_ENABLED_TOOLS_MAX
+    );
+  }
+  if (
+    typeof o.defaultMode === 'string' &&
+    (HERMES_MODES as readonly string[]).includes(o.defaultMode)
+  ) {
+    out.defaultMode = o.defaultMode as HermesMode;
+  }
+  if (Array.isArray(o.savedWorkflows)) {
+    const flows: HermesSavedWorkflow[] = [];
+    for (const w of o.savedWorkflows) {
+      if (!w || typeof w !== 'object') continue;
+      const wo = w as Record<string, unknown>;
+      const title =
+        typeof wo.title === 'string' ? wo.title.trim() : '';
+      const goal = typeof wo.goal === 'string' ? wo.goal.trim() : '';
+      if (!title && !goal) continue;
+      flows.push({
+        title: title.slice(0, HERMES_WORKFLOW_TITLE_MAX),
+        goal: goal.slice(0, HERMES_WORKFLOW_GOAL_MAX),
+      });
+      if (flows.length >= HERMES_WORKFLOWS_MAX) break;
+    }
+    out.savedWorkflows = flows;
+  }
+  if (typeof o.updatedAt === 'number' && Number.isFinite(o.updatedAt)) {
+    out.updatedAt = o.updatedAt;
+  }
+  return out;
+}
+
 /** A short, safe thread title derived from the user's first message. */
 function deriveThreadTitle(message: string): string {
   const one = String(message ?? '')
@@ -461,10 +568,28 @@ export class ClickDzHermesController {
   // stop/approval registries) ALONGSIDE the existing CacheRedis the legacy read
   // tools use. CacheRedis stays for the internal shops/ERP reads; the runtime
   // owns thread persistence + streaming coordination.
+  // WS14/C5: `Cache` (the @Global JSON provider) is added for the per-user agent
+  // config singleton — the SAME provider the runtime persists threads through,
+  // so config get/set reuses the proven fail-soft (de)serialization idiom.
   constructor(
     private readonly redis: CacheRedis,
-    private readonly runtime: ClickDzAgentRuntime
+    private readonly runtime: ClickDzAgentRuntime,
+    private readonly cache: Cache
   ) {}
+
+  /**
+   * Read + normalize the caller's persisted Hermes config (fail-soft). Returns
+   * the canonical {provisioned:false} default when nothing is stored or the read
+   * fails. Never throws.
+   */
+  private async readHermesConfig(userId: string): Promise<HermesConfig> {
+    try {
+      const raw = await this.cache.get<unknown>(hermesConfigKey(userId));
+      return normalizeHermesConfig(raw);
+    } catch {
+      return { provisioned: false };
+    }
+  }
 
   /** Small helper: fetch with a hard AbortController timeout. */
   private async fetchWithTimeout(
@@ -483,22 +608,233 @@ export class ClickDzHermesController {
 
   /**
    * GET capabilities — drives the HERMES UI enable/disable state.
-   * {tools:[{slug,label,available,consequential}], plannerReady, streaming}.
-   * Never throws; env-derived. WS12: adds `streaming:true` + per-tool
-   * `consequential` so the FE can show the approval affordance.
+   * {tools:[{slug,label,available,consequential,enabled}], plannerReady,
+   * streaming, provisioned}. Never throws; env-derived + per-user.
+   *
+   * WS12 added `streaming:true` + per-tool `consequential`. WS14/C5 FOLDS the
+   * per-user config in (the `_user` this route already receives is the wire-in
+   * point): each tool gains `enabled` = is it in the user's enabledTools set
+   * (defaults to true when the user hasn't customized the set, so the console
+   * works out of the box), and top-level `provisioned` mirrors the config so the
+   * FE onboarding gate can key off /capabilities alone if it prefers. The
+   * existing {tools, plannerReady, streaming} fields are untouched — additive.
    */
   @Throttle('default')
   @Get('/api/v1/hermes/capabilities')
-  capabilities(@CurrentUser() _user: CurrentUser, @Res() res: Response) {
+  async capabilities(@CurrentUser() user: CurrentUser, @Res() res: Response) {
+    const config = await this.readHermesConfig(user.id);
+    // When the user has an explicit enabledTools set, honor it; otherwise every
+    // tool is enabled by default (no customization = full catalog available).
+    const enabledSet =
+      config.enabledTools && config.enabledTools.length
+        ? new Set(config.enabledTools)
+        : null;
     const tools = buildToolCatalog().map(t => ({
       slug: t.slug,
       label: t.label,
       available: t.available,
       consequential: t.consequential,
+      enabled: enabledSet ? enabledSet.has(t.slug) : true,
     }));
-    res
-      .status(200)
-      .json({ tools, plannerReady: !!CDZ_AI_KEY, streaming: true });
+    res.status(200).json({
+      tools,
+      plannerReady: !!CDZ_AI_KEY,
+      streaming: true,
+      provisioned: config.provisioned,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // WS14 / C5 — per-user agent CONFIG (onboarding persistence).
+  //
+  //   GET /api/v1/hermes/config → the caller's config (defaults
+  //     {provisioned:false} when none). Auth via @CurrentUser.
+  //   PUT /api/v1/hermes/config {agentName?, personaGoal?, enabledTools?,
+  //     defaultMode?, savedWorkflows?} → upsert (merges over the stored config,
+  //     sets provisioned:true), validated (defaultMode enum; enabledTools ⊆ real
+  //     tool slugs; length/count caps), typed 400 on malformed input via @Res
+  //     passthrough — NEVER a raw HttpException.
+  //
+  // The config is a per-user SINGLETON (the "1 hermes" = one config each);
+  // threads remain the runs, so there is no thread cap and no 409 — PUT just
+  // upserts. Persisted through the JSON Cache under
+  // `clickdz:agent:config:<userId>:hermes` (~90d TTL, refreshed on write),
+  // mirroring the runtime's thread persistence idiom.
+  // -------------------------------------------------------------------------
+  @Throttle('default')
+  @Get('/api/v1/hermes/config')
+  async getConfig(@CurrentUser() user: CurrentUser): Promise<HermesConfig> {
+    return this.readHermesConfig(user.id);
+  }
+
+  @Throttle('default')
+  @Put('/api/v1/hermes/config')
+  async putConfig(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<HermesConfig | { ok: false; error: string }> {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res.status(400).json({ ok: false, error: 'body must be an object' });
+      return { ok: false, error: 'invalid_body' };
+    }
+
+    // Start from the stored config so PUT is a partial upsert (unspecified
+    // fields are preserved), then validate + apply each provided field.
+    const current = await this.readHermesConfig(user.id);
+    const next: HermesConfig = { ...current, provisioned: true };
+
+    if (body.agentName !== undefined) {
+      if (typeof body.agentName !== 'string') {
+        res
+          .status(400)
+          .json({ ok: false, error: '"agentName" must be a string' });
+        return { ok: false, error: 'invalid_agentName' };
+      }
+      const name = body.agentName.trim();
+      if (name.length > HERMES_AGENT_NAME_MAX) {
+        res.status(400).json({
+          ok: false,
+          error: `"agentName" must be <= ${HERMES_AGENT_NAME_MAX} chars`,
+        });
+        return { ok: false, error: 'invalid_agentName' };
+      }
+      if (name) next.agentName = name;
+      else delete next.agentName;
+    }
+
+    if (body.personaGoal !== undefined) {
+      if (typeof body.personaGoal !== 'string') {
+        res
+          .status(400)
+          .json({ ok: false, error: '"personaGoal" must be a string' });
+        return { ok: false, error: 'invalid_personaGoal' };
+      }
+      const goal = body.personaGoal.trim();
+      if (goal.length > HERMES_PERSONA_GOAL_MAX) {
+        res.status(400).json({
+          ok: false,
+          error: `"personaGoal" must be <= ${HERMES_PERSONA_GOAL_MAX} chars`,
+        });
+        return { ok: false, error: 'invalid_personaGoal' };
+      }
+      if (goal) next.personaGoal = goal;
+      else delete next.personaGoal;
+    }
+
+    if (body.enabledTools !== undefined) {
+      if (!Array.isArray(body.enabledTools)) {
+        res
+          .status(400)
+          .json({ ok: false, error: '"enabledTools" must be an array' });
+        return { ok: false, error: 'invalid_enabledTools' };
+      }
+      if (body.enabledTools.length > HERMES_ENABLED_TOOLS_MAX) {
+        res.status(400).json({
+          ok: false,
+          error: `"enabledTools" must have <= ${HERMES_ENABLED_TOOLS_MAX} entries`,
+        });
+        return { ok: false, error: 'invalid_enabledTools' };
+      }
+      const known = allToolSlugs();
+      const cleaned: string[] = [];
+      for (const raw of body.enabledTools) {
+        if (typeof raw !== 'string') {
+          res.status(400).json({
+            ok: false,
+            error: '"enabledTools" entries must be strings',
+          });
+          return { ok: false, error: 'invalid_enabledTools' };
+        }
+        const slug = raw.trim();
+        if (!known.has(slug)) {
+          res.status(400).json({
+            ok: false,
+            error: `unknown tool slug "${slug}" — must be one of: ${Array.from(
+              known
+            ).join(', ')}`,
+          });
+          return { ok: false, error: 'unknown_tool' };
+        }
+        cleaned.push(slug);
+      }
+      next.enabledTools = Array.from(new Set(cleaned));
+    }
+
+    if (body.defaultMode !== undefined) {
+      if (
+        typeof body.defaultMode !== 'string' ||
+        !(HERMES_MODES as readonly string[]).includes(body.defaultMode)
+      ) {
+        res.status(400).json({
+          ok: false,
+          error: `"defaultMode" must be one of: ${HERMES_MODES.join(', ')}`,
+        });
+        return { ok: false, error: 'invalid_defaultMode' };
+      }
+      next.defaultMode = body.defaultMode as HermesMode;
+    }
+
+    if (body.savedWorkflows !== undefined) {
+      if (!Array.isArray(body.savedWorkflows)) {
+        res
+          .status(400)
+          .json({ ok: false, error: '"savedWorkflows" must be an array' });
+        return { ok: false, error: 'invalid_savedWorkflows' };
+      }
+      if (body.savedWorkflows.length > HERMES_WORKFLOWS_MAX) {
+        res.status(400).json({
+          ok: false,
+          error: `"savedWorkflows" must have <= ${HERMES_WORKFLOWS_MAX} entries`,
+        });
+        return { ok: false, error: 'invalid_savedWorkflows' };
+      }
+      const flows: HermesSavedWorkflow[] = [];
+      for (const w of body.savedWorkflows) {
+        if (!w || typeof w !== 'object' || Array.isArray(w)) {
+          res.status(400).json({
+            ok: false,
+            error: '"savedWorkflows" entries must be objects {title, goal}',
+          });
+          return { ok: false, error: 'invalid_savedWorkflows' };
+        }
+        const wo = w as Record<string, unknown>;
+        const title = typeof wo.title === 'string' ? wo.title.trim() : '';
+        const goal = typeof wo.goal === 'string' ? wo.goal.trim() : '';
+        if (
+          title.length > HERMES_WORKFLOW_TITLE_MAX ||
+          goal.length > HERMES_WORKFLOW_GOAL_MAX
+        ) {
+          res.status(400).json({
+            ok: false,
+            error: `each workflow "title" (<= ${HERMES_WORKFLOW_TITLE_MAX}) and "goal" (<= ${HERMES_WORKFLOW_GOAL_MAX}) must respect the length caps`,
+          });
+          return { ok: false, error: 'invalid_savedWorkflows' };
+        }
+        if (!title && !goal) continue; // skip fully-empty rows
+        flows.push({ title, goal });
+      }
+      next.savedWorkflows = flows;
+    }
+
+    next.updatedAt = Date.now();
+
+    // Persist through the JSON Cache (fail-soft). If the write fails we still
+    // return the normalized config the caller asked us to set — the FE proceeds
+    // and a later read will simply miss (Redis is a cache, not the source of
+    // truth); we surface a typed 503 only when we can detect the miss.
+    const saved = await this.cache.set(hermesConfigKey(user.id), next, {
+      ttl: HERMES_CONFIG_TTL_MS,
+    });
+    if (!saved) {
+      res.status(503).json({
+        ok: false,
+        error: 'config could not be persisted right now — please retry',
+      });
+      return { ok: false, error: 'persist_failed' };
+    }
+    // Return the canonical normalized shape (identical to a subsequent GET).
+    return normalizeHermesConfig(next);
   }
 
   // -------------------------------------------------------------------------
