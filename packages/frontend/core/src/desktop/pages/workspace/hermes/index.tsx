@@ -1,241 +1,205 @@
-import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
+import { AgentPalette } from '@affine/core/modules/agents/components';
+import {
+  ApprovalPrompt,
+  Composer,
+  ConversationThread,
+  EmptyState,
+  StatusBar,
+  ThreadSidebar,
+} from '@affine/core/modules/agents/components';
+import { getCapabilities } from '@affine/core/modules/agents/api';
+import type { AgentEvent, AgentMessage } from '@affine/core/modules/agents/types';
+import { useAgentStream } from '@affine/core/modules/agents/use-agent-stream';
+import { useAgentThreads } from '@affine/core/modules/agents/use-agent-threads';
 import {
   ViewBody,
   ViewHeader,
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { ChatWithAiIcon } from '@blocksuite/icons/rc';
 import {
   type CSSProperties,
-  type PropsWithChildren,
   useCallback,
   useEffect,
   useRef,
   useState,
 } from 'react';
 
+import { HermesConnectionsPanel } from './hermes-connections';
+import { HermesWorkflowsPanel } from './hermes-workflows';
+
 // ---------------------------------------------------------------------------
-// ClickDz Hermes — autonomous operations agent console. DARK by default.
+// ClickDz Hermes — streaming autonomous operations-agent console.
 //
-// Type a GOAL; the server-side agent (cdz-flash planner loop) picks tools and
-// executes them, streaming back a step trace + a final answer. This page:
-//   • reflects GET /api/v1/hermes/capabilities (tool chips + planner status)
-//   • POSTs /api/v1/hermes/run {goal, dryRun} — runs can take up to ~90s,
-//     so the fetch gets a generous 120s abort and a reassuring working state
-//   • renders steps[] as a collapsible timeline + the final answer
-//   • keeps the last 10 runs in localStorage with a re-run affordance
-// Everything degrades gracefully: planner down -> retryable banner; a tool
-// without keys -> greyed chip + friendly skip notice. No new .css.ts — inline
-// styles only, mirroring the Integrations page scaffold (house rules).
+// Layout: a ThreadSidebar (left) + a main column (live ConversationThread over
+// a Composer). A turn is streamed back over SSE via useAgentStream: the
+// in-progress assistant message renders its plan/act steps and its final answer
+// token-by-token, its phase surfaces via StatusBar, and a Stop button is live
+// while running. When the agent needs sign-off before a consequential tool it
+// emits `approval_request` — the hook exposes it as `pendingApproval` and we
+// surface SHELL's ApprovalPrompt inline (as renderExtras on the streaming
+// message) and resolve it through approve(id, decision).
+//
+// The Composer mode toggle drives the run policy: auto (execute freely),
+// ask (pause for approval on writes/sends) or dry (plan only, execute nothing).
+//
+// On mount we fetch capabilities (via the STREAMCLIENT api) to reflect tool
+// availability and, when the planner is offline, a clear blocking notice. The
+// empty state (no active thread) hosts a hero plus the two HERMESX panels:
+// HermesWorkflowsPanel (curated goals → composer) and HermesConnectionsPanel
+// (Composio / Make / internal tool status from `capabilities`).
+//
+// House rules: inline styles only, no new deps, SHELL palette, and every
+// surface degrades gracefully with loading / empty / error states. Motion is
+// kept to short opacity/transform transitions and disabled for
+// prefers-reduced-motion users (SHELL primitives honour that; this shell's own
+// keyframes are guarded below).
 // ---------------------------------------------------------------------------
 
+const AGENT = 'hermes' as const;
+
+// HERMES run policy. The mode union is inlined on the stream's send() input
+// (STREAMCLIENT does not export a named type), so we mirror it locally.
+type AgentMode = 'auto' | 'ask' | 'dry';
+
+// Shape the two HERMESX panels + the notices read from capabilities. The REST
+// client returns the raw JSON loosely typed (Record<string, unknown>), so we
+// normalise it defensively into this shape once.
 interface HermesTool {
   slug: string;
   label: string;
   available: boolean;
 }
-
-interface CapabilitiesResponse {
+interface HermesCaps {
   tools: HermesTool[];
   plannerReady: boolean;
-  error?: string;
+  streaming?: boolean;
 }
 
-// One agent step, mirrors the backend HermesStep shape (contract C2).
-interface HermesStep {
-  i: number;
-  thought?: string;
-  tool?: string;
-  args?: unknown;
-  ok: boolean;
-  resultPreview?: string;
-  error?: string;
-}
-
-interface RunResponse {
-  ok: boolean;
-  answer: string;
-  steps: HermesStep[];
-  iterations: number;
-}
-
-// A completed run as rendered — `id` keys the timeline so expansion state and
-// the reveal animation reset between runs; `dryRun` echoes the request flag.
-interface RunResult extends RunResponse {
-  id: string;
-  dryRun: boolean;
-}
-
-interface HistoryEntry {
-  id: string;
-  goal: string;
-  dryRun: boolean;
-  ts: number;
-  ok: boolean;
-  summary: string;
-}
-
-// Run failure kinds that need bespoke surfaces:
-//   planner  -> {error:'planner_unavailable'} / 502 (retryable, warn tone)
-//   tool     -> {error:'tool_unavailable'|'not_configured'} (actionable, warn)
-//   timeout  -> client-side abort after RUN_TIMEOUT_MS (retryable, error)
-//   generic  -> anything else (retryable, error)
-type RunErrorKind = 'planner' | 'tool' | 'timeout' | 'generic';
-
-interface RunFailure {
-  kind: RunErrorKind;
-  message: string;
-}
-
-const GOAL_MAX = 4_000;
-// Backend caps a run at 6 iterations / ~90s wall clock — give the fetch real
-// headroom so slow-but-successful runs are not killed by the client.
-const RUN_TIMEOUT_MS = 120_000;
-const HISTORY_KEY = 'cdz:hermes-history';
-const HISTORY_MAX = 10;
-
-const EXAMPLE_GOALS = [
-  "Summarize today's orders and draft a WhatsApp broadcast",
-  'Find leads from last week and prepare a follow-up',
-];
-
-// Dark, app-consistent palette. Each value is an --affine-* theme var with a
-// hard dark fallback so the page reads correctly even before theme vars load.
-const C = {
-  bg: 'var(--affine-background-primary-color, #141414)',
-  panel: 'var(--affine-background-secondary-color, #1c1c1e)',
-  border: 'var(--affine-border-color, #2a2a2c)',
-  text: 'var(--affine-text-primary-color, #ececec)',
-  muted: 'var(--affine-text-secondary-color, #9aa0a6)',
-  accent: 'var(--affine-primary-color, #1e96eb)',
-  accentSoft: 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 14%, transparent)',
-  warnBg: 'color-mix(in srgb, #e8a33d 12%, transparent)',
-  warnBorder: 'color-mix(in srgb, #e8a33d 40%, transparent)',
-  errBg: 'color-mix(in srgb, var(--affine-error-color, #eb4b4b) 12%, transparent)',
-  errBorder: 'color-mix(in srgb, var(--affine-error-color, #eb4b4b) 40%, transparent)',
-  okText: 'var(--affine-success-color, #4cae4c)',
-  errText: 'var(--affine-error-color, #eb4b4b)',
+// SHELL's shared palette (single source of truth so the page reads cohesively
+// with the console primitives). Colour tokens live under `AgentPalette.color`;
+// we pull the handful this page needs and add a couple of local warn/error
+// tokens so the planner-offline notice matches the app.
+const C = AgentPalette.color;
+const P = {
+  bg: C.bg,
+  panel: C.panel,
+  border: C.border,
+  text: C.text,
+  muted: C.muted,
+  accent: C.accent,
+  accentSoft: C.accentSoft,
+  warnBg: C.warnBg,
+  warnBorder: C.warnBorder,
+  errText: C.errText,
 } as const;
 
-type LoadState = 'loading' | 'ready' | 'error';
-
-// Keyframes + prefers-reduced-motion opt-out. Injected once via a <style>
-// tag (same trick as the Integrations spinner; names are page-unique). The
-// step reveal is transform/opacity only, 240ms — and fully disabled for
-// reduced-motion users via the class rules below (`!important` beats the
-// element's inline animation/transition declarations).
+// Page-unique keyframes for this shell's own fades (SHELL owns its component
+// motion). Reduced-motion users get no animation.
 const GLOBAL_CSS = `
-@keyframes cdz-hermes-spin{to{transform:rotate(360deg)}}
-@keyframes cdz-hermes-step-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-@keyframes cdz-hermes-pulse{0%,100%{opacity:1}50%{opacity:0.35}}
-.cdz-hermes-step{animation:cdz-hermes-step-in 240ms ease both}
+@keyframes cdz-hermes-fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.cdz-hermes-fade{animation:cdz-hermes-fade-in 200ms ease both}
 @media (prefers-reduced-motion: reduce){
-  .cdz-hermes-step{animation:none !important}
-  .cdz-hermes-motion{animation:none !important;transition:none !important}
+  .cdz-hermes-fade{animation:none !important}
 }
 `;
 
-// ---- localStorage history helpers (fail-soft: private mode etc.) ----------
+// Curated fallbacks for the empty-state chips (SHELL's EmptyState renders
+// `examples` as clickable chips that seed the composer).
+const EXAMPLE_GOALS = [
+  "Summarize today's orders and draft a WhatsApp broadcast",
+  'Find leads from last week and prepare a follow-up',
+  'Reconcile this week’s expenses against orders',
+];
 
-function loadHistory(): HistoryEntry[] {
-  try {
-    const raw = window.localStorage.getItem(HISTORY_KEY);
-    if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (e): e is HistoryEntry =>
-          !!e &&
-          typeof (e as HistoryEntry).goal === 'string' &&
-          typeof (e as HistoryEntry).ts === 'number'
-      )
-      .slice(0, HISTORY_MAX);
-  } catch {
-    return [];
-  }
+type CapsState = 'loading' | 'ready' | 'error';
+
+// Normalise the loosely-typed capabilities JSON into HermesCaps. Anything
+// missing or malformed degrades to empty/false so the UI never crashes.
+function normalizeCaps(raw: Record<string, unknown>): HermesCaps {
+  const rawTools = Array.isArray((raw as { tools?: unknown }).tools)
+    ? ((raw as { tools: unknown[] }).tools)
+    : [];
+  const tools: HermesTool[] = rawTools
+    .filter((t): t is Record<string, unknown> => !!t && typeof t === 'object')
+    .map(t => ({
+      slug: typeof t.slug === 'string' ? t.slug : '',
+      label: typeof t.label === 'string' ? t.label : String(t.slug ?? ''),
+      available: !!t.available,
+    }))
+    .filter(t => t.slug);
+  return {
+    tools,
+    plannerReady: !!(raw as { plannerReady?: unknown }).plannerReady,
+    streaming: !!(raw as { streaming?: unknown }).streaming,
+  };
 }
 
-function persistHistory(entries: HistoryEntry[]) {
-  try {
-    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
-  } catch {
-    // localStorage unavailable — history simply won't survive reloads.
-  }
-}
+const HermesConsole = () => {
+  // ---- threads (list / load / rename / delete / new) ----------------------
+  const {
+    threads,
+    activeId,
+    setActiveId,
+    reload: reloadThreads,
+    newThread,
+    rename,
+    remove,
+    activeThread,
+    loadThread,
+    loadingThreads,
+  } = useAgentThreads({ agent: AGENT });
 
-function timeAgo(ts: number): string {
-  const mins = Math.floor((Date.now() - ts) / 60_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return 'yesterday';
-  if (days < 7) return `${days}d ago`;
-  return new Date(ts).toLocaleDateString();
-}
+  // ---- capabilities (tool availability + planner readiness) ---------------
+  const [capsState, setCapsState] = useState<CapsState>('loading');
+  const [capabilities, setCapabilities] = useState<HermesCaps | null>(null);
 
-function formatArgs(args: unknown): string {
-  if (args === undefined || args === null) return '';
-  try {
-    return JSON.stringify(args, null, 2);
-  } catch {
-    return String(args);
-  }
-}
+  // ---- composer state -----------------------------------------------------
+  const [input, setInput] = useState('');
+  const [mode, setMode] = useState<AgentMode>('ask');
 
-function summarizeRun(r: RunResult): string {
-  const flat = (r.answer || '').replace(/\s+/g, ' ').trim();
-  if (flat) return flat.length > 160 ? `${flat.slice(0, 157)}…` : flat;
-  return r.ok
-    ? `Completed in ${r.steps.length} step${r.steps.length === 1 ? '' : 's'}`
-    : 'Run finished with errors';
-}
+  // Guards a one-shot reload after a run finishes (fires when finalMessage
+  // lands / running flips false), so thread history + the sidebar refresh.
+  const reloadedForFinalRef = useRef<string | null>(null);
 
-// ---------------------------------------------------------------------------
+  // ---- live stream (send / stop / approve + in-progress assistant turn) ---
+  // `onEvent` is a PARAM here (not a return value): we watch minted-thread and
+  // completion frames to keep the sidebar + active thread in sync mid-run.
+  const handleEvent = useCallback(
+    (ev: AgentEvent) => {
+      if (ev.type === 'thread') {
+        // Adopt the server-minted thread id as the active selection.
+        setActiveId(ev.threadId);
+      } else if (ev.type === 'final' || ev.type === 'done') {
+        void reloadThreads();
+      }
+    },
+    [reloadThreads, setActiveId]
+  );
 
-const HermesPage = () => {
-  // ---- capabilities ----
-  const [capsState, setCapsState] = useState<LoadState>('loading');
-  const [tools, setTools] = useState<HermesTool[]>([]);
-  const [plannerReady, setPlannerReady] = useState(false);
-
-  // ---- composer + run ----
-  const [goal, setGoal] = useState('');
-  const [dryRun, setDryRun] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const [failure, setFailure] = useState<RunFailure | null>(null);
-  const [result, setResult] = useState<RunResult | null>(null);
-
-  // ---- history ----
-  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
-
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  // What the Retry button should re-run (the goal that just failed, even if
-  // the composer has been edited since).
-  const lastRunRef = useRef<{ goal: string; dry: boolean } | null>(null);
+  const {
+    running,
+    status,
+    phase,
+    streamingMessage,
+    threadId,
+    pendingApproval,
+    finalMessage,
+    error,
+    send,
+    stop,
+    approve,
+  } = useAgentStream({ agent: AGENT, onEvent: handleEvent });
 
   const loadCaps = useCallback(async () => {
     setCapsState('loading');
     try {
-      const res = await fetch(cdzApiUrl('/api/v1/hermes/capabilities'), {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        setCapsState('error');
-        return;
-      }
-      const data = (await res
-        .json()
-        .catch(() => ({}))) as Partial<CapabilitiesResponse>;
-      setTools(Array.isArray(data.tools) ? data.tools : []);
-      setPlannerReady(!!data.plannerReady);
+      const raw = await getCapabilities(AGENT);
+      setCapabilities(normalizeCaps(raw));
       setCapsState('ready');
     } catch {
+      setCapabilities(null);
       setCapsState('error');
     }
   }, []);
@@ -244,146 +208,90 @@ const HermesPage = () => {
     void loadCaps();
   }, [loadCaps]);
 
-  // Elapsed-seconds ticker while a run is in flight (reassurance copy).
+  const plannerReady = !!capabilities?.plannerReady;
+
+  // The single send path — used by the Composer's onSend (no args: reads the
+  // controlled `input`) and by workflow/example picks after seeding the input.
+  const doSend = useCallback(() => {
+    const trimmed = input.trim();
+    if (!trimmed || running || !plannerReady) return;
+    setInput('');
+    void send({ message: trimmed, threadId: activeId ?? undefined, mode });
+  }, [activeId, input, mode, plannerReady, running, send]);
+
+  // When a run finishes (not running any more, a final message arrived), reload
+  // the active thread so the canonical persisted history replaces the transient
+  // streaming turn. Keyed by message id so it fires once per completed turn.
   useEffect(() => {
-    if (!running) return;
-    setElapsed(0);
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [running]);
+    if (running) return;
+    if (!finalMessage) return;
+    if (reloadedForFinalRef.current === finalMessage.id) return;
+    reloadedForFinalRef.current = finalMessage.id;
+    void reloadThreads();
+    const tid = threadId ?? activeId;
+    if (tid) void loadThread(tid);
+  }, [running, finalMessage, threadId, activeId, reloadThreads, loadThread]);
 
-  const pushHistory = useCallback((entry: HistoryEntry) => {
-    setHistory(prev => {
-      const next = [entry, ...prev].slice(0, HISTORY_MAX);
-      persistHistory(next);
-      return next;
-    });
+  // HERMESX workflow / example pick → seed the composer. We never auto-send:
+  // the user reviews the goal and presses send (Enter) themselves.
+  const handlePick = useCallback((goal: string) => {
+    const g = (goal ?? '').trim();
+    if (!g) return;
+    setInput(g);
   }, []);
 
-  const clearHistory = useCallback(() => {
-    setHistory(() => {
-      persistHistory([]);
-      return [];
-    });
-  }, []);
-
-  // The single run path — used by the Run button, history re-runs and the
-  // failure Retry buttons (explicit args because setState is async).
-  const executeRun = useCallback(
-    async (goalText: string, dry: boolean) => {
-      const trimmed = goalText.trim();
-      if (!trimmed || running) return;
-      // Reflect what is actually running in the composer (matters for re-run).
-      setGoal(trimmed);
-      setDryRun(dry);
-      setRunning(true);
-      setFailure(null);
-      setResult(null);
-      lastRunRef.current = { goal: trimmed, dry };
-
-      const controller = new AbortController();
-      const killer = window.setTimeout(
-        () => controller.abort(),
-        RUN_TIMEOUT_MS
-      );
-      try {
-        const res = await fetch(cdzApiUrl('/api/v1/hermes/run'), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ goal: trimmed, dryRun: dry }),
-          signal: controller.signal,
-        });
-        const data = (await res
-          .json()
-          .catch(() => ({}))) as Partial<RunResponse> & { error?: string };
-
-        if (res.status === 502 || data.error === 'planner_unavailable') {
-          setFailure({
-            kind: 'planner',
-            message:
-              'The AI planner is unreachable right now. This is usually temporary.',
-          });
-          return;
-        }
-        if (
-          data.error === 'tool_unavailable' ||
-          data.error === 'not_configured'
-        ) {
-          setFailure({
-            kind: 'tool',
-            message:
-              'A tool Hermes needs is not configured on this server. Greyed-out chips in Agent status show what is missing — ask the owner to add those keys, or rephrase the goal around the available tools.',
-          });
-          return;
-        }
-        if (!res.ok) {
-          setFailure({
-            kind: 'generic',
-            message: `The run could not be completed (HTTP ${res.status}). Please try again.`,
-          });
-          return;
-        }
-
-        const runResult: RunResult = {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          ok: !!data.ok,
-          answer: typeof data.answer === 'string' ? data.answer : '',
-          steps: Array.isArray(data.steps)
-            ? data.steps.filter(s => !!s && typeof s === 'object')
-            : [],
-          iterations:
-            typeof data.iterations === 'number' ? data.iterations : 0,
-          dryRun: dry,
-        };
-        setResult(runResult);
-        pushHistory({
-          id: runResult.id,
-          goal: trimmed,
-          dryRun: dry,
-          ts: Date.now(),
-          ok: runResult.ok,
-          summary: summarizeRun(runResult),
-        });
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          setFailure({
-            kind: 'timeout',
-            message:
-              'The run took longer than 2 minutes and was stopped on this side. The goal may be too broad — try a narrower one, or run it again.',
-          });
-        } else {
-          setFailure({
-            kind: 'generic',
-            message:
-              'Network error while running. Check your connection and try again.',
-          });
-        }
-      } finally {
-        window.clearTimeout(killer);
-        setRunning(false);
-      }
+  const handleSelectThread = useCallback(
+    (id: string) => {
+      if (running) return; // don't switch context mid-stream
+      void loadThread(id);
     },
-    [pushHistory, running]
+    [loadThread, running]
   );
 
-  const retry = useCallback(() => {
-    const last = lastRunRef.current;
-    if (last) void executeRun(last.goal, last.dry);
-    else void executeRun(goal, dryRun);
-  }, [dryRun, executeRun, goal]);
+  const handleNewThread = useCallback(() => {
+    if (running) return;
+    setInput('');
+    newThread();
+  }, [newThread, running]);
 
-  const loadIntoComposer = useCallback((entry: HistoryEntry) => {
-    setGoal(entry.goal);
-    setDryRun(entry.dryRun);
-    textareaRef.current?.focus();
-  }, []);
+  const handleRename = useCallback(
+    (id: string, title: string) => {
+      void rename(id, title);
+    },
+    [rename]
+  );
 
-  const canRun = goal.trim().length > 0 && !running;
-  const availableCount = tools.filter(t => t.available).length;
+  const handleDelete = useCallback(
+    (id: string) => {
+      void remove(id);
+    },
+    [remove]
+  );
+
+  // Display messages = the loaded thread's history; the in-progress turn is
+  // passed to ConversationThread SEPARATELY via `streamingMessage`.
+  const messages: AgentMessage[] = activeThread?.messages ?? [];
+  const hasConversation = messages.length > 0 || !!streamingMessage;
+
+  const composerDisabled = capsState === 'ready' && !plannerReady;
+
+  // Inline approval: render SHELL's ApprovalPrompt as an extra beneath the
+  // streaming assistant message when the hook exposes a pending request.
+  const renderExtras = useCallback(
+    (_message: AgentMessage, isStreaming: boolean) => {
+      if (!isStreaming || !pendingApproval) return null;
+      return (
+        <div style={{ marginTop: 10 }}>
+          <ApprovalPrompt
+            request={pendingApproval}
+            disabled={!running}
+            onDecide={(id, decision) => void approve(id, decision)}
+          />
+        </div>
+      );
+    },
+    [approve, pendingApproval, running]
+  );
 
   return (
     <>
@@ -399,10 +307,10 @@ const HermesPage = () => {
             padding: '0 16px',
             fontSize: 14,
             fontWeight: 600,
-            color: C.text,
+            color: P.text,
           }}
         >
-          <span style={{ fontSize: 16 }}>⚡</span>
+          <ChatWithAiIcon style={{ fontSize: 16 }} />
           Hermes
           <span
             style={{
@@ -412,7 +320,7 @@ const HermesPage = () => {
               padding: '0 6px',
               borderRadius: 5,
               letterSpacing: '0.05em',
-              color: C.muted,
+              color: P.muted,
               backgroundColor:
                 'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
             }}
@@ -426,611 +334,247 @@ const HermesPage = () => {
           style={{
             height: '100%',
             width: '100%',
-            overflow: 'auto',
-            background: C.bg,
-            color: C.text,
+            display: 'flex',
+            overflow: 'hidden',
+            background: P.bg,
+            color: P.text,
             fontSize: 13,
             lineHeight: 1.5,
           }}
         >
           <style>{GLOBAL_CSS}</style>
-          <div
+
+          {/* ---- Left: thread rail -------------------------------------- */}
+          <ThreadSidebar
+            threads={threads}
+            activeId={activeId}
+            onSelect={handleSelectThread}
+            onNew={handleNewThread}
+            onRename={handleRename}
+            onDelete={handleDelete}
+            loading={loadingThreads}
+            title="Conversations"
+            width={264}
+          />
+
+          {/* ---- Right: conversation + composer ------------------------- */}
+          <main
             style={{
-              maxWidth: 960,
-              margin: '0 auto',
-              padding: '28px 24px 48px',
+              flex: 1,
+              minWidth: 0,
               display: 'flex',
               flexDirection: 'column',
-              gap: 20,
+              minHeight: 0,
             }}
           >
-            <header style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <h1
-                style={{
-                  margin: 0,
-                  fontSize: 24,
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  color: C.text,
-                }}
-              >
-                <span>⚡</span> Hermes
-              </h1>
-              <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
-                Your autonomous operations agent. Give it a goal — it plans the
-                steps, runs the right tools, and reports back.
-              </p>
-            </header>
-
-            {/* Agent status: planner indicator + tool chips ------------------ */}
-            <section style={panelStyle}>
+            {/* Planner-offline notice pins to the top of the column so it is
+                visible from the empty state through an active thread. */}
+            {capsState === 'ready' && !plannerReady ? (
               <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 12,
-                  flexWrap: 'wrap',
-                }}
+                className="cdz-hermes-fade"
+                role="alert"
+                style={noticeStyle}
               >
-                <h2 style={sectionTitleStyle}>Agent status</h2>
-                <span style={{ flex: 1 }} />
-                {capsState === 'ready' ? (
-                  <span style={{ fontSize: 12, color: C.muted }}>
-                    {availableCount}/{tools.length} tools available
-                  </span>
-                ) : null}
-                <button
-                  style={linkBtnStyle}
-                  disabled={capsState === 'loading'}
-                  onClick={() => void loadCaps()}
-                >
-                  {capsState === 'loading' ? 'Checking…' : 'Refresh'}
+                <strong>Planner offline.</strong>&nbsp;Hermes can’t plan runs
+                until the owner configures{' '}
+                <code style={codeStyle}>CDZ_AI_KEY</code> on the server. Threads
+                and tools still load; sending is disabled.
+              </div>
+            ) : null}
+            {capsState === 'error' ? (
+              <div
+                className="cdz-hermes-fade"
+                role="alert"
+                style={noticeStyle}
+              >
+                <strong>Couldn’t load agent capabilities.</strong>&nbsp;Tool
+                availability is unknown.{' '}
+                <button style={linkBtnStyle} onClick={() => void loadCaps()}>
+                  Retry
                 </button>
               </div>
-
-              {capsState === 'loading' ? (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    color: C.muted,
-                    fontSize: 12,
-                  }}
-                >
-                  <Spinner /> Checking agent capabilities…
-                </div>
-              ) : capsState === 'error' ? (
-                <Banner tone="error">
-                  Couldn&apos;t load agent capabilities.{' '}
-                  <button style={linkBtnStyle} onClick={() => void loadCaps()}>
-                    Retry
-                  </button>
-                </Banner>
-              ) : (
-                <>
-                  {/* Planner readiness */}
-                  <div
-                    style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-                  >
-                    <span
-                      className="cdz-hermes-motion"
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        flexShrink: 0,
-                        background: plannerReady ? C.okText : C.errText,
-                        animation: running
-                          ? 'cdz-hermes-pulse 1.2s ease-in-out infinite'
-                          : 'none',
-                      }}
-                    />
-                    <span style={{ fontSize: 12, fontWeight: 600 }}>
-                      {plannerReady ? 'Planner ready' : 'Planner offline'}
-                    </span>
-                    <span style={{ fontSize: 12, color: C.muted }}>
-                      {plannerReady
-                        ? '— cdz-flash is reachable and will plan your runs.'
-                        : '— runs will fail until the owner configures the AI planner.'}
-                    </span>
-                  </div>
-
-                  {/* Tool chips */}
-                  {tools.length > 0 ? (
-                    <div
-                      style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
-                      role="list"
-                      aria-label="Agent tools"
-                    >
-                      {tools.map(tool => (
-                        <span
-                          key={tool.slug}
-                          role="listitem"
-                          title={
-                            tool.available
-                              ? tool.label
-                              : `${tool.label} — not configured on this server. Hermes will skip it until the owner adds its keys.`
-                          }
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            padding: '5px 12px',
-                            borderRadius: 999,
-                            fontSize: 12,
-                            fontWeight: 600,
-                            cursor: tool.available ? 'default' : 'help',
-                            color: tool.available ? C.text : C.muted,
-                            background: tool.available
-                              ? C.accentSoft
-                              : 'transparent',
-                            border: `1px ${tool.available ? 'solid' : 'dashed'} ${C.border}`,
-                            opacity: tool.available ? 1 : 0.55,
-                          }}
-                        >
-                          {tool.label}
-                          {!tool.available ? (
-                            <span
-                              style={{
-                                fontSize: 10,
-                                fontWeight: 700,
-                                letterSpacing: '0.04em',
-                                textTransform: 'uppercase',
-                              }}
-                            >
-                              off
-                            </span>
-                          ) : null}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <Banner tone="info">
-                      No tools are registered yet — Hermes can still reason,
-                      but it will have nothing to execute.
-                    </Banner>
-                  )}
-                </>
-              )}
-            </section>
-
-            {/* Goal composer ------------------------------------------------- */}
-            <section style={panelStyle}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <h2 style={sectionTitleStyle}>
-                  <span>▶</span> Goal
-                </h2>
-                <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>
-                  Describe the outcome you want. Hermes decides which tools to
-                  call and in what order.
-                </p>
+            ) : null}
+            {error ? (
+              <div
+                className="cdz-hermes-fade"
+                role="alert"
+                style={noticeStyle}
+              >
+                <strong>Run error.</strong>&nbsp;{error}
               </div>
+            ) : null}
 
-              {capsState === 'ready' && !plannerReady ? (
-                <Banner tone="warn">
-                  The AI planner is offline — runs will fail until the owner
-                  configures <code style={codeStyle}>CDZ_AI_KEY</code> on the
-                  server. You can still try: Hermes re-checks on every run.
-                </Banner>
-              ) : null}
-
-              <textarea
-                ref={textareaRef}
-                value={goal}
-                onChange={e => setGoal(e.target.value.slice(0, GOAL_MAX))}
-                disabled={running}
-                placeholder="e.g. Summarize today's orders and draft a WhatsApp broadcast"
-                rows={3}
-                style={{
-                  width: '100%',
-                  boxSizing: 'border-box',
-                  resize: 'vertical',
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  fontSize: 13,
-                  fontFamily: 'inherit',
-                  lineHeight: 1.5,
-                  color: C.text,
-                  background: C.bg,
-                  border: `1px solid ${C.border}`,
-                  opacity: running ? 0.55 : 1,
-                }}
+            {/* Conversation region (SHELL owns scroll + empty-state slot) */}
+            {hasConversation ? (
+              <ConversationThread
+                messages={messages}
+                streamingMessage={streamingMessage}
+                renderExtras={renderExtras}
+                style={{ flex: 1, minHeight: 0 }}
               />
-
-              {/* Example goals */}
+            ) : (
+              // ---- Empty state: hero + HERMESX panels --------------------
               <div
                 style={{
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: 'auto',
                   display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  gap: 8,
+                  flexDirection: 'column',
                 }}
               >
-                <span style={{ fontSize: 12, color: C.muted }}>Try:</span>
-                {EXAMPLE_GOALS.map(example => (
-                  <button
-                    key={example}
-                    type="button"
-                    disabled={running}
-                    onClick={() => {
-                      setGoal(example);
-                      textareaRef.current?.focus();
-                    }}
-                    style={{
-                      appearance: 'none',
-                      cursor: running ? 'default' : 'pointer',
-                      padding: '5px 12px',
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: 500,
-                      color: C.text,
-                      background: 'transparent',
-                      border: `1px solid ${C.border}`,
-                      opacity: running ? 0.5 : 1,
-                    }}
-                  >
-                    {example}
-                  </button>
-                ))}
-              </div>
-
-              {/* Controls row: dry-run toggle + run button */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <button
-                  type="button"
-                  disabled={!canRun}
-                  onClick={() => void executeRun(goal, dryRun)}
-                  style={{
-                    appearance: 'none',
-                    border: 'none',
-                    borderRadius: 8,
-                    padding: '9px 18px',
-                    fontSize: 13,
-                    fontWeight: 700,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    cursor: canRun ? 'pointer' : 'default',
-                    color: '#fff',
-                    background: C.accent,
-                    opacity: canRun ? 1 : 0.5,
-                  }}
-                >
-                  {running ? (
-                    <>
-                      <Spinner /> Running…
-                    </>
-                  ) : dryRun ? (
-                    <>▶ Plan (dry run)</>
-                  ) : (
-                    <>▶ Run</>
-                  )}
-                </button>
-                <Toggle
-                  on={dryRun}
-                  disabled={running}
-                  onChange={setDryRun}
-                  label="Dry run (plan only)"
-                />
-                <span style={{ fontSize: 12, color: C.muted }}>
-                  {dryRun
-                    ? 'Hermes will plan the steps but execute nothing.'
-                    : 'Hermes will actually execute the tools it picks.'}
-                </span>
-              </div>
-
-              {/* Working state (runs can take up to ~90s) */}
-              {running ? (
                 <div
-                  role="status"
-                  aria-live="polite"
+                  className="cdz-hermes-fade"
                   style={{
+                    maxWidth: 900,
+                    width: '100%',
+                    margin: '0 auto',
+                    padding: '32px 24px 40px',
                     display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 12,
-                    padding: '14px 16px',
-                    borderRadius: 10,
-                    background: C.accentSoft,
-                    border: `1px solid ${C.border}`,
+                    flexDirection: 'column',
+                    gap: 24,
                   }}
                 >
-                  <span style={{ marginTop: 2 }}>
-                    <Spinner />
-                  </span>
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 2,
-                    }}
+                  <EmptyState
+                    icon={<ChatWithAiIcon style={{ fontSize: 26 }} />}
+                    title="Hermes — your operations agent"
+                    subtitle="Give Hermes a goal. It plans the steps, calls the right tools across your shops and connected apps, and reports back — streaming every step live. Pick a workflow to start, or type your own below."
+                    examples={EXAMPLE_GOALS}
+                    onPickExample={handlePick}
                   >
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>
-                      Hermes is working
-                      {dryRun ? ' on the plan' : ''}… {elapsed}s
-                    </span>
-                    <span style={{ fontSize: 12, color: C.muted }}>
-                      Planning{dryRun ? '' : ' and executing'} can take up to
-                      ~90 seconds for multi-step goals. Hang tight — this page
-                      will show every step as soon as the run finishes.
-                    </span>
-                  </div>
-                </div>
-              ) : null}
-
-              {/* Failure surfaces (distinct per kind) */}
-              {failure ? (
-                <Banner
-                  tone={
-                    failure.kind === 'planner' || failure.kind === 'tool'
-                      ? 'warn'
-                      : 'error'
-                  }
-                >
-                  {failure.kind === 'planner' ? (
-                    <strong>AI planner unreachable. </strong>
-                  ) : failure.kind === 'tool' ? (
-                    <strong>Tool unavailable. </strong>
-                  ) : failure.kind === 'timeout' ? (
-                    <strong>Run timed out. </strong>
-                  ) : null}
-                  {failure.message}
-                  {failure.kind !== 'tool' ? (
-                    <div style={{ marginTop: 8 }}>
-                      <button
-                        style={linkBtnStyle}
-                        disabled={running}
-                        onClick={retry}
-                      >
-                        {running ? 'Retrying…' : 'Retry'}
-                      </button>
-                    </div>
-                  ) : null}
-                </Banner>
-              ) : null}
-
-              {/* Result: step timeline, then the final answer ---------------- */}
-              {result ? (
-                <div
-                  style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
-                >
-                  {result.steps.length > 0 ? (
+                    {/* Curated operations workflows (HERMESX). Picking a card
+                        seeds the composer. */}
                     <div
                       style={{
                         display: 'flex',
                         flexDirection: 'column',
-                        gap: 8,
+                        gap: 24,
+                        textAlign: 'left',
                       }}
                     >
-                      <div
-                        style={{
-                          fontSize: 11,
-                          fontWeight: 700,
-                          letterSpacing: '0.06em',
-                          textTransform: 'uppercase',
-                          color: C.muted,
-                        }}
-                      >
-                        Steps ({result.steps.length}) · {result.iterations}{' '}
-                        iteration{result.iterations === 1 ? '' : 's'}
-                        {result.dryRun
-                          ? ' · dry run — nothing was executed'
-                          : ''}
-                      </div>
-                      {result.steps.map((step, i) => (
-                        <StepRow
-                          key={`${result.id}-${i}`}
-                          step={step}
-                          index={i}
-                          dryRun={result.dryRun}
-                        />
-                      ))}
+                      <HermesWorkflowsPanel onPick={handlePick} />
+                      {/* Tools / connections status derived from capabilities
+                          (HERMESX). Renders its own skeleton when null. */}
+                      <HermesConnectionsPanel capabilities={capabilities} />
                     </div>
-                  ) : (
-                    <Banner tone="info">
-                      The agent returned no steps for this run.
-                    </Banner>
-                  )}
-
-                  {/* Final answer — prominent, revealed after the steps */}
-                  <div
-                    className="cdz-hermes-step"
-                    style={{
-                      padding: '14px 16px',
-                      borderRadius: 10,
-                      background: result.ok ? C.accentSoft : C.errBg,
-                      border: `1px solid ${result.ok ? C.border : C.errBorder}`,
-                      animationDelay: `${Math.min(result.steps.length, 9) * 55}ms`,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 700,
-                        letterSpacing: '0.06em',
-                        textTransform: 'uppercase',
-                        color: C.muted,
-                        marginBottom: 6,
-                      }}
-                    >
-                      {result.dryRun
-                        ? 'Proposed plan'
-                        : result.ok
-                          ? 'Answer'
-                          : 'Answer · finished with errors'}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: 14,
-                        color: C.text,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {result.answer || '(no answer returned)'}
-                    </div>
-                  </div>
+                  </EmptyState>
                 </div>
-              ) : null}
-            </section>
-
-            {/* Run history ---------------------------------------------------- */}
-            <section style={panelStyle}>
-              <div
-                style={{ display: 'flex', alignItems: 'center', gap: 12 }}
-              >
-                <h2 style={sectionTitleStyle}>Recent runs</h2>
-                <span style={{ fontSize: 12, color: C.muted }}>
-                  last {HISTORY_MAX}, stored on this device
-                </span>
-                <span style={{ flex: 1 }} />
-                {history.length > 0 ? (
-                  <button style={linkBtnStyle} onClick={clearHistory}>
-                    Clear
-                  </button>
-                ) : null}
               </div>
-              {history.length === 0 ? (
-                <div style={{ fontSize: 12, color: C.muted }}>
-                  No runs yet — your last {HISTORY_MAX} runs will appear here,
-                  ready to re-run.
-                </div>
-              ) : (
-                <div
-                  style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
-                >
-                  {history.map(entry => (
-                    <div
-                      key={entry.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        padding: '9px 12px',
-                        borderRadius: 8,
-                        background: C.bg,
-                        border: `1px solid ${C.border}`,
-                      }}
-                    >
-                      <span
-                        title={entry.ok ? 'Completed' : 'Finished with errors'}
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: '50%',
-                          flexShrink: 0,
-                          background: entry.ok ? C.okText : C.errText,
-                        }}
-                      />
-                      <div
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 1,
-                        }}
-                      >
-                        <span
-                          title={entry.goal}
-                          style={{
-                            fontSize: 13,
-                            fontWeight: 600,
-                            color: C.text,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {entry.goal}
-                        </span>
-                        <span
-                          title={entry.summary}
-                          style={{
-                            fontSize: 11.5,
-                            color: C.muted,
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                        >
-                          {timeAgo(entry.ts)}
-                          {entry.dryRun ? ' · dry run' : ''}
-                          {entry.summary ? ` · ${entry.summary}` : ''}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={running}
-                        onClick={() => loadIntoComposer(entry)}
-                        title="Load this goal into the composer without running"
-                        style={{
-                          ...historyBtnStyle,
-                          opacity: running ? 0.5 : 1,
-                          cursor: running ? 'default' : 'pointer',
-                        }}
-                      >
-                        Load
-                      </button>
-                      <button
-                        type="button"
-                        disabled={running}
-                        onClick={() =>
-                          void executeRun(entry.goal, entry.dryRun)
-                        }
-                        title="Run this goal again"
-                        style={{
-                          ...historyBtnStyle,
-                          color: '#fff',
-                          background: C.accent,
-                          border: `1px solid ${C.accent}`,
-                          opacity: running ? 0.5 : 1,
-                          cursor: running ? 'default' : 'pointer',
-                        }}
-                      >
-                        ↻ Re-run
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
+            )}
+
+            {/* Live status strip (phase chip + label + elapsed) while running */}
+            {running ? (
+              <StatusBar
+                phase={phase ?? 'planning'}
+                label={status ?? ''}
+                running={running}
+              />
+            ) : null}
+
+            {/* Composer: textarea + send + Stop-while-running, with the mode
+                toggle in the left slot. Send is gated on planner readiness. */}
+            <Composer
+              value={input}
+              onChange={setInput}
+              onSend={doSend}
+              onStop={stop}
+              running={running}
+              disabled={composerDisabled}
+              placeholder={
+                composerDisabled
+                  ? 'Planner offline — sending is disabled'
+                  : 'Message Hermes — describe the outcome you want…'
+              }
+              leftSlot={
+                <ModeToggle mode={mode} disabled={running} onChange={setMode} />
+              }
+            />
+          </main>
         </div>
       </ViewBody>
     </>
   );
 };
 
-// ---- small inline-styled helpers (no exports from a .css.ts) --------------
+// ---------------------------------------------------------------------------
+// Local helpers (page-scoped; SHELL owns the reusable primitives).
+// ---------------------------------------------------------------------------
 
-const panelStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  padding: 18,
-  borderRadius: 12,
-  background: C.panel,
-  border: `1px solid ${C.border}`,
+// Composer leftSlot: a compact segmented control for the run policy.
+//   auto — execute tools freely
+//   ask  — pause for approval before any consequential tool (writes / sends)
+//   dry  — plan only, execute nothing
+const MODE_META: Record<AgentMode, { label: string; hint: string }> = {
+  auto: { label: 'Auto', hint: 'Run tools without asking' },
+  ask: { label: 'Ask', hint: 'Pause for approval before writes / sends' },
+  dry: { label: 'Dry run', hint: 'Plan only — execute nothing' },
 };
 
-const sectionTitleStyle: CSSProperties = {
-  margin: 0,
-  fontSize: 15,
-  fontWeight: 700,
-  color: C.text,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
+const MODE_ORDER: AgentMode[] = ['auto', 'ask', 'dry'];
+
+const ModeToggle = ({
+  mode,
+  disabled,
+  onChange,
+}: {
+  mode: AgentMode;
+  disabled?: boolean;
+  onChange: (next: AgentMode) => void;
+}) => (
+  <div
+    role="group"
+    aria-label="Run mode"
+    title={MODE_META[mode].hint}
+    style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      padding: 2,
+      borderRadius: 8,
+      gap: 2,
+      background: P.bg,
+      border: `1px solid ${P.border}`,
+      opacity: disabled ? 0.55 : 1,
+    }}
+  >
+    {MODE_ORDER.map(m => {
+      const active = m === mode;
+      return (
+        <button
+          key={m}
+          type="button"
+          role="radio"
+          aria-checked={active}
+          disabled={disabled}
+          title={MODE_META[m].hint}
+          onClick={() => !disabled && onChange(m)}
+          style={{
+            appearance: 'none',
+            border: 'none',
+            borderRadius: 6,
+            padding: '4px 10px',
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: 'inherit',
+            cursor: disabled ? 'default' : 'pointer',
+            color: active ? '#fff' : P.muted,
+            background: active ? P.accent : 'transparent',
+            transition: 'background 150ms ease, color 150ms ease',
+          }}
+        >
+          {MODE_META[m].label}
+        </button>
+      );
+    })}
+  </div>
+);
+
+const noticeStyle: CSSProperties = {
+  display: 'block',
+  padding: '10px 16px',
+  fontSize: 12.5,
+  color: P.text,
+  background: P.warnBg,
+  borderBottom: `1px solid ${P.warnBorder}`,
 };
 
 const codeStyle: CSSProperties = {
@@ -1038,7 +582,8 @@ const codeStyle: CSSProperties = {
   fontSize: 12,
   padding: '1px 5px',
   borderRadius: 4,
-  background: 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 14%, transparent)',
+  background:
+    'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 14%, transparent)',
   color: 'var(--affine-text-primary-color, #ececec)',
 };
 
@@ -1053,354 +598,6 @@ const linkBtnStyle: CSSProperties = {
   textDecoration: 'underline',
 };
 
-const historyBtnStyle: CSSProperties = {
-  appearance: 'none',
-  flexShrink: 0,
-  padding: '5px 10px',
-  borderRadius: 8,
-  fontSize: 12,
-  fontWeight: 600,
-  color: C.text,
-  background: 'transparent',
-  border: `1px solid ${C.border}`,
-};
-
-const stepLabelStyle: CSSProperties = {
-  fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: '0.06em',
-  textTransform: 'uppercase',
-  color: C.muted,
-  marginBottom: 4,
-};
-
-const stepPreStyle: CSSProperties = {
-  margin: 0,
-  padding: '8px 10px',
-  borderRadius: 6,
-  background: C.bg,
-  border: `1px solid ${C.border}`,
-  color: C.muted,
-  fontSize: 11.5,
-  fontFamily: 'var(--affine-font-code-family, monospace)',
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
-  maxHeight: 260,
-  overflow: 'auto',
-};
-
-// Accessible dry-run switch — inline styles, 150ms transform/background
-// transition (killed under prefers-reduced-motion via .cdz-hermes-motion).
-const Toggle = ({
-  on,
-  disabled,
-  onChange,
-  label,
-}: {
-  on: boolean;
-  disabled?: boolean;
-  onChange: (next: boolean) => void;
-  label: string;
-}) => (
-  <button
-    type="button"
-    role="switch"
-    aria-checked={on}
-    disabled={disabled}
-    onClick={() => onChange(!on)}
-    style={{
-      appearance: 'none',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 8,
-      background: 'none',
-      border: 'none',
-      padding: 0,
-      cursor: disabled ? 'default' : 'pointer',
-      color: C.text,
-      font: 'inherit',
-      opacity: disabled ? 0.6 : 1,
-    }}
-  >
-    <span
-      className="cdz-hermes-motion"
-      style={{
-        width: 30,
-        height: 18,
-        borderRadius: 999,
-        position: 'relative',
-        flexShrink: 0,
-        background: on
-          ? C.accent
-          : 'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 30%, transparent)',
-        transition: 'background 150ms ease',
-      }}
-    >
-      <span
-        className="cdz-hermes-motion"
-        style={{
-          position: 'absolute',
-          top: 2,
-          left: 2,
-          width: 14,
-          height: 14,
-          borderRadius: '50%',
-          background: '#fff',
-          transform: on ? 'translateX(12px)' : 'none',
-          transition: 'transform 150ms ease',
-        }}
-      />
-    </span>
-    <span style={{ fontSize: 12, fontWeight: 600 }}>{label}</span>
-  </button>
-);
-
-// A single collapsible agent step: number + tool (or "thinking") + status
-// pill + one-line thought preview; expands to full thought / args / result /
-// error. Failed steps start expanded. The row reveal is staggered ≤9 steps.
-const StepRow = ({
-  step,
-  index,
-  dryRun,
-}: {
-  step: HermesStep;
-  index: number;
-  dryRun: boolean;
-}) => {
-  const [open, setOpen] = useState(() => !step.ok && !!step.error);
-  const argsText = formatArgs(step.args);
-  const toolMissing =
-    !!step.error && /unavailable|not[_ ]configured/i.test(step.error);
-  const pill = !step.ok
-    ? { text: 'failed', color: C.errText, bg: C.errBg, border: C.errBorder }
-    : dryRun && step.tool
-      ? { text: 'planned', color: C.accent, bg: C.accentSoft, border: C.border }
-      : { text: 'ok', color: C.okText, bg: C.accentSoft, border: C.border };
-
-  return (
-    <div
-      className="cdz-hermes-step"
-      style={{
-        borderRadius: 8,
-        background: C.bg,
-        border: `1px solid ${C.border}`,
-        overflow: 'hidden',
-        animationDelay: `${Math.min(index, 9) * 55}ms`,
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        aria-expanded={open}
-        style={{
-          appearance: 'none',
-          width: '100%',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          padding: '9px 12px',
-          background: 'transparent',
-          border: 'none',
-          cursor: 'pointer',
-          color: C.text,
-          textAlign: 'left',
-          font: 'inherit',
-        }}
-      >
-        <span
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            width: '100%',
-          }}
-        >
-          <span style={{ fontSize: 11, color: C.muted, width: 18 }}>
-            {index + 1}.
-          </span>
-          {step.tool ? (
-            <span
-              style={{
-                fontFamily: 'var(--affine-font-code-family, monospace)',
-                fontSize: 12,
-                fontWeight: 600,
-                flex: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {step.tool}
-            </span>
-          ) : (
-            <span
-              style={{
-                fontSize: 12,
-                fontStyle: 'italic',
-                color: C.muted,
-                flex: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              thinking
-            </span>
-          )}
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-              textTransform: 'uppercase',
-              padding: '1px 8px',
-              borderRadius: 999,
-              color: pill.color,
-              background: pill.bg,
-              border: `1px solid ${pill.border}`,
-            }}
-          >
-            {pill.text}
-          </span>
-          <span style={{ fontSize: 11, color: C.muted }}>
-            {open ? '▾' : '▸'}
-          </span>
-        </span>
-        {step.thought ? (
-          <span
-            style={{
-              fontSize: 11.5,
-              color: C.muted,
-              paddingLeft: 28,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              maxWidth: '100%',
-              boxSizing: 'border-box',
-            }}
-          >
-            {step.thought}
-          </span>
-        ) : null}
-      </button>
-      {open ? (
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 10,
-            padding: '10px 12px',
-            borderTop: `1px solid ${C.border}`,
-            background: C.panel,
-          }}
-        >
-          {step.thought ? (
-            <div>
-              <div style={stepLabelStyle}>Thought</div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: C.text,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {step.thought}
-              </div>
-            </div>
-          ) : null}
-          {step.tool ? (
-            <div>
-              <div style={stepLabelStyle}>
-                Tool call{dryRun ? ' (planned, not executed)' : ''}
-              </div>
-              <pre style={stepPreStyle}>
-                {step.tool}
-                {argsText ? `\n${argsText}` : ''}
-              </pre>
-            </div>
-          ) : null}
-          {step.resultPreview ? (
-            <div>
-              <div style={stepLabelStyle}>Result</div>
-              <pre style={stepPreStyle}>{step.resultPreview}</pre>
-            </div>
-          ) : null}
-          {step.error ? (
-            <div>
-              <div style={stepLabelStyle}>Error</div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: C.errText,
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {step.error}
-              </div>
-              {toolMissing ? (
-                <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>
-                  This tool isn&apos;t configured on the server, so Hermes
-                  skipped it. Greyed-out chips under Agent status show what
-                  is missing.
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {!step.thought && !step.tool && !step.resultPreview && !step.error ? (
-            <div style={{ fontSize: 12, color: C.muted }}>
-              (empty step)
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-};
-
-// Tiny CSS spinner (keyframes live in GLOBAL_CSS; page-unique name).
-const Spinner = () => (
-  <span
-    className="cdz-hermes-motion"
-    style={{
-      display: 'inline-block',
-      width: 12,
-      height: 12,
-      borderRadius: '50%',
-      border: '2px solid rgba(255,255,255,0.4)',
-      borderTopColor: '#fff',
-      animation: 'cdz-hermes-spin 0.7s linear infinite',
-    }}
-  />
-);
-
-const Banner = ({
-  tone,
-  children,
-}: PropsWithChildren<{ tone: 'info' | 'warn' | 'error' | 'ok' }>) => {
-  const map = {
-    info: { bg: C.accentSoft, border: C.border, color: C.text },
-    ok: { bg: C.accentSoft, border: C.border, color: C.text },
-    warn: { bg: C.warnBg, border: C.warnBorder, color: C.text },
-    error: { bg: C.errBg, border: C.errBorder, color: C.text },
-  }[tone];
-  return (
-    <div
-      style={{
-        padding: '12px 14px',
-        borderRadius: 10,
-        fontSize: 13,
-        background: map.bg,
-        border: `1px solid ${map.border}`,
-        color: map.color,
-      }}
-    >
-      {children}
-    </div>
-  );
-};
-
 export const Component = () => {
-  return <HermesPage />;
+  return <HermesConsole />;
 };
