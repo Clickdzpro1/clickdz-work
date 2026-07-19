@@ -3,7 +3,7 @@
 // The stream hook ALREADY collects terminal/files/preview/pendingApproval for
 // us (see the exact return shape below); the page reads those directly and only
 // uses the `onEvent` PARAM to adopt a freshly-minted thread id.
-import { api as agentApi } from '@affine/core/modules/agents/api';
+import * as agentApi from '@affine/core/modules/agents/api';
 import type { AgentEvent } from '@affine/core/modules/agents/types';
 import { useAgentStream } from '@affine/core/modules/agents/use-agent-stream';
 import { useAgentThreads } from '@affine/core/modules/agents/use-agent-threads';
