@@ -421,6 +421,16 @@ export class ChatInputPreference extends SignalWatcher(
   @property({ attribute: false })
   accessor onAISubscribe!: () => Promise<void>;
 
+  // WS2 — fresh-start ("Nouvelle discussion"). Optional so existing hosts
+  // that don't pass it keep working unchanged (keep-context paths are
+  // unaffected either way); when provided, invoking it performs the actual
+  // session swap + navigation on the host side (mirrors the runtime's own
+  // `createNewSession` dispatch used by the "+ New Chat" toolbar button —
+  // RECON B8 / ai-chat-toolbar.ts `onPlusClick`). The popup itself never
+  // touches CopilotClient/forkSession directly; it only signals intent.
+  @property({ attribute: false })
+  accessor onNewSession: (() => void | Promise<void>) | undefined;
+
   model = computed(() => {
     // Use the service's reconciled id so a stale persisted modelId (one no
     // longer in the current list) resolves to the default instead of leaving
@@ -643,12 +653,15 @@ export class ChatInputPreference extends SignalWatcher(
     // model above already stores the keep-context default; this row surfaces
     // that decision and lets the user re-affirm it.
     //
-    // "Nouvelle discussion" (fresh start) is intentionally absent: while the
-    // fork mutation is client-wired (copilot-client.forkSession), starting a
-    // clean thread also needs a UI session-swap + navigation that this popup
-    // has no handle on (no CopilotClient / no fork or new-session callback is
-    // passed in by the chat-input host — RECON F.4 / G). Firing the mutation
-    // here alone would strand an orphan session, so the button is omitted.
+    // "Nouvelle discussion" (fresh start) sits beside the keep-context row:
+    // the host (chat-input) now threads an optional `onNewSession` callback
+    // that performs the actual session swap (it dispatches the runtime's own
+    // `createNewSession` action — the same primitive the "+ New Chat"
+    // toolbar button already uses, see ai-chat-toolbar.ts `onPlusClick`).
+    // The popup never touches CopilotClient/forkSession itself, so there is
+    // no orphan-session risk: it only signals intent through the callback.
+    // If a host doesn't pass the callback (not yet wired), the row is hidden
+    // rather than firing nothing on click.
     if (this.hasHandoffContext) {
       const sessionId = this.session?.sessionId ?? '';
       const storedMode = getContextMode(sessionId);
@@ -661,6 +674,7 @@ export class ChatInputPreference extends SignalWatcher(
         keepMode === 'compact'
           ? '🧠 Garder le contexte (résumé)'
           : '🧠 Garder le contexte';
+      const onNewSession = this.onNewSession;
       modelItems.push(
         menu.subMenu({
           name: 'Contexte du modèle',
@@ -689,6 +703,24 @@ export class ChatInputPreference extends SignalWatcher(
                   this.keepContextForSwitch();
                 },
               }),
+              // Only rendered once the host wires the callback (RECON B8):
+              // the fork/new-session mutation exists client-side, but firing
+              // it without a session-swap + navigation handle would strand
+              // an orphan session, so this row stays hidden until a real
+              // `onNewSession` is threaded through from the chat-input host.
+              ...(onNewSession
+                ? [
+                    menu.action({
+                      name: '🆕 Nouvelle discussion',
+                      class: {
+                        'ai-model-item': true,
+                      },
+                      select: () => {
+                        void onNewSession();
+                      },
+                    }),
+                  ]
+                : []),
             ],
           },
         })

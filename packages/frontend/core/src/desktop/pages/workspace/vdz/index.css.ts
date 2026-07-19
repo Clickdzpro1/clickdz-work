@@ -99,38 +99,6 @@ export const headerTitle = style({
   flexShrink: 0,
 });
 
-// The project name on the right: reads as an editable field (subtle hover
-// affordance) and truncates with an ellipsis rather than pushing the row wider.
-export const timelineName = style({
-  color: textDim,
-  fontSize: 12,
-  fontWeight: 500,
-  minWidth: 0,
-  maxWidth: 240,
-  overflow: 'hidden',
-  whiteSpace: 'nowrap',
-  textOverflow: 'ellipsis',
-  padding: '0 8px',
-  height: HEADER_CONTROL_H,
-  lineHeight: `${HEADER_CONTROL_H}px`,
-  borderRadius: 6,
-  border: '1px solid transparent',
-  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
-  ':hover': {
-    color: text,
-    background: bg,
-    borderColor: border,
-  },
-});
-
-// Slim vertical divider separating the project name from the panel View menu.
-export const headerDivider = style({
-  width: 1,
-  height: 18,
-  flexShrink: 0,
-  background: border,
-});
-
 // ---- Mode tabs (Edit / Generate) in the header --------------------------
 // One segmented group: a bordered track holding two equal segments.
 export const modeTabs = style({
@@ -1396,37 +1364,6 @@ export const reopenTab = style({
 export const viewMenuRoot = style({
   position: 'relative',
   display: 'inline-flex',
-});
-
-export const viewMenuTrigger = style({
-  appearance: 'none',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  height: 28,
-  boxSizing: 'border-box',
-  border: `1px solid ${border}`,
-  background: bg,
-  color: textDim,
-  fontSize: 12,
-  fontWeight: 600,
-  padding: '0 10px',
-  borderRadius: 8,
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-  flexShrink: 0,
-  transition: 'background 120ms ease, color 120ms ease, border-color 120ms',
-  ':hover': {
-    color: text,
-    borderColor: accent,
-  },
-  selectors: {
-    '&[data-open="true"]': {
-      color: text,
-      background: raised,
-      borderColor: accent,
-    },
-  },
 });
 
 export const viewMenuGlyph = style({

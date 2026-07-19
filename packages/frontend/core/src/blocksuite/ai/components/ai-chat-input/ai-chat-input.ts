@@ -3301,6 +3301,7 @@ export class AIChatInput extends SignalWatcher(
           .subscriptionService=${this.subscriptionService}
           .aiModelService=${this.aiModelService}
           .onAISubscribe=${this.onAISubscribe}
+          .onNewSession=${this._onNewSessionFromPreference}
         ></chat-input-preference>
         ${status === 'transmitting' || status === 'loading'
           ? html`<button
@@ -3483,6 +3484,14 @@ export class AIChatInput extends SignalWatcher(
 
   private readonly _toggleReasoning = (extendedThinking: boolean) => {
     this.reasoningConfig.setEnabled(extendedThinking);
+  };
+
+  // WS2 — fresh-start ("Nouvelle discussion") from the model-switch preference
+  // popup. Dispatches the runtime's own createNewSession action (same primitive
+  // the "+ New Chat" toolbar button uses) for a real session swap + UI update.
+  private readonly _onNewSessionFromPreference = async () => {
+    if (!this.runtime) return;
+    await this.runtime.dispatch({ type: 'createNewSession' });
   };
 
   private readonly _handleImageRemove = (index: number) => {
