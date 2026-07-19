@@ -164,6 +164,7 @@ export function EffectsPanel({
   return (
     <VdzPanel
       title="Effects"
+      icon="✨"
       data-testid="vdz-effects"
       onCollapse={onCollapse}
       bodyClassName={styles.inspectorBody}

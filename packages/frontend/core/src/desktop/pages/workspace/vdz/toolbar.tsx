@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import type { VdzOp, VdzTimeline } from '../../../../modules/vdz';
 import { VDZ_RATIO_PRESETS } from '../../../../modules/vdz/presets';
+import * as chrome from './chrome-studio.css';
 import { formatTimecode } from './constants';
 import * as styles from './index.css';
 
@@ -60,12 +61,20 @@ interface ToolbarProps {
  * match; wider than this and the button reads "Custom". ~2% tolerance. */
 const RATIO_MATCH_TOLERANCE = 0.02;
 
+/** setCanvas op range (mirrors ops.ts's integer 320..4096 clamp — we validate
+ * the Custom inputs against the same bounds so an out-of-range value is caught
+ * before it ever reaches the frozen op layer). */
+const CANVAS_MIN = 320;
+const CANVAS_MAX = 4096;
+
 /**
  * The compact aspect-ratio picker: a toolbar button showing the current ratio
  * (the closest {@link VDZ_RATIO_PRESETS} match to the timeline's width/height,
  * or "Custom" when nothing is within ~2%) that opens a small popover of the
- * presets. Selecting one commits `{ op:'setCanvas', width, height }` through the
- * toolbar's shared op-commit path — the exact mechanism Split/Delete/etc. use.
+ * presets. A checkmark marks the applied ratio, and a "Custom…" entry reveals
+ * inline W×H inputs. Both presets AND the custom size commit `{ op:'setCanvas',
+ * width, height }` through the toolbar's shared op-commit path — the exact
+ * mechanism Split/Delete/etc. use.
  */
 function RatioPicker({
   timeline,
@@ -75,6 +84,7 @@ function RatioPicker({
   onCommitOp: (op: VdzOp) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
   const width = timeline?.width ?? 0;
@@ -96,16 +106,35 @@ function RatioPicker({
     }
     if (best > RATIO_MATCH_TOLERANCE) match = null;
   }
+  const isCustom = aspect > 0 && !match;
   const currentLabel = match ? match.label : 'Custom';
 
-  // Close on an outside click or Escape while the popover is open.
+  // Custom W×H draft (seeded from the live canvas so opening it shows the
+  // current size, ready to tweak).
+  const [draftW, setDraftW] = useState('');
+  const [draftH, setDraftH] = useState('');
+
+  // Reset drafts to the live size whenever the custom editor is opened.
+  const openCustom = () => {
+    setDraftW(width > 0 ? String(width) : '');
+    setDraftH(height > 0 ? String(height) : '');
+    setCustomOpen(true);
+  };
+
+  // Close (and reset the custom editor) on outside click or Escape.
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (!wrapRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!wrapRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+        setCustomOpen(false);
+      }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') {
+        setOpen(false);
+        setCustomOpen(false);
+      }
     };
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown, true);
@@ -118,6 +147,32 @@ function RatioPicker({
   const select = (preset: (typeof VDZ_RATIO_PRESETS)[number]) => {
     onCommitOp({ op: 'setCanvas', width: preset.width, height: preset.height });
     setOpen(false);
+    setCustomOpen(false);
+  };
+
+  // Parse + validate the custom drafts to integers inside [320, 4096].
+  const parsed = (raw: string): number | null => {
+    const n = Math.round(Number(raw));
+    if (!Number.isFinite(n) || n < CANVAS_MIN || n > CANVAS_MAX) return null;
+    return n;
+  };
+  const customW = parsed(draftW);
+  const customH = parsed(draftH);
+  const customValid = customW !== null && customH !== null;
+
+  const commitCustom = () => {
+    if (customW === null || customH === null) return;
+    // SAME op path the presets use — ops.ts revalidates the 320..4096 range.
+    onCommitOp({ op: 'setCanvas', width: customW, height: customH });
+    setOpen(false);
+    setCustomOpen(false);
+  };
+
+  const onCustomKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      commitCustom();
+    }
   };
 
   return (
@@ -141,7 +196,7 @@ function RatioPicker({
             top: 'calc(100% + 6px)',
             right: 0,
             zIndex: 40,
-            minWidth: 176,
+            minWidth: 200,
             padding: 6,
             display: 'flex',
             flexDirection: 'column',
@@ -173,7 +228,7 @@ function RatioPicker({
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 10,
+                  gap: 8,
                   width: '100%',
                   padding: '6px 8px',
                   border: '1px solid transparent',
@@ -194,6 +249,9 @@ function RatioPicker({
                   if (!active) e.currentTarget.style.background = 'transparent';
                 }}
               >
+                <span className={chrome.ratioCheck} aria-hidden="true">
+                  {active ? '✓' : ''}
+                </span>
                 <span
                   aria-hidden="true"
                   style={{
@@ -234,13 +292,136 @@ function RatioPicker({
               </button>
             );
           })}
+
+          <div className={chrome.ratioSep} />
+
+          {/* ---- Custom… : inline W×H editor committing through setCanvas ---- */}
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={isCustom}
+            aria-expanded={customOpen}
+            onClick={() => (customOpen ? setCustomOpen(false) : openCustom())}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              width: '100%',
+              padding: '6px 8px',
+              border: '1px solid transparent',
+              borderRadius: 6,
+              background:
+                isCustom && !customOpen
+                  ? 'rgba(91,140,255,0.18)'
+                  : 'transparent',
+              color: isCustom ? '#dfe7ff' : '#e7e9ee',
+              font: 'inherit',
+              fontSize: 12,
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+            onMouseEnter={e => {
+              if (!(isCustom && !customOpen)) {
+                e.currentTarget.style.background = 'rgba(255,255,255,0.06)';
+              }
+            }}
+            onMouseLeave={e => {
+              if (!(isCustom && !customOpen)) {
+                e.currentTarget.style.background = 'transparent';
+              }
+            }}
+          >
+            <span className={chrome.ratioCheck} aria-hidden="true">
+              {isCustom ? '✓' : ''}
+            </span>
+            <span
+              aria-hidden="true"
+              style={{
+                flex: '0 0 auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 22,
+                height: 22,
+                color: '#9aa0ab',
+                fontSize: 14,
+              }}
+            >
+              ⤢
+            </span>
+            <span style={{ flex: 1, minWidth: 0, fontWeight: 600 }}>
+              Custom…
+            </span>
+          </button>
+
+          {customOpen ? (
+            <div className={chrome.customForm}>
+              <div className={chrome.customRow}>
+                <label className={chrome.customField}>
+                  <span className={chrome.customLabel}>W</span>
+                  <input
+                    className={chrome.customInput}
+                    type="number"
+                    inputMode="numeric"
+                    min={CANVAS_MIN}
+                    max={CANVAS_MAX}
+                    step={1}
+                    value={draftW}
+                    onChange={e => setDraftW(e.target.value)}
+                    onKeyDown={onCustomKeyDown}
+                    aria-label="Custom canvas width in pixels"
+                    autoFocus
+                  />
+                </label>
+                <span className={chrome.customTimes} aria-hidden="true">
+                  ×
+                </span>
+                <label className={chrome.customField}>
+                  <span className={chrome.customLabel}>H</span>
+                  <input
+                    className={chrome.customInput}
+                    type="number"
+                    inputMode="numeric"
+                    min={CANVAS_MIN}
+                    max={CANVAS_MAX}
+                    step={1}
+                    value={draftH}
+                    onChange={e => setDraftH(e.target.value)}
+                    onKeyDown={onCustomKeyDown}
+                    aria-label="Custom canvas height in pixels"
+                  />
+                </label>
+              </div>
+              <div className={chrome.customRow}>
+                <span className={chrome.customHint}>
+                  {CANVAS_MIN}–{CANVAS_MAX} px each side
+                </span>
+                <button
+                  type="button"
+                  className={chrome.customApply}
+                  style={{ marginLeft: 'auto' }}
+                  disabled={!customValid}
+                  onClick={commitCustom}
+                  title="Apply custom canvas size"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-/** Editor action bar. Sits ABOVE the lanes (never in the AI-dock footer). */
+/** Editor action bar. Sits ABOVE the lanes (never in the AI-dock footer).
+ *
+ * Controls are organised into four logically-grouped clusters, separated by
+ * subtle hairline dividers: playback (media · play · audio · timecode) |
+ * edit & insert (undo · redo · text · split · delete · ripple) | canvas &
+ * zoom (zoom out/in · aspect ratio) | view & export (export · collapse). Each
+ * button carries a tooltip naming its keyboard shortcut where one exists. */
 export function Toolbar({
   showMedia,
   onToggleMedia,
@@ -277,188 +458,207 @@ export function Toolbar({
   const exportPct = Math.round((exportProgress ?? 0) * 100);
   return (
     <div className={styles.toolbar}>
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onToggleMedia}
-        aria-pressed={showMedia}
-        title="Toggle the media bin (upload / AI images / stock)"
-      >
-        {showMedia ? '◧ Media' : '▤ Media'}
-      </button>
-
-      <span className={styles.toolDivider} />
-
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onTogglePlay}
-        title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
-      >
-        {isPlaying ? '⏸ Pause' : '▶ Play'}
-      </button>
-
-      {onToggleAudioMute ? (
+      {/* ---- Group: playback ------------------------------------------- */}
+      <span className={chrome.toolGroup}>
         <button
           type="button"
           className={styles.toolButton}
-          onClick={onToggleAudioMute}
-          aria-pressed={audioMuted}
-          title={audioMuted ? 'Unmute preview audio' : 'Mute preview audio'}
+          onClick={onToggleMedia}
+          aria-pressed={showMedia}
+          title="Toggle the media bin — upload / AI images / stock (Cmd/Ctrl+1)"
         >
-          {audioMuted ? '🔇 Muted' : '🔊 Audio'}
+          {showMedia ? '◧ Media' : '▤ Media'}
         </button>
-      ) : null}
 
-      <span className={styles.toolTimecode}>
-        {formatTimecode(playheadSeconds)} / {formatTimecode(duration)}
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onTogglePlay}
+          aria-pressed={isPlaying}
+          title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
+        >
+          {isPlaying ? '⏸ Pause' : '▶ Play'}
+        </button>
+
+        {onToggleAudioMute ? (
+          <button
+            type="button"
+            className={styles.toolButton}
+            onClick={onToggleAudioMute}
+            aria-pressed={audioMuted}
+            title={audioMuted ? 'Unmute preview audio' : 'Mute preview audio'}
+          >
+            {audioMuted ? '🔇 Muted' : '🔊 Audio'}
+          </button>
+        ) : null}
+
+        <span
+          className={styles.toolTimecode}
+          title="Playhead / total duration"
+        >
+          {formatTimecode(playheadSeconds)} / {formatTimecode(duration)}
+        </span>
       </span>
 
       <span className={styles.toolDivider} />
 
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onUndo}
-        disabled={!canUndo}
-        title="Undo (Ctrl/Cmd+Z)"
-      >
-        ↺ Undo
-      </button>
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onRedo}
-        disabled={!canRedo}
-        title="Redo (Ctrl/Cmd+Shift+Z)"
-      >
-        ↻ Redo
-      </button>
-
-      <span className={styles.toolDivider} />
-
-      {onAddText ? (
+      {/* ---- Group: edit & insert -------------------------------------- */}
+      <span className={chrome.toolGroup}>
         <button
           type="button"
           className={styles.toolButton}
-          onClick={onAddText}
-          title="Add a text clip at the playhead"
+          onClick={onUndo}
+          disabled={!canUndo}
+          title="Undo (Ctrl/Cmd+Z)"
         >
-          ＋ Text
+          ↺ Undo
         </button>
-      ) : null}
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onSplit}
-        disabled={!canSplit}
-        title="Split selected clip at playhead (S)"
-      >
-        ⋔ Split
-      </button>
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onDelete}
-        disabled={!canDelete}
-        title="Delete selected (Delete)"
-      >
-        🗑 Delete
-      </button>
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onRippleDelete}
-        disabled={!canDelete}
-        title="Ripple delete — close the gap (Shift+Delete)"
-      >
-        ⇤ Ripple
-      </button>
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onRedo}
+          disabled={!canRedo}
+          title="Redo (Ctrl/Cmd+Shift+Z)"
+        >
+          ↻ Redo
+        </button>
+
+        {onAddText ? (
+          <button
+            type="button"
+            className={styles.toolButton}
+            onClick={onAddText}
+            title="Add a text clip at the playhead"
+          >
+            ＋ Text
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onSplit}
+          disabled={!canSplit}
+          title="Split the selected clip at the playhead (S)"
+        >
+          ⋔ Split
+        </button>
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onDelete}
+          disabled={!canDelete}
+          title="Delete the selection (Delete)"
+        >
+          🗑 Delete
+        </button>
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onRippleDelete}
+          disabled={!canDelete}
+          title="Ripple delete — remove and close the gap (Shift+Delete)"
+        >
+          ⇤ Ripple
+        </button>
+      </span>
 
       <span className={styles.toolSpacer} />
 
       {selectionCount > 1 ? (
-        <span className={styles.toolBadge}>{selectionCount} selected</span>
+        <span className={styles.toolBadge} title={`${selectionCount} clips selected`}>
+          {selectionCount} selected
+        </span>
       ) : null}
 
       <span className={styles.toolDivider} />
 
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onZoomOut}
-        title="Zoom out"
-      >
-        −
-      </button>
-      <span className={styles.toolZoomLabel}>{Math.round(pxPerSec)} px/s</span>
-      <button
-        type="button"
-        className={styles.toolButton}
-        onClick={onZoomIn}
-        title="Zoom in"
-      >
-        +
-      </button>
+      {/* ---- Group: canvas & zoom -------------------------------------- */}
+      <span className={chrome.toolGroup}>
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onZoomOut}
+          title="Zoom the timeline out"
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+        <span className={styles.toolZoomLabel} title="Timeline zoom (pixels per second)">
+          {Math.round(pxPerSec)} px/s
+        </span>
+        <button
+          type="button"
+          className={styles.toolButton}
+          onClick={onZoomIn}
+          title="Zoom the timeline in"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
 
-      {onCommitOp ? (
-        <>
-          <span className={styles.toolDivider} />
+        {onCommitOp ? (
           <RatioPicker timeline={timeline} onCommitOp={onCommitOp} />
-        </>
-      ) : null}
+        ) : null}
+      </span>
 
-      {onExport ? (
+      {onExport || onCollapse ? (
         <>
           <span className={styles.toolDivider} />
-          {exportFileUrl ? (
-            <a
-              className={styles.toolButton}
-              href={exportFileUrl}
-              download
-              title="Download the rendered MP4"
-            >
-              ⬇ MP4
-            </a>
-          ) : (
-            <button
-              type="button"
-              className={styles.toolButton}
-              onClick={onExport}
-              disabled={exportBusy || exportUnavailable}
-              title={
-                exportUnavailable
-                  ? 'Render service coming online soon'
-                  : 'Compile this timeline and render it to an MP4'
-              }
-            >
-              {exportBusy ? `⤓ Exporting ${exportPct}%` : '⬇ Export MP4'}
-            </button>
-          )}
-          {exportNote ? (
-            <span
-              className={styles.toolZoomLabel}
-              title={exportNote}
-              style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-            >
-              {exportNote}
-            </span>
-          ) : null}
-        </>
-      ) : null}
+          {/* ---- Group: view & export ------------------------------------ */}
+          <span className={chrome.toolGroup}>
+            {onExport ? (
+              exportFileUrl ? (
+                <a
+                  className={styles.toolButton}
+                  href={exportFileUrl}
+                  download
+                  title="Download the rendered MP4"
+                >
+                  ⬇ MP4
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  className={styles.toolButton}
+                  onClick={onExport}
+                  disabled={exportBusy || exportUnavailable}
+                  title={
+                    exportUnavailable
+                      ? 'Render service coming online soon'
+                      : 'Compile this timeline and render it to an MP4'
+                  }
+                >
+                  {exportBusy ? `⤓ Exporting ${exportPct}%` : '⬇ Export MP4'}
+                </button>
+              )
+            ) : null}
+            {onExport && exportNote ? (
+              <span
+                className={styles.toolZoomLabel}
+                title={exportNote}
+                style={{
+                  maxWidth: 220,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {exportNote}
+              </span>
+            ) : null}
 
-      {onCollapse ? (
-        <>
-          <span className={styles.toolDivider} />
-          <button
-            type="button"
-            className={styles.toolButton}
-            onClick={onCollapse}
-            title="Hide the timeline (Cmd/Ctrl+4)"
-            aria-label="Hide timeline"
-          >
-            ×
-          </button>
+            {onCollapse ? (
+              <button
+                type="button"
+                className={styles.toolButton}
+                onClick={onCollapse}
+                title="Hide the timeline (Cmd/Ctrl+4)"
+                aria-label="Hide timeline"
+              >
+                ×
+              </button>
+            ) : null}
+          </span>
         </>
       ) : null}
     </div>

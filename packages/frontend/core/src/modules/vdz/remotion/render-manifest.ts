@@ -11,7 +11,13 @@ import type {
   VdzTrack,
   VdzTransition,
 } from '../schema';
-import { computeTimelineDuration } from '../schema';
+// C1: the ONE canonical export-duration rule (max clip end over ALL clips on ALL
+// tracks, floored at 1s), shared with the HTML compiler + the export dialog so
+// every tier derives its total from the SAME number. Imported from the
+// export-orchestration module (the single home the ownership map allows for the
+// shared utility); it reaches back here only via a dynamic `import()`, so the
+// static import cannot form an initialization cycle.
+import { computeExportDurationSec } from '../use-vdz-timeline-export';
 
 /**
  * Vdz Studio — the Remotion RENDER MANIFEST (true-video-export track, PR1).
@@ -44,17 +50,26 @@ import { computeTimelineDuration } from '../schema';
  *     `vignetteBoxShadow` use;
  *   · caption `capPreset` chrome, the resolved vertical anchor (via the shared
  *     `captionAnchorY`, so an explicit `y` or a `capPosition` third both land
- *     exactly where the preview puts them), and per-word karaoke `words`.
- * Keeping this a pure, dependency-free lowering (it imports only the schema
- * types + the ONE `captionAnchorY` helper, and `computeTimelineDuration`) means
- * it is runtime-testable and adds NO new dependency to any workspace package.
+ *     exactly where the preview puts them), and per-word karaoke `words`;
+ *   · the transition-EXTENDED on-screen WINDOW per clip (`renderStartSec` /
+ *     `renderDurationSec`, in seconds), mirroring `anim.ts::clipWindow` — an
+ *     outgoing clip lingers half a transition past the boundary and an incoming
+ *     clip appears half a transition early, so the worker can bound each
+ *     `<Sequence>` to render the clip's fade-out / fade-in TAIL instead of hard-
+ *     cutting it at the raw clip edge.
+ * It imports the schema types, the ONE `captionAnchorY` helper, and the shared
+ * C1 `computeExportDurationSec` utility — no DOM, no clock, no React at runtime
+ * — so it stays deterministic, runtime-testable, and adds NO new dependency.
  *
  * FRAME MATH. All timeline values are SECONDS; the manifest is the frame domain
- * the worker renders in. We convert with the timeline's own `fps` and round to
- * the nearest whole frame (`Math.round(seconds * fps)`), the standard Remotion
- * convention, so a 3.0s clip at 30fps is exactly 90 frames. `durationInFrames`
- * is derived from the timeline's max clip end the same way and floored to a
- * minimum of 1 (Remotion rejects a zero-frame composition).
+ * the worker renders in. Per-clip frame counts use round-to-nearest
+ * (`Math.round(seconds * fps)`), the standard Remotion convention, so a 3.0s
+ * clip at 30fps is exactly 90 frames. The COMPOSITION length is different: per
+ * C3, `durationInFrames = ceil(durationSec * fps)` from the C1 duration, so a
+ * fractional last frame is never dropped (a 2.98s @ 30fps timeline yields 90
+ * frames, not 89), then floored to a minimum of 1 (Remotion rejects a zero-frame
+ * composition). The transition-extended window fields stay in SECONDS (their
+ * `…Sec` names): the worker converts them to frames itself for the `<Sequence>`.
  */
 
 /** The manifest schema version. Bumped only on a breaking shape change. */
@@ -108,6 +123,23 @@ interface VdzManifestClipBase {
   fromFrame: number;
   /** Clip length, in FRAMES (rounded from seconds · fps; >= 1). */
   durationInFrames: number;
+  /**
+   * The clip's transition-EXTENDED on-screen window START, in SECONDS (C3),
+   * mirroring `anim.ts::clipWindow`: pulled EARLIER by half of the transition
+   * after the previous clip when they abut (so this clip's fade-IN tail renders),
+   * clamped at 0. Absent when it equals the raw `start` (no head extension). The
+   * worker PREFERS this for the `<Sequence>` lower bound, falling back to
+   * `fromFrame`.
+   */
+  renderStartSec?: number;
+  /**
+   * The clip's transition-EXTENDED window LENGTH, in SECONDS (C3): the window
+   * end (pushed LATER by half of the transition after THIS clip when the next
+   * abuts, so the fade-OUT tail renders) minus `renderStartSec`. Absent when it
+   * equals the raw `duration` (no extension). The worker PREFERS this for the
+   * `<Sequence>` length, falling back to `durationInFrames`.
+   */
+  renderDurationSec?: number;
   /** Optional entrance/exit motion, in the frame domain. */
   animation?: { in?: VdzManifestAnimation; out?: VdzManifestAnimation };
   /** Optional visual filter stack (unchanged normalized amounts). */
@@ -226,9 +258,9 @@ export interface VdzRenderManifest {
   fps: number;
   width: number;
   height: number;
-  /** Total composition length in FRAMES (>= 1). */
+  /** Total composition length in FRAMES: `ceil(durationInSeconds · fps)`, >= 1 (C3). */
   durationInFrames: number;
-  /** Convenience: the same total in seconds (max clip end). */
+  /** The same total in seconds — the canonical C1 duration (max clip end, min 1s). */
   durationInSeconds: number;
   tracks: VdzManifestTrack[];
   /** Srcs that could NOT be resolved to a loadable url (kept raw, reported). */
@@ -257,6 +289,43 @@ export interface BuildRenderManifestOptions {
 function toFrames(seconds: number, fps: number): number {
   if (!Number.isFinite(seconds) || seconds <= 0) return 0;
   return Math.round(seconds * fps + 1e-6);
+}
+
+/**
+ * The transition-EXTENDED on-screen window for a clip, in SECONDS — a VERBATIM
+ * mirror of `anim.ts::clipWindow` (and the HTML compiler's `clipRenderWindow`),
+ * so the manifest's per-clip window matches the preview frame-for-frame:
+ *   · a transition AFTER this clip pushes its END later by `duration/2`, but only
+ *     when the NEXT clip actually abuts (a real crossfade, not a gap);
+ *   · a transition after the PREVIOUS clip (whose boundary is this clip's start)
+ *     pulls this clip's START earlier by `duration/2`, again only if they abut.
+ * Start clamps at 0. Returns the raw `[start, start+duration]` when no abutting
+ * transition touches either boundary.
+ */
+function extendedWindow(
+  track: VdzTrack,
+  clip: VdzClip,
+  index: number
+): { start: number; end: number } {
+  let start = clip.start;
+  let end = clip.start + clip.duration;
+  const transitions = track.transitions ?? [];
+
+  const next = track.clips[index + 1];
+  if (next && Math.abs(end - next.start) < 1e-6) {
+    for (const tr of transitions) {
+      if (tr.afterClipId === clip.id) end += tr.duration / 2;
+    }
+  }
+  if (index > 0) {
+    const prev = track.clips[index - 1];
+    if (Math.abs(prev.start + prev.duration - clip.start) < 1e-6) {
+      for (const tr of transitions) {
+        if (tr.afterClipId === prev.id) start -= tr.duration / 2;
+      }
+    }
+  }
+  return { start: Math.max(0, start), end };
 }
 
 /** The default animation-side duration, mirroring `anim.ts::animDuration` (0.5s). */
@@ -311,14 +380,36 @@ function clamp01(t: number): number {
   return t < 0 ? 0 : t > 1 ? 1 : t;
 }
 
-/** The base fields shared by every manifest clip. */
-function lowerBase(clip: VdzClip, fps: number): VdzManifestClipBase {
+/**
+ * The base fields shared by every manifest clip. `win` is the clip's transition-
+ * extended on-screen window (seconds); when it exceeds the raw clip span the
+ * `renderStartSec`/`renderDurationSec` fields are attached (C3) so the worker can
+ * render the clip's crossfade tails. Absent `win` (audio clips, which never
+ * transition) → no window fields, byte-identical to before.
+ */
+function lowerBase(
+  clip: VdzClip,
+  fps: number,
+  win?: { start: number; end: number }
+): VdzManifestClipBase {
   const base: VdzManifestClipBase = {
     id: clip.id,
     fromFrame: toFrames(clip.start, fps),
     durationInFrames: Math.max(1, toFrames(clip.duration, fps)),
   };
   if (typeof clip.name === 'string') base.name = clip.name;
+  // Transition-extended window (C3). Emit only when it actually differs from the
+  // raw span (a >~1ms difference on either edge), so untouched clips add nothing.
+  if (win) {
+    const rawStart = clip.start;
+    const rawEnd = clip.start + clip.duration;
+    const headExtended = rawStart - win.start > 1e-3;
+    const tailExtended = win.end - rawEnd > 1e-3;
+    if (headExtended || tailExtended) {
+      base.renderStartSec = win.start;
+      base.renderDurationSec = Math.max(0, win.end - win.start);
+    }
+  }
   const animation = lowerAnimation(clip, fps);
   if (animation) base.animation = animation;
   const effects = lowerEffects(clip);
@@ -350,9 +441,10 @@ function lowerClip(
   fps: number,
   map: Record<string, string> | undefined,
   unresolved: Set<string>,
-  duckWindows: DuckWindow[]
+  duckWindows: DuckWindow[],
+  win?: { start: number; end: number }
 ): VdzManifestClip | null {
-  const base = lowerBase(clip, fps);
+  const base = lowerBase(clip, fps, win);
   switch (clip.type) {
     case 'video':
       return {
@@ -507,7 +599,11 @@ export function buildRenderManifest(
 
   const tracks: VdzManifestTrack[] = timeline.tracks.map((track, trackIndex) => {
     const manifestClips: VdzManifestClip[] = [];
-    for (const clip of track.clips) {
+    // Transition-extended windows mirror the preview, which composes ONLY visual
+    // tracks — so we resolve a window for non-audio tracks and leave audio clips
+    // without one (they carry no crossfade tail).
+    const isVisualTrack = track.kind !== 'audio';
+    track.clips.forEach((clip, clipIndex) => {
       // For an audio clip, the duck windows it can be affected by are every
       // duck voiceover EXCEPT itself.
       const duckWindows: DuckWindow[] =
@@ -516,9 +612,13 @@ export function buildRenderManifest(
               .filter(d => d.id !== clip.id)
               .map(d => ({ fromFrame: d.from, toFrame: d.to }))
           : [];
-      const lowered = lowerClip(clip, fps, map, unresolved, duckWindows);
+      const win =
+        isVisualTrack && clip.type !== 'audio'
+          ? extendedWindow(track, clip, clipIndex)
+          : undefined;
+      const lowered = lowerClip(clip, fps, map, unresolved, duckWindows, win);
       if (lowered) manifestClips.push(lowered);
-    }
+    });
     return {
       id: track.id,
       kind: track.kind,
@@ -529,8 +629,16 @@ export function buildRenderManifest(
     };
   });
 
-  const durationInSeconds = computeTimelineDuration(timeline);
-  const durationInFrames = Math.max(1, toFrames(durationInSeconds, fps));
+  // C1 + C3: the canonical whole-timeline duration (max clip end over ALL tracks,
+  // floored at 1s), converted to frames with CEIL (never drop a fractional last
+  // frame), floored at a minimum of 1 (Remotion rejects a zero-frame comp). A
+  // tiny epsilon absorbs float noise so an exact boundary doesn't ceil up a whole
+  // spurious frame (e.g. 3.0s @ 30fps → 90, not 91).
+  const durationInSeconds = computeExportDurationSec(timeline);
+  const durationInFrames = Math.max(
+    1,
+    Math.ceil(durationInSeconds * fps - 1e-6)
+  );
 
   return {
     version: VDZ_RENDER_MANIFEST_VERSION,

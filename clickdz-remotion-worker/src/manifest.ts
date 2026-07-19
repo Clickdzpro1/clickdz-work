@@ -68,8 +68,23 @@ export interface ManifestWord {
 export interface ManifestClipBase {
   id: string;
   name?: string;
+  /** Clip start on the track, in FRAMES (the clip's TRUE window start). */
   fromFrame: number;
+  /** Clip length, in FRAMES (the clip's TRUE window length; >= 1). */
   durationInFrames: number;
+  /**
+   * C3 — OPTIONAL transition-extended RENDER window, in SECONDS (matching the
+   * preview's `anim.ts` `clipWindow`: a clip's tail extends by half an abutting
+   * transition's duration). When present, the worker uses these for the
+   * <Sequence> mount bounds (converted to frames via `manifest.fps`) so an
+   * OUTGOING clip stays mounted through the after-boundary half of its crossfade
+   * — the per-frame anim/transition math still uses the TRUE `fromFrame` /
+   * `durationInFrames` window, so curves stay centered. Absent → the <Sequence>
+   * falls back to `fromFrame` / `durationInFrames` (old behavior). Both optional
+   * so the CURRENT prod app (which never sends them) renders unchanged.
+   */
+  renderStartSec?: number;
+  renderDurationSec?: number;
   animation?: { in?: ManifestAnimation; out?: ManifestAnimation };
   effects?: ManifestEffect[];
   opacity?: number;
@@ -201,6 +216,20 @@ export function parseManifest(input: unknown): RenderManifest {
       }
       if (!Number.isFinite(Number(clip.durationInFrames))) {
         throw new Error('clip.durationInFrames must be a number');
+      }
+      // C3: the render-window fields are OPTIONAL — but if present they must be
+      // finite (a NaN would poison the <Sequence> bounds). Absent → ignored.
+      if (
+        clip.renderStartSec !== undefined &&
+        !Number.isFinite(Number(clip.renderStartSec))
+      ) {
+        throw new Error('clip.renderStartSec must be a number when present');
+      }
+      if (
+        clip.renderDurationSec !== undefined &&
+        !Number.isFinite(Number(clip.renderDurationSec))
+      ) {
+        throw new Error('clip.renderDurationSec must be a number when present');
       }
     }
     if (track.transitions !== undefined && !Array.isArray(track.transitions)) {

@@ -69,11 +69,29 @@ export interface VdzHistoryTurn {
 
 /** Everything the caller knows about the current editing session. */
 export interface VdzContext {
-  /** The current timeline document, already validated by the caller. */
+  /**
+   * The current timeline document, already validated by the caller. The
+   * frontend rides a compact, playhead-aware context map on this object under
+   * the reserved {@link AI_CONTEXT_KEY} key (a JSON STRING); {@link
+   * buildVdzContextTurn} extracts + renders it as its own section and STRIPS it
+   * before printing the full timeline, so the model sees both cleanly. The
+   * controller passes `payload.timeline` straight through, so no controller
+   * change is needed to carry the extra signal.
+   */
   timeline: unknown;
   /** Ids of clips the user currently has selected (may be empty). */
   selectedClipIds?: string[];
 }
+
+/**
+ * Reserved key the frontend attaches to the wire timeline, carrying the compact
+ * playhead/frame/clip-map context as a JSON STRING (see the frontend's
+ * `serialize-timeline.ts`). Kept in sync with `AI_CONTEXT_KEY` there.
+ */
+const AI_CONTEXT_KEY = '_aiContext';
+
+/** Longest the compact context string we render inline may be (defensive). */
+const MAX_AI_CONTEXT_CHARS = 4_000;
 
 // ---------------------------------------------------------------------------
 // VDZ_SYSTEM_PROMPT — prepended (as the single system message) to every turn.
@@ -183,9 +201,84 @@ export const VDZ_SYSTEM_PROMPT = [
   '    0.05–0.07 ≈ a subtitle/caption. color is any CSS color ("#ffd700").',
   '',
   '════════════════════════════════════════════════════════════════════',
+  'LIVE CONTEXT: PLAYHEAD, FRAMES & TIMECODE (how to hit exact times)',
+  '════════════════════════════════════════════════════════════════════',
+  'Alongside the full timeline, the context turn gives you a COMPACT MAP of the',
+  'live editing session — where the playhead is and what each clip is — so you',
+  'can compute precise op arguments. It is JSON shaped EXACTLY like this:',
+  '{',
+  '  "canvas": { "w": 1080, "h": 1920 },      // same as timeline width/height',
+  '  "fps": 30,                                // frames per second',
+  '  "durationSec": 12.5,                      // total length (max clip end; ≥1)',
+  '  "tracks": [',
+  '    { "kind": "video", "clips": [',
+  '        { "id": "clip-bg-1", "kind": "video", "start": 0, "dur": 6,',
+  '          "label": "Intro" },',
+  '        { "id": "clip-cap-1", "kind": "text", "start": 1, "dur": 5,',
+  '          "label": "Welcome", "hasWords": true }   // hasWords = karaoke timings',
+  '    ] }',
+  '  ],',
+  '  "playhead": { "sec": 2.5, "frame": 75, "timecode": "00:02.15" },',
+  '  "selectedClipId": "clip-cap-1"            // present iff ONE clip is selected',
+  '}',
+  'Notes on this map: "start"/"dur" are SECONDS (rounded to 2 dp) — the same',
+  'clip.start/clip.duration as the full timeline, just compact. "label" is a',
+  'short human name (truncated) for your reference only — NEVER target a clip by',
+  'its label or its position/index; ALWAYS target by its exact "id". "playhead",',
+  '"selectedClipId" and "hasWords" may be ABSENT (no playhead reported, nothing',
+  'selected, no karaoke words) — treat absent as unknown/none. A rare',
+  '"omittedClips": N means the map was truncated to fit; the FULL timeline still',
+  'lists every clip, so read ids from there if a clip is missing here.',
+  '',
+  'FRAMES ↔ SECONDS (use the fps from the context — do NOT assume 30):',
+  '  • seconds → frames:  frame = round(seconds × fps)',
+  '  • frames → seconds:  seconds = frame ÷ fps',
+  '  One frame lasts 1/fps seconds (≈0.033s at 30fps, 0.04s at 25fps). Op',
+  '  arguments are always SECONDS — if the user talks in frames, convert first',
+  '  (e.g. at 30fps "trim 15 frames" = 15÷30 = 0.5s).',
+  'TIMECODE format is "mm:ss.ff": minutes, seconds, then the FRAME within that',
+  '  second (ff, 0-padded, 0..fps-1). So at 30fps "00:02.15" = 2s + 15 frames =',
+  '  2 + 15/30 = 2.5s. To turn a timecode into seconds: mm×60 + ss + ff÷fps.',
+  '',
+  'THE PLAYHEAD is the user\'s current scrub position (playhead.sec). Requests',
+  'phrased relative to it resolve to that number:',
+  '  • "at the playhead" / "here" / "at the current position" → use playhead.sec.',
+  '  • "split/cut … at the playhead" → splitClip with atSeconds = playhead.sec,',
+  '    on the clip whose span CONTAINS the playhead (start < playhead.sec <',
+  '    start+dur). If the playhead is not strictly inside any clip on the target',
+  '    track, splitClip is invalid there — say so instead of guessing.',
+  '  • "from here on" / "everything after the playhead" → clips with start ≥',
+  '    playhead.sec (or the tail of the clip under it).',
+  'If the context reports NO playhead and the request depends on one, state that',
+  'assumption in the summary (e.g. assume the start, 0) rather than inventing one.',
+  '',
+  'COMPUTING PRECISE OP ARGUMENTS — always read the target clip\'s current',
+  'start/dur from the map (or full timeline), then do the arithmetic:',
+  '  • "make the second clip 2s shorter" → find that clip by id (2nd in track',
+  '    order), newDuration = dur − 2, clamp to ≥ 0.1; trimClip duration=newDuration.',
+  '  • "make it N seconds long" → trimClip duration = N (N ≥ 0.1).',
+  '  • "cut the first N seconds off" (in place) → keep start, duration = dur − N',
+  '    (clamp ≥ 0.1); for a VIDEO clip also set trimStart = (old trimStart or 0)',
+  '    + N; add a nudgeClip -N (or rippleDelete) if asked to pull the rest up.',
+  '  • "move it to 3s" → moveClip start=3; "move it half a second later" →',
+  '    nudgeClip deltaSeconds=0.5.',
+  '  • "the selected clip" / "this" / "it" → selectedClipId (or the selected-ids',
+  '    list). Never guess when nothing is selected — ask or state the assumption.',
+  '  NEVER let a duration reach 0 or below, or a start go negative — clamp',
+  '  durations to ≥ 0.1s and starts to ≥ 0, and mention any clamp in the summary.',
+  '',
+  '════════════════════════════════════════════════════════════════════',
   'THE OPS (this is your entire output vocabulary)',
   '════════════════════════════════════════════════════════════════════',
-  'Each op is one JSON object with an "op" field. The full catalog:',
+  'Each op is one JSON object with an "op" field. The full catalog (these are',
+  'the ONLY ops that exist — never invent another):',
+  '',
+  '• { "op":"addTrack", "track": Track }',
+  '     Add a NEW empty track (a fresh lane). Use ONLY when the track you need',
+  '     does not already exist (e.g. adding audio to a timeline that has no audio',
+  '     track). track.id must be unique; track.kind ∈ "video"|"audio"|"overlay";',
+  '     start it with "clips":[]. Then add clips to it in LATER ops (they see it).',
+  '     e.g. {"op":"addTrack","track":{"id":"track-audio","kind":"audio","name":"Audio","clips":[]}}',
   '',
   '• { "op":"addClip", "trackId", "clip": Clip }',
   '     Add a NEW clip to a track. The clip must be complete and its id must be',
@@ -328,16 +421,28 @@ export const VDZ_SYSTEM_PROMPT = [
   '   extras that were not requested — except in an explicit "generate/build a',
   '   whole …" request, where you compose a complete scene.',
   '4. Respect the existing structure: target real track ids and clip ids from',
-  '   the provided timeline. If the user selected clips (given to you as',
-  '   "selected clip ids"), a vague request like "make this bigger" / "delete',
-  '   this" refers to the selected clip(s).',
-  '5. Keep edits valid: durations > 0, times ≥ 0, positions/sizes within 0..1,',
-  '   trimStart only on video clips, setText only on text clips, opacity/rotation',
-  '   only on visual clips (never audio), capPreset/capPosition only on text clips,',
-  '   setCanvas width/height integers in 320..4096.',
-  `6. Stay well under ${MAX_OPS_PER_TURN} ops. Prefer the sharpest op for the job`,
+  '   the provided timeline / context map — ALWAYS by exact "id", NEVER by a',
+  '   guessed index or a clip\'s label. To resolve "the second clip" pick the 2nd',
+  '   clip in that track\'s order and use ITS id. If the user selected clips (the',
+  '   "selected clip ids" / context selectedClipId), a vague "make this bigger" /',
+  '   "delete this" refers to the selected clip(s). Requests about "the playhead"',
+  '   / "here" use the context playhead (see the LIVE CONTEXT section).',
+  '5. Keep edits valid: durations > 0 (clamp to ≥ 0.1s when a computed length',
+  '   would drop lower), times ≥ 0, positions/sizes within 0..1, trimStart only',
+  '   on video clips, setText only on text clips, opacity/rotation only on visual',
+  '   clips (never audio), capPreset/capPosition only on text clips, setCanvas',
+  '   width/height integers in 320..4096.',
+  `6. Stay well under ${MAX_OPS_PER_TURN} ops, and use ONLY ops from the catalog`,
+  '   above (never invent one). Prefer the sharpest op and the smallest batch',
   '   (rippleDelete over removeClip+moveClips; nudgeClip over moveClip for',
-  '   relative shifts; splitClip over manual trim+add when cutting one clip).',
+  '   relative shifts; splitClip over manual trim+add when cutting one clip; a',
+  '   single setClipStyle/setEffects over several patches). Create a lane with',
+  '   addTrack only when the track you need is genuinely absent.',
+  '7. If the request is AMBIGUOUS (it does not say which clip, or needs a',
+  '   playhead the context does not report), either use the clearest reasonable',
+  '   target (selection, the clip under the playhead) OR make the smallest safe',
+  '   assumption — and STATE that assumption in the summary. Do not silently',
+  '   guess; a wrong silent guess costs the user an edit.',
   '',
   '════════════════════════════════════════════════════════════════════',
   'EXAMPLES',
@@ -387,6 +492,18 @@ export const VDZ_SYSTEM_PROMPT = [
   'caption with setClipStyle: capPreset "boxed", capPosition "lower".',
   'Reply:',
   '{"summary":"Switched the canvas to vertical 9:16, added a soft vignette to the video, and gave the captions a boxed lower-third style.","ops":[{"op":"setCanvas","width":1080,"height":1920},{"op":"setEffects","trackId":"track-video","clipId":"clip-bg-1","effects":[{"kind":"vignette","amount":0.35}]},{"op":"setClipStyle","trackId":"track-overlay","clipId":"clip-caption-1","capPreset":"boxed","capPosition":"lower"}]}',
+  '',
+  '--- Example E: split at the playhead + trim the second clip ---',
+  'Context map (excerpt): fps 30; playhead {"sec":4,"frame":120,"timecode":',
+  '"00:04.00"}; "track-video" clips [ {"id":"clip-intro","kind":"video",',
+  '"start":0,"dur":10}, {"id":"clip-b","kind":"video","start":10,"dur":6} ].',
+  'User: "cut the intro at the playhead, then make the second clip 2s shorter"',
+  'Reasoning (do NOT include): the playhead is at 4s, strictly inside clip-intro',
+  '(0 < 4 < 10) → splitClip atSeconds=4. "the second clip" is the 2nd in track',
+  'order, clip-b (dur 6); 2s shorter → duration = 6 − 2 = 4 (≥ 0.1, fine) →',
+  'trimClip duration=4. Target both by id, not index.',
+  'Reply:',
+  '{"summary":"Split the intro clip at the playhead (4s) and trimmed the second clip to 4s.","ops":[{"op":"splitClip","trackId":"track-video","clipId":"clip-intro","atSeconds":4},{"op":"trimClip","trackId":"track-video","clipId":"clip-b","duration":4}]}',
   '',
   'Now respond to the real request using the current timeline provided below.',
 ].join('\n');
@@ -528,16 +645,48 @@ function serializeTimeline(timeline: unknown): string {
 }
 
 /**
+ * Split the wire timeline into (a) the compact, playhead-aware CONTEXT MAP the
+ * frontend attached under {@link AI_CONTEXT_KEY} (a JSON string) and (b) the
+ * timeline with that key removed, so the full-timeline JSON we show the model
+ * stays clean. Defensive: a non-object timeline, an absent/blank/oversized key,
+ * or a non-string value all yield `{ contextMap: null, timeline }` unchanged.
+ */
+function extractAiContext(timeline: unknown): {
+  contextMap: string | null;
+  timeline: unknown;
+} {
+  if (timeline == null || typeof timeline !== 'object' || Array.isArray(timeline)) {
+    return { contextMap: null, timeline };
+  }
+  const record = timeline as Record<string, unknown>;
+  const raw = record[AI_CONTEXT_KEY];
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return { contextMap: null, timeline };
+  }
+  // Strip the reserved key from a shallow clone so the timeline we print does
+  // not carry it (never mutate the caller's object).
+  const rest: Record<string, unknown> = {};
+  for (const key of Object.keys(record)) {
+    if (key !== AI_CONTEXT_KEY) rest[key] = record[key];
+  }
+  const contextMap =
+    raw.length > MAX_AI_CONTEXT_CHARS ? raw.slice(0, MAX_AI_CONTEXT_CHARS) : raw;
+  return { contextMap, timeline: rest };
+}
+
+/**
  * Build the user-role "context turn" that carries the live editing state into
- * the conversation: the current timeline JSON and the current selection. This
- * is a single message the controller places right after the system prompt.
+ * the conversation: the current timeline JSON, the compact PLAYHEAD & TIMELINE
+ * MAP (when the frontend supplied one), and the current selection. This is a
+ * single message the controller places right after the system prompt.
  *
  * Kept as a plain user turn (not a second system message) so it works across
  * both the Make agent path (which flattens roles) and any direct chat-model
  * fallback.
  */
 export function buildVdzContextTurn(context: VdzContext): string {
-  const timelineJson = serializeTimeline(context?.timeline);
+  const { contextMap, timeline } = extractAiContext(context?.timeline);
+  const timelineJson = serializeTimeline(timeline);
   const ids = Array.isArray(context?.selectedClipIds)
     ? context.selectedClipIds
         .filter((id): id is string => typeof id === 'string' && id.length > 0)
@@ -547,9 +696,23 @@ export function buildVdzContextTurn(context: VdzContext): string {
     ? `Selected clip ids (a vague "this"/"these"/"it" refers to these): ${JSON.stringify(ids)}`
     : 'Selected clip ids: (none — the user has nothing selected)';
 
+  // The compact context map (playhead / frame / timecode / clip map) is placed
+  // FIRST so the model reads "where am I" before the full document. Absent when
+  // the client did not send one (older client) — the turn degrades cleanly.
+  const contextBlock = contextMap
+    ? [
+        'Live playhead & timeline map (compact — playhead, frames, timecode and a',
+        'clip map you target by id; see the LIVE CONTEXT section of the system',
+        'prompt for its exact shape):',
+        contextMap,
+        '',
+      ]
+    : [];
+
   return [
     'CURRENT EDITING CONTEXT (read-only — do not echo this back):',
     '',
+    ...contextBlock,
     'Current timeline JSON:',
     timelineJson,
     '',

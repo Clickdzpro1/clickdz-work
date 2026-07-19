@@ -27,22 +27,37 @@ const accent = v.accent;
 const HEADER_CONTROL_H = 28;
 
 // ---- The bar: a compact inline group in the header-right zone ------------
+// Tightened rhythm: a slightly smaller inter-control gap, with the project
+// name (identity) leading and a hairline divider setting it off from the
+// action buttons (Save · Open · ⋯) so the hierarchy reads at a glance.
 export const bar = style({
   display: 'flex',
   alignItems: 'center',
-  gap: 6,
+  gap: 4,
   minWidth: 0,
   height: HEADER_CONTROL_H,
 });
 
-// Inline-editable project name. Reads as a field: subtle hover affordance,
-// truncates rather than pushing the row wider. Becomes a real <input> on edit
-// (same box metrics so there's no layout jump).
+// A hairline divider between the project name and the action cluster — the
+// same subtle seam the editor toolbar uses, giving the bar a clear "identity ·
+// actions" split without extra chrome.
+export const barDivider = style({
+  width: 1,
+  height: 16,
+  flexShrink: 0,
+  background: border,
+  margin: '0 4px',
+});
+
+// Inline-editable project name — the bar's title. Reads as a quiet field that
+// brightens on hover; truncates rather than pushing the row wider. Becomes a
+// real <input> on edit (same box metrics so there's no layout jump).
 export const nameField = style({
-  color: textDim,
-  fontSize: 12,
-  fontWeight: 500,
-  minWidth: 0,
+  color: text,
+  fontSize: 12.5,
+  fontWeight: 600,
+  letterSpacing: 0.1,
+  minWidth: 40,
   maxWidth: 220,
   overflow: 'hidden',
   whiteSpace: 'nowrap',
@@ -67,8 +82,9 @@ export const nameInput = style({
   appearance: 'none',
   boxSizing: 'border-box',
   color: text,
-  fontSize: 12,
-  fontWeight: 500,
+  fontSize: 12.5,
+  fontWeight: 600,
+  letterSpacing: 0.1,
   fontFamily: 'inherit',
   width: 200,
   height: HEADER_CONTROL_H,
@@ -82,14 +98,15 @@ export const nameInput = style({
   },
 });
 
-// A slim "unsaved changes" dot before the name (only shown when dirty).
-export const dirtyDot = style({
+// The "unsaved changes" indicator dot rendered INSIDE the Save button (before
+// its label) whenever the working timeline is dirty. CurrentColor-tinted so it
+// tracks the button's own text color (bright on the actionable accent Save).
+export const saveDot = style({
   width: 6,
   height: 6,
   flexShrink: 0,
   borderRadius: '50%',
-  background: accent,
-  marginRight: 2,
+  background: 'currentColor',
 });
 
 // Base header button (Save / Save As / Open). 28px tall to align on the row.
@@ -136,11 +153,16 @@ export const barButton = style({
   },
 });
 
-// A keyboard-hint chip inside a button (e.g. ⌘S), dimmed and monospaced.
+// A keyboard-hint chip inside a button (e.g. ⌘S), dimmed and monospaced with a
+// faint inset pill so it reads as a distinct affordance, not part of the label.
 export const shortcutHint = style({
   fontSize: 10,
   fontWeight: 600,
+  lineHeight: 1,
   color: textDim,
+  padding: '2px 4px',
+  borderRadius: 4,
+  background: accentAlpha(10),
   fontFamily:
     'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
 });

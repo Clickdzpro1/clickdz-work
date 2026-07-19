@@ -7,11 +7,16 @@ import {
   useState,
 } from 'react';
 
+import * as chrome from './chrome-studio.css';
 import * as styles from './index.css';
 import {
   type UseVdzLayout,
+  VDZ_PANEL_ICON_BY_TITLE,
+  VDZ_PANEL_IDS,
+  VDZ_PANEL_META,
   type VdzPanelId,
   useVdzResizeDrag,
+  vdzPanelShortcut,
 } from './use-vdz-layout';
 
 // ---- Reusable slim panel chrome -----------------------------------------
@@ -19,6 +24,12 @@ import {
 interface VdzPanelProps extends PropsWithChildren {
   /** Panel title shown in the slim header strip. */
   title: string;
+  /**
+   * Leading header glyph. Defaults to the icon registered for this title in
+   * {@link VDZ_PANEL_META} (so panels mounted from files this pass doesn't own
+   * still get the shared icon just by their title). Pass `null` to omit it.
+   */
+  icon?: string | null;
   /** Optional dot / count / control rendered before the collapse button. */
   accessory?: ReactNode;
   /** Called when the header collapse (×) button is pressed. */
@@ -30,21 +41,31 @@ interface VdzPanelProps extends PropsWithChildren {
 }
 
 /**
- * A consistent slim panel: a header strip (title + accessory + collapse ×) over
- * a body. Every workspace panel wears this so hide/resize/reopen behave the
- * same everywhere. Styling lives in index.css.ts (the Vdz dark palette).
+ * A consistent slim panel: a header strip (icon + title + accessory + collapse
+ * ×, always in that order/spacing) over a body. Every workspace panel wears
+ * this so hide/resize/reopen — and now the header chrome — behave the same
+ * everywhere. Styling lives in index.css.ts + chrome-studio.css.ts (the Vdz
+ * dark palette / themed tokens).
  */
 export function VdzPanel({
   title,
+  icon,
   accessory,
   onCollapse,
   bodyClassName,
   children,
   ...rest
 }: VdzPanelProps) {
+  // Explicit icon wins; otherwise fall back to the title-registered glyph.
+  const glyph = icon === undefined ? VDZ_PANEL_ICON_BY_TITLE[title] : icon;
   return (
     <div className={styles.vdzPanel} data-testid={rest['data-testid']}>
       <div className={styles.panelHeader}>
+        {glyph ? (
+          <span className={chrome.panelHeaderIcon} aria-hidden="true">
+            {glyph}
+          </span>
+        ) : null}
         <span className={styles.panelTitle}>{title}</span>
         <span className={styles.panelHeaderSpacer} />
         {accessory}
@@ -152,14 +173,20 @@ export function VdzReopenTab({
 
 // ---- View menu (header dropdown that checkmarks visible panels) ----------
 
-const VIEW_MENU_ITEMS: { id: VdzPanelId; label: string; hint: string }[] = [
-  { id: 'mediaBin', label: 'Media', hint: 'Cmd/Ctrl+1' },
-  { id: 'inspector', label: 'Inspector', hint: 'Cmd/Ctrl+2' },
-  { id: 'aiDock', label: 'AI', hint: 'Cmd/Ctrl+3' },
-  { id: 'timeline', label: 'Timeline', hint: 'Cmd/Ctrl+4' },
-  { id: 'transcript', label: 'Transcript', hint: 'Cmd/Ctrl+5' },
-  { id: 'effects', label: 'Effects', hint: 'Cmd/Ctrl+6' },
-];
+// Derived from the shared panel registry so the menu can never drift from the
+// panel headers or the Cmd/Ctrl+N key handler: label + icon come from
+// VDZ_PANEL_META, and the hint is generated from the same shortcut digit.
+const VIEW_MENU_ITEMS: {
+  id: VdzPanelId;
+  label: string;
+  icon: string;
+  hint: string;
+}[] = VDZ_PANEL_IDS.map(id => ({
+  id,
+  label: VDZ_PANEL_META[id].label,
+  icon: VDZ_PANEL_META[id].icon,
+  hint: vdzPanelShortcut(id),
+}));
 
 interface VdzViewMenuProps {
   layout: UseVdzLayout['layout'];
@@ -248,6 +275,9 @@ export function VdzViewMenu({
                 <span className={styles.viewMenuCheck} aria-hidden="true">
                   {checked ? '✓' : ''}
                 </span>
+                <span className={chrome.viewMenuIcon} aria-hidden="true">
+                  {item.icon}
+                </span>
                 <span className={styles.viewMenuLabel}>{item.label}</span>
                 <span className={styles.viewMenuHint}>{item.hint}</span>
               </button>
@@ -261,6 +291,9 @@ export function VdzViewMenu({
             onClick={onReset}
           >
             <span className={styles.viewMenuCheck} aria-hidden="true" />
+            <span className={chrome.viewMenuIcon} aria-hidden="true">
+              ↺
+            </span>
             <span className={styles.viewMenuLabel}>Reset layout</span>
           </button>
         </div>

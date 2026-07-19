@@ -55,6 +55,55 @@ export const VDZ_PANEL_SPECS: Record<VdzPanelId, PanelSpec> = {
 
 export const VDZ_PANEL_IDS = Object.keys(VDZ_PANEL_SPECS) as VdzPanelId[];
 
+/**
+ * Presentational registry for each panel: the short menu label, a header/menu
+ * glyph, and the digit of its Cmd/Ctrl+N shortcut.
+ *
+ * This is the SINGLE source of truth the chrome reads from so the panel anchors
+ * never drift: the View menu (label + icon + shortcut hint + checkmark) and the
+ * shared panel-header chrome (icon + title) both derive their icon and label
+ * from here, and the `Cmd/Ctrl+N` hint is generated from `shortcutDigit` (the
+ * key handler in index.tsx maps the same digits). The layout specs above remain
+ * the source of truth for sizing/visibility; this only adds display metadata
+ * (kept beside the ids so adding a panel updates one place).
+ */
+export interface VdzPanelMeta {
+  /** Short label shown in the View menu (and matched to the panel title). */
+  label: string;
+  /** A leading glyph shown in the panel header and its View-menu row. */
+  icon: string;
+  /** The digit of the panel's Cmd/Ctrl+<n> shortcut. */
+  shortcutDigit: string;
+}
+
+export const VDZ_PANEL_META: Record<VdzPanelId, VdzPanelMeta> = {
+  mediaBin: { label: 'Media', icon: '▤', shortcutDigit: '1' },
+  inspector: { label: 'Inspector', icon: '⚙', shortcutDigit: '2' },
+  aiDock: { label: 'AI', icon: '✦', shortcutDigit: '3' },
+  timeline: { label: 'Timeline', icon: '▦', shortcutDigit: '4' },
+  transcript: { label: 'Transcript', icon: '💬', shortcutDigit: '5' },
+  effects: { label: 'Effects', icon: '✨', shortcutDigit: '6' },
+};
+
+/** The consistent shortcut label for a panel (e.g. `Cmd/Ctrl+2`). */
+export function vdzPanelShortcut(id: VdzPanelId): string {
+  return `Cmd/Ctrl+${VDZ_PANEL_META[id].shortcutDigit}`;
+}
+
+/**
+ * A panel-title → header glyph lookup, derived from {@link VDZ_PANEL_META} so
+ * the shared `VdzPanel` (which only receives a title string, from callers in
+ * files this pass does not own) can render the SAME icon as the View menu
+ * without those callers changing. Keyed by the exact title the panels pass
+ * ("Inspector" / "Effects" / "Transcript" match their metadata labels).
+ */
+export const VDZ_PANEL_ICON_BY_TITLE: Record<string, string> = Object.values(
+  VDZ_PANEL_META
+).reduce<Record<string, string>>((acc, meta) => {
+  acc[meta.label] = meta.icon;
+  return acc;
+}, {});
+
 /** Timeline collapses to just its toolbar + scrubber row (~min height). */
 export const VDZ_TIMELINE_MIN = VDZ_PANEL_SPECS.timeline.min;
 

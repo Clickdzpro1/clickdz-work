@@ -12,7 +12,15 @@ import {
   visualTransformCss,
 } from '../../desktop/pages/workspace/vdz/anim';
 import type { VdzClip, VdzTimeline, VdzTrack } from './schema';
-import { computeTimelineDuration } from './schema';
+// C1: the ONE canonical export-duration rule (max clip end over ALL clips on ALL
+// tracks, floored at 1s). Lives in the export-orchestration module so the dialog
+// and both render tiers share a single source of truth. The static import is
+// safe from a cycle: use-vdz-timeline-export only reaches back here via a dynamic
+// `import()` inside its async `start()`, never at module-eval time.
+import {
+  computeExportDurationSec,
+  resolveExportFps,
+} from './use-vdz-timeline-export';
 
 /**
  * Vdz Studio — timeline → HyperFrames HTML compiler (Cluster 2, Option B).
@@ -21,7 +29,11 @@ import { computeTimelineDuration } from './schema';
  * HTML document in exactly the shape the cdz-render service already renders and
  * the VDZ_RUNTIME already drives (see clickdz-vdz-video-prompt.ts + server.mjs):
  *   · a `#stage` root carrying `data-composition-id` at `width×height`, scaled to
- *     the viewport (the same seek-safe sizing script the AI compositions use);
+ *     the viewport (the same seek-safe sizing script the AI compositions use).
+ *     It ALSO carries `data-start="0"` + the C1 `data-duration` (plus `data-fps`
+ *     / `data-width` / `data-height`) so the offline `hyperframes` producer
+ *     resolves the composition's LENGTH from the root directly — the exact whole-
+ *     timeline duration — instead of re-probing a shorter one (see below);
  *   · one `class="clip"` element per visible clip, carrying `data-start` /
  *     `data-duration` / `data-track-index` on its OPENING tag (so the service's
  *     text-scan duration probe and the runtime's visibility toggle both see it);
@@ -29,6 +41,19 @@ import { computeTimelineDuration } from './schema';
  *     paused` — SEEKABLE via `document.getAnimations()`, which is the ONLY thing
  *     the host/service scrub through;
  *   · the VDZ_RUNTIME embedded VERBATIM near the end of <body>.
+ *
+ * WHOLE-TIMELINE DURATION — the truncation fix (C1).
+ * The classic tier used to derive its recording length purely from the max
+ * `class="clip"` window end (the producer's + `probeDurationSeconds`'s DOM scan).
+ * That scan omits AUDIO clips entirely (they emit no `.clip` element) and any
+ * trailing GAP after the last visual clip, so a timeline whose furthest-right
+ * content is on an audio track — or which ends on empty space — recorded SHORT.
+ * We now (1) stamp the authoritative C1 duration onto the `#stage` root so the
+ * producer uses it verbatim, and (2) emit an invisible full-span ANCHOR clip
+ * covering `[0, C1]` WHENEVER the natural max clip-window end falls short of C1,
+ * so the runtime's own `duration()` and the server's regex probe both report the
+ * full length too. A timeline whose visual clips already reach C1 emits NO anchor
+ * and is byte-identical to before.
  *
  * PREVIEW PARITY — the load-bearing guarantee.
  * We do NOT re-derive any easing/animation/transition math here. For every clip
@@ -94,7 +119,11 @@ export interface CompileTimelineResult {
   html: string;
   /** Number of `.clip` elements emitted (visible clips only). */
   clipCount: number;
-  /** Composition length in seconds (max clip end, mirrors the runtime). */
+  /**
+   * Composition length in seconds — the canonical C1 duration (max clip end over
+   * ALL clips on ALL tracks, floored at 1s). This is the value stamped on the
+   * composition root, so it matches the length the render tier records.
+   */
   durationSeconds: number;
   /** Distinct srcs that could NOT be resolved to an embeddable value. */
   unresolved: string[];
@@ -601,6 +630,10 @@ export function compileTimelineToHtml(
   // @keyframes is only added to the document when true, so a timeline with no
   // karaoke captions produces byte-identical CSS to before.
   let usesKaraoke = false;
+  // Furthest-right VISUAL clip-window end actually emitted as a `.clip`. Used to
+  // decide whether the timed content already spans the full C1 duration or needs
+  // a trailing anchor (audio-only tail / trailing gap → it falls short).
+  let maxWindowEnd = 0;
 
   timeline.tracks.forEach((track, trackIndex) => {
     // Audio tracks contribute nothing visible (identical to computePreviewFrame).
@@ -613,6 +646,7 @@ export function compileTimelineToHtml(
       const win = clipRenderWindow(track, clip, clipIndex);
       const span = win.end - win.start;
       if (span <= 0) return;
+      if (win.end > maxWindowEnd) maxWindowEnd = win.end;
 
       // A karaoke caption with usable words emits per-word spans → mark that the
       // shared @keyframes is needed.
@@ -673,7 +707,31 @@ export function compileTimelineToHtml(
     keyframeRules.push(karaokeKeyframesRule());
   }
 
-  const durationSeconds = computeTimelineDuration(timeline);
+  // C1: the canonical whole-timeline duration (max clip end over ALL clips on
+  // ALL tracks — audio included — floored at 1s). The classic tier's own DOM
+  // scan (`probeDurationSeconds`) and runtime `duration()` see only VISUAL
+  // `.clip` windows, so when the timeline's furthest content is on an audio
+  // track — or there's a trailing gap — that scan reports LESS than C1.
+  const durationSeconds = computeExportDurationSec(timeline);
+  const fps = resolveExportFps(timeline);
+
+  // TRUNCATION FIX: if the emitted visual windows fall short of C1 (with a
+  // one-frame tolerance so float noise / a transition tail doesn't trip it),
+  // append an INVISIBLE anchor clip spanning the full [0, C1] window. It carries
+  // data-start/data-duration so BOTH the server's regex probe and the runtime's
+  // `duration()` report the full length; it paints nothing (opacity:0, empty),
+  // and is hidden by the runtime's visibility toggle outside its span anyway.
+  // No animation is bound to it — it is a pure timing marker. Emitted ONLY when
+  // needed, so a timeline whose visuals already reach C1 stays byte-identical.
+  const frameTol = fps > 0 ? 1 / fps : 1e-3;
+  if (durationSeconds - maxWindowEnd > frameTol) {
+    clipEls.push(
+      `<div class="clip" data-start="0" data-duration="${num(durationSeconds)}" ` +
+        'data-track-index="0" aria-hidden="true" ' +
+        'style="position:absolute;inset:0;opacity:0;pointer-events:none;' +
+        'z-index:0;"></div>'
+    );
+  }
 
   // Base document CSS. The near-black mat matches the AI-composition default; the
   // #stage is the timeline's own pixel box, centered + scaled. Clip visibility
@@ -699,7 +757,15 @@ export function compileTimelineToHtml(
     '</style>',
     '</head>',
     '<body>',
-    `<div id="stage" data-composition-id="root" data-width="${width}" data-height="${height}">`,
+    // Root composition element. `data-start="0"` + the C1 `data-duration` let the
+    // hyperframes producer resolve the FULL timeline length from the root (it is
+    // idempotent server-side: server.mjs::prepareRoot leaves an existing
+    // data-start/data-duration untouched, so our authoritative values win over
+    // its `.clip`-scan fallback). `data-fps`/`data-width`/`data-height` carry the
+    // export dimensions + frame rate alongside (C2).
+    `<div id="stage" data-composition-id="root" data-start="0" ` +
+      `data-duration="${num(durationSeconds)}" data-fps="${num(fps)}" ` +
+      `data-width="${width}" data-height="${height}">`,
     clipEls.join('\n'),
     '</div>',
     stageSizingScript(width, height),

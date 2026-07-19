@@ -2,11 +2,26 @@
  * CDZ Render — the ClickDz Vdz Studio MP4 export service.
  *
  * One lean server, one real dependency (`hyperframes`):
- *   - POST /render        {kind:'html', html, fps?, width?, height?} -> {jobId}
+ *   - POST /render        {kind:'html', html, fps?, width?, height?, durationSec?} -> {jobId}
  *   - GET  /jobs/:id      -> {status, progress, error?, size?}
  *   - GET  /jobs/:id/file -> streams the finished MP4 (video/mp4)
  *   - POST /render        {kind:'timeline', ...}  -> 501 (arrives with remotion)
  *   - GET  /health        -> {ok:true} (the ONLY unauthenticated route)
+ *
+ * C2 EXPLICIT PARAMS (backward compatible). The backend proxy now forwards the
+ * timeline's real width/height/fps and the canonical durationSec (rule C1) when
+ * the app sends them; all are OPTIONAL, so the OLD app (html only) is unchanged.
+ *   · durationSec — TRUSTED over the regex probe when provided (probe stays as
+ *     the fallback for the legacy html-only payload). Injected as the root's
+ *     data-duration so the hyperframes producer records exactly that length.
+ *   · width/height — the hyperframes CLI has NO dimension flag (it reads the
+ *     composition box from the ROOT element's data-width/data-height per its own
+ *     docs/data-attributes.md), so we inject those attrs onto the root. That is
+ *     the mechanism that exists; there is no viewport/CLI knob to wire instead.
+ *   · fps — forwarded to the CLI's -f flag. LIMITATION: hyperframes' VALID_FPS
+ *     is {24,30,60} (it hard-exits on anything else), so a requested 25 — legal
+ *     in the C2 contract and honored by the Remotion tier — is coerced to the
+ *     default 30 on THIS tier rather than crashing the render.
  *
  * HOW IT RENDERS
  * The compositions are HeyGen HyperFrames HTML documents (a root element with
@@ -62,12 +77,20 @@ const RENDER_WORKERS = String(process.env.CDZ_RENDER_WORKERS || 'auto');
 
 // ---- validation bounds (mirror the backend proxy's caps) ----
 const MAX_HTML_BYTES = 2 * 1024 * 1024; // 2 MB
-const MAX_DURATION_S = 120; // composition length cap
+// Composition length cap. Raised 120 → 300 (C2): the classic tier now honors
+// the same 300s ceiling the backend proxy enforces, so a 2–5 min timeline is no
+// longer rejected here. Over the cap we return a 400 whose JSON body names
+// maxSec so the proxy/UI can surface the exact limit.
+const MAX_DURATION_S = 300;
 const DEFAULT_FPS = 30;
+// hyperframes' own VALID_FPS is {24,30,60} — its render command hard-exits on
+// any other rate. The C2 contract allows 25 (honored by the Remotion tier), so
+// a 25 that reaches here is coerced to DEFAULT_FPS rather than crashing the CLI.
 const ALLOWED_FPS = new Set([24, 30, 60]);
 const DEFAULT_WIDTH = 1920;
 const DEFAULT_HEIGHT = 1080;
-const MAX_DIMENSION = 3840; // 4K per side ceiling
+const MIN_DIMENSION = 320; // per side floor (C2)
+const MAX_DIMENSION = 4096; // per side ceiling (4K+, C2: 320–4096)
 
 // Where finished MP4s live. Kept flat so the sweeper is trivial.
 const RENDERS_DIR = process.env.CDZ_RENDERS_DIR || join(tmpdir(), 'renders');
@@ -126,6 +149,15 @@ function invalid(message) {
 }
 
 /**
+ * A 400 that carries EXTRA structured fields to merge into the error JSON body
+ * (e.g. the duration cap names `maxSec` so the proxy/UI can show the limit). The
+ * outer request catch spreads `details` into the `{error:{...}}` envelope.
+ */
+function invalidWith(message, details) {
+  return Object.assign(new Error(message), { status: 400, details });
+}
+
+/**
  * Probe a composition's length WITHOUT a browser: scan every `class="clip"`
  * element for data-start + data-duration and take the max end — the exact
  * formula VDZ_RUNTIME and the hyperframes runtime use. Returns 0 when the
@@ -166,15 +198,19 @@ function probeDurationSeconds(html) {
  *
  * So we inject onto the `data-composition-id` element (when absent):
  *   · data-start="0"           — begin playback at t=0
- *   · data-duration="<probed>" — the max clip end we already computed
+ *   · data-duration="<value>"  — the trusted/probed composition length
+ *   · data-width / data-height — the composition box (C2). hyperframes reads the
+ *     render dimensions from these ROOT attrs (docs/data-attributes.md); there
+ *     is NO CLI/viewport dimension flag, so this is the mechanism that exists.
  *
  * The producer still seeks every CSS/WAAPI animation via document.getAnimations()
  * per frame (the same primitive VDZ_RUNTIME uses), so motion renders faithfully.
  * The `missing_timeline_registry` lint is a WARNING only — the CLI continues the
  * render unless `--strict` is passed (we never pass it). Idempotent: an existing
- * data-start / data-duration on the root is left untouched.
+ * data-start / data-duration / data-width / data-height on the root is left
+ * untouched (an author-declared box wins over our injected default).
  */
-function prepareRoot(html, durationSeconds) {
+function prepareRoot(html, durationSeconds, width, height) {
   const rootRe = /<([a-zA-Z][\w-]*)\b([^>]*\bdata-composition-id\b[^>]*?)(\/?)>/;
   const m = html.match(rootRe);
   if (!m) return html;
@@ -183,6 +219,10 @@ function prepareRoot(html, durationSeconds) {
   if (!/\bdata-duration\b/.test(attrs)) {
     attrs += ` data-duration="${durationSeconds}"`;
   }
+  // C2: carry the composition box on the root so the producer renders at the
+  // requested resolution. Only injected when the author did not already set it.
+  if (!/\bdata-width\b/.test(attrs)) attrs += ` data-width="${width}"`;
+  if (!/\bdata-height\b/.test(attrs)) attrs += ` data-height="${height}"`;
   return html.replace(m[0], `<${m[1]}${attrs}${m[3]}>`);
 }
 
@@ -201,14 +241,31 @@ function validateHtmlJob(body) {
     throw invalid('composition must be a full HTML document starting with <!DOCTYPE html>');
   }
 
-  const duration = probeDurationSeconds(html);
-  if (duration <= 0) {
+  // Structural check: the composition must declare at least one timed clip. This
+  // is about clip PRESENCE (an empty document renders nothing), independent of
+  // the trusted length below.
+  const probed = probeDurationSeconds(html);
+  if (probed <= 0) {
     throw invalid(
       'composition has no timed clips (need class="clip" with data-start + data-duration)'
     );
   }
+
+  // C2: TRUST the request's durationSec over the probe when it is a finite
+  // positive number (the frontend's canonical rule-C1 total). The probe stays as
+  // the fallback for the legacy html-only payload. The trusted value governs
+  // both the cap check and the root data-duration we inject (which is what the
+  // hyperframes producer reads to decide how many seconds to record).
+  const requested = Number(body?.durationSec);
+  const trusted = Number.isFinite(requested) && requested > 0;
+  const duration = trusted ? Math.round(requested * 1000) / 1000 : probed;
+
   if (duration > MAX_DURATION_S) {
-    throw invalid(`composition is too long (${duration}s; max ${MAX_DURATION_S}s)`);
+    // 400 whose JSON body NAMES maxSec (C2) so the proxy/UI can show the limit.
+    throw invalidWith(
+      `composition is too long (${duration}s; max ${MAX_DURATION_S}s)`,
+      { maxSec: MAX_DURATION_S, durationSec: duration }
+    );
   }
 
   let fps = Number(body?.fps ?? DEFAULT_FPS);
@@ -218,7 +275,7 @@ function validateHtmlJob(body) {
   const height = clampDim(body?.height, DEFAULT_HEIGHT);
 
   return {
-    html: prepareRoot(html, duration),
+    html: prepareRoot(html, duration, width, height),
     fps,
     width,
     height,
@@ -226,10 +283,16 @@ function validateHtmlJob(body) {
   };
 }
 
+/**
+ * Clamp a requested dimension into [MIN_DIMENSION, MAX_DIMENSION]; fall back to
+ * `fallback` when absent/non-finite/non-positive. A too-small positive value is
+ * raised to the floor (a 0-height render is meaningless); a too-large one is
+ * capped at the 4K+ ceiling.
+ */
 function clampDim(value, fallback) {
   const n = Math.trunc(Number(value));
   if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(n, MAX_DIMENSION);
+  return Math.min(MAX_DIMENSION, Math.max(MIN_DIMENSION, n));
 }
 
 // ---------------------------------------------------------------- job store
@@ -313,6 +376,11 @@ async function runRender(job) {
     job.size = statSync(job.outPath).size;
     job.status = 'done';
     job.progress = 1;
+    // C2: log the output size at completion (a suspiciously tiny file is the
+    // tell-tale of a truncated/short render; see the duration-audit ledger).
+    console.log(
+      `[render] done job=${job.id} durationSec=${job.spec.duration} bytes=${job.size}`
+    );
   } finally {
     // Drop the staging dir; the MP4 lives in RENDERS_DIR and is swept later.
     await rm(projectDir, { recursive: true, force: true }).catch(() => {});
@@ -463,6 +531,11 @@ async function requestHandler(req, res) {
 
       const spec = validateHtmlJob(body);
       const jobId = enqueue(spec);
+      // C2: log the accepted, sanitized render params (duration is the trusted
+      // value when the request supplied durationSec, else the probed length).
+      console.log(
+        `[render] durationSec=${spec.duration} w=${spec.width} h=${spec.height} fps=${spec.fps} job=${jobId}`
+      );
       return json(res, 202, { jobId });
     }
 
@@ -503,7 +576,17 @@ async function requestHandler(req, res) {
     // Never let one bad request take the process down (cdz-ai stance).
     const status = e?.status || (e?.message === 'body too large' ? 413 : 500);
     if (!res.headersSent) {
-      err(res, status, e?.message || 'internal server error', status >= 500 ? 'api_error' : 'invalid_request_error');
+      const type = status >= 500 ? 'api_error' : 'invalid_request_error';
+      // A validation error MAY carry extra structured fields (e.g. the duration
+      // cap's maxSec) — spread them into the error envelope so the body names
+      // them, not just the message string.
+      if (e?.details && typeof e.details === 'object') {
+        json(res, status, {
+          error: { message: e?.message || 'invalid request', type, ...e.details },
+        });
+      } else {
+        err(res, status, e?.message || 'internal server error', type);
+      }
     } else {
       try {
         res.end();

@@ -25,6 +25,7 @@ import {
   type VdzMediaItem,
 } from '../../../../modules/vdz/use-vdz-media';
 import { useVdzTimelineExport } from '../../../../modules/vdz/use-vdz-timeline-export';
+import { VdzExportDialog } from './export-dialog';
 import { VdzAiDock } from './ai-dock';
 import { VdzAudioPlayback } from './audio-playback';
 import {
@@ -353,11 +354,13 @@ const VdzStudioPage = () => {
   // A single move/trim op emitted by the lanes on pointerup.
   const commitLaneOp = useCallback((op: VdzOp) => run(op), [run]);
 
-  // Export the CURRENT timeline to MP4 (compile → inline media → render).
+  // Export the CURRENT timeline to MP4. The toolbar button now OPENS the export
+  // dialog (engine choice + summary); the render starts when the user confirms
+  // (see the <VdzExportDialog> mount in the ViewBody). Stop playback first.
   const onExportMp4 = useCallback(() => {
     setIsPlaying(false);
-    void timelineExport.start(timeline);
-  }, [timelineExport, timeline]);
+    timelineExport.openDialog();
+  }, [timelineExport]);
 
   // ---- Media → timeline (all through the one history apply path) --------
   // Resolve a concrete track id for a media payload: prefer the caller's
@@ -739,6 +742,14 @@ const VdzStudioPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <VdzExportDialog
+          open={timelineExport.dialogOpen}
+          timeline={timeline}
+          onCancel={timelineExport.closeDialog}
+          onConfirm={engine => {
+            void timelineExport.start(timeline, engine);
+          }}
+        />
         {mode === 'generate' ? (
           <div className={styles.generateHost}>
             <Suspense fallback={null}>
@@ -1003,28 +1014,14 @@ const VdzStudioPage = () => {
                           }
                           bodyClassName={styles.inspectorBody}
                         >
-                          {selected ? (
-                            <Inspector
-                              clip={selected.clip}
-                              trackId={selected.trackId}
-                              onOp={commitLaneOp}
-                              timeline={timeline}
-                              onOps={runBatch}
-                            />
-                          ) : selectedIds.size > 1 ? (
-                            <div className={styles.inspectorHint}>
-                              {selectedIds.size} clips selected. Delete /
-                              ripple-delete act on the whole selection; click a
-                              single clip to inspect its JSON.
-                            </div>
-                          ) : (
-                            <div className={styles.inspectorHint}>
-                              Select a clip in the timeline below to inspect its
-                              JSON. Everything here is a validated{' '}
-                              <code>VdzTimeline</code> — the same document the AI
-                              will edit via <code>VdzOp</code>s.
-                            </div>
-                          )}
+                          <Inspector
+                            clip={selected?.clip ?? null}
+                            trackId={selected?.trackId ?? null}
+                            selectedCount={selectedIds.size}
+                            onOp={commitLaneOp}
+                            timeline={timeline}
+                            onOps={runBatch}
+                          />
                         </VdzPanel>
                       </div>
                     </>
@@ -1049,6 +1046,7 @@ const VdzStudioPage = () => {
                         <VdzAiDock
                           timeline={timeline}
                           selectedClipIds={selectedClipIds}
+                          playheadSeconds={playheadSeconds}
                           onApplyOps={onApplyOps}
                           pendingProposal={pendingProposal}
                           onAcceptProposal={acceptPendingOps}

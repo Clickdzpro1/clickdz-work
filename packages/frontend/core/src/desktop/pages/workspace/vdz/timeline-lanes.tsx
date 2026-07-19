@@ -19,6 +19,7 @@ import {
 } from './constants';
 import * as styles from './index.css';
 import { TimeRuler } from './time-ruler';
+import * as ex from './timeline-extras.css';
 
 type TrackKind = VdzTimeline['tracks'][number]['kind'];
 
@@ -93,6 +94,42 @@ function roundSec(seconds: number): number {
 }
 
 /**
+ * `mm:ss.ff` clock for the playhead readout, where `ff` is the FRAME within the
+ * current second (0..fps-1), derived from fps. Frame-accurate: snaps the whole
+ * time to the nearest frame first so the seconds/frame split never disagrees at
+ * a boundary (e.g. 1.999s @30 → 02.00, not 01.30).
+ */
+function formatClockFrames(seconds: number, fps: number): string {
+  const safeFps = fps > 0 ? fps : 30;
+  const totalFrames = Math.max(0, Math.round(seconds * safeFps));
+  const totalWholeSec = Math.floor(totalFrames / safeFps);
+  const frame = totalFrames - totalWholeSec * safeFps;
+  const mins = Math.floor(totalWholeSec / 60);
+  const secs = totalWholeSec % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(
+    frame
+  ).padStart(2, '0')}`;
+}
+
+/** Absolute frame number at a time (round(sec * fps)). */
+function frameAt(seconds: number, fps: number): number {
+  const safeFps = fps > 0 ? fps : 30;
+  return Math.max(0, Math.round(seconds * safeFps));
+}
+
+/** A friendly, kind-specific empty-lane hint. */
+function emptyHintText(kind: TrackKind): string {
+  switch (kind) {
+    case 'video':
+      return 'Drop video or images here';
+    case 'audio':
+      return 'Drop music or voiceover here';
+    default:
+      return 'Drop text or shapes here';
+  }
+}
+
+/**
  * Px-based, horizontally-scrollable lane stack with drag-to-move, edge trim
  * handles, snapping, a live ghost, multi-select and an overlaid playhead.
  *
@@ -131,6 +168,62 @@ export function TimelineLanes({
   // never a drag in flight during playback, so the ref is always current then).
   const playheadRef = useRef(playheadSeconds);
   playheadRef.current = playheadSeconds;
+
+  // ---- Hover time indicator (ghost line + tooltip) ----------------------
+  // Purely visual, driven imperatively so it never triggers React re-renders
+  // or re-layout on pointer move: the handler writes a `transform` + tooltip
+  // text directly to two refs. It reads zoom / drag through refs so the
+  // callbacks stay referentially stable and never see a stale closure.
+  const laneStackRef = useRef<HTMLDivElement | null>(null);
+  const hoverLineRef = useRef<HTMLDivElement | null>(null);
+  const hoverTipRef = useRef<HTMLDivElement | null>(null);
+  const pxPerSecRef = useRef(pxPerSec);
+  pxPerSecRef.current = pxPerSec;
+  const fpsRef = useRef(timeline.fps);
+  fpsRef.current = timeline.fps;
+  const draggingRef = useRef(false);
+  draggingRef.current = drag !== null;
+
+  const setHoverVisible = useCallback((visible: boolean) => {
+    const line = hoverLineRef.current;
+    const tip = hoverTipRef.current;
+    if (line) line.classList.toggle(ex.hoverLineVisible, visible);
+    if (tip) tip.classList.toggle(ex.hoverTipVisible, visible);
+  }, []);
+
+  const onHoverMove = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      // While a clip is being dragged/trimmed the snap guide + ghost own the
+      // space; keep the hover indicator out of the way (and never interfere
+      // with the drag — this handler only ever reads, never preventDefault's).
+      if (draggingRef.current) {
+        setHoverVisible(false);
+        return;
+      }
+      const stack = laneStackRef.current;
+      if (!stack) return;
+      const rect = stack.getBoundingClientRect();
+      const x = Math.round(event.clientX - rect.left);
+      if (x < 0 || x > rect.width) {
+        setHoverVisible(false);
+        return;
+      }
+      const line = hoverLineRef.current;
+      const tip = hoverTipRef.current;
+      const seconds = Math.max(0, x / (pxPerSecRef.current || 1));
+      if (line) line.style.transform = `translateX(${x}px)`;
+      if (tip) {
+        tip.style.transform = `translateX(${x}px) translateX(-50%)`;
+        tip.textContent = formatClockFrames(seconds, fpsRef.current);
+      }
+      setHoverVisible(true);
+    },
+    [setHoverVisible]
+  );
+
+  const onHoverLeave = useCallback(() => {
+    setHoverVisible(false);
+  }, [setHoverVisible]);
 
   const kindOfTrack = useCallback(
     (trackId: string): TrackKind | undefined =>
@@ -535,6 +628,18 @@ export function TimelineLanes({
           onDragLeave={() => setDropTrackId(null)}
           onDrop={e => onLaneDrop(e, track.id)}
         >
+          {/* Empty-lane hint: shows only when the lane has no clips and isn't
+              hosting the drag ghost. Non-interactive (pointerEvents:none) so it
+              never intercepts a background scrub/drop. */}
+          {track.clips.length === 0 &&
+          !(drag && drag.ghostTrackId === track.id) ? (
+            <div className={ex.emptyHint}>
+              <span className={ex.emptyHintIcon} aria-hidden="true">
+                ＋
+              </span>
+              {emptyHintText(track.kind)}
+            </div>
+          ) : null}
           {track.clips.map(clip => {
                   // Non-null only while THIS clip is the one being dragged.
                   const dragThis =
@@ -708,8 +813,13 @@ export function TimelineLanes({
       >
         <div className={styles.laneLabelRulerSpacer} />
         {timeline.tracks.map(track => (
-          <div key={track.id} className={styles.laneLabelCell}>
-            {track.name ?? track.kind}
+          <div key={track.id} className={ex.laneHeaderCell}>
+            <span
+              className={ex.laneHeaderPip}
+              style={{ background: TRACK_COLORS[track.kind] }}
+              aria-hidden="true"
+            />
+            <span>{track.name ?? track.kind}</span>
           </div>
         ))}
         {/* Add-lane control: more video / text-overlay / music lanes. */}
@@ -788,25 +898,59 @@ export function TimelineLanes({
       {/* Scroll container: ruler + lanes + playhead share one width & scroll. */}
       <div className={styles.lanesScroll} onWheel={onWheel}>
         <div className={styles.lanesContent} style={{ width: contentWidth }}>
-          <TimeRuler spanSeconds={spanSeconds} pxPerSec={pxPerSec} />
+          <TimeRuler
+            spanSeconds={spanSeconds}
+            pxPerSec={pxPerSec}
+            fps={timeline.fps}
+          />
 
-          <div className={styles.laneStack}>
+          <div
+            className={styles.laneStack}
+            ref={laneStackRef}
+            onPointerMove={onHoverMove}
+            onPointerLeave={onHoverLeave}
+          >
             {laneRows}
+
+            {/* Hover time indicator: a thin ghost line + tooltip that follow the
+                pointer. Positioned via transform (updated imperatively in
+                onHoverMove) so they never trigger re-layout; hidden until the
+                pointer enters and while a drag is in flight. */}
+            <div className={ex.hoverLine} ref={hoverLineRef} aria-hidden="true" />
+            <div className={ex.hoverTip} ref={hoverTipRef} aria-hidden="true" />
 
             {/* Snap guide, drawn only while a snap is active. */}
             {snapGuideLeft !== null ? (
               <div
                 className={styles.snapGuide}
-                style={{ left: snapGuideLeft }}
+                style={{ left: Math.round(snapGuideLeft) }}
               />
             ) : null}
 
-            {/* Playhead spans the lane stack (not the ruler above it). */}
+            {/* Playhead spans the lane stack (not the ruler above it). Refined:
+                full-height with a soft glow + a cap so its exact column reads
+                over bright clips. left rounded for a crisp hairline. */}
             <div
-              className={styles.lanePlayhead}
-              style={{ left: playheadSeconds * pxPerSec }}
-            />
+              className={ex.playhead}
+              style={{ left: Math.round(playheadSeconds * pxPerSec) }}
+            >
+              <span className={ex.playheadCap} aria-hidden="true" />
+            </div>
           </div>
+        </div>
+
+        {/* Playhead readout HUD, pinned to the visible scroll viewport (not the
+            scrolling content) so it stays put as the lanes scroll under it.
+            Non-interactive; reflects the playhead prop (updates with it, no new
+            per-frame state). */}
+        <div className={ex.readoutChip} aria-hidden="true">
+          <span className={ex.readoutTime}>
+            {formatClockFrames(playheadSeconds, timeline.fps)}
+          </span>
+          <span className={ex.readoutDot} />
+          <span className={ex.readoutFrame}>
+            {frameAt(playheadSeconds, timeline.fps)}f
+          </span>
         </div>
       </div>
     </div>
