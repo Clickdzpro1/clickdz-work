@@ -48,12 +48,19 @@ import {
   buildNewAppContent,
   type AppHistoryTurn,
   type AppSelectionContext,
+  buildShopEditContent,
 } from './clickdz-app-prompt';
 // SECURITY: constant-time token compare + per-slug Data API write tokens.
 // C6: verifyDataToken gates the @Public() /pay/checkout route with the SAME
 // per-slug token the published shop already sends on data writes (checkout auth
 // == data-write auth), so no new secret/credential is introduced.
-import { dataWriteToken, safeEqual, verifyDataToken } from './cdz-data-token';
+import { dataWriteToken, safeEqual, verifyDataToken,
+  staffToken,
+  verifyStaffToken,
+  staffCan,
+  staffPermissions,
+  type StaffRole,
+} from './cdz-data-token';
 // WS3 templates — COMPLETE single-file HTML apps authored in sibling files
 // (Merchant/Clerk own them, in parallel). We code against the export names; the
 // files may not exist locally yet. Each contains the SAME placeholder tokens the
@@ -73,6 +80,7 @@ import {
   featuresRequireRemint,
   parseFeatureCsv,
   type TemplateMintOpts,
+  isStale,
 } from './clickdz-template-mint';
 // R0-b (WSB-2) — shop source recovery. Pure helpers behind GET /apps/:slug/source:
 // fetchDeployedHtml (recover a published app's HTML from its live Vercel URL,
@@ -84,7 +92,66 @@ import {
   fetchDeployedHtml,
   resolveAppSource,
   type AppSourceRecord,
+  renderTemplateSource,
 } from './clickdz-app-source';
+import {
+  applyValidation,
+  applyVoid,
+  buildConversion,
+  buildDraftInvoice,
+  buildInvoiceFromOrder,
+  coerceInvoice,
+  filterInvoices,
+  invoiceCollectionForDate,
+  invoiceCollectionsInRange,
+  reserveInvoiceSeq,
+  resolveInvoiceRates,
+  type InvoiceOptions,
+  type InvoiceRecord,
+  type InvoiceType,
+  type ValidationError,
+} from './clickdz-erp-invoicing';
+import {
+  applySupplierBalanceDelta,
+  buildPoRecord,
+  buildSupplierRecord,
+  computeCancel,
+  computeReceive,
+  normalizePoLines,
+  procPoId,
+  procPoSeqKey,
+  putErpRecord,
+} from './clickdz-erp-procurement';
+import {
+  buildDayClose,
+  buildPendingCodEntry,
+  caisseCollectionFor,
+  caisseCollectionForDate,
+  caisseCollectionsInRange,
+  caisseStr,
+  hasPendingCodMarker,
+  mergeCaisseEntry,
+  normalizeRange,
+  reconcileCourier,
+  validateCaisseEntry,
+  type CaisseRecord,
+  type CourierLite,
+} from './clickdz-erp-caisse';
+import {
+  describeViolations,
+  lintShopContract,
+} from './clickdz-shop-contract';
+import {
+  appendLog,
+  getVersionHtml,
+  publicShopState,
+  readShopState,
+  recordVersion,
+  setPendingAiPatch,
+  writeShopState,
+  type ShopState,
+} from './clickdz-shop-state';
+import * as Shipping from './clickdz-erp-shipping';
 
 // SECURITY: input caps for cost/side-effecting routes (images, apps, plan).
 // Non-breaking for normal use; reject oversized/abusive payloads early.
@@ -1042,6 +1109,13 @@ const ERP_TOP_PRODUCTS_MAX = 5;
 // it appends — checked BEFORE the delete half of a delete+recreate so an
 // oversized replacement can never destroy the record it was replacing.
 const ERP_MAX_WRITE_BYTES = 8 * 1024 - 128;
+const CDZ_SHOP_STATE = process.env.CDZ_SHOP_STATE === '1';
+// WSE-12 (R2-e) — staff auth. Roles mirror ./cdz-data-token's StaffRole union
+// (owner=all, manager=all-minus-staff.manage/settings.write, staff=orders only).
+const ERP_STAFF_ROLES = ['owner', 'manager', 'staff'] as const;
+// Defensive cap on staff per shop (an SMB owner + a handful of staff). Keeps the
+// `staff` collection well under the data API's 500-record ceiling.
+const ERP_MAX_STAFF = 50;
 // Verbatim default tagline from the shop template's defaultSettings().
 const ERP_DEFAULT_TAGLINE =
   'Produits de qualité, livrés partout en Algérie — paiement à la livraison.';
@@ -3171,6 +3245,23 @@ export class ClickDzBridgeController {
       kind,
       storeSlug,
     });
+    // R2-h (WSB-3): persist the just-deployed shop HTML as a ShopState version
+    // and update the state blob so the studio has a server-side source of truth
+    // (kills the no-source-across-devices failure). SHOP kind only; gated by
+    // CDZ_SHOP_STATE. Fail-soft (own try/catch): a Redis hiccup here must NEVER
+    // break a successful deploy. A shop's own slug doubles as its storeSlug.
+    if (CDZ_SHOP_STATE && kind === 'shop') {
+      try {
+        const stateSlug =
+          storeSlug && APP_SLUG_RE.test(storeSlug) ? storeSlug : slug;
+        await recordVersion(this.redis, user.id, stateSlug, html, 'deploy');
+        await writeShopState(this.redis, user.id, stateSlug, {
+          aiPatchHtml: html,
+        });
+      } catch {
+        /* ShopState is best-effort; the deploy already succeeded */
+      }
+    }
     return { ...deployed, bytes: html.length };
   }
 
@@ -4052,6 +4143,2499 @@ export class ClickDzBridgeController {
    * namespace belongs to SOMEONE — just not the caller ⇒ typed 403. No
    * records at all (or data API down, deny-path only) ⇒ typed 404.
    */
+  // =========================================================================
+  // WSE-2 (LEDGER) — FACTURATION DZ. Owner-gated invoice routes (devis/bl/
+  // facture) gated by env CDZ_ERP_INVOICING. Pure math/validation/partition/
+  // sequence logic lives in ./clickdz-erp-invoicing; these routes only do I/O
+  // (ownership, data-API reads/writes with the re-derived write token) and map
+  // the module's discriminated-union `reason`s to typed 4xx bodies. Money docs
+  // are written with the ATOMIC data-API PUT (never delete+recreate) so an
+  // invoice never vanishes mid-edit and a gap-less legal number is never
+  // re-minted. Typed errors from ../../base or hand-written passthrough — never
+  // a raw HttpException (the global filter coerces it to 500).
+  // =========================================================================
+
+  /** WSE-2: invoicing on? (env CDZ_ERP_INVOICING; OFF = routes 404). */
+  private erpInvoicingEnabled(): boolean {
+    const v = String(process.env.CDZ_ERP_INVOICING || '').trim().toLowerCase();
+    return v === '1' || v === 'true' || v === 'on' || v === 'yes';
+  }
+
+  /** WSE-2: guard — throw a typed 404 when the feature flag is off. */
+  private assertInvoicingEnabled(): void {
+    if (!this.erpInvoicingEnabled()) {
+      throw new NotFound('Facturation is not enabled');
+    }
+  }
+
+  /** WSE-2: build InvoiceOptions from env (TVA/timbre rates + today). */
+  private erpInvoiceOptions(): InvoiceOptions {
+    const { tvaRate, timbreRate } = resolveInvoiceRates(
+      process.env.CDZ_ERP_TVA_RATE,
+      process.env.CDZ_ERP_TIMBRE_RATE
+    );
+    return { tvaRate, timbreRate };
+  }
+
+  /** WSE-2: a fresh temporary draft id (bridge has no randomUUID — use bytes). */
+  private erpDraftId(): string {
+    return `draft-${randomBytes(6).toString('hex')}`;
+  }
+
+  /**
+   * WSE-2 helper — ATOMIC upsert of one money document via the data API's PUT
+   * route (R1 `PUT /api/v2/apps-data/:slug/:collection/:id`). No delete window:
+   * a concurrent reader sees old-or-new, never a gap. Returns the stored record
+   * or a status (0 = unreachable). NEVER logs the token.
+   */
+  private async erpInvoicePut(
+    slug: string,
+    collection: string,
+    id: string,
+    record: ErpRecord,
+    token: string
+  ): Promise<{ ok: true; record: ErpRecord } | { ok: false; status: number }> {
+    const res = await fetch(
+      `${this.erpDataBase(slug)}/${collection}/${encodeURIComponent(id)}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(record),
+        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+      }
+    ).catch(() => null);
+    if (!res || !res.ok) {
+      const status = res ? res.status : 0;
+      this.logger.warn(
+        `[erp] invoice put failed slug=${slug} coll=${collection} id=${id} status=${status || 'unreachable'}`
+      );
+      return { ok: false, status };
+    }
+    const stored = (await res.json().catch(() => null)) as ErpRecord | null;
+    return { ok: true, record: stored ?? record };
+  }
+
+  /**
+   * WSE-2 helper — find one invoice by its id across a bounded window of
+   * monthly partitions (newest-first). Returns the record + its partition
+   * collection name (needed to PUT the update back into the SAME partition),
+   * or null when not found / the data API is unreachable on every read.
+   */
+  private async erpFindInvoice(
+    slug: string,
+    id: string
+  ): Promise<{ record: InvoiceRecord; collection: string } | null> {
+    // A validated id encodes its year (<type>-<year>-<seq>); a draft id does
+    // not. Scan the last 24 monthly partitions (invoiceCollectionsInRange with
+    // no bounds → current month only, so widen explicitly by passing a range).
+    const now = new Date();
+    const from = new Date(
+      Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), 1)
+    );
+    const cols = invoiceCollectionsInRange(
+      `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}`,
+      `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`,
+      24
+    );
+    for (const col of cols) {
+      const rows = await this.erpList(slug, col);
+      if (!rows) continue;
+      const hit = rows.find(r => erpStr(r.id) === id);
+      if (hit) {
+        const inv = coerceInvoice(hit);
+        if (inv) return { record: inv, collection: col };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * WSE-2 — map a clickdz-erp-invoicing ValidationError `reason` to a typed 400
+   * body (passthrough res — a raw HttpException would be coerced to 500). The
+   * reason string is a stable machine code; the frontend renders the FR label.
+   */
+  private erpInvoiceBadInput(res: Response, reason: string, field?: string): void {
+    res.status(HttpStatus.BAD_REQUEST).json({
+      error: 'invalid_invoice',
+      reason,
+      ...(field ? { field } : {}),
+    });
+  }
+
+  /**
+   * WSE-2 — POST /api/v1/apps/:slug/erp/invoices (auth'd, owner-only).
+   * BODY `{ type, customer, lines, orderRef?, payment?, date? }` — create a
+   * DRAFT invoice (status brouillon, NO number yet). When `orderRef` is present
+   * and `lines` is absent, mints the draft FROM the shop order (items→lines).
+   * Written atomically via PUT at a temp draft id into the date's monthly
+   * partition. Returns `{ ok, invoice }`.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/invoices')
+  async erpCreateInvoice(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertInvoicingEnabled();
+    await this.assertOwnsErpApp(user, slug);
+    const opts = this.erpInvoiceOptions();
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const draftId = this.erpDraftId();
+    const orderRef = erpStr(body?.orderRef).trim();
+    const hasLines = Array.isArray(body?.lines) && body.lines.length > 0;
+
+    let built:
+      | { ok: true; record: InvoiceRecord }
+      | { ok: false; reason: string; field?: string };
+    if (orderRef && !hasLines) {
+      // convert-from-order: fetch the order (matched by ref) then map it.
+      const orders = await this.erpList(slug, 'orders');
+      if (!orders) {
+        res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+        return;
+      }
+      const order = orders.find(o => erpStr(o.ref).trim() === orderRef);
+      if (!order) {
+        throw new NotFound('Order not found');
+      }
+      built = buildInvoiceFromOrder(
+        order,
+        { type: body?.type, customer: body?.customer, payment: body?.payment },
+        draftId,
+        opts
+      );
+    } else {
+      built = buildDraftInvoice(
+        {
+          type: body?.type,
+          customer: body?.customer,
+          lines: body?.lines,
+          payment: body?.payment,
+          orderRef: body?.orderRef,
+          date: body?.date,
+        },
+        draftId,
+        opts
+      );
+    }
+    if (!built.ok) {
+      this.erpInvoiceBadInput(res, built.reason, built.field);
+      return;
+    }
+    const record = built.record;
+    if (
+      Buffer.byteLength(JSON.stringify(record), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Invoice record too large (8KB cap; reduce line count)');
+    }
+    const collection = invoiceCollectionForDate(String(record.date));
+    const put = await this.erpInvoicePut(
+      slug,
+      collection,
+      draftId,
+      record as unknown as ErpRecord,
+      token
+    );
+    if (!put.ok) {
+      this.erpWriteFailed(res, put.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] invoice draft slug=${slug} user=${user.id} type=${record.type} coll=${collection}${orderRef ? ` order=${orderRef.slice(0, 40)}` : ''}`
+    );
+    return { ok: true, invoice: put.record };
+  }
+
+  /**
+   * WSE-2 — GET /api/v1/apps/:slug/erp/invoices (auth'd, owner-only).
+   * QUERY `month?=YYYY-MM` (or `from`/`to` range), `type?`, `status?`. Fetches
+   * the matching monthly partitions server-side, merges, filters + sorts
+   * (newest-first) via the pure module. Returns `{ invoices, partitionsRead }`.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/invoices')
+  async erpListInvoices(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('month') month: string | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Query('type') type: string | undefined,
+    @Query('status') status: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertInvoicingEnabled();
+    await this.assertOwnsErpApp(user, slug);
+    // A single `month` collapses to a one-month range; else `from`/`to`; else
+    // the module defaults to the current month.
+    const cols = month
+      ? invoiceCollectionsInRange(month, month, 24)
+      : invoiceCollectionsInRange(from, to, 24);
+    const merged: ErpRecord[] = [];
+    let read = 0;
+    let failed = 0;
+    for (const col of cols) {
+      const rows = await this.erpList(slug, col);
+      if (!rows) {
+        failed++;
+        continue;
+      }
+      read++;
+      for (const r of rows) merged.push(r);
+    }
+    if (read === 0 && failed > 0) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const invoices = filterInvoices(merged, { type, status });
+    return { invoices, partitionsRead: read };
+  }
+
+  /**
+   * WSE-2 — GET /api/v1/apps/:slug/erp/invoices/:id (auth'd, owner-only).
+   * Finds one invoice across the partition window. 404 when absent.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/invoices/:id')
+  async erpGetInvoice(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertInvoicingEnabled();
+    await this.assertOwnsErpApp(user, slug);
+    const found = await this.erpFindInvoice(slug, erpStr(id).trim());
+    if (!found) {
+      throw new NotFound('Invoice not found');
+    }
+    return { invoice: found.record };
+  }
+
+  /**
+   * WSE-2 — POST /api/v1/apps/:slug/erp/invoices/:id/validate (auth'd, owner).
+   * Assigns the gap-less legal number AT VALIDATION (Redis INCR), stamps the
+   * legal id `<type>-<year>-<seq>`, status→valide, and writes the NEW id via
+   * PUT while removing the old draft record from the same partition. The seq is
+   * reserved immediately before the write; a failed write does not retry the
+   * INCR (documented gap-less contract). 409-style body on non-draft source.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/invoices/:id/validate')
+  async erpValidateInvoice(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertInvoicingEnabled();
+    await this.assertOwnsErpApp(user, slug);
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const found = await this.erpFindInvoice(slug, erpStr(id).trim());
+    if (!found) {
+      throw new NotFound('Invoice not found');
+    }
+    const draft = found.record;
+    if (draft.status !== 'brouillon') {
+      res
+        .status(HttpStatus.CONFLICT)
+        .json({ error: 'invoice_not_draft', status: draft.status });
+      return;
+    }
+    const { timbreRate } = this.erpInvoiceOptions();
+    // Reserve the gap-less number ONLY now, right before persisting.
+    const seq = await reserveInvoiceSeq(
+      this.redis as unknown as { incr(k: string): Promise<number> },
+      slug,
+      draft.type as InvoiceType,
+      Number(draft.year)
+    );
+    const validated = applyValidation(draft, seq, timbreRate);
+    if (!validated.ok) {
+      this.erpInvoiceBadInput(res, validated.reason, validated.field);
+      return;
+    }
+    const record = validated.record;
+    if (
+      Buffer.byteLength(JSON.stringify(record), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Invoice record too large');
+    }
+    // Write the validated record at its NEW legal id (atomic PUT). Then remove
+    // the old draft id from the same partition (best-effort; the validated doc
+    // is authoritative once written).
+    const put = await this.erpInvoicePut(
+      slug,
+      found.collection,
+      String(record.id),
+      record as unknown as ErpRecord,
+      token
+    );
+    if (!put.ok) {
+      // Do NOT retry the INCR — the reserved number is consumed. Surface the
+      // write failure; the (rare) burned number is the documented gap-less cost.
+      this.erpWriteFailed(res, put.status);
+      return;
+    }
+    if (String(record.id) !== String(draft.id)) {
+      await this.erpDeleteRecord(slug, found.collection, String(draft.id), token);
+    }
+    this.logger.log(
+      `[erp] invoice validate slug=${slug} user=${user.id} ${draft.id} -> ${record.id}`
+    );
+    return { ok: true, invoice: put.record };
+  }
+
+  /**
+   * WSE-2 — POST /api/v1/apps/:slug/erp/invoices/:id/void (auth'd, owner-only).
+   * Marks the document `annule` in place (a validated legal doc is NEVER
+   * deleted — its number stays accounted-for). Atomic PUT at the same id.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/invoices/:id/void')
+  async erpVoidInvoice(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertInvoicingEnabled();
+    await this.assertOwnsErpApp(user, slug);
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const found = await this.erpFindInvoice(slug, erpStr(id).trim());
+    if (!found) {
+      throw new NotFound('Invoice not found');
+    }
+    const voided = applyVoid(found.record);
+    if (!voided.ok) {
+      res
+        .status(HttpStatus.CONFLICT)
+        .json({ error: 'invoice_already_void' });
+      return;
+    }
+    const record = voided.record;
+    const put = await this.erpInvoicePut(
+      slug,
+      found.collection,
+      String(record.id),
+      record as unknown as ErpRecord,
+      token
+    );
+    if (!put.ok) {
+      this.erpWriteFailed(res, put.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] invoice void slug=${slug} user=${user.id} id=${record.id}`
+    );
+    return { ok: true, invoice: put.record };
+  }
+
+  /**
+   * WSE-2 — POST /api/v1/apps/:slug/erp/invoices/:id/convert (auth'd, owner).
+   * BODY `{ to }` — devis→bl→facture (or the legal skip devis→facture). Mints a
+   * NEW DRAFT (seq 0, brouillon) carrying the source lines + customer + orderRef
+   * and recording `convertedFrom`. The new doc gets its own gap-less number
+   * only when it is later validated. Atomic PUT of the new draft.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/invoices/:id/convert')
+  async erpConvertInvoice(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertInvoicingEnabled();
+    await this.assertOwnsErpApp(user, slug);
+    const opts = this.erpInvoiceOptions();
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const found = await this.erpFindInvoice(slug, erpStr(id).trim());
+    if (!found) {
+      throw new NotFound('Invoice not found');
+    }
+    const draftId = this.erpDraftId();
+    const built = buildConversion(found.record, body?.to, draftId, opts);
+    if (!built.ok) {
+      // illegal_conversion / source_void are conflicts; the rest are 400s.
+      if (built.reason === 'illegal_conversion' || built.reason === 'source_void') {
+        res
+          .status(HttpStatus.CONFLICT)
+          .json({ error: 'invoice_convert_conflict', reason: built.reason });
+        return;
+      }
+      this.erpInvoiceBadInput(res, built.reason, built.field);
+      return;
+    }
+    const record = built.record;
+    if (
+      Buffer.byteLength(JSON.stringify(record), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Invoice record too large');
+    }
+    const collection = invoiceCollectionForDate(String(record.date));
+    const put = await this.erpInvoicePut(
+      slug,
+      collection,
+      draftId,
+      record as unknown as ErpRecord,
+      token
+    );
+    if (!put.ok) {
+      this.erpWriteFailed(res, put.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] invoice convert slug=${slug} user=${user.id} ${found.record.id}(${found.record.type}) -> ${record.type} ${record.id}`
+    );
+    return { ok: true, invoice: put.record };
+  }
+
+  // =========================================================================
+  // R2-b (WSE-4) — SUPPLIERS + PURCHASE ORDERS (procurement). Every route is
+  // authed (@CurrentUser via the global AuthGuard) + owner-gated
+  // (assertOwnsErpApp) and reuses the SAME erpList / erpCreateRecord /
+  // erpApplyStockRollup helpers + the re-derived per-slug write token as the
+  // inventory v2 routes above. Suppliers/POs are written at their business-key
+  // id via the WSE-1 PUT-upsert primitive (data POST would clobber the id).
+  // RECEIVING posts stock through the EXISTING movements-YYYYMM ledger — the
+  // exact record shape + roll-up as POST /erp/inventory/movement. Pure shaping /
+  // receive math lives in clickdz-erp-procurement.ts. No env gate (reference
+  // data is harmless; plan WSE-4 specifies none). Typed errors / passthrough.
+  // =========================================================================
+
+  /** Normalize a stored supplier row to the pinned public shape. */
+  private erpSupplierView(s: ErpRecord) {
+    return {
+      id: erpStr(s.id),
+      name: erpStr(s.name),
+      phone: erpStr(s.phone),
+      ...(erpStr(s.email) ? { email: erpStr(s.email) } : {}),
+      ...(erpStr(s.address) ? { address: erpStr(s.address) } : {}),
+      balance: Math.round(erpNum(s.balance)),
+      active: s.active !== false,
+      createdAt: erpStr(s.createdAt),
+    };
+  }
+
+  /**
+   * R2-b — GET /api/v1/apps/:slug/erp/suppliers (auth'd, owner-only).
+   * Lists the `suppliers` reference collection (newest-first, ≤500).
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/suppliers')
+  async erpSuppliers(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const rows = await this.erpList(slug, 'suppliers');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    return { suppliers: rows.map(s => this.erpSupplierView(s)) };
+  }
+
+  /**
+   * R2-b — POST /api/v1/apps/:slug/erp/suppliers (auth'd, owner-only).
+   * BODY `{ supplier }` — upsert a supplier by its kebab-slug business key
+   * (derived from the name). Existing fields are preserved on a partial edit
+   * (balance/createdAt never wiped). Written IN PLACE via the v2 PUT-upsert.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/suppliers')
+  async erpCreateSupplier(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const raw = body?.supplier;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new BadRequest('"supplier" must be an object');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const existing = await this.erpList(slug, 'suppliers');
+    if (!existing) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const built = buildSupplierRecord(raw);
+    if (!built.ok) {
+      throw new BadRequest('"supplier" needs a "name"');
+    }
+    const prior = existing.find(s => erpStr(s.id) === built.id);
+    const merged = buildSupplierRecord(raw, prior);
+    if (!merged.ok) {
+      throw new BadRequest('"supplier" needs a "name"');
+    }
+    if (Buffer.byteLength(JSON.stringify(merged.record), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Supplier record too large');
+    }
+    const wrote = await putErpRecord(
+      this.erpDataBase(slug),
+      'suppliers',
+      merged.id,
+      merged.record,
+      token
+    );
+    if (!wrote.ok) {
+      this.erpWriteFailed(res, wrote.status);
+      return;
+    }
+    this.logger.log(`[erp] supplier upsert slug=${slug} user=${user.id} id=${merged.id}`);
+    return { ok: true, supplier: this.erpSupplierView(wrote.record) };
+  }
+
+  /**
+   * R2-b — PUT /api/v1/apps/:slug/erp/suppliers/:id (auth'd, owner-only).
+   * In-place edit of an existing supplier by id. BODY `{ supplier }`. Absent
+   * fields are preserved; the id in the path is authoritative (renaming a
+   * supplier keeps the same id — its business key is stable).
+   */
+  @Throttle('strict')
+  @Put('/api/v1/apps/:slug/erp/suppliers/:id')
+  async erpUpdateSupplier(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const sid = erpStr(id).trim();
+    if (!sid) throw new BadRequest('"id" is required');
+    const raw = body?.supplier;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new BadRequest('"supplier" must be an object');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const existing = await this.erpList(slug, 'suppliers');
+    if (!existing) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const prior = existing.find(s => erpStr(s.id) === sid);
+    if (!prior) throw new NotFound('Supplier not found');
+    // Force the stored name when the body omits one so the id (kebab of name)
+    // stays pinned to the existing record even on a phone/address-only edit.
+    const patchBody = { ...raw } as Record<string, unknown>;
+    if (patchBody.name === undefined) patchBody.name = prior.name;
+    const merged = buildSupplierRecord(patchBody, prior);
+    if (!merged.ok) throw new BadRequest('"supplier" needs a "name"');
+    // Keep the caller's original id (path) as authoritative.
+    merged.record.id = sid;
+    if (Buffer.byteLength(JSON.stringify(merged.record), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Supplier record too large');
+    }
+    const wrote = await putErpRecord(
+      this.erpDataBase(slug),
+      'suppliers',
+      sid,
+      merged.record,
+      token
+    );
+    if (!wrote.ok) {
+      this.erpWriteFailed(res, wrote.status);
+      return;
+    }
+    this.logger.log(`[erp] supplier update slug=${slug} user=${user.id} id=${sid}`);
+    return { ok: true, supplier: this.erpSupplierView(wrote.record) };
+  }
+
+  /**
+   * R2-b — GET /api/v1/apps/:slug/erp/purchase-orders (auth'd, owner-only).
+   * Lists the `purchase-orders` collection (newest-first, ≤500).
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/purchase-orders')
+  async erpPurchaseOrders(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const rows = await this.erpList(slug, 'purchase-orders');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    return { purchaseOrders: rows };
+  }
+
+  /**
+   * R2-b — GET /api/v1/apps/:slug/erp/purchase-orders/:id (auth'd, owner-only).
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/purchase-orders/:id')
+  async erpPurchaseOrder(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const pid = erpStr(id).trim();
+    if (!pid) throw new BadRequest('"id" is required');
+    const rows = await this.erpList(slug, 'purchase-orders');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const po = rows.find(r => erpStr(r.id) === pid);
+    if (!po) throw new NotFound('Purchase order not found');
+    return { purchaseOrder: po };
+  }
+
+  /**
+   * R2-b — POST /api/v1/apps/:slug/erp/purchase-orders (auth'd, owner-only).
+   * BODY `{ supplierId, lines:[{productId?, label, qty, unitCost}], date?,
+   * status?, warehouseId?, note? }`. Mints a gap-less id `po-<year>-<seq>` via
+   * Redis INCR, then writes the record IN PLACE at that id via PUT-upsert.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/purchase-orders')
+  async erpCreatePurchaseOrder(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const supplierId = erpStr(body?.supplierId).trim();
+    if (!supplierId) throw new BadRequest('"supplierId" is required');
+    const lines = normalizePoLines(body?.lines);
+    if (!lines) throw new BadRequest('"lines" must be a non-empty array (max 100)');
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    // Supplier must exist (a PO is always against a known supplier).
+    const suppliers = await this.erpList(slug, 'suppliers');
+    if (!suppliers) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    if (!suppliers.some(s => erpStr(s.id) === supplierId)) {
+      throw new NotFound('Supplier not found');
+    }
+    // Gap-less numbering: reserve the seq only after a successful write would be
+    // rare to fail here, but INCR is atomic so numbers are monotonic per year.
+    const year = new Date().getUTCFullYear();
+    const seq = await this.redis.incr(procPoSeqKey(slug, year));
+    const built = buildPoRecord({
+      id: procPoId(year, seq),
+      supplierId,
+      date: body?.date,
+      status: body?.status,
+      lines,
+      warehouseId: body?.warehouseId,
+      note: body?.note,
+    });
+    if (!built.ok) {
+      throw new BadRequest('Invalid purchase order');
+    }
+    if (Buffer.byteLength(JSON.stringify(built.record), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Purchase order too large (reduce lines/note)');
+    }
+    const wrote = await putErpRecord(
+      this.erpDataBase(slug),
+      'purchase-orders',
+      erpStr(built.record.id),
+      built.record,
+      token
+    );
+    if (!wrote.ok) {
+      this.erpWriteFailed(res, wrote.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] po create slug=${slug} user=${user.id} id=${erpStr(built.record.id)} lines=${lines.length}`
+    );
+    return { ok: true, purchaseOrder: wrote.record };
+  }
+
+  /**
+   * R2-b — POST /api/v1/apps/:slug/erp/purchase-orders/:id/receive (owner-only).
+   * BODY `{ lines:[{label|productId, qty}], warehouseId? }` (empty lines ⇒
+   * receive ALL outstanding). Computes the receive (clickdz-erp-procurement),
+   * then posts stock through the EXISTING movements ledger: one positive
+   * 'purchase' movement per received line into the current-month
+   * `movements-YYYYMM` partition via erpCreateRecord, recomputes each affected
+   * product's roll-up via erpApplyStockRollup, updates the PO in place, and
+   * bumps the supplier balance by the received cost.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/purchase-orders/:id/receive')
+  async erpReceivePurchaseOrder(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const pid = erpStr(id).trim();
+    if (!pid) throw new BadRequest('"id" is required');
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const [pos, warehouses] = await Promise.all([
+      this.erpList(slug, 'purchase-orders'),
+      this.erpList(slug, 'warehouses'),
+    ]);
+    if (!pos || !warehouses) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const po = pos.find(r => erpStr(r.id) === pid);
+    if (!po) throw new NotFound('Purchase order not found');
+    const result = computeReceive(po, {
+      lines: body?.lines,
+      warehouseId: body?.warehouseId,
+    });
+    if (!result.ok) {
+      if (result.reason === 'not_receivable') {
+        throw new BadRequest('Purchase order is not receivable (cancelled or fully received)');
+      }
+      if (result.reason === 'no_warehouse') {
+        throw new BadRequest('"warehouseId" is required (none on the PO)');
+      }
+      if (result.reason === 'nothing_to_receive') {
+        throw new BadRequest('Nothing to receive (no outstanding matching line qty)');
+      }
+      throw new BadRequest('Invalid receive request');
+    }
+    // The target warehouse must exist (movements into an unknown warehouse are a
+    // client bug — same rule as POST /erp/inventory/movement).
+    const targetWh = erpStr(result.po.warehouseId).trim();
+    if (targetWh && !warehouses.some(w => erpStr(w.id) === targetWh)) {
+      throw new NotFound('Warehouse not found');
+    }
+    // Append movements through the EXISTING ledger (movements-YYYYMM), exactly
+    // like erpInventoryMovement. A full partition surfaces as data_rejected.
+    const collection = erpMovementCollection();
+    for (const mv of result.movements) {
+      if (Buffer.byteLength(JSON.stringify(mv), 'utf8') > ERP_MAX_WRITE_BYTES) {
+        throw new BadRequest('Movement record too large');
+      }
+      const created = await this.erpCreateRecord(slug, collection, mv, token);
+      if (!created.ok) {
+        this.erpWriteFailed(res, created.status);
+        return;
+      }
+    }
+    // Recompute + persist each affected product's roll-up from the ledger (now
+    // including the just-appended movements) — reuses erpApplyStockRollup.
+    if (result.movements.length > 0) {
+      const { totals } = await this.erpReadMovements(slug, ERP_MOVEMENT_MONTHS_READ);
+      for (const key of Object.keys(result.receivedByKey)) {
+        const newStock = Math.max(0, Math.round(totals.get(key) ?? 0));
+        await this.erpApplyStockRollup(slug, key, newStock, token);
+      }
+    }
+    // Persist the updated PO in place (incremented qtyReceived + new status).
+    if (Buffer.byteLength(JSON.stringify(result.po), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Purchase order too large after receive');
+    }
+    const poWrote = await putErpRecord(
+      this.erpDataBase(slug),
+      'purchase-orders',
+      pid,
+      result.po,
+      token
+    );
+    if (!poWrote.ok) {
+      this.erpWriteFailed(res, poWrote.status);
+      return;
+    }
+    // Bump the supplier balance by the received cost (we now owe more).
+    let supplierBalance: number | undefined;
+    if (result.receivedCost > 0) {
+      const suppliers = await this.erpList(slug, 'suppliers');
+      const supplier = suppliers?.find(s => erpStr(s.id) === erpStr(po.supplierId));
+      if (supplier) {
+        const updated = applySupplierBalanceDelta(supplier, result.receivedCost);
+        const sw = await putErpRecord(
+          this.erpDataBase(slug),
+          'suppliers',
+          erpStr(supplier.id),
+          updated,
+          token
+        );
+        if (sw.ok) supplierBalance = Math.round(erpNum(sw.record.balance));
+      }
+    }
+    this.logger.log(
+      `[erp] po receive slug=${slug} user=${user.id} id=${pid} movements=${result.movements.length} status=${result.nextStatus} cost=${result.receivedCost}`
+    );
+    return {
+      ok: true,
+      purchaseOrder: poWrote.record,
+      movements: result.movements.length,
+      ...(supplierBalance !== undefined ? { supplierBalance } : {}),
+    };
+  }
+
+  /**
+   * R2-b — POST /api/v1/apps/:slug/erp/purchase-orders/:id/cancel (owner-only).
+   * Cancels a 'brouillon'/'commande' PO (sets status 'annule'). A PO that has
+   * already received stock is NOT cancellable (append-only ledger — reverse via
+   * a manual negative movement instead). Written in place via PUT-upsert.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/purchase-orders/:id/cancel')
+  async erpCancelPurchaseOrder(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const pid = erpStr(id).trim();
+    if (!pid) throw new BadRequest('"id" is required');
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const pos = await this.erpList(slug, 'purchase-orders');
+    if (!pos) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const po = pos.find(r => erpStr(r.id) === pid);
+    if (!po) throw new NotFound('Purchase order not found');
+    const result = computeCancel(po);
+    if (!result.ok) {
+      throw new BadRequest('Purchase order cannot be cancelled (already received or cancelled)');
+    }
+    const wrote = await putErpRecord(
+      this.erpDataBase(slug),
+      'purchase-orders',
+      pid,
+      result.po,
+      token
+    );
+    if (!wrote.ok) {
+      this.erpWriteFailed(res, wrote.status);
+      return;
+    }
+    this.logger.log(`[erp] po cancel slug=${slug} user=${user.id} id=${pid}`);
+    return { ok: true, purchaseOrder: wrote.record };
+  }
+
+  // ===========================================================================
+  // WSE-6 (ROUTIER) — LIVRAISON: couriers + 58-wilaya shipping matrix + order
+  // courier-assignment / tracking. Owner-only (assertOwnsErpApp). Reuses
+  // erpList / erpCreateRecord / erpDeleteRecord + the re-derived per-slug write
+  // token; logic delegated to ./clickdz-erp-shipping (imported as `Shipping`).
+  // Collections: `couriers`, `shipping-rates` (both unpartitioned reference
+  // data). Tracking is a SUB-state written on the `orders` record.
+  // ===========================================================================
+
+  /**
+   * PUT one record IN PLACE via the data API's atomic upsert (v2 PUT-by-id),
+   * using the re-derived per-slug write token (Bearer). Unlike delete+recreate,
+   * this preserves the record's id + createdAt — required for order edits whose
+   * server-generated id other data may reference. status 0 = unreachable.
+   */
+  private async erpPutRecord(
+    slug: string,
+    collection: string,
+    id: string,
+    record: ErpRecord,
+    token: string
+  ): Promise<{ ok: true; record: ErpRecord } | { ok: false; status: number }> {
+    const res = await fetch(
+      `${this.erpDataBase(slug)}/${collection}/${encodeURIComponent(id)}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(record),
+        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+      }
+    ).catch(() => null);
+    if (!res || !res.ok) {
+      const status = res ? res.status : 0;
+      this.logger.warn(
+        `[erp] put failed slug=${slug} coll=${collection} id=${id} status=${status || 'unreachable'}`
+      );
+      return { ok: false, status };
+    }
+    const saved = (await res.json().catch(() => null)) as ErpRecord | null;
+    return { ok: true, record: saved ?? record };
+  }
+
+  /**
+   * WSE-6 — GET /api/v1/apps/:slug/erp/shipping/wilayas (owner-only).
+   * The canonical 58-wilaya table (single server-side source). No write token
+   * needed — pure reference data.
+   */
+  @Get('/api/v1/apps/:slug/erp/shipping/wilayas')
+  async erpShippingWilayas(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    return { wilayas: Shipping.WILAYAS };
+  }
+
+  /** WSE-6 — GET /api/v1/apps/:slug/erp/couriers (owner-only). */
+  @Get('/api/v1/apps/:slug/erp/couriers')
+  async erpCouriersList(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const couriers = await this.erpList(slug, 'couriers');
+    if (!couriers) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    return { couriers };
+  }
+
+  /**
+   * WSE-6 — POST /api/v1/apps/:slug/erp/couriers (owner-only). Create a courier
+   * (pinned shape). Id is derived kebab-case from name (or a supplied valid id).
+   * Rejects a duplicate id (409) so the business key stays unique.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/couriers')
+  async erpCourierCreate(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const built = Shipping.buildCourierRecord(
+      body,
+      new Date().toISOString()
+    );
+    if (!built.ok) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'invalid_courier', field: built.field });
+      return;
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const existing = await this.erpList(slug, 'couriers');
+    if (!existing) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    if (existing.some(c => erpStr(c.id) === built.courier.id)) {
+      res.status(HttpStatus.CONFLICT).json({ error: 'courier_exists', id: built.courier.id });
+      return;
+    }
+    const created = await this.erpCreateRecord(slug, 'couriers', built.courier, token);
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    this.logger.log(`[erp] courier create slug=${slug} user=${user.id} id=${built.courier.id}`);
+    return { ok: true, courier: created.record };
+  }
+
+  /**
+   * WSE-6 — PUT /api/v1/apps/:slug/erp/couriers/:id (owner-only). Update a
+   * courier in place (id + createdAt immutable). Uses PUT-by-id upsert.
+   */
+  @Throttle('strict')
+  @Put('/api/v1/apps/:slug/erp/couriers/:id')
+  async erpCourierUpdate(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    if (!Shipping.isValidCourierId(id)) {
+      throw new BadRequest('Invalid courier id');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const couriers = await this.erpList(slug, 'couriers');
+    if (!couriers) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const found = couriers.find(c => erpStr(c.id) === id);
+    if (!found) throw new NotFound('Courier not found');
+    const merged = Shipping.mergeCourierPatch(found, body);
+    if (!merged.ok) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'invalid_courier', field: merged.field });
+      return;
+    }
+    // The stored record's data-API id is the same business id we PUT by.
+    const recId = erpStr(found.id);
+    const saved = await this.erpPutRecord(slug, 'couriers', recId, merged.courier, token);
+    if (!saved.ok) {
+      this.erpWriteFailed(res, saved.status);
+      return;
+    }
+    this.logger.log(`[erp] courier update slug=${slug} user=${user.id} id=${id}`);
+    return { ok: true, courier: saved.record };
+  }
+
+  /**
+   * WSE-6 — GET /api/v1/apps/:slug/erp/shipping/rates?courierId= (owner-only).
+   * Returns the dense 58-row matrix for the courier (missing rows → null fees).
+   */
+  @Get('/api/v1/apps/:slug/erp/shipping/rates')
+  async erpShippingRates(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('courierId') courierId: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const cid = erpStr(courierId).trim().toLowerCase();
+    if (!Shipping.isValidCourierId(cid)) {
+      throw new BadRequest('"courierId" query param is required');
+    }
+    const rows = await this.erpList(slug, 'shipping-rates');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    return { courierId: cid, matrix: Shipping.exportMatrix(rows, cid) };
+  }
+
+  /**
+   * WSE-6 — POST /api/v1/apps/:slug/erp/shipping/rates (owner-only). Bulk-set a
+   * courier's rate matrix. BODY `{ courierId, rates: [{wilaya, fee?, homeFee?,
+   * deskFee?}] }`. Each rate → one `<courierId>:<wilayaCode>` record, written
+   * in place (PUT-by-id upsert) so re-setting a wilaya just overwrites its row.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/shipping/rates')
+  async erpShippingRatesSet(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const cid = erpStr(body?.courierId).trim().toLowerCase();
+    const built = Shipping.buildBulkRates(cid, body?.rates);
+    if (!built.ok) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: built.error, ...(built.wilaya ? { wilaya: built.wilaya } : {}) });
+      return;
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    let written = 0;
+    for (const rec of built.records) {
+      const saved = await this.erpPutRecord(slug, 'shipping-rates', rec.id, rec, token);
+      if (!saved.ok) {
+        this.erpWriteFailed(res, saved.status);
+        return;
+      }
+      written++;
+    }
+    this.logger.log(`[erp] rates set slug=${slug} user=${user.id} courier=${cid} rows=${written}`);
+    return { ok: true, courierId: cid, written };
+  }
+
+  /**
+   * WSE-6 — POST /api/v1/apps/:slug/erp/shipping/rates/import-csv (owner-only).
+   * BODY `{ courierId, csv }`. Parses pasted `wilayaCode,fee,homeFee,deskFee`
+   * lines (courier PDFs re-typed as CSV) and bulk-sets them like the JSON path.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/shipping/rates/import-csv')
+  async erpShippingRatesImportCsv(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const cid = erpStr(body?.courierId).trim().toLowerCase();
+    if (!Shipping.isValidCourierId(cid)) {
+      throw new BadRequest('"courierId" is required');
+    }
+    const parsed = Shipping.parseRatesCsv(body?.csv);
+    if (!parsed.ok) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: parsed.error, ...(parsed.line ? { line: parsed.line } : {}) });
+      return;
+    }
+    const built = Shipping.buildBulkRates(cid, parsed.rows);
+    if (!built.ok) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: built.error, ...(built.wilaya ? { wilaya: built.wilaya } : {}) });
+      return;
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    let written = 0;
+    for (const rec of built.records) {
+      const saved = await this.erpPutRecord(slug, 'shipping-rates', rec.id, rec, token);
+      if (!saved.ok) {
+        this.erpWriteFailed(res, saved.status);
+        return;
+      }
+      written++;
+    }
+    this.logger.log(`[erp] rates import-csv slug=${slug} user=${user.id} courier=${cid} rows=${written} skipped=${parsed.skipped}`);
+    return { ok: true, courierId: cid, written, skipped: parsed.skipped };
+  }
+
+  /**
+   * WSE-6 — POST /api/v1/apps/:slug/erp/orders/:orderId/assign-courier
+   * (owner-only). BODY `{ courierId, mode? }`. Writes courierId + deliveryMode
+   * on the order record IN PLACE (PUT-by-id, id/createdAt preserved). Does not
+   * move the order status. `:orderId` is the data-API record id.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/orders/:orderId/assign-courier')
+  async erpOrderAssignCourier(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('orderId') orderId: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const built = Shipping.buildAssignPatch(body?.courierId, body?.mode, new Date().toISOString());
+    if (!built.ok) {
+      throw new BadRequest('"courierId" is required (a valid courier id)');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const orders = await this.erpList(slug, 'orders');
+    if (!orders) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const order = orders.find(o => erpStr(o.id) === orderId);
+    if (!order) throw new NotFound('Order not found');
+    // Verify the courier exists so an order can't point at a phantom id.
+    const couriers = await this.erpList(slug, 'couriers');
+    if (couriers && !couriers.some(c => erpStr(c.id) === built.patch.courierId)) {
+      throw new NotFound('Courier not found');
+    }
+    const merged: ErpRecord = { ...order, ...built.patch };
+    delete (merged as any).createdAt; // upsert preserves the stored createdAt
+    if (Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Order record too large');
+    }
+    const saved = await this.erpPutRecord(slug, 'orders', orderId, merged, token);
+    if (!saved.ok) {
+      this.erpWriteFailed(res, saved.status);
+      return;
+    }
+    this.logger.log(`[erp] assign-courier slug=${slug} user=${user.id} order=${orderId} courier=${built.patch.courierId}`);
+    return { ok: true, order: saved.record };
+  }
+
+  /**
+   * WSE-6 — POST /api/v1/apps/:slug/erp/orders/:orderId/tracking (owner-only).
+   * BODY `{ status }` — one of pris-en-charge|en-route|livre|retour. Sets the
+   * tracking sub-state AND advances the order's canonical status accordingly,
+   * IN PLACE (PUT-by-id). `:orderId` is the data-API record id.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/orders/:orderId/tracking')
+  async erpOrderTracking(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('orderId') orderId: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const built = Shipping.buildTrackingPatch(body?.status, new Date().toISOString());
+    if (!built.ok) {
+      throw new BadRequest(`"status" must be one of: ${Shipping.TRACKING_STATUSES.join(', ')}`);
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const orders = await this.erpList(slug, 'orders');
+    if (!orders) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const order = orders.find(o => erpStr(o.id) === orderId);
+    if (!order) throw new NotFound('Order not found');
+    const merged: ErpRecord = { ...order, ...built.patch };
+    delete (merged as any).createdAt;
+    if (Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Order record too large');
+    }
+    const saved = await this.erpPutRecord(slug, 'orders', orderId, merged, token);
+    if (!saved.ok) {
+      this.erpWriteFailed(res, saved.status);
+      return;
+    }
+    this.logger.log(`[erp] tracking slug=${slug} user=${user.id} order=${orderId} -> ${body?.status} (${built.orderStatus})`);
+    return { ok: true, order: saved.record };
+  }
+
+  // =========================================================================
+  // R2-d (WSE-8, TIROIR) — CAISSE (cash register) + COD RECONCILIATION.
+  // Every route is authed (@CurrentUser via the global AuthGuard) + owner-gated
+  // (assertOwnsErpApp) and reuses the SAME erpList/erpCreateRecord helpers +
+  // re-derived per-slug write token as the sibling ERP routes. Money docs are
+  // updated IN PLACE via the data API's native PUT upsert (never delete+recreate)
+  // — a caisse entry must never vanish mid-edit. All logic (validation, money
+  // math, partition names, reconcile, day-close) lives in ./clickdz-erp-caisse;
+  // these are thin call sites. Typed errors / passthrough res only.
+  // =========================================================================
+
+  /**
+   * Fail-soft delivered-COD hook (called from erpOrderStatus on a 'Livrée'
+   * transition). Writes a pending-COD MARKER entry ('in'/'cod', pending:true,
+   * amount = order total, tagged orderRef + courierId when present) into the
+   * caisse partition for the order's delivery day, so day-close/reconcile know a
+   * delivered order owes its COD. Idempotent (skips if a marker for the ref
+   * already exists). NEVER throws — any failure is logged and swallowed so a
+   * caisse hiccup can never break the status update. Returns nothing.
+   */
+  private async erpWritePendingCod(
+    slug: string,
+    order: ErpRecord,
+    token: string
+  ): Promise<void> {
+    try {
+      const built = buildPendingCodEntry(order as CaisseRecord);
+      if (!built) return;
+      const existing = await this.erpList(slug, built.collection);
+      const ref = caisseStr((built.entry as ErpRecord).orderRef);
+      if (existing && ref && hasPendingCodMarker(existing as CaisseRecord[], ref)) {
+        return; // marker already present — stay idempotent
+      }
+      const created = await this.erpCreateRecord(
+        slug,
+        built.collection,
+        built.entry as ErpRecord,
+        token
+      );
+      if (created.ok) {
+        this.logger.log(
+          `[erp] caisse pending-COD slug=${slug} ref=${ref.slice(0, 40)} amount=${(built.entry as ErpRecord).amount}`
+        );
+      }
+    } catch (e) {
+      // Fail-soft: a delivered order must still advance even if caisse is down.
+      this.logger.warn(
+        `[erp] caisse pending-COD write skipped slug=${slug}: ${String((e as Error)?.message || e).slice(0, 120)}`
+      );
+    }
+  }
+
+  /**
+   * R2-d — GET /api/v1/apps/:slug/erp/caisse?month=YYYYMM (auth'd, owner-only).
+   * Lists ONE monthly partition (`caisse-YYYYMM`); defaults to the current month.
+   * `month` is validated to 6 digits (bad → current month). Returns the raw
+   * entries newest-first (the data API's own sort) plus the resolved collection.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/caisse')
+  async erpCaisseList(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('month') month: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const m = caisseStr(month).trim();
+    const collection = /^\d{6}$/.test(m)
+      ? `caisse-${m}`
+      : caisseCollectionFor();
+    const entries = await this.erpList(slug, collection);
+    if (!entries) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    this.logger.log(
+      `[erp] caisse-list slug=${slug} user=${user.id} coll=${collection} n=${entries.length}`
+    );
+    return { collection, entries };
+  }
+
+  /**
+   * R2-d — POST /api/v1/apps/:slug/erp/caisse (auth'd, owner-only).
+   * BODY = the pinned Caisse entry shape. Validated/normalized in the sibling
+   * helper (integer DZD, kind/method allowlists), then created in the monthly
+   * partition derived from the entry's own date (back-dated entries land in the
+   * right month). Rejects invalid input as a typed 400 (invalid_entry{field}).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/caisse')
+  async erpCaisseCreate(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const v = validateCaisseEntry(body);
+    if (!v.ok) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_entry', field: v.field, message: v.message });
+      return;
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const created = await this.erpCreateRecord(
+      slug,
+      v.collection,
+      v.entry as unknown as ErpRecord,
+      token
+    );
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] caisse-create slug=${slug} user=${user.id} coll=${v.collection} kind=${v.entry.kind} amount=${v.entry.amount}`
+    );
+    return { ok: true, entry: created.record };
+  }
+
+  /**
+   * R2-d — PUT /api/v1/apps/:slug/erp/caisse/:id (auth'd, owner-only).
+   * In-place money-doc update. Locates the existing entry (this month, then the
+   * previous 24 partitions) by id, merges the partial patch onto it (sibling
+   * helper re-validates the pinned shape), and writes it back via the data API's
+   * native PUT upsert (single HSET — no delete window). 404 when the id is not
+   * found in the read window.
+   */
+  @Throttle('strict')
+  @Put('/api/v1/apps/:slug/erp/caisse/:id')
+  async erpCaisseUpdate(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const entryId = caisseStr(id).trim();
+    if (!entryId) throw new BadRequest('Entry id is required');
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    // Find the entry + its partition. Try the patch's date month first (cheap),
+    // then fan out over the rolling window (a caisse entry can be edited months
+    // later). We search a bounded set of partitions and stop at the first hit.
+    const hintDate = caisseStr(body?.date).slice(0, 10);
+    const partitions = new Set<string>();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(hintDate)) {
+      partitions.add(caisseCollectionForDate(hintDate));
+    }
+    for (const c of caisseCollectionsInRange(
+      new Date(Date.now() - 730 * 86_400_000).toISOString().slice(0, 10),
+      new Date().toISOString().slice(0, 10)
+    )) {
+      partitions.add(c);
+    }
+    let found: ErpRecord | null = null;
+    let foundCollection = '';
+    for (const collection of partitions) {
+      const rows = await this.erpList(slug, collection);
+      if (!rows) continue;
+      const hit = rows.find(r => caisseStr(r.id) === entryId);
+      if (hit) {
+        found = hit;
+        foundCollection = collection;
+        break;
+      }
+    }
+    if (!found) throw new NotFound('Caisse entry not found');
+    const merged = mergeCaisseEntry(found as CaisseRecord, body);
+    if (!merged.ok) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({
+          error: 'invalid_entry',
+          field: merged.field,
+          message: merged.message,
+        });
+      return;
+    }
+    // The entry's month may have CHANGED (date edited). PUT into the partition
+    // for the NEW date; if that differs from where it was stored, delete the old
+    // copy so it doesn't linger in two months (best-effort — PUT is the source
+    // of truth). Normal case: same partition, a pure in-place HSET.
+    const targetCollection = merged.collection;
+    const saved = await this.erpPutRecord(
+      slug,
+      targetCollection,
+      entryId,
+      merged.entry as unknown as ErpRecord,
+      token
+    );
+    if (!saved.ok) {
+      this.erpWriteFailed(res, saved.status);
+      return;
+    }
+    if (foundCollection && foundCollection !== targetCollection) {
+      await this.erpDeleteRecord(slug, foundCollection, entryId, token);
+    }
+    this.logger.log(
+      `[erp] caisse-update slug=${slug} user=${user.id} id=${entryId} coll=${targetCollection}`
+    );
+    return { ok: true, entry: saved.record };
+  }
+
+  /**
+   * R2-d — GET /api/v1/apps/:slug/erp/caisse/reconcile?courierId=&from=&to=
+   * (auth'd, owner-only). Per-courier COD reconciliation over [from,to]:
+   *   expected = Σ delivered-order totals for courierId in range − codFee×count
+   *   received = Σ non-pending 'in' caisse entries tagged courierId in range
+   *   gap      = expected − received (+ per-order refs).
+   * Reads ALL orders + the couriers list + the caisse partitions spanning the
+   * range; all math in the sibling helper (integer DZD). `courierId` required.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/caisse/reconcile')
+  async erpCaisseReconcile(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('courierId') courierId: string | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const cid = caisseStr(courierId).trim();
+    if (!cid) throw new BadRequest('"courierId" query param is required');
+    const range = normalizeRange(from, to);
+    const [orders, couriers] = await Promise.all([
+      this.erpList(slug, 'orders'),
+      this.erpList(slug, 'couriers'),
+    ]);
+    if (!orders || !couriers) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    // Merge the caisse partitions covering the range (best-effort: a missing
+    // partition is simply empty; a failed read is skipped, matching inventory).
+    const collections = caisseCollectionsInRange(range.from, range.to);
+    const parts = await Promise.all(collections.map(c => this.erpList(slug, c)));
+    const caisseRows: ErpRecord[] = [];
+    for (const rows of parts) {
+      if (rows) caisseRows.push(...rows);
+    }
+    const courier =
+      (couriers.find(c => caisseStr(c.id).trim() === cid) as
+        | CourierLite
+        | undefined) ?? null;
+    const report = reconcileCourier(
+      cid,
+      courier,
+      orders as CaisseRecord[],
+      caisseRows as CaisseRecord[],
+      range.from,
+      range.to
+    );
+    this.logger.log(
+      `[erp] caisse-reconcile slug=${slug} user=${user.id} courier=${cid} ${range.from}..${range.to} expected=${report.expectedTotal} received=${report.receivedTotal} gap=${report.gap}`
+    );
+    return { range, report };
+  }
+
+  /**
+   * R2-d — GET /api/v1/apps/:slug/erp/caisse/day-close?date=YYYY-MM-DD
+   * (auth'd, owner-only). Day-close (or single-day) summary: in/out totals by
+   * method (cod|cash|chargily) + net, with pending-COD markers reported
+   * separately. `date` defaults to today (UTC). All integer DZD.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/caisse/day-close')
+  async erpCaisseDayClose(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('date') date: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const range = normalizeRange(date, date);
+    const collections = caisseCollectionsInRange(range.from, range.to);
+    const parts = await Promise.all(collections.map(c => this.erpList(slug, c)));
+    // A single failed partition read is degraded (empty) rather than 502-ing the
+    // whole close; but if EVERY partition is unreachable, surface the outage.
+    if (parts.every(p => p === null)) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const caisseRows: ErpRecord[] = [];
+    for (const rows of parts) {
+      if (rows) caisseRows.push(...rows);
+    }
+    const summary = buildDayClose(
+      caisseRows as CaisseRecord[],
+      range.from,
+      range.from,
+      range.to
+    );
+    this.logger.log(
+      `[erp] caisse-day-close slug=${slug} user=${user.id} date=${range.from} in=${summary.inTotal} out=${summary.outTotal} net=${summary.net}`
+    );
+    return summary;
+  }
+
+  // -------------------------------------------------------------------------
+  // R2-g (WSB-2) — POST /api/v1/apps/:slug/ai-edit (auth'd, owner-only).
+  // "Modifier avec l'IA": edit a LIVE published storefront with the shop-aware
+  // prompt, then MECHANICALLY lint the result against the storefront contract
+  // (data-API wiring, Bearer write-auth, the orders POST + 5 status literals,
+  // the settings singleton, featureOn/sectionOn gating). On a lint failure it
+  // retries the model ONCE with the concrete violations appended; a second
+  // failure is a typed 422 (never deployed). Success returns the edited HTML —
+  // it does NOT deploy (the FE deploys via the existing deployApp path, same
+  // slug → cap-safe). When CDZ_SHOP_STATE is on it ALSO best-effort stages the
+  // HTML as a ShopState pending patch (Coffre's clickdz-shop-state.ts, resolved
+  // by fail-soft dynamic import so a parallel-built/renamed module can never
+  // break this route or boot).
+  //
+  // Env-gated by CDZ_SHOP_AI_EDIT (OFF → typed 404, byte-identical to today —
+  // same flag that gates GET /apps/:slug/source, whose helpers this reuses).
+  // Ownership + current-HTML resolution reuse the EXACT mechanism of the
+  // /source route: readPublishedApps + resolveAppSource with the same
+  // renderTemplate closure. The LLM call mirrors buildAppHtml verbatim
+  // (runMakeAgent 'clickdz-apps' + MAKE_CODE_AGENT_ID, then extractHtmlApp).
+  // Passthrough res carries the typed 422 body (a raw HttpException would be
+  // flattened to a generic 500 by the global filter).
+  // -------------------------------------------------------------------------
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/ai-edit')
+  async aiEditShop(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    // Feature flag OFF → behave as if the route does not exist (typed 404).
+    if (!CDZ_SHOP_AI_EDIT) {
+      throw new NotFound('App not found');
+    }
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      throw new BadRequest('Invalid app slug');
+    }
+    const instruction = String(body?.instruction || '').trim();
+    if (!instruction) {
+      throw new BadRequest('An edit instruction is required');
+    }
+    // SECURITY: this route runs the (paid) code agent. Cap the instruction like
+    // the generate route caps its prompt.
+    if (instruction.length > MAX_PROMPT_CHARS) {
+      throw new PayloadTooLargeException(
+        `Instruction is too long (max ${MAX_PROMPT_CHARS} characters)`
+      );
+    }
+
+    // Ownership: the caller must own this slug (or its paired storeSlug). SAME
+    // mechanism as assertOwnsErpApp / GET /apps/mine / GET /apps/:slug/source.
+    const records = await this.readPublishedApps(user.id);
+    const record =
+      records.find(r => r.slug === slug) ??
+      records.find(r => r.storeSlug === slug);
+    if (!record) {
+      throw new NotFound('App not found');
+    }
+
+    // ----- resolve the current published HTML (the edit base) ---------------
+    // Reuse the EXACT source-resolution the /source route uses: the same
+    // renderTemplate closure (template-kind → server-render fast path; else
+    // fetch the deployed artifact). This gives us the live storefront to edit.
+    const externalBase = (
+      process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+    ).replace(/\/+$/, '');
+    const renderTemplate = (rec: AppSourceRecord): string => {
+      const templateHtml =
+        rec.kind === 'erp'
+          ? CLICKDZ_ERP_TEMPLATE_HTML
+          : rec.kind === 'shop'
+            ? CLICKDZ_SHOP_TEMPLATE_HTML
+            : '';
+      if (!templateHtml) return '';
+      const dataSlug = rec.storeSlug || rec.slug;
+      const dataUrl = `${externalBase}/api/v2/apps-data/${dataSlug}`;
+      const dataToken = dataWriteToken(dataSlug);
+      return renderTemplateSource({
+        templateHtml,
+        slug: dataSlug,
+        dataUrl,
+        dataToken,
+        tokens: {
+          storeName: CDZ_TPL_DEFAULT_STORE_NAME,
+          whatsapp: CDZ_TPL_DEFAULT_WHATSAPP,
+          accent:
+            rec.kind === 'erp'
+              ? CDZ_TPL_DEFAULT_ERP_ACCENT
+              : CDZ_TPL_DEFAULT_ACCENT,
+          pin: CDZ_TPL_DEFAULT_PIN,
+        },
+      });
+    };
+    const resolved = await resolveAppSource(record, { renderTemplate });
+    if (!resolved.ok) {
+      if (resolved.reason === 'not_renderable') {
+        throw new NotFound('App source is not available');
+      }
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'source_fetch_failed',
+        reason: resolved.reason,
+        message: 'Could not recover the published source to edit. Please try again.',
+      });
+      return;
+    }
+    const currentHtml = resolved.html;
+
+    // ----- LLM edit + contract lint, with a SINGLE auto-retry ---------------
+    // The generation call mirrors buildAppHtml exactly (same agent id + model
+    // tiering): runMakeAgent('clickdz-apps', MAKE_CODE_AGENT_ID) → extractHtmlApp.
+    // The only difference is the shop-aware content builder + the lint/retry
+    // loop wrapped around it (we can't reuse buildAppHtml verbatim because it
+    // neither lints nor retries).
+    const startedAt = Date.now();
+    const runShopEdit = async (violations?: string[]): Promise<string> => {
+      const content = buildShopEditContent({
+        prompt: instruction,
+        currentHtml,
+        ...(violations && violations.length ? { violations } : {}),
+      });
+      const reply = await this.runMakeAgent(
+        [{ role: 'user', content }],
+        'clickdz-apps',
+        MAKE_CODE_AGENT_ID || undefined
+      );
+      let html = extractHtmlApp(reply || '');
+      if (!html) {
+        throw new HttpException(
+          { error: { message: 'The model did not return a valid app. Try rephrasing.', type: 'provider_error', code: 'app_generation_failed' } },
+          HttpStatus.BAD_GATEWAY
+        );
+      }
+      if (html.length > 400_000) html = html.slice(0, 400_000);
+      return html;
+    };
+
+    let html = await runShopEdit();
+    let lint = lintShopContract(html);
+    if (!lint.ok) {
+      this.logger.warn(
+        `[apps] ai-edit slug=${slug} contract violations (attempt 1): ${lint.violations.length} — retrying once`
+      );
+      // Single auto-retry with the concrete violations appended to the prompt.
+      html = await runShopEdit(lint.violations);
+      lint = lintShopContract(html);
+    }
+    if (!lint.ok) {
+      this.logger.warn(
+        `[apps] ai-edit slug=${slug} contract violations persist after retry: ${describeViolations(lint.violations)}`
+      );
+      res.status(HttpStatus.UNPROCESSABLE_ENTITY).json({
+        error: 'contract_violation',
+        violations: lint.violations,
+        message: describeViolations(lint.violations),
+      });
+      return;
+    }
+
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    this.logger.log(
+      `[apps] ai-edit slug=${slug} user=${user.id} ok bytes=${html.length} in ${seconds}s`
+    );
+
+    // Best-effort ShopState pending-patch hand-off (Coffre owns the module and
+    // builds in parallel → resolved by fail-soft dynamic import so a missing /
+    // renamed export can NEVER break this response or crash boot). Purely
+    // additive; the FE still deploys via the existing path regardless.
+    await this.stageShopStatePatch(user.id, record, html, instruction);
+
+    // "What changed" label for the version list (best-effort; never blocks).
+    let summary: string | undefined;
+    try {
+      summary = await this.summarizeEdit(instruction, currentHtml, html);
+    } catch {
+      summary = undefined;
+    }
+
+    return {
+      ok: true,
+      slug,
+      html,
+      lint: { ok: true },
+      bytes: html.length,
+      seconds,
+      ...(summary ? { summary } : {}),
+    };
+  }
+
+  /**
+   * R2-g — best-effort ShopState pending-patch stage. When CDZ_SHOP_STATE is on
+   * we hand the freshly-edited HTML to Coffre's ShopState module (WSB-3,
+   * clickdz-shop-state.ts) so a later deploy/rollback has the delta server-side.
+   * Coffre's module is built IN PARALLEL and R2-CONTRACT pins only its DATA
+   * shape, not export names — so we resolve it via a fail-soft dynamic import
+   * and feature-detect a pending-patch entry point among the plausible names.
+   * ANY failure (flag off, module absent, name mismatch, throw) is swallowed:
+   * this is additive and must never break the ai-edit response or boot.
+   */
+  private async stageShopStatePatch(
+    ownerId: string,
+    record: PublishedAppRecord,
+    html: string,
+    note: string
+  ): Promise<void> {
+    if (process.env.CDZ_SHOP_STATE !== '1') return;
+    try {
+      // Sentinel R2 fix: direct positional call via the static import — the
+      // probe/object-bag pattern mis-matched setPendingAiPatch(cache, userId,
+      // slug, html) and silently no-opped. note flows to the version label via
+      // the deploy hook; keeping this call minimal and fail-soft.
+      void note;
+      await setPendingAiPatch(this.redis, ownerId, record.slug, html);
+    } catch (err) {
+      this.logger.warn(
+        `[apps] ai-edit ShopState stage skipped (fail-soft): ${(err as Error)?.message || err}`
+      );
+    }
+  }
+
+  /**
+   * R2-h (WSB-3) — GET /api/v1/apps/:slug/state (auth'd, owner-only). Returns the
+   * server-side ShopState for this store: templateId, featureSet, settingsRef,
+   * whether an AI patch is staged, version METADATA and the activity log. NEVER
+   * returns raw HTML (version bodies are fetched via /state/versions/:id). Gated
+   * by CDZ_SHOP_STATE (OFF -> typed 404, byte-identical current behaviour).
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/state')
+  async shopStateGet(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!CDZ_SHOP_STATE) {
+      throw new NotFound('App not found');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    const state = await readShopState(this.redis, user.id, slug);
+    return { ok: true, state: publicShopState(state) };
+  }
+
+  /**
+   * R2-h (WSB-3) — GET /api/v1/apps/:slug/state/versions/:id (auth'd, owner-only).
+   * Returns that recorded version's FULL HTML (the one place a version body is
+   * exposed, for preview/rollback confirmation). Unknown/expired id -> typed 404.
+   * Gated by CDZ_SHOP_STATE.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/state/versions/:id')
+  async shopStateVersionGet(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!CDZ_SHOP_STATE) {
+      throw new NotFound('App not found');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    const html = await getVersionHtml(this.redis, user.id, slug, id);
+    if (html == null) {
+      throw new NotFound('Version not found');
+    }
+    return { ok: true, id, html, bytes: html.length };
+  }
+
+  /**
+   * R2-h (WSB-3) — POST /api/v1/apps/:slug/state/rollback (auth'd, owner-only).
+   * BODY `{ versionId }`. Loads that version's stored HTML and RE-DEPLOYS it via
+   * the SAME internal deploy path deployApp uses (deployAppToVercel, same slug ->
+   * idempotent, never trips the publish cap), then records a fresh 'rollback'
+   * version so the timeline stays append-only. Gated by CDZ_SHOP_STATE.
+   * Passthrough res carries the exact deploy failure bodies (a typed error would
+   * be flattened to a 500 by the global filter).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/state/rollback')
+  async shopStateRollback(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!CDZ_SHOP_STATE) {
+      throw new NotFound('App not found');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    const versionId = typeof body?.versionId === 'string' ? body.versionId : '';
+    if (!versionId) {
+      throw new BadRequest('"versionId" is required');
+    }
+    const html = await getVersionHtml(this.redis, user.id, slug, versionId);
+    if (html == null || html.length < 20) {
+      throw new NotFound('Version not found');
+    }
+    // Re-deploy via the SAME internal path as deployApp. deployAppToVercel owns
+    // `res` on failure (typed 503/502 already written) -> stop without recording.
+    const result = await this.deployAppToVercel(slug, html, res);
+    if (!result.ok) return;
+    const deployed = result.deployed;
+    this.logger.log(
+      `[shopstate] rollback slug=${slug} user=${user.id} to=${versionId}`
+    );
+    // Record the rolled-back HTML as a NEW version (append-only history) and
+    // reflect it as the staged patch. Fail-soft: never undo a successful deploy.
+    try {
+      await recordVersion(
+        this.redis,
+        user.id,
+        slug,
+        html,
+        `rollback ${versionId}`
+      );
+      await writeShopState(this.redis, user.id, slug, { aiPatchHtml: html });
+      await appendLog(
+        this.redis,
+        user.id,
+        slug,
+        'rollback',
+        `rolled back to ${versionId}`
+      );
+    } catch {
+      /* ShopState is best-effort; the deploy already succeeded */
+    }
+    return { ...deployed, bytes: html.length, rolledBackTo: versionId };
+  }
+
+  /**
+   * R2-h (WSB-3) — POST /api/v1/apps/:slug/state/note (auth'd, owner-only).
+   * BODY `{ note }`. Appends a free-text 'note' entry to the ShopState activity
+   * log (newest-first, capped). Gated by CDZ_SHOP_STATE.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/state/note')
+  async shopStateNote(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!CDZ_SHOP_STATE) {
+      throw new NotFound('App not found');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    const note =
+      typeof body?.note === 'string' ? body.note.trim().slice(0, 400) : '';
+    if (!note) {
+      throw new BadRequest('"note" is required');
+    }
+    const state = await appendLog(this.redis, user.id, slug, 'note', note);
+    return { ok: true, state: publicShopState(state) };
+  }
+
+  // ===========================================================================
+  // WSE-12 (R2-e) — ERP STAFF AUTH & ROLES (CLEF). All routes gated by
+  // CDZ_ERP_STAFF_AUTH: OFF (default) ⇒ typed 404 (route behaves as if it does
+  // not exist), so the legacy single-PIN published-app path is byte-identical.
+  // Owner-gated CRUD (session + assertOwnsErpApp) mints/rotates HMAC staff
+  // tokens (logic in ./cdz-data-token); the @Public verify route is what the
+  // PUBLISHED ERP app calls at login (R3). Token logic is delegated to the
+  // sibling file — this controller only does I/O + role/permission mapping.
+  // Typed errors (BadRequest/NotFound) or passthrough res only — never a raw
+  // HttpException (the global filter would coerce it to 500).
+  // ===========================================================================
+
+  /** Staff records live in the unpartitioned `staff` collection (Mason WSE). */
+  private staffAuthEnabled(): boolean {
+    return process.env.CDZ_ERP_STAFF_AUTH === '1';
+  }
+
+  /**
+   * Normalize a raw `staff` data-record to the pinned shape. A record with no
+   * `nonce` (e.g. a legacy/hand-seeded row) defaults to '0' so tokens can still
+   * be minted + rotated deterministically.
+   */
+  private erpStaffView(r: ErpRecord): {
+    id: string;
+    name: string;
+    phone: string;
+    role: string;
+    active: boolean;
+    nonce: string;
+    createdAt: string;
+  } {
+    return {
+      id: erpStr(r.id),
+      name: erpStr(r.name),
+      phone: erpStr(r.phone),
+      role: erpStr(r.role),
+      active: r.active !== false,
+      nonce: erpStr(r.nonce) || '0',
+      createdAt: erpStr(r.createdAt),
+    };
+  }
+
+  /**
+   * WSE-12 — GET /api/v1/apps/:slug/erp/staff (auth'd, owner-only).
+   * Lists staff records (NEVER any secret material — no token, no pinHash).
+   * CDZ_ERP_STAFF_AUTH OFF ⇒ typed 404.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/erp/staff')
+  async erpListStaff(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!this.staffAuthEnabled()) {
+      throw new NotFound('Staff auth not enabled');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    const rows = await this.erpList(slug, 'staff');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const staff = rows.map(r => {
+      const v = this.erpStaffView(r);
+      // Never leak the nonce/pinHash to the client — expose only display fields.
+      return {
+        id: v.id,
+        name: v.name,
+        phone: v.phone,
+        role: v.role,
+        active: v.active,
+        createdAt: v.createdAt,
+      };
+    });
+    this.logger.log(
+      `[erp] staff list slug=${slug} user=${user.id} count=${staff.length}`
+    );
+    return { staff };
+  }
+
+  /**
+   * WSE-12 — POST /api/v1/apps/:slug/erp/staff (auth'd, owner-only).
+   * BODY `{ name, phone?, role }` — creates a staff record
+   * `{ id, name, phone, role, active, nonce, createdAt }` (id = kebab slug of
+   * name + short random suffix). Returns the record PLUS a ONE-TIME
+   * `staffToken` (shown once; never re-derivable from the list route). Bad role
+   * ⇒ 400. CDZ_ERP_STAFF_AUTH OFF ⇒ typed 404.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/staff')
+  async erpCreateStaff(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!this.staffAuthEnabled()) {
+      throw new NotFound('Staff auth not enabled');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    const name = erpStr(body?.name).trim().slice(0, 80);
+    if (!name) {
+      throw new BadRequest('"name" is required');
+    }
+    const phone = erpStr(body?.phone).trim().slice(0, 40);
+    const role = erpStr(body?.role).trim();
+    if (!(ERP_STAFF_ROLES as readonly string[]).includes(role)) {
+      throw new BadRequest(
+        `"role" must be one of: ${ERP_STAFF_ROLES.join(', ')}`
+      );
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const existing = await this.erpList(slug, 'staff');
+    if (!existing) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    if (existing.length >= ERP_MAX_STAFF) {
+      throw new BadRequest(`Too many staff (max ${ERP_MAX_STAFF})`);
+    }
+    // Stable, human-ish business id: kebab of the name + a short random suffix
+    // (unguessable + collision-safe across a rename).
+    const kebab =
+      name
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[^\w\s-]/g, '')
+        .trim()
+        .replace(/[\s_]+/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 40) || 'staff';
+    const id = `${kebab}-${randomBytes(3).toString('hex')}`;
+    // Fresh revocation nonce — folded into every token this staff carries.
+    const nonce = randomBytes(6).toString('hex');
+    const record: ErpRecord = {
+      id,
+      name,
+      ...(phone ? { phone } : {}),
+      role,
+      active: true,
+      nonce,
+      createdAt: new Date().toISOString(),
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(record), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Staff record too large');
+    }
+    const created = await this.erpCreateRecord(slug, 'staff', record, token);
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    // ONE-TIME token — minted here and returned exactly once; the list route
+    // never exposes it. Logic delegated to ./cdz-data-token.
+    const staffTok = staffToken(slug, id, role as StaffRole, nonce);
+    this.logger.log(
+      `[erp] staff create slug=${slug} user=${user.id} id=${id} role=${role}`
+    );
+    return {
+      ok: true,
+      staff: {
+        id,
+        name,
+        phone,
+        role,
+        active: true,
+        createdAt: record.createdAt,
+      },
+      // Present ONCE — the owner hands it to the staff member. NEVER logged.
+      staffToken: staffTok,
+    };
+  }
+
+  /**
+   * WSE-12 — PUT /api/v1/apps/:slug/erp/staff/:id (auth'd, owner-only).
+   * BODY `{ role?, active? }` — updates a staff member's role and/or active
+   * flag via delete+recreate on the business `id` (preserves name/phone/nonce/
+   * createdAt). Changing a role does NOT rotate the nonce, but an outstanding
+   * token still carries the OLD role in its signature, so it keeps its old
+   * permissions until re-issued — call `/revoke` to force re-login on a
+   * demotion. CDZ_ERP_STAFF_AUTH OFF ⇒ typed 404.
+   */
+  @Throttle('strict')
+  @Put('/api/v1/apps/:slug/erp/staff/:id')
+  async erpUpdateStaff(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!this.staffAuthEnabled()) {
+      throw new NotFound('Staff auth not enabled');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    const sid = erpStr(id).trim();
+    if (!sid) {
+      throw new BadRequest('"id" is required');
+    }
+    const hasRole = body?.role !== undefined;
+    const hasActive = body?.active !== undefined;
+    if (!hasRole && !hasActive) {
+      throw new BadRequest('Nothing to update (role and/or active)');
+    }
+    let role = '';
+    if (hasRole) {
+      role = erpStr(body?.role).trim();
+      if (!(ERP_STAFF_ROLES as readonly string[]).includes(role)) {
+        throw new BadRequest(
+          `"role" must be one of: ${ERP_STAFF_ROLES.join(', ')}`
+        );
+      }
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const rows = await this.erpList(slug, 'staff');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const matches = rows.filter(r => erpStr(r.id) === sid);
+    if (matches.length === 0) {
+      throw new NotFound('Staff not found');
+    }
+    // Merge onto the authoritative (newest-first) copy; drop server-managed
+    // fields the recreate will re-mint.
+    const base = matches[0];
+    const merged: ErpRecord = {};
+    for (const k of Object.keys(base)) {
+      if (k !== 'createdAt') merged[k] = base[k];
+    }
+    if (hasRole) merged.role = role;
+    if (hasActive) merged.active = body.active !== false;
+    merged.id = sid;
+    merged.createdAt = erpStr(base.createdAt) || new Date().toISOString();
+    if (
+      Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Staff record too large');
+    }
+    // delete+recreate on the business key (self-heals any duplicates).
+    for (const m of matches) {
+      const recId = erpStr(m.id);
+      if (!recId) continue;
+      if (!(await this.erpDeleteRecord(slug, 'staff', recId, token))) {
+        res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
+        return;
+      }
+    }
+    const created = await this.erpCreateRecord(slug, 'staff', merged, token);
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    const v = this.erpStaffView(merged);
+    this.logger.log(
+      `[erp] staff update slug=${slug} user=${user.id} id=${sid} role=${v.role} active=${v.active}`
+    );
+    return {
+      ok: true,
+      staff: {
+        id: v.id,
+        name: v.name,
+        phone: v.phone,
+        role: v.role,
+        active: v.active,
+        createdAt: v.createdAt,
+      },
+    };
+  }
+
+  /**
+   * WSE-12 — POST /api/v1/apps/:slug/erp/staff/:id/revoke (auth'd, owner-only).
+   * Rotates the staff member's revocation `nonce` (delete+recreate, preserving
+   * every other field). Because the nonce is folded into every token's
+   * signature, ALL outstanding tokens for this staff member fail verification
+   * immediately (instant device kill / password-reset semantics). Returns the
+   * new one-time `staffToken` so the owner can re-issue access. OFF ⇒ 404.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/staff/:id/revoke')
+  async erpRevokeStaff(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!this.staffAuthEnabled()) {
+      throw new NotFound('Staff auth not enabled');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    const sid = erpStr(id).trim();
+    if (!sid) {
+      throw new BadRequest('"id" is required');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const rows = await this.erpList(slug, 'staff');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const matches = rows.filter(r => erpStr(r.id) === sid);
+    if (matches.length === 0) {
+      throw new NotFound('Staff not found');
+    }
+    const base = matches[0];
+    // Bump the nonce — this is what kills every old token on next verify.
+    const newNonce = randomBytes(6).toString('hex');
+    const merged: ErpRecord = {};
+    for (const k of Object.keys(base)) {
+      if (k !== 'createdAt') merged[k] = base[k];
+    }
+    merged.id = sid;
+    merged.nonce = newNonce;
+    merged.createdAt = erpStr(base.createdAt) || new Date().toISOString();
+    for (const m of matches) {
+      const recId = erpStr(m.id);
+      if (!recId) continue;
+      if (!(await this.erpDeleteRecord(slug, 'staff', recId, token))) {
+        res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
+        return;
+      }
+    }
+    const created = await this.erpCreateRecord(slug, 'staff', merged, token);
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    const role = erpStr(merged.role);
+    const staffTok = (ERP_STAFF_ROLES as readonly string[]).includes(role)
+      ? staffToken(slug, sid, role as StaffRole, newNonce)
+      : '';
+    this.logger.log(
+      `[erp] staff revoke slug=${slug} user=${user.id} id=${sid} (nonce rotated)`
+    );
+    // New one-time token so the owner can re-issue; old tokens are now dead.
+    return { ok: true, staffToken: staffTok };
+  }
+
+  /**
+   * WSE-12 — @Public() POST /api/v1/apps-staff/verify.
+   * The PUBLISHED ERP app (no session cookie) calls this at LOGIN with the
+   * per-staff token it holds. BODY `{ slug, token }` → verifies the HMAC token
+   * (constant-time, expiry-bound) AND that its embedded revocation nonce still
+   * matches the CURRENT staff record AND that the member is still active →
+   * `{ ok, staffId, role, permissions[] }`. ANY failure ⇒ `{ ok: false }` (no
+   * detail leaked). CDZ_ERP_STAFF_AUTH OFF ⇒ typed 404. Rate-limited exactly
+   * like the other @Public routes (@Throttle('strict')). Typed errors /
+   * passthrough only (a raw HttpException would become a 500).
+   *
+   * NOTE: this is a TOP-LEVEL path (NOT under /apps/:slug/...) so the published
+   * app can reach it without an owner session; the slug travels in the body.
+   */
+  @Public()
+  @Throttle('strict')
+  @Post('/api/v1/apps-staff/verify')
+  async erpStaffVerify(
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!this.staffAuthEnabled()) {
+      throw new NotFound('Staff auth not enabled');
+    }
+    const slug = erpStr(body?.slug).trim();
+    if (!slug || !APP_SLUG_RE.test(slug)) {
+      res.status(HttpStatus.BAD_REQUEST).json({ error: 'invalid_slug' });
+      return;
+    }
+    const token = erpStr(body?.token).trim();
+    // Cryptographic check first (cheap, constant-time, no I/O on failure).
+    const verified = verifyStaffToken(slug, token);
+    if (!verified.ok || !verified.staffId || !verified.role) {
+      return { ok: false };
+    }
+    // Bind the token to the LIVE staff record: the embedded nonce must still
+    // match (a revoke bumps it) and the member must still be active. Reading
+    // the collection here is the ONE stateful check that powers revocation.
+    const rows = await this.erpList(slug, 'staff');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const rec = rows
+      .map(r => this.erpStaffView(r))
+      .find(v => v.id === verified.staffId);
+    if (!rec || !rec.active) {
+      return { ok: false };
+    }
+    if (!safeEqual(rec.nonce, verified.nonce ?? '')) {
+      // Token carries a stale nonce ⇒ it was revoked ⇒ reject.
+      return { ok: false };
+    }
+    // Trust the LIVE record's role (not the token's) so a demotion takes effect
+    // on next login even before the old token expires; permissions derive from
+    // it via the single source of truth in ./cdz-data-token.
+    const role = (ERP_STAFF_ROLES as readonly string[]).includes(rec.role)
+      ? (rec.role as StaffRole)
+      : verified.role;
+    this.logger.log(
+      `[erp] staff verify slug=${slug} id=${rec.id} role=${role} ok`
+    );
+    return {
+      ok: true,
+      staffId: rec.id,
+      role,
+      permissions: staffPermissions(role),
+    };
+  }
+
+  /**
+   * R2-i (WSF-8) — GET /api/v1/apps/:slug/staleness (auth'd, owner-only).
+   * Reports whether a published shop was minted against an OLDER template
+   * catalog version, so the studio can offer "Update app to unlock new
+   * features" (03-customization §"Upgrade path for published apps"). Fetches the
+   * app's CURRENT html via the SAME R1 source internals `/apps/:slug/source`
+   * uses (resolveAppSource → template-kind server-render fast path; deployed
+   * fetch fallback), then runs the pure `isStale` stamp check on it.
+   *   • no stamp (legacy / no-templateId mint) ⇒ { stale:false } — never nag.
+   *   • older stamp ⇒ { stale:true, from, to, templateId }.
+   * Gated by CDZ_FEATURES_ENABLED (OFF ⇒ typed 404 — byte-identical current
+   * behaviour). FAIL-SOFT: any source-fetch failure (unreachable origin,
+   * non-renderable, etc.) returns { stale:false } rather than a 5xx — a staleness
+   * probe must never break the studio; a missed nag is harmless.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/staleness')
+  async appStaleness(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    // Feature flag OFF → behave as if the route does not exist (typed 404).
+    if (!featuresEnabled()) {
+      throw new NotFound('App not found');
+    }
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      throw new BadRequest('Invalid app slug');
+    }
+    // Ownership: same mechanism as assertOwnsErpApp / GET /apps/:slug/source.
+    await this.assertOwnsErpApp(user, slug);
+    const records = await this.readPublishedApps(user.id);
+    const record =
+      records.find(r => r.slug === slug) ??
+      records.find(r => r.storeSlug === slug);
+    // No record for this owner ⇒ nothing to compare against ⇒ not stale.
+    if (!record) {
+      return { stale: false };
+    }
+    // RENDER closure: reconstruct the CURRENT template artifact with the SAME
+    // token values templateApp / appSource inject. The stamp lives in the shell
+    // (added at mint for a templated app), so the render fast path reproduces it;
+    // the deployed fetch fallback recovers the live artifact's stamp verbatim.
+    const externalBase = (
+      process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+    ).replace(/\/+$/, '');
+    const renderTemplate = (rec: AppSourceRecord): string => {
+      const templateHtml =
+        rec.kind === 'erp'
+          ? CLICKDZ_ERP_TEMPLATE_HTML
+          : rec.kind === 'shop'
+            ? CLICKDZ_SHOP_TEMPLATE_HTML
+            : '';
+      if (!templateHtml) return '';
+      const dataSlug = rec.storeSlug || rec.slug;
+      const dataUrl = `${externalBase}/api/v2/apps-data/${dataSlug}`;
+      const dataToken = dataWriteToken(dataSlug);
+      return renderTemplateSource({
+        templateHtml,
+        slug: dataSlug,
+        dataUrl,
+        dataToken,
+        tokens: {
+          storeName: CDZ_TPL_DEFAULT_STORE_NAME,
+          whatsapp: CDZ_TPL_DEFAULT_WHATSAPP,
+          accent:
+            rec.kind === 'erp'
+              ? CDZ_TPL_DEFAULT_ERP_ACCENT
+              : CDZ_TPL_DEFAULT_ACCENT,
+          pin: CDZ_TPL_DEFAULT_PIN,
+        },
+      });
+    };
+    // FAIL-SOFT: never let a source-fetch problem 5xx a staleness probe.
+    let html: string | null = null;
+    try {
+      const resolved = await resolveAppSource(record, { renderTemplate });
+      if (resolved.ok) html = resolved.html;
+    } catch {
+      html = null;
+    }
+    if (!html) {
+      return { stale: false };
+    }
+    const status = isStale(html);
+    this.logger.log(
+      `[apps] staleness slug=${slug} user=${user.id} stale=${status.stale} from=${status.from ?? '-'} to=${status.to}`
+    );
+    // { stale, from?, to, templateId? } — undefined fields are omitted in JSON.
+    return {
+      stale: status.stale,
+      from: status.from,
+      to: status.to,
+      templateId: status.templateId,
+    };
+  }
+
   private async assertOwnsErpApp(
     user: CurrentUser,
     slug: string
@@ -4301,6 +6885,12 @@ export class ClickDzBridgeController {
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
+    }
+    // R2-d (WSE-8): on delivery, write a pending-COD marker so caisse day-close
+    // & per-courier reconcile know this order owes its COD. Fail-soft — never
+    // breaks the status update (helper swallows all errors); idempotent.
+    if (status === 'Livrée') {
+      await this.erpWritePendingCod(slug, created.record, token);
     }
     this.logger.log(
       `[erp] order-status slug=${slug} user=${user.id} ref=${ref.slice(0, 40)} -> ${status}`

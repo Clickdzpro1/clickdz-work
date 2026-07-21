@@ -36,6 +36,11 @@ import { SHOP_FEATURES, ERP_FEATURES } from './clickdz-features';
 // the exact accessor name the merge must reconcile.
 import type { TemplateDef, SeedProduct } from './clickdz-shop-catalog';
 import { getTemplateDef, listTemplateMeta as listTemplateSummaries } from './clickdz-shop-catalog';
+// R2-i (WSF-8): the catalog's stable version integer. It is stamped into every
+// TEMPLATED mint (see injectTplStamp / TPL_STAMP_RE below) and is the CURRENT
+// value isStale() compares a parsed stamp against. Imported by NAME (value
+// import) so a stamp always carries the version the catalog shipped at mint.
+import { TEMPLATE_CATALOG_VERSION } from './clickdz-shop-catalog';
 
 // =========================================================================
 // ENV GATES — mirror how the bridge reads CDZ_PUBLISH_MAX_APPS today
@@ -237,7 +242,168 @@ export function resolveTemplateTokens(
   for (const token of keys) {
     out = out.split(token).join(map[token]);
   }
+  // R2-i (WSF-8): stamp the artifact with a version marker — but ONLY for a
+  // TEMPLATED mint (def present). A no-templateId mint (def == null) MUST stay
+  // byte-identical to the pre-catalog output (the #1 invariant), so it receives
+  // NO stamp — a legacy shop is thus never "stale" and never nagged. The stamp
+  // is an HTML comment node (does not affect rendering) inserted right after the
+  // doctype (see injectTplStamp), carrying the catalog version + the templateId.
+  if (def) {
+    out = injectTplStamp(out, def.id);
+  }
   return out;
+}
+
+// =========================================================================
+// R2-i (WSF-8) — tplVersion stamp + staleness. The upgrade-path primitive
+// (03-customization §"Upgrade path for published apps"): stamp a version marker
+// into every TEMPLATED artifact so the studio can later detect that a published
+// shop was minted against an OLDER catalog and offer "Update app to unlock new
+// features". A legacy (no-templateId) shop carries NO stamp and is treated as
+// current (never stale) so it is never nagged.
+//
+// The marker is a single HTML comment placed just after the doctype:
+//   <!-- cdz-tpl v:<TEMPLATE_CATALOG_VERSION> t:<templateId|none> -->
+// A comment node is inert (does not render, does not change the DOM the shop's
+// SPA builds), and it is only ever ADDED to a templated mint — so the byte-
+// identical-default invariant for a no-templateId mint is untouched.
+// =========================================================================
+
+/** The literal comment marker prefix (kept in one place; parser derives from it). */
+const TPL_STAMP_PREFIX = '<!-- cdz-tpl ';
+/**
+ * Match a stamp anywhere in the document (there is only ever one, injected right
+ * after the doctype). Captures the integer version and the templateId token.
+ * `t:` is a slug (kebab-case ids like `resto-fastfood`) or the literal `none`.
+ * Kept intentionally permissive on the id charset so a future id shape still
+ * parses; the version is the only field staleness math consumes.
+ */
+const TPL_STAMP_RE = /<!--\s*cdz-tpl\s+v:(\d+)\s+t:([A-Za-z0-9_-]+)\s*-->/;
+
+/**
+ * Insert the version marker immediately AFTER the doctype declaration (so the
+ * doctype stays at byte 0, which some static hosts/validators expect). If no
+ * doctype is present the marker is prepended. Idempotent: an existing stamp is
+ * replaced (never duplicated) so a re-mint of already-stamped HTML stays clean.
+ * `templateId` blank/absent ⇒ the `none` sentinel (a stamp is only ever written
+ * for a templated mint, but the sentinel keeps the format total).
+ */
+export function injectTplStamp(html: string, templateId?: string | null): string {
+  if (typeof html !== 'string' || html.length === 0) return html;
+  const id = typeof templateId === 'string' && templateId.trim() ? templateId.trim() : 'none';
+  const marker = TPL_STAMP_PREFIX + 'v:' + String(TEMPLATE_CATALOG_VERSION) + ' t:' + id + ' -->';
+  // Drop any pre-existing stamp first (idempotent re-mint) — split/join, no regex
+  // replace side effects. Only the marker text is removed; surrounding HTML kept.
+  let out = html;
+  const existing = out.match(TPL_STAMP_RE);
+  if (existing) {
+    out = out.split(existing[0]).join('');
+  }
+  // Place after the doctype line when present; else prepend.
+  const m = out.match(/<!doctype html>/i);
+  if (m && typeof m.index === 'number') {
+    const at = m.index + m[0].length;
+    return out.slice(0, at) + '\n' + marker + out.slice(at);
+  }
+  return marker + '\n' + out;
+}
+
+/** The parsed contents of a stamp. `templateId` is `null` for the `none` sentinel. */
+export interface TplStamp {
+  /** The TEMPLATE_CATALOG_VERSION the artifact was minted against. */
+  v: number;
+  /** The template id, or null when the stamp carried the `none` sentinel. */
+  templateId: string | null;
+}
+
+/**
+ * Parse the version stamp out of an artifact's HTML. Returns null when there is
+ * NO stamp (a legacy / no-templateId mint) — the caller reads "no stamp" as
+ * "current, do not nag". Never throws; a malformed marker simply yields null.
+ */
+export function readTplStamp(html: unknown): TplStamp | null {
+  if (typeof html !== 'string' || html.length === 0) return null;
+  const m = html.match(TPL_STAMP_RE);
+  if (!m) return null;
+  const v = Number(m[1]);
+  if (!Number.isFinite(v)) return null;
+  const rawId = m[2];
+  const templateId = rawId && rawId !== 'none' ? rawId : null;
+  return { v, templateId };
+}
+
+/** The result of a staleness check. `from` present only when a stamp was read. */
+export interface StalenessResult {
+  /** True when the artifact was minted against an OLDER catalog version. */
+  stale: boolean;
+  /** The stamped version (absent when there is no stamp = legacy). */
+  from?: number;
+  /** The current catalog version (always present). */
+  to: number;
+  /** The stamped template id (absent when no stamp / `none` sentinel). */
+  templateId?: string;
+}
+
+/**
+ * Compare an artifact's stamp against the CURRENT TEMPLATE_CATALOG_VERSION.
+ *   • no stamp (legacy / no-templateId mint) ⇒ { stale:false, to } — NEVER nag a
+ *     legacy shop (it opted out of the catalog; it has no upgrade to offer).
+ *   • stamp.v <  current ⇒ { stale:true,  from, to, templateId } — offer update.
+ *   • stamp.v >= current ⇒ { stale:false, from, to, templateId } — up to date.
+ * Pure + total; a bad/absent stamp degrades to "not stale", never to an error.
+ */
+export function isStale(html: unknown): StalenessResult {
+  const to = TEMPLATE_CATALOG_VERSION as number;
+  const stamp = readTplStamp(html);
+  if (!stamp) {
+    // Legacy / untemplated artifact — no stamp means "current", never stale.
+    return { stale: false, to };
+  }
+  const result: StalenessResult = { stale: stamp.v < to, from: stamp.v, to };
+  if (stamp.templateId) result.templateId = stamp.templateId;
+  return result;
+}
+
+// =========================================================================
+// remintFromState — the deterministic re-mint primitive (R3's UI calls it).
+//
+// Given a shop's saved {templateId, featureSet, settings} plus the current
+// template HTML + wiring (the caller injects CLICKDZ_SHOP_TEMPLATE_HTML and the
+// minted data-url/token/slug exactly as templateApp / renderTemplateSource do —
+// this module stays free of the template constant + env, so it is boot-safe and
+// unit-testable). Produces FRESH html via the SAME resolveTemplateTokens path,
+// so the output is byte-for-byte what a fresh `templateApp` mint of the same
+// inputs would emit — including the current version stamp. This is the "re-mint
+// keeping data" step of the upgrade path (data lives in the per-slug Data API,
+// untouched by a re-deploy; only the HTML shell + settings singleton change).
+//
+// featureSet is accepted for forward-compatibility (R3 threads it into the
+// settings singleton the studio persists separately); it does not alter the
+// minted shell today because features resolve at RUNTIME from the singleton
+// (03-customization "data-driven runtime flags"), not at mint. Kept in the
+// signature so the re-mint call site is stable when a feature ever needs a
+// mint-time token. Returns '' only when given empty template HTML.
+// =========================================================================
+
+/** Saved shop state the re-mint reads (mirrors Coffre's ShopState shape subset). */
+export interface RemintState {
+  /** The catalog template id to re-resolve; null/absent ⇒ default (untemplated). */
+  templateId?: string | null;
+  /** Enabled feature ids (runtime flags; carried for the singleton, not the mint). */
+  featureSet?: string[];
+  /** The wiring + validated settings values (same as a fresh mint's opts). */
+  settings: TemplateMintOpts;
+}
+
+export function remintFromState(
+  templateHtml: string,
+  state: RemintState
+): string {
+  if (typeof templateHtml !== 'string' || templateHtml.length === 0) return '';
+  // Resolve the def by id honoring the env gate (null ⇒ byte-identical default
+  // mint, i.e. an untemplated re-mint stays legacy — and thus gets NO stamp).
+  const def = resolveTemplateDef(state.templateId);
+  return resolveTemplateTokens(templateHtml, def, state.settings);
 }
 
 /**

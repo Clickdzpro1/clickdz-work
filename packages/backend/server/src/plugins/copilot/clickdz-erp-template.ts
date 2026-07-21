@@ -27,6 +27,19 @@
  * are preserved across re-creation. Caps: 8KB/record, 500/collection. Currency DZD.
  * Order.status enum: Nouvelle | Confirmee | Expediee | Livree | Retournee.
  *
+ * MODULE FLAGS (WSF-6, R2): the nav + each section is gated by moduleOn(id),
+ * reading the shared settings singleton the SAME way the shop template reads
+ * settings.features (a CSV of enabled module ids). Canonical module ids come
+ * from the registry (clickdz-features.ts ERP_FEATURES): apercu, commandes,
+ * stock, clients, depenses, reglages — with apercu + reglages CORE (never
+ * hidden). ABSENT settings.features means "every current module visible", so
+ * an untouched ERP is BYTE-IDENTICAL to today. Four forward-ready module slots
+ * (factures, fournisseurs, livraison, caisse) ship dormant: each renders only
+ * when BOTH moduleOn('<id>') AND its backend flag is set in the singleton
+ * (settings.erpBackends CSV) — both absent by default, so nothing new shows.
+ * Their real UIs land in R3; v1 shows a tiny "Configurez depuis le studio"
+ * placeholder. No new __CLICKDZ_*__ token is introduced (flags are pure runtime).
+ *
  * ESCAPE AUDIT: the HTML below is emitted with String.raw so the app can use
  * normal JS quotes freely. The source HTML is verified at build time to contain
  * ZERO backticks and ZERO dollar-brace sequences, so nothing inside can terminate
@@ -516,14 +529,57 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     expanded: {},
     busy: {}   // per-record busy flags
   };
+  /* Module registry mirror (canonical ids = clickdz-features.ts ERP_FEATURES).
+     core:true    -> apercu + reglages, never hidden by moduleOn.
+     future:true  -> R2/R3 forward-ready slots: shown only when moduleOn(id) AND
+                     the backend for that module is flagged present in settings
+                     (settings.erpBackends CSV). Both absent by default = dormant. */
   var TABS = [
-    { id:"apercu",   label:"Aperçu",   ico:"📈" },
-    { id:"commandes",label:"Commandes",ico:"🧾" },
-    { id:"stock",    label:"Stock",    ico:"📦" },
-    { id:"clients",  label:"Clients",  ico:"👥" },
-    { id:"depenses", label:"Dépenses", ico:"💸" },
-    { id:"reglages", label:"Réglages", ico:"⚙️" }
+    { id:"apercu",     label:"Aperçu",       ico:"📈", core:true },
+    { id:"commandes",  label:"Commandes",    ico:"🧾" },
+    { id:"stock",      label:"Stock",        ico:"📦" },
+    { id:"clients",    label:"Clients",      ico:"👥" },
+    { id:"depenses",   label:"Dépenses",     ico:"💸" },
+    { id:"factures",   label:"Factures",     ico:"🧮", future:true },
+    { id:"fournisseurs",label:"Fournisseurs",ico:"🚚", future:true },
+    { id:"livraison",  label:"Livraison",    ico:"📮", future:true },
+    { id:"caisse",     label:"Caisse",       ico:"💵", future:true },
+    { id:"reglages",   label:"Réglages",     ico:"⚙️", core:true }
   ];
+  var FUTURE_IDS = ["factures","fournisseurs","livraison","caisse"];
+  /* ---- Module flags (WSF-6) -------------------------------------------------
+     moduleOn(id): mirrors the shop template's featureOn/sectionOn approach over
+     the shared settings singleton. settings.features is a CSV of enabled module
+     ids (same key + mechanism as the registry's ERP module entries). ABSENT/null
+     features = "all current modules visible" (byte-identical to today). Core
+     modules (apercu, reglages) are ALWAYS on. A present-but-empty CSV keeps only
+     the core modules. Forward-ready slots additionally require their backend to
+     be flagged present (moduleBackendOn) so a bare flag never surfaces an empty
+     screen. */
+  function csvHas(raw, id){
+    var list = Array.isArray(raw) ? raw : String(raw==null?"":raw).split(",");
+    for(var i=0;i<list.length;i++){ if(String(list[i]).trim()===id) return true; }
+    return false;
+  }
+  function isCoreModule(id){ return id==="apercu" || id==="reglages"; }
+  function moduleBackendOn(id){
+    var s = store.settings || {};
+    return csvHas(s.erpBackends, id);
+  }
+  function moduleOn(id){
+    if(isCoreModule(id)) return true;
+    var s = store.settings || {};
+    var raw = s.features;
+    // Absent settings singleton OR unset features CSV = every current module on
+    // (the byte-identical default: an untouched ERP shows all modules like today).
+    var enabled = (raw===undefined || raw===null) ? true : csvHas(raw, id);
+    if(!enabled) return false;
+    // Forward-ready slots stay hidden until their backend is provisioned.
+    if(FUTURE_IDS.indexOf(id)>=0) return moduleBackendOn(id);
+    return true;
+  }
+  /* The nav/tabs actually rendered right now (order preserved). */
+  function activeTabs(){ return TABS.filter(function(t){ return moduleOn(t.id); }); }
   function go(tab){ ui.tab=tab; if(location.hash!=="#"+tab) location.hash=tab; render(); }
   window.addEventListener("hashchange", function(){
     var t=(location.hash||"#apercu").replace("#","");
@@ -933,6 +989,21 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     return wrap;
   }
 
+  /* WSF-6 — forward-ready module placeholder. Rendered for factures /
+     fournisseurs / livraison / caisse once their nav slot is unlocked (module on
+     AND backend provisioned) but before their real R3 UI ships. Kept tiny.
+     dir="auto" keeps the copy correct if the shared UI later runs in darja/RTL. */
+  function viewFutureModule(id){
+    var meta = TABS.filter(function(t){ return t.id===id; })[0] || { ico:"🧩", label:id };
+    var wrap = el("div",{dir:"auto"});
+    wrap.appendChild(el("div",{class:"card"}, el("div",{class:"state"},[
+      el("div",{class:"em"}, meta.ico),
+      el("div",{class:"st-t"}, meta.label),
+      el("div",{class:"st-s"}, "Ce module est activé mais pas encore configuré. Configurez-le depuis le studio ClickDz pour l'utiliser ici.")
+    ])));
+    return wrap;
+  }
+
   function stateBox(em, title, sub){
     return el("div",{class:"card"}, el("div",{class:"state"},[
       el("div",{class:"em"}, em),
@@ -944,7 +1015,13 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   /* ============================================================
      Render
      ============================================================ */
-  function currentTab(){ return TABS.some(function(t){return t.id===ui.tab;}) ? ui.tab : "apercu"; }
+  /* A tab is valid only if it is a KNOWN module that is currently visible
+     (moduleOn). An unknown hash, or a disabled/dormant module id, falls back to
+     the Aperçu core — same effect as today for any non-tab hash. */
+  function currentTab(){
+    var known = TABS.some(function(t){ return t.id===ui.tab; });
+    return (known && moduleOn(ui.tab)) ? ui.tab : "apercu";
+  }
 
   function sidebar(){
     var side = el("div",{class:"sidebar"});
@@ -953,7 +1030,7 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
       el("div",{},[ el("div",{class:"bt"},"ClickDz ERP"), el("div",{class:"bs"}, SLUG) ])
     ]));
     var pending = metrics().pending, ro = reorderCount();
-    TABS.forEach(function(t){
+    activeTabs().forEach(function(t){
       var link = el("button",{class:"navlink"+(currentTab()===t.id?" active":""),onclick:function(){go(t.id);}},[
         el("span",{class:"ico"}, t.ico), el("span",{}, t.label)
       ]);
@@ -970,7 +1047,7 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
 
   function mobileTabs(){
     var bar = el("div",{class:"mtabs"});
-    TABS.forEach(function(t){
+    activeTabs().forEach(function(t){
       var b = el("button",{class:(currentTab()===t.id?"active":""),onclick:function(){go(t.id);}},[
         el("span",{class:"mi"}, t.ico), el("span",{}, t.label)
       ]);
@@ -1020,6 +1097,7 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
       else if(tab==="clients") view=viewClients();
       else if(tab==="depenses") view=viewDepenses();
       else if(tab==="reglages") view=viewReglages();
+      else if(FUTURE_IDS.indexOf(tab)>=0) view=viewFutureModule(tab);
       else view=viewApercu();
       content.appendChild(view);
     }
@@ -1035,6 +1113,10 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     if(tab==="clients") return "Clients dérivés des commandes";
     if(tab==="depenses") return "Suivi des dépenses par mois";
     if(tab==="reglages") return "Appairage & informations";
+    if(tab==="factures") return "Devis, bons de livraison & factures";
+    if(tab==="fournisseurs") return "Fournisseurs & bons d'achat";
+    if(tab==="livraison") return "Transporteurs & frais par wilaya";
+    if(tab==="caisse") return "Encaissements & rapprochement";
     return "";
   }
 
@@ -1048,7 +1130,7 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   // expose a tiny hook for smoke tests (no-op in production use)
   window.__CDZ_ERP__ = { store:store, metrics:metrics, deriveCustomers:deriveCustomers,
     chartRevenue:chartRevenue, chartStatus:chartStatus, loadAll:loadAll, advanceStatus:advanceStatus,
-    changeStock:changeStock, ui:ui };
+    changeStock:changeStock, ui:ui, moduleOn:moduleOn, activeTabs:activeTabs, render:render, TABS:TABS };
 })();
 </script>
 </body>
