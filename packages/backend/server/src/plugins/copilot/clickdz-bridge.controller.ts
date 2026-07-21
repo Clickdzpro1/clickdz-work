@@ -1252,6 +1252,16 @@ function normalizeErpSettings(row: ErpRecord | undefined) {
         ? Math.max(0, Math.round(erpNum(row.deliveryFee)))
         : 500,
     adminPin: erpStr(row?.adminPin).slice(0, 12) || CDZ_TPL_DEFAULT_PIN,
+    // R3 — staff auth + published-module activation + seller identity (facturation).
+    staffAuth: erpStr(row?.staffAuth) === '1' ? '1' : '0',
+    erpBackends: erpStr(row?.erpBackends).slice(0, 200),
+    sellerName: erpStr(row?.sellerName).slice(0, 80),
+    sellerRc: erpStr(row?.sellerRc).slice(0, 40),
+    sellerNif: erpStr(row?.sellerNif).slice(0, 40),
+    sellerNis: erpStr(row?.sellerNis).slice(0, 40),
+    sellerArt: erpStr(row?.sellerArt).slice(0, 40),
+    sellerAddress: erpStr(row?.sellerAddress).slice(0, 200),
+    sellerPhone: erpStr(row?.sellerPhone).slice(0, 20),
     accent: CDZ_ACCENT_RE.test(accent) ? accent : CDZ_TPL_DEFAULT_ACCENT,
     currency: erpStr(row?.currency).trim() || 'DZD',
     // C7 appearance ids (validated; defaults reproduce today's look).

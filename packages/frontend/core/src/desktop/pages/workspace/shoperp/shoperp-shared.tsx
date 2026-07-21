@@ -370,6 +370,18 @@ export interface ErpSettings {
   // "Payer en ligne" option (SHOPTPL gates on this); the bridge allowlist
   // (normalizeErpSettings) validates it. Unset/false = cash-on-delivery only.
   onlinePay?: boolean;
+  // WSE-9 (COMPTOIR) — CSV of enabled published-ERP module ids
+  // (factures|livraison|caisse). Rides the settings singleton; the studio
+  // "Afficher dans l'app" toggles add/remove an id here (postErpBackends).
+  erpBackends?: string;
+  staffAuth?: string;
+  sellerName?: string;
+  sellerRc?: string;
+  sellerNif?: string;
+  sellerNis?: string;
+  sellerArt?: string;
+  sellerAddress?: string;
+  sellerPhone?: string;
 }
 
 export interface ErpOrderItem {
@@ -659,7 +671,2644 @@ export function postErpSettings(
 // body (like /erp/settings), surfaced as a typed 'error'.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// WSE-3 FACTURATION — thin, typed client over the R2 invoicing bridge routes
+// (all @CurrentUser-authed, owner-only, gated server-side by CDZ_ERP_INVOICING):
+//   GET  /api/v1/apps/:slug/erp/invoices?month=YYYY-MM&type=&status=
+//        → { invoices: InvoiceView[], partitionsRead }
+//   GET  /api/v1/apps/:slug/erp/invoices/:id            → { invoice }
+//   POST /api/v1/apps/:slug/erp/invoices                → { ok, invoice }
+//        body { type, customer, lines, orderRef?, payment?, date? }
+//   POST /api/v1/apps/:slug/erp/invoices/:id/validate   → { ok, invoice }
+//   POST /api/v1/apps/:slug/erp/invoices/:id/void       → { ok, invoice }
+//   POST /api/v1/apps/:slug/erp/invoices/:id/convert    → { ok, invoice }  {to}
+// The FLAG-OFF contract: the whole route family 404s while CDZ_ERP_INVOICING is
+// off → both list + mutate wrappers surface that as a distinct 'not-found'
+// outcome so the page renders a quiet "activation en attente" state (never a
+// crash). Money math (HT/TVA/timbre/TTC) is authored on the server — these
+// wrappers ship a CLIENT-SIDE MIRROR (computeInvoiceLine/computeInvoiceDoc)
+// for LIVE display in the editor ONLY; the server always recomputes on save.
+// credentials:'include' matches the inventory/customize wrappers (session
+// cookie). Reads use the same authed bridge route (NOT the public data API) so
+// only the owner sees drafts. Everything fails soft — never throws for a
+// documented HTTP status.
+// ---------------------------------------------------------------------------
+
+/** The three fiscal document kinds, in their legal conversion order. */
+export const INVOICE_TYPES = ['devis', 'bl', 'facture'] as const;
+export type InvoiceType = (typeof INVOICE_TYPES)[number];
+
+/** Document lifecycle — numbering is assigned at VALIDATION, never at draft. */
+export const INVOICE_STATUSES = ['brouillon', 'valide', 'annule'] as const;
+export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
+
+/** Payment method carried on a facture (drives whether timbre applies). */
+export const INVOICE_PAYMENTS = ['cash', 'cod', 'chargily', 'virement'] as const;
+export type InvoicePayment = (typeof INVOICE_PAYMENTS)[number];
+
+/** FR labels for the doc kinds (this surface is French where the shop is). */
+export const INVOICE_TYPE_LABELS: Record<InvoiceType, string> = {
+  devis: 'Devis',
+  bl: 'Bon de livraison',
+  facture: 'Facture',
+};
+
+/** FR labels for the statuses. */
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  brouillon: 'Brouillon',
+  valide: 'Validée',
+  annule: 'Annulée',
+};
+
+/** Per-status colors (mirrors the order STATUS_COLORS spirit). */
+export const INVOICE_STATUS_COLORS: Record<InvoiceStatus, string> = {
+  brouillon: '#9aa0a6',
+  valide: '#22c55e',
+  annule: '#ef4444',
+};
+
+/** FR labels for the payment methods. */
+export const INVOICE_PAYMENT_LABELS: Record<InvoicePayment, string> = {
+  cash: 'Espèces',
+  cod: 'Paiement à la livraison',
+  chargily: 'En ligne (Chargily)',
+  virement: 'Virement bancaire',
+};
+
+/** Fiscal client block — RC/NIF/NIS/ART are the DZ legal identifiers. */
+export interface InvoiceCustomer {
+  name: string;
+  rc?: string;
+  nif?: string;
+  nis?: string;
+  art?: string;
+  address?: string;
+}
+
+/** One invoice line. `lineHT`/`lineTVA` are server-computed (round-then-sum). */
+export interface InvoiceLine {
+  ref?: string;
+  label: string;
+  qty: number;
+  unitHT: number;
+  tvaRate: number;
+  lineHT?: number;
+  lineTVA?: number;
+}
+
+/** A stored invoice record — mirrors the R2 clickdz-erp-invoicing shape. */
+export interface InvoiceView {
+  id: string;
+  type: InvoiceType;
+  seq: number;
+  year: number;
+  date: string;
+  customer: InvoiceCustomer;
+  lines: InvoiceLine[];
+  totalHT: number;
+  totalTVA: number;
+  timbre: number;
+  totalTTC: number;
+  status: InvoiceStatus;
+  payment?: InvoicePayment;
+  orderRef?: string;
+  convertedFrom?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [k: string]: unknown;
+}
+
+/** Default TVA rate (percent) — DZ standard 19% unless a line overrides it. */
+export const INVOICE_DEFAULT_TVA = 19;
+/** Timbre fiscal defaults (percent + floor/cap in DZD) — mirror the backend. */
+export const INVOICE_TIMBRE_RATE = 1;
+export const INVOICE_TIMBRE_MIN = 5;
+export const INVOICE_TIMBRE_MAX = 10_000;
+/** Belt-and-braces cap matching the server INVOICE_MAX_LINES (8KB record). */
+export const INVOICE_MAX_LINES = 60;
+
+/**
+ * CLIENT-SIDE mirror of the backend per-line math (clickdz-erp-invoicing
+ * computeLineTotals): lineHT = round(qty*unitHT); lineTVA = round(lineHT*rate/100).
+ * Round-then-sum, integer DZD. FOR DISPLAY ONLY — the server recomputes on save.
+ */
+export function computeInvoiceLine(
+  qty: number,
+  unitHT: number,
+  tvaRate: number
+): { lineHT: number; lineTVA: number } {
+  const q = num(qty);
+  const u = Math.round(num(unitHT));
+  const r = num(tvaRate);
+  const lineHT = Math.round(q * u);
+  const lineTVA = Math.round((lineHT * r) / 100);
+  return { lineHT, lineTVA };
+}
+
+/**
+ * CLIENT-SIDE mirror of the backend document math (computeInvoiceTotals +
+ * computeTimbre): sum the ALREADY-ROUNDED line figures, then apply the timbre
+ * rule (facture + cash/cod only, rate% of HT+TVA, floored at MIN, capped at
+ * MAX, only when the base is positive). FOR DISPLAY ONLY.
+ */
+export function computeInvoiceDoc(
+  type: InvoiceType,
+  lines: Array<{ qty: number; unitHT: number; tvaRate: number }>,
+  payment: InvoicePayment | undefined
+): { totalHT: number; totalTVA: number; timbre: number; totalTTC: number } {
+  let totalHT = 0;
+  let totalTVA = 0;
+  for (const l of lines) {
+    const { lineHT, lineTVA } = computeInvoiceLine(l.qty, l.unitHT, l.tvaRate);
+    totalHT += lineHT;
+    totalTVA += lineTVA;
+  }
+  const baseTTC = totalHT + totalTVA;
+  let timbre = 0;
+  const isCash = payment === 'cash' || payment === 'cod';
+  if (type === 'facture' && isCash && baseTTC > 0) {
+    const raw = Math.round((baseTTC * INVOICE_TIMBRE_RATE) / 100);
+    timbre = Math.max(INVOICE_TIMBRE_MIN, Math.min(INVOICE_TIMBRE_MAX, raw));
+  }
+  return { totalHT, totalTVA, timbre, totalTTC: baseTTC + timbre };
+}
+
+/** Coerce a raw wire record into a well-typed InvoiceView (tolerant). */
+function coerceInvoiceView(raw: unknown): InvoiceView | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const type = String(r.type || '').toLowerCase();
+  if (!(INVOICE_TYPES as readonly string[]).includes(type)) return null;
+  const status = String(r.status || 'brouillon').toLowerCase();
+  const custRaw = (r.customer && typeof r.customer === 'object'
+    ? r.customer
+    : {}) as Record<string, unknown>;
+  const customer: InvoiceCustomer = {
+    name: String(custRaw.name || ''),
+  };
+  for (const k of ['rc', 'nif', 'nis', 'art', 'address'] as const) {
+    const v = custRaw[k];
+    if (typeof v === 'string' && v) customer[k] = v;
+  }
+  const lines: InvoiceLine[] = Array.isArray(r.lines)
+    ? (r.lines as unknown[]).map(lv => {
+        const l = (lv && typeof lv === 'object' ? lv : {}) as Record<
+          string,
+          unknown
+        >;
+        const line: InvoiceLine = {
+          label: String(l.label || ''),
+          qty: num(l.qty),
+          unitHT: num(l.unitHT),
+          tvaRate: num(l.tvaRate),
+          lineHT: num(l.lineHT),
+          lineTVA: num(l.lineTVA),
+        };
+        if (typeof l.ref === 'string' && l.ref) line.ref = l.ref;
+        return line;
+      })
+    : [];
+  return {
+    id: String(r.id || ''),
+    type: type as InvoiceType,
+    seq: num(r.seq),
+    year: num(r.year),
+    date: String(r.date || '').slice(0, 10),
+    customer,
+    lines,
+    totalHT: num(r.totalHT),
+    totalTVA: num(r.totalTVA),
+    timbre: num(r.timbre),
+    totalTTC: num(r.totalTTC),
+    status: (INVOICE_STATUSES as readonly string[]).includes(status)
+      ? (status as InvoiceStatus)
+      : 'brouillon',
+    ...(typeof r.payment === 'string' &&
+    (INVOICE_PAYMENTS as readonly string[]).includes(r.payment)
+      ? { payment: r.payment as InvoicePayment }
+      : {}),
+    ...(typeof r.orderRef === 'string' && r.orderRef
+      ? { orderRef: r.orderRef }
+      : {}),
+    ...(typeof r.convertedFrom === 'string' && r.convertedFrom
+      ? { convertedFrom: r.convertedFrom }
+      : {}),
+    ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
+    ...(typeof r.updatedAt === 'string' ? { updatedAt: r.updatedAt } : {}),
+  };
+}
+
+// List outcome: 'not-found' = the whole route family 404'd (flag CDZ_ERP_INVOICING
+// off, or app absent) → the page shows the quiet activation state.
+export type InvoiceListOutcome =
+  | { status: 'ok'; invoices: InvoiceView[] }
+  | { status: 'not-found' }
+  | { status: 'error'; message: string };
+
+/**
+ * GET /erp/invoices — the month-scoped ledger view. `month` is YYYY-MM (the
+ * backend collapses it to a one-month partition read); optional type/status
+ * filters are validated server-side. A 404 (flag off / app not found) →
+ * 'not-found'; a 502 data-API failure → a retryable 'error'. Never throws.
+ */
+export async function fetchInvoices(
+  slug: string,
+  query: { month?: string; type?: InvoiceType | ''; status?: InvoiceStatus | '' } = {}
+): Promise<InvoiceListOutcome> {
+  const qs = new URLSearchParams();
+  if (query.month) qs.set('month', query.month);
+  if (query.type) qs.set('type', query.type);
+  if (query.status) qs.set('status', query.status);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/invoices${suffix}`
+      ),
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement des factures.' };
+  }
+  if (res.status === 404) {
+    return { status: 'not-found' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { invoices?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : data?.error === 'data_api_unavailable'
+            ? 'Le service de données est momentanément indisponible — réessayez.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `Impossible de charger les factures (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const raw = Array.isArray(data?.invoices) ? (data.invoices as unknown[]) : [];
+  const invoices: InvoiceView[] = [];
+  for (const r of raw) {
+    const inv = coerceInvoiceView(r);
+    if (inv) invoices.push(inv);
+  }
+  return { status: 'ok', invoices };
+}
+
+export type InvoiceOneOutcome =
+  | { status: 'ok'; invoice: InvoiceView }
+  | { status: 'not-found' }
+  | { status: 'error'; message: string };
+
+/** GET /erp/invoices/:id — fetch one invoice by id. 404 → 'not-found'. */
+export async function fetchInvoice(
+  slug: string,
+  id: string
+): Promise<InvoiceOneOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/invoices/${encodeURIComponent(id)}`
+      ),
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement de la facture.' };
+  }
+  if (res.status === 404) {
+    return { status: 'not-found' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { invoice?: unknown; message?: unknown }
+    | null;
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Impossible de charger la facture (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const inv = coerceInvoiceView(data?.invoice);
+  if (!inv) {
+    return { status: 'error', message: 'Réponse incomplète du serveur.' };
+  }
+  return { status: 'ok', invoice: inv };
+}
+
+// Mutation outcome. 'unavailable' = admin writes can't be signed (server can't
+// derive the write token → read-only, like the other ERP mutations).
+// 'not-found' = the route 404'd (flag off) OR the target invoice is gone.
+// 'invalid' carries the machine `reason`+`field` so the form points at the bad
+// input; 'conflict' carries a `reason` (invoice_not_draft / already_void / a
+// convert conflict) so the UI explains why the transition was refused.
+export type InvoiceMutateOutcome =
+  | { status: 'ok'; invoice: InvoiceView }
+  | { status: 'unavailable' }
+  | { status: 'not-found' }
+  | { status: 'invalid'; reason: string; field?: string }
+  | { status: 'conflict'; reason: string }
+  | { status: 'error'; message: string };
+
+/** Shared POST helper for the invoice mutations — maps every documented body. */
+async function invoiceMutate(
+  slug: string,
+  path: string,
+  body: Record<string, unknown> | undefined
+): Promise<InvoiceMutateOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/${path}`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body ?? {}),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+  }
+  if (res.status === 404) {
+    // Route missing (flag off) OR the target invoice/order was not found. Both
+    // degrade to 'not-found'; the page decides whether to quiet-gate or refresh.
+    return { status: 'not-found' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & {
+        error?: unknown;
+        reason?: unknown;
+        field?: unknown;
+        message?: unknown;
+        invoice?: unknown;
+      })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (res.status === 400 && data?.error === 'invalid_invoice') {
+    return {
+      status: 'invalid',
+      reason: String(data?.reason || 'invalid'),
+      ...(typeof data?.field === 'string' ? { field: data.field } : {}),
+    };
+  }
+  if (res.status === 409) {
+    const reason =
+      data?.error === 'invoice_not_draft'
+        ? 'invoice_not_draft'
+        : data?.error === 'invoice_already_void'
+          ? 'invoice_already_void'
+          : String(data?.reason || data?.error || 'conflict');
+    return { status: 'conflict', reason };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : data?.error === 'data_api_unavailable' ||
+              data?.error === 'data_write_failed'
+            ? 'Le service de données est momentanément indisponible — réessayez.'
+            : data?.error === 'data_rejected'
+              ? 'Enregistrement refusé (trop volumineux ou invalide).'
+              : typeof data?.message === 'string'
+                ? (data.message as string)
+                : `L’opération a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const inv = coerceInvoiceView(data?.invoice);
+  if (!inv) {
+    return { status: 'error', message: 'Réponse incomplète du serveur.' };
+  }
+  return { status: 'ok', invoice: inv };
+}
+
+/** The create-invoice body (a draft). `orderRef` without `lines` mints from an order. */
+export interface CreateInvoiceBody {
+  type: InvoiceType;
+  customer: InvoiceCustomer;
+  lines?: Array<{
+    ref?: string;
+    label: string;
+    qty: number;
+    unitHT: number;
+    tvaRate: number;
+  }>;
+  payment?: InvoicePayment;
+  orderRef?: string;
+  date?: string;
+}
+
+/** POST /erp/invoices — create a DRAFT (brouillon, no number yet). */
+export function postInvoice(
+  slug: string,
+  body: CreateInvoiceBody
+): Promise<InvoiceMutateOutcome> {
+  return invoiceMutate(slug, 'invoices', body as unknown as Record<string, unknown>);
+}
+
+/** POST /erp/invoices/:id/validate — assign the gap-less legal number. */
+export function validateInvoice(
+  slug: string,
+  id: string
+): Promise<InvoiceMutateOutcome> {
+  return invoiceMutate(
+    slug,
+    `invoices/${encodeURIComponent(id)}/validate`,
+    undefined
+  );
+}
+
+/** POST /erp/invoices/:id/void — mark a document annulée (never deleted). */
+export function voidInvoice(
+  slug: string,
+  id: string
+): Promise<InvoiceMutateOutcome> {
+  return invoiceMutate(
+    slug,
+    `invoices/${encodeURIComponent(id)}/void`,
+    undefined
+  );
+}
+
+/** POST /erp/invoices/:id/convert — devis→bl→facture (or the legal skip). */
+export function convertInvoice(
+  slug: string,
+  id: string,
+  to: InvoiceType
+): Promise<InvoiceMutateOutcome> {
+  return invoiceMutate(slug, `invoices/${encodeURIComponent(id)}/convert`, {
+    to,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// WSE-5 PROCUREMENT — Fournisseurs + Bons de commande. Thin typed wrappers over
+// the R2-b authed owner-only bridge routes (credentials:'include', same shape
+// as fetchErpSummary / erpMutate). Reads never throw; mutations return a
+// discriminated ErpMutateOutcome-style union ('unavailable' = 501
+// admin_writes_unavailable → the caller goes read-only). Records mirror the
+// clickdz-erp-procurement contract exactly:
+//   supplier { id, name, phone, email?, address?, balance, active, createdAt }
+//   PO       { id 'po-YYYY-seq', supplierId, date, status, lines[], totalCost,
+//              warehouseId?, note, createdAt }
+//   PO line  { productId?, label, qty, qtyReceived, unitCost }
+// ---------------------------------------------------------------------------
+
+/** A procurement supplier (reference data). balance = dette we owe (DZD). */
+export interface ProcSupplier {
+  id: string;
+  name: string;
+  phone: string;
+  email?: string;
+  address?: string;
+  balance: number;
+  active: boolean;
+  createdAt?: string;
+}
+
+/** One purchase-order line (qty ordered vs qtyReceived + unit purchase cost). */
+export interface ProcPurchaseOrderLine {
+  productId?: string;
+  label: string;
+  qty: number;
+  qtyReceived: number;
+  unitCost: number;
+}
+
+/** A purchase order. status ∈ brouillon|commande|recu-partiel|recu|annule. */
+export interface ProcPurchaseOrder {
+  id: string;
+  supplierId: string;
+  date?: string;
+  status: string;
+  lines: ProcPurchaseOrderLine[];
+  totalCost: number;
+  warehouseId?: string;
+  note?: string;
+  createdAt?: string;
+}
+
+/** French labels for the PO status vocabulary (mirrors PROC_PO_STATUSES). */
+export const PO_STATUS_LABELS: Record<string, string> = {
+  brouillon: 'Brouillon',
+  commande: 'Commandé',
+  'recu-partiel': 'Reçu partiel',
+  recu: 'Reçu',
+  annule: 'Annulé',
+};
+
+/** Status → chip color (draft grey, ordered blue, partial amber, done green). */
+export function poStatusColor(status: string): string {
+  switch (status) {
+    case 'commande':
+      return '#38bdf8';
+    case 'recu-partiel':
+      return '#e8a33d';
+    case 'recu':
+      return '#22c55e';
+    case 'annule':
+      return '#ef4444';
+    default:
+      return '#9aa0a6';
+  }
+}
+
+/** Coerce a raw record into the normalized ProcSupplier shape (defensive). */
+function normalizeSupplier(raw: unknown): ProcSupplier {
+  const s = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    id: String(s.id ?? ''),
+    name: String(s.name ?? ''),
+    phone: String(s.phone ?? ''),
+    ...(s.email ? { email: String(s.email) } : {}),
+    ...(s.address ? { address: String(s.address) } : {}),
+    balance: num(s.balance),
+    active: s.active !== false,
+    ...(s.createdAt ? { createdAt: String(s.createdAt) } : {}),
+  };
+}
+
+/** Coerce a raw record into the normalized ProcPurchaseOrder shape (defensive). */
+function normalizePurchaseOrder(raw: unknown): ProcPurchaseOrder {
+  const p = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawLines = Array.isArray(p.lines) ? (p.lines as unknown[]) : [];
+  const lines: ProcPurchaseOrderLine[] = rawLines.map(item => {
+    const l = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+    const productId = String(l.productId ?? '').trim();
+    return {
+      ...(productId ? { productId } : {}),
+      label: String(l.label ?? productId ?? ''),
+      qty: num(l.qty),
+      qtyReceived: num(l.qtyReceived),
+      unitCost: num(l.unitCost),
+    };
+  });
+  return {
+    id: String(p.id ?? ''),
+    supplierId: String(p.supplierId ?? ''),
+    ...(p.date ? { date: String(p.date) } : {}),
+    status: String(p.status ?? 'brouillon'),
+    lines,
+    totalCost: num(p.totalCost),
+    ...(p.warehouseId ? { warehouseId: String(p.warehouseId) } : {}),
+    ...(p.note ? { note: String(p.note) } : {}),
+    ...(p.createdAt ? { createdAt: String(p.createdAt) } : {}),
+  };
+}
+
+export type SuppliersOutcome =
+  | { status: 'ok'; suppliers: ProcSupplier[] }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** GET /erp/suppliers — list suppliers (newest-first). Never throws. */
+export async function fetchSuppliers(slug: string): Promise<SuppliersOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/suppliers`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement des fournisseurs.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { suppliers?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Impossible de charger les fournisseurs (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const rows = Array.isArray(data?.suppliers) ? (data!.suppliers as unknown[]) : [];
+  return { status: 'ok', suppliers: rows.map(normalizeSupplier).filter(s => s.id) };
+}
+
+export type SupplierMutateOutcome =
+  | { status: 'ok'; supplier: ProcSupplier }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/**
+ * Upsert a supplier. With `editId` → PUT /erp/suppliers/:id (edit in place);
+ * without → POST /erp/suppliers (create by kebab-slug of the name). Body is
+ * `{ supplier }`; partial edits preserve balance/createdAt server-side.
+ */
+export async function saveSupplier(
+  slug: string,
+  supplier: {
+    name: string;
+    phone?: string;
+    email?: string;
+    address?: string;
+    active?: boolean;
+  },
+  editId?: string
+): Promise<SupplierMutateOutcome> {
+  let res: Response;
+  const url = editId
+    ? cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/suppliers/${encodeURIComponent(editId)}`
+      )
+    : cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/suppliers`);
+  try {
+    res = await fetch(url, {
+      method: editId ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ supplier }),
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — aucune modification enregistrée.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { ok?: boolean; supplier?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (data?.error === 'admin_writes_unavailable' || res.status === 501) {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : res.status === 404
+            ? 'Fournisseur introuvable — actualisez et réessayez.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `L’enregistrement a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', supplier: normalizeSupplier(data?.supplier) };
+}
+
+export type PurchaseOrdersOutcome =
+  | { status: 'ok'; purchaseOrders: ProcPurchaseOrder[] }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** GET /erp/purchase-orders — list POs (newest-first). Never throws. */
+export async function fetchPurchaseOrders(slug: string): Promise<PurchaseOrdersOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/purchase-orders`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement des bons de commande.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { purchaseOrders?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Impossible de charger les bons de commande (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const rows = Array.isArray(data?.purchaseOrders)
+    ? (data!.purchaseOrders as unknown[])
+    : [];
+  return { status: 'ok', purchaseOrders: rows.map(normalizePurchaseOrder).filter(p => p.id) };
+}
+
+export type PurchaseOrderOutcome =
+  | { status: 'ok'; purchaseOrder: ProcPurchaseOrder }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** GET /erp/purchase-orders/:id — fetch one PO (freshest received state). */
+export async function fetchPurchaseOrder(
+  slug: string,
+  id: string
+): Promise<PurchaseOrderOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/purchase-orders/${encodeURIComponent(id)}`
+      ),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement du bon.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { purchaseOrder?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (res.status === 501) return { status: 'unavailable' };
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : res.status === 404
+            ? 'Bon de commande introuvable.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `Impossible de charger le bon (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', purchaseOrder: normalizePurchaseOrder(data?.purchaseOrder) };
+}
+
+/**
+ * POST /erp/purchase-orders — create a PO. BODY `{ supplierId, lines:[{label,
+ * qty, unitCost, productId?}], note?, warehouseId?, date?, status? }`. The
+ * server mints the gap-less `po-YYYY-seq` id and computes totalCost.
+ */
+export async function createPurchaseOrder(
+  slug: string,
+  body: {
+    supplierId: string;
+    lines: Array<{ label: string; qty: number; unitCost: number; productId?: string }>;
+    note?: string;
+    warehouseId?: string;
+    date?: string;
+  }
+): Promise<PurchaseOrderOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/purchase-orders`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — le bon n’a pas été créé.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { ok?: boolean; purchaseOrder?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (data?.error === 'admin_writes_unavailable' || res.status === 501) {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : res.status === 404
+            ? 'Fournisseur introuvable — actualisez et réessayez.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `La création du bon a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', purchaseOrder: normalizePurchaseOrder(data?.purchaseOrder) };
+}
+
+export type ReceivePurchaseOrderOutcome =
+  | {
+      status: 'ok';
+      purchaseOrder: ProcPurchaseOrder;
+      /** Count of stock movements the backend posted to the ledger. */
+      movements: number;
+      /** The supplier's new balance (dette) after the receive, when returned. */
+      supplierBalance?: number;
+    }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/**
+ * POST /erp/purchase-orders/:id/receive — receive stock. BODY `{ lines:[{label
+ * |productId, qty}], warehouseId? }` (empty/absent lines ⇒ receive ALL). The
+ * server posts real 'purchase' movements through the inventory ledger, updates
+ * the PO in place, and bumps the supplier balance by the received cost.
+ */
+export async function receivePurchaseOrder(
+  slug: string,
+  id: string,
+  body: {
+    lines?: Array<{ label?: string; productId?: string; qty: number }>;
+    warehouseId?: string;
+  }
+): Promise<ReceivePurchaseOrderOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/purchase-orders/${encodeURIComponent(id)}/receive`
+      ),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — la réception n’a pas été enregistrée.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | {
+        ok?: boolean;
+        purchaseOrder?: unknown;
+        movements?: unknown;
+        supplierBalance?: unknown;
+        error?: unknown;
+        message?: unknown;
+      }
+    | null;
+  if (data?.error === 'admin_writes_unavailable' || res.status === 501) {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : res.status === 404
+            ? 'Bon ou entrepôt introuvable — actualisez et réessayez.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `La réception a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return {
+    status: 'ok',
+    purchaseOrder: normalizePurchaseOrder(data?.purchaseOrder),
+    movements: num(data?.movements),
+    ...(data?.supplierBalance !== undefined
+      ? { supplierBalance: num(data.supplierBalance) }
+      : {}),
+  };
+}
+
+/** POST /erp/purchase-orders/:id/cancel — cancel a brouillon/commande PO. */
+export async function cancelPurchaseOrder(
+  slug: string,
+  id: string
+): Promise<PurchaseOrderOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/purchase-orders/${encodeURIComponent(id)}/cancel`
+      ),
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — le bon n’a pas été annulé.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { ok?: boolean; purchaseOrder?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (data?.error === 'admin_writes_unavailable' || res.status === 501) {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : res.status === 404
+            ? 'Bon de commande introuvable.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `L’annulation a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', purchaseOrder: normalizePurchaseOrder(data?.purchaseOrder) };
+}
 /** A scalar feature param — IDs / numbers / booleans only (8KB-cap safe). */
+// ---------------------------------------------------------------------------
+// WSE-7 (R3-c, BOUSSOLE) — LIVRAISON studio API layer. Thin wrappers over the
+// R2 shipping bridge routes (all owner-only, first-party session cookie via
+// credentials:'include', mirroring customizeApp). Record shapes are PINNED by
+// the pure module `clickdz-erp-shipping.ts` (Courier / ShippingRate / MatrixRow
+// / Wilaya / TrackingStatus) — do NOT rename fields. Every mutation returns an
+// ErpMutateOutcome-style discriminated union so the studio page can render
+// loading / error / empty / read-only (admin_writes_unavailable) states without
+// guessing. Reads never throw for a documented status — they resolve to typed
+// outcomes.
+// ---------------------------------------------------------------------------
+
+/** Courier record (collection `couriers`, pinned by clickdz-erp-shipping.ts). */
+export interface ShipCourier {
+  id: string;
+  name: string;
+  phone?: string;
+  active: boolean;
+  codFee?: number;
+  createdAt?: string;
+}
+
+/** One Algerian wilaya — official code (1-58) + French name (from the endpoint). */
+export interface ShipWilaya {
+  code: number;
+  name: string;
+}
+
+/** A dense matrix row for the 58-wilaya grid (missing rows → null fees). */
+export interface ShipMatrixRow {
+  wilaya: number;
+  name: string;
+  fee: number | null;
+  homeFee: number | null;
+  deskFee: number | null;
+}
+
+/** One rate row to bulk-set (fee/homeFee/deskFee all optional; ≥1 required). */
+export interface ShipRateInput {
+  wilaya: number;
+  fee?: number;
+  homeFee?: number;
+  deskFee?: number;
+}
+
+/** Courier tracking sub-states — map onto the 5 order statuses server-side. */
+export const TRACKING_STATUSES = [
+  'pris-en-charge',
+  'en-route',
+  'livre',
+  'retour',
+] as const;
+export type ShipTrackingStatus = (typeof TRACKING_STATUSES)[number];
+
+/** Delivery mode an order can carry (home = à domicile, desk = stop-desk). */
+export type ShipDeliveryMode = 'home' | 'desk';
+
+// ---- Read outcomes ---------------------------------------------------------
+
+export type CouriersOutcome =
+  | { status: 'ok'; couriers: ShipCourier[] }
+  | { status: 'error'; message: string };
+
+export type WilayasOutcome =
+  | { status: 'ok'; wilayas: ShipWilaya[] }
+  | { status: 'error'; message: string };
+
+export type ShippingRatesOutcome =
+  | { status: 'ok'; courierId: string; matrix: ShipMatrixRow[] }
+  | { status: 'error'; message: string };
+
+// ---- Small internal helper: a friendly message for a failed read ----------
+
+function shipReadMessage(status: number, fallback: string): string {
+  return status === 401
+    ? 'Please sign in again.'
+    : status === 403
+      ? 'This shop belongs to another account.'
+      : status === 404
+        ? 'This shop was not found — it may have been deleted.'
+        : fallback;
+}
+
+/** GET /erp/shipping/wilayas — the canonical 58-wilaya table (reference data). */
+export async function fetchWilayas(slug: string): Promise<WilayasOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/shipping/wilayas`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error while loading wilayas.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { wilayas?: unknown; message?: unknown }
+    | null;
+  if (!res.ok) {
+    return {
+      status: 'error',
+      message: shipReadMessage(
+        res.status,
+        typeof data?.message === 'string'
+          ? data.message
+          : `Could not load wilayas (${res.status}).`
+      ),
+    };
+  }
+  const raw = Array.isArray(data?.wilayas) ? (data.wilayas as unknown[]) : [];
+  const wilayas: ShipWilaya[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const w = item as Record<string, unknown>;
+    const code = num(w.code);
+    const name = typeof w.name === 'string' ? w.name : '';
+    if (code >= 1 && code <= 58 && name) wilayas.push({ code, name });
+  }
+  return { status: 'ok', wilayas };
+}
+
+/** GET /erp/couriers — the store's couriers (newest-first as the API returns). */
+export async function fetchCouriers(slug: string): Promise<CouriersOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/couriers`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error while loading couriers.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { couriers?: unknown; message?: unknown }
+    | null;
+  if (!res.ok) {
+    return {
+      status: 'error',
+      message: shipReadMessage(
+        res.status,
+        typeof data?.message === 'string'
+          ? data.message
+          : `Could not load couriers (${res.status}).`
+      ),
+    };
+  }
+  const raw = Array.isArray(data?.couriers) ? (data.couriers as unknown[]) : [];
+  const couriers: ShipCourier[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const c = item as Record<string, unknown>;
+    const id = typeof c.id === 'string' ? c.id : '';
+    const name = typeof c.name === 'string' ? c.name : '';
+    if (!id) continue;
+    const courier: ShipCourier = {
+      id,
+      name: name || id,
+      active: c.active === undefined ? true : Boolean(c.active),
+    };
+    if (typeof c.phone === 'string' && c.phone) courier.phone = c.phone;
+    if (c.codFee !== undefined) courier.codFee = num(c.codFee);
+    if (typeof c.createdAt === 'string') courier.createdAt = c.createdAt;
+    couriers.push(courier);
+  }
+  return { status: 'ok', couriers };
+}
+
+/** GET /erp/shipping/rates?courierId= — the dense 58-row matrix for a courier. */
+export async function fetchShippingRates(
+  slug: string,
+  courierId: string
+): Promise<ShippingRatesOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/shipping/rates?courierId=${encodeURIComponent(courierId)}`
+      ),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error while loading rates.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { courierId?: unknown; matrix?: unknown; message?: unknown }
+    | null;
+  if (!res.ok) {
+    return {
+      status: 'error',
+      message: shipReadMessage(
+        res.status,
+        typeof data?.message === 'string'
+          ? data.message
+          : `Could not load rates (${res.status}).`
+      ),
+    };
+  }
+  const raw = Array.isArray(data?.matrix) ? (data.matrix as unknown[]) : [];
+  const matrix: ShipMatrixRow[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const wilaya = num(r.wilaya);
+    if (wilaya < 1 || wilaya > 58) continue;
+    matrix.push({
+      wilaya,
+      name: typeof r.name === 'string' ? r.name : '',
+      fee: r.fee === null || r.fee === undefined ? null : num(r.fee),
+      homeFee: r.homeFee === null || r.homeFee === undefined ? null : num(r.homeFee),
+      deskFee: r.deskFee === null || r.deskFee === undefined ? null : num(r.deskFee),
+    });
+  }
+  return {
+    status: 'ok',
+    courierId: typeof data?.courierId === 'string' ? data.courierId : courierId,
+    matrix,
+  };
+}
+
+// ---- Mutation helper (mirrors erpMutate, but for the shipping route tree) --
+
+async function shipMutate<T>(
+  path: string,
+  body: Record<string, unknown>
+): Promise<ErpMutateOutcome<T>> {
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(path), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was changed.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in again.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : res.status === 404
+            ? 'Not found — it may have been changed elsewhere. Refresh and retry.'
+            : res.status === 409
+              ? 'A courier with this name already exists.'
+              : typeof data?.message === 'string'
+                ? (data.message as string)
+                : typeof data?.error === 'string'
+                  ? `The change failed (${data.error}).`
+                  : `The change failed (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: data as T };
+}
+
+async function shipMutatePut<T>(
+  path: string,
+  body: Record<string, unknown>
+): Promise<ErpMutateOutcome<T>> {
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(path), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was changed.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in again.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : res.status === 404
+            ? 'Not found — refresh and retry.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `The change failed (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: data as T };
+}
+
+/** POST /erp/couriers — create a courier (id derived kebab-case from name). */
+export function saveCourier(
+  slug: string,
+  body: { name: string; phone?: string; codFee?: number; active?: boolean }
+): Promise<ErpMutateOutcome<{ ok?: boolean; courier?: ShipCourier }>> {
+  return shipMutate(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/couriers`,
+    body as Record<string, unknown>
+  );
+}
+
+/** PUT /erp/couriers/:id — update a courier in place (id/createdAt immutable). */
+export function updateCourier(
+  slug: string,
+  id: string,
+  patch: { name?: string; phone?: string; codFee?: number; active?: boolean }
+): Promise<ErpMutateOutcome<{ ok?: boolean; courier?: ShipCourier }>> {
+  return shipMutatePut(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/couriers/${encodeURIComponent(id)}`,
+    patch as Record<string, unknown>
+  );
+}
+
+/** POST /erp/shipping/rates — bulk-set a courier's rate matrix. */
+export function postShippingRates(
+  slug: string,
+  courierId: string,
+  rates: ShipRateInput[]
+): Promise<ErpMutateOutcome<{ ok?: boolean; courierId?: string; written?: number }>> {
+  return shipMutate(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/shipping/rates`,
+    { courierId, rates }
+  );
+}
+
+/** POST /erp/shipping/rates/import-csv — parse + bulk-set a pasted CSV blob. */
+export function importRatesCsv(
+  slug: string,
+  courierId: string,
+  csv: string
+): Promise<
+  ErpMutateOutcome<{ ok?: boolean; courierId?: string; written?: number; skipped?: number }>
+> {
+  return shipMutate(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/shipping/rates/import-csv`,
+    { courierId, csv }
+  );
+}
+
+/** POST /erp/orders/:orderId/assign-courier — attach a courier to an order. */
+export function assignCourier(
+  slug: string,
+  orderId: string,
+  courierId: string,
+  mode?: ShipDeliveryMode
+): Promise<ErpMutateOutcome<{ ok?: boolean; order?: ErpOrder }>> {
+  return shipMutate(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/orders/${encodeURIComponent(orderId)}/assign-courier`,
+    { courierId, ...(mode ? { mode } : {}) }
+  );
+}
+
+/** POST /erp/orders/:orderId/tracking — advance the tracking sub-state (also
+ *  moves the order's canonical status: livre→Livrée, retour→Retournée). */
+export function postTracking(
+  slug: string,
+  orderId: string,
+  status: ShipTrackingStatus
+): Promise<ErpMutateOutcome<{ ok?: boolean; order?: ErpOrder }>> {
+  return shipMutate(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/orders/${encodeURIComponent(orderId)}/tracking`,
+    { status }
+  );
+}
+// ---------------------------------------------------------------------------
+// WSE-9 (COMPTOIR) — Caisse (cash register) + COD reconciliation client layer.
+// Thin wrappers over the R2-d bridge routes (/api/v1/apps/:slug/erp/caisse*),
+// mirroring the fetchErpSummary / erpMutate outcome style (discriminated unions,
+// credentials:'include', 404/501 → quiet 'unavailable'). Money is INTEGER DZD
+// end-to-end (the backend rounds + validates; these types carry plain numbers).
+// The pinned entry shape { id, date, kind:'in'|'out', amount, method, courierId?,
+// orderRef?, note, pending? } and the reconcile/day-close shapes are byte-aligned
+// with ./clickdz-erp-caisse.ts (server) — DO NOT drift them.
+// ---------------------------------------------------------------------------
+
+/** Payment/settlement method for a caisse movement (backend allowlist). */
+export type CaisseMethod = 'cod' | 'cash' | 'chargily';
+
+/** FR labels for the three methods (this surface is French). */
+export const CAISSE_METHOD_LABELS: Record<CaisseMethod, string> = {
+  cash: 'Espèces',
+  cod: 'COD (livraison)',
+  chargily: 'Chargily (en ligne)',
+};
+
+/** One caisse ledger entry (raw data-API record + pinned fields). */
+export interface CaisseEntry {
+  id: string;
+  date: string;
+  kind: 'in' | 'out';
+  amount: number;
+  method: CaisseMethod | string;
+  courierId?: string;
+  orderRef?: string;
+  note?: string;
+  /** true = pending-COD marker (expected, not yet counted as real cash). */
+  pending?: boolean;
+  createdAt?: string;
+}
+
+/** A courier as consumed by the caisse UI (subset of the couriers record). */
+export interface CourierLite {
+  id: string;
+  name?: string;
+  codFee?: number;
+  active?: boolean;
+}
+
+/** One delivered-order reference inside a reconcile report. */
+export interface ReconcileOrderRef {
+  ref: string;
+  total: number;
+  date: string;
+}
+
+/** GET /erp/caisse/reconcile → { range, report } — the report shape. */
+export interface CaisseReconcile {
+  courierId: string;
+  courierName: string;
+  expectedTotal: number;
+  receivedTotal: number;
+  gap: number;
+  codFeeTotal: number;
+  deliveredCount: number;
+  orders: ReconcileOrderRef[];
+}
+
+/** Per-method money breakdown (integer DZD). */
+export interface CaisseMethodBreakdown {
+  cod: number;
+  cash: number;
+  chargily: number;
+}
+
+/** GET /erp/caisse/day-close → the day-close (or range) summary. */
+export interface CaisseDayClose {
+  date: string;
+  from: string;
+  to: string;
+  inTotal: number;
+  outTotal: number;
+  net: number;
+  inByMethod: CaisseMethodBreakdown;
+  outByMethod: CaisseMethodBreakdown;
+  pendingCodTotal: number;
+  entryCount: number;
+}
+
+export type CaisseListOutcome =
+  | { status: 'ok'; entries: CaisseEntry[] }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+export type CaisseReconcileOutcome =
+  | { status: 'ok'; report: CaisseReconcile }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+export type CaisseDayCloseOutcome =
+  | { status: 'ok'; summary: CaisseDayClose }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** Coerce a raw record into a well-typed CaisseEntry (defensive). */
+function normalizeCaisseEntry(raw: unknown): CaisseEntry {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    id: String(r.id ?? ''),
+    date: String(r.date ?? '').slice(0, 10),
+    kind: r.kind === 'out' ? 'out' : 'in',
+    amount: num(r.amount),
+    method: typeof r.method === 'string' ? r.method : 'cash',
+    ...(r.courierId ? { courierId: String(r.courierId) } : {}),
+    ...(r.orderRef ? { orderRef: String(r.orderRef) } : {}),
+    ...(r.note != null ? { note: String(r.note) } : {}),
+    ...(r.pending === true ? { pending: true } : {}),
+    ...(r.createdAt ? { createdAt: String(r.createdAt) } : {}),
+  };
+}
+
+function emptyBreakdown(raw: unknown): CaisseMethodBreakdown {
+  const b = (raw ?? {}) as Record<string, unknown>;
+  return { cod: num(b.cod), cash: num(b.cash), chargily: num(b.chargily) };
+}
+
+/**
+ * GET /api/v1/apps/:slug/erp/caisse?month=YYYYMM — one monthly partition,
+ * newest-first. 404/501/502 → 'unavailable' so the Journal shows a quiet empty
+ * state (never crashes). `month` is YYYYMM; omit for the current month.
+ */
+export async function fetchCaisse(
+  slug: string,
+  month?: string
+): Promise<CaisseListOutcome> {
+  const qs = /^\d{6}$/.test(String(month || '')) ? `?month=${month}` : '';
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/caisse${qs}`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement du journal.' };
+  }
+  if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
+  const data = (await res.json().catch(() => null)) as
+    | { entries?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (data?.error === 'data_api_unavailable') return { status: 'unavailable' };
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Impossible de charger le journal (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const rows = Array.isArray(data?.entries) ? (data!.entries as unknown[]) : [];
+  return { status: 'ok', entries: rows.map(normalizeCaisseEntry).filter(e => e.id) };
+}
+
+/**
+ * POST /api/v1/apps/:slug/erp/caisse — create one entry (pinned shape). Returns
+ * the created record. 501 admin_writes_unavailable → 'unavailable' (read-only).
+ */
+export async function postCaisseEntry(
+  slug: string,
+  body: {
+    kind: 'in' | 'out';
+    amount: number;
+    method: CaisseMethod;
+    date?: string;
+    courierId?: string;
+    orderRef?: string;
+    note?: string;
+  }
+): Promise<ErpMutateOutcome<{ ok?: boolean; entry?: CaisseEntry }>> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/caisse`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — rien n’a été enregistré.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown; field?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') return { status: 'unavailable' };
+  if (!res.ok) {
+    const message =
+      res.status === 400 && data?.error === 'invalid_entry'
+        ? typeof data?.message === 'string'
+          ? (data.message as string)
+          : 'Écriture invalide — vérifiez les champs.'
+        : res.status === 401
+          ? 'Veuillez vous reconnecter.'
+          : res.status === 403
+            ? 'Cette boutique appartient à un autre compte.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `L’enregistrement a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: data as { ok?: boolean; entry?: CaisseEntry } };
+}
+
+/**
+ * PUT /api/v1/apps/:slug/erp/caisse/:id — edit an entry IN PLACE (native upsert;
+ * money docs never delete+recreate). Partial patch; sends `date` as the month
+ * hint the backend uses to locate the partition cheaply. 404 → typed error.
+ */
+export async function putCaisseEntry(
+  slug: string,
+  id: string,
+  patch: {
+    kind?: 'in' | 'out';
+    amount?: number;
+    method?: CaisseMethod;
+    date?: string;
+    courierId?: string;
+    orderRef?: string;
+    note?: string;
+  }
+): Promise<ErpMutateOutcome<{ ok?: boolean; entry?: CaisseEntry }>> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/caisse/${encodeURIComponent(id)}`
+      ),
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(patch),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') return { status: 'unavailable' };
+  if (!res.ok) {
+    const message =
+      res.status === 400 && data?.error === 'invalid_entry'
+        ? typeof data?.message === 'string'
+          ? (data.message as string)
+          : 'Écriture invalide.'
+        : res.status === 404
+          ? 'Écriture introuvable — actualisez et réessayez.'
+          : res.status === 401
+            ? 'Veuillez vous reconnecter.'
+            : res.status === 403
+              ? 'Cette boutique appartient à un autre compte.'
+              : typeof data?.message === 'string'
+                ? (data.message as string)
+                : `La modification a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: data as { ok?: boolean; entry?: CaisseEntry } };
+}
+
+/**
+ * GET /api/v1/apps/:slug/erp/caisse/reconcile?courierId=&from=&to= — per-courier
+ * COD reconciliation. Unwraps the { range, report } envelope to the report.
+ * 404/501/502 → 'unavailable'.
+ */
+export async function fetchReconcile(
+  slug: string,
+  courierId: string,
+  from: string,
+  to: string
+): Promise<CaisseReconcileOutcome> {
+  const qs = `?courierId=${encodeURIComponent(courierId)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/caisse/reconcile${qs}`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du rapprochement.' };
+  }
+  if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
+  const data = (await res.json().catch(() => null)) as
+    | { report?: unknown; error?: unknown; message?: unknown }
+    | null;
+  if (data?.error === 'data_api_unavailable') return { status: 'unavailable' };
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Le rapprochement a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const r = (data?.report ?? {}) as Record<string, unknown>;
+  const orders = Array.isArray(r.orders) ? (r.orders as unknown[]) : [];
+  return {
+    status: 'ok',
+    report: {
+      courierId: String(r.courierId ?? courierId),
+      courierName: String(r.courierName ?? r.courierId ?? courierId),
+      expectedTotal: num(r.expectedTotal),
+      receivedTotal: num(r.receivedTotal),
+      gap: num(r.gap),
+      codFeeTotal: num(r.codFeeTotal),
+      deliveredCount: num(r.deliveredCount),
+      orders: orders.map(o => {
+        const o2 = (o ?? {}) as Record<string, unknown>;
+        return {
+          ref: String(o2.ref ?? ''),
+          total: num(o2.total),
+          date: String(o2.date ?? '').slice(0, 10),
+        };
+      }),
+    },
+  };
+}
+
+/**
+ * GET /api/v1/apps/:slug/erp/caisse/day-close?date=YYYY-MM-DD — the day-close
+ * summary (returned directly, not wrapped). 404/501/502 → 'unavailable'.
+ */
+export async function fetchDayClose(
+  slug: string,
+  date?: string
+): Promise<CaisseDayCloseOutcome> {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/caisse/day-close${qs}`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors de la clôture.' };
+  }
+  if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<CaisseDayClose> & { error?: unknown; message?: unknown })
+    | null;
+  if ((data as { error?: unknown })?.error === 'data_api_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `La clôture a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return {
+    status: 'ok',
+    summary: {
+      date: String(data?.date ?? date ?? '').slice(0, 10),
+      from: String(data?.from ?? '').slice(0, 10),
+      to: String(data?.to ?? '').slice(0, 10),
+      inTotal: num(data?.inTotal),
+      outTotal: num(data?.outTotal),
+      net: num(data?.net),
+      inByMethod: emptyBreakdown(data?.inByMethod),
+      outByMethod: emptyBreakdown(data?.outByMethod),
+      pendingCodTotal: num(data?.pendingCodTotal),
+      entryCount: num(data?.entryCount),
+    },
+  };
+}
+
+/**
+ * GET /api/v1/apps/:slug/erp/couriers — the courier list, unwrapped to a lite
+ * shape for the caisse form/reconcile pickers. NEVER throws: any failure (route
+ * absent because Routier's shipping backend isn't on this server, 404, network)
+ * resolves to [] so the caisse page has no hard dependency on shipping. Reused
+ * by the shipping UI post-merge if it wants a lite courier read.
+ */
+export async function fetchCaisseCouriers(slug: string): Promise<CourierLite[]> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/couriers`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return [];
+  }
+  if (!res.ok) return [];
+  const data = (await res.json().catch(() => null)) as
+    | { couriers?: unknown }
+    | unknown[]
+    | null;
+  const raw = Array.isArray(data)
+    ? data
+    : Array.isArray((data as { couriers?: unknown })?.couriers)
+      ? ((data as { couriers?: unknown }).couriers as unknown[])
+      : [];
+  const out: CourierLite[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const c = item as Record<string, unknown>;
+    const id = String(c.id ?? '').trim();
+    if (!id) continue;
+    out.push({
+      id,
+      ...(c.name != null ? { name: String(c.name) } : {}),
+      ...(c.codFee != null ? { codFee: num(c.codFee) } : {}),
+      ...(c.active != null ? { active: c.active === true } : {}),
+    });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// erpBackends — published-app module activation. `settings.erpBackends` is a CSV
+// of enabled published-ERP module ids (factures|livraison|caisse). Studio pages
+// offer an "Afficher dans l'app" toggle that adds/removes their id; the published
+// template shows those tabs only when the module is on AND its id is present. The
+// value rides the EXISTING settings singleton (postErpSettings under the hood),
+// so the orchestrator only needs to allowlist `erpBackends` in normalizeErpSettings.
+// ---------------------------------------------------------------------------
+
+/** The published-ERP module ids that can be toggled into erpBackends. */
+export const MODULE_IDS = ['factures', 'livraison', 'caisse'] as const;
+export type ModuleId = (typeof MODULE_IDS)[number];
+
+/** FR labels for the toggleable modules. */
+export const MODULE_LABELS: Record<ModuleId, string> = {
+  factures: 'Factures',
+  livraison: 'Livraison',
+  caisse: 'Caisse',
+};
+
+/** Parse the erpBackends CSV → the set of enabled module ids. */
+export function parseErpBackends(csv: string | undefined): ModuleId[] {
+  if (!csv) return [];
+  const wanted = String(csv)
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  return MODULE_IDS.filter(id => wanted.includes(id));
+}
+
+/** Is a given module id currently enabled in the erpBackends CSV? */
+export function hasErpModule(csv: string | undefined, id: ModuleId): boolean {
+  return parseErpBackends(csv).includes(id);
+}
+
+/** Add/remove a module id, returning the new stable-ordered CSV. */
+export function toggleErpModule(
+  csv: string | undefined,
+  id: ModuleId,
+  on: boolean
+): string {
+  const cur = new Set(parseErpBackends(csv));
+  if (on) cur.add(id);
+  else cur.delete(id);
+  return MODULE_IDS.filter(m => cur.has(m)).join(',');
+}
+
+/**
+ * Persist the erpBackends CSV via the settings singleton. Thin cast over the
+ * same /erp/settings write path as every other setting (postErpSettings), so the
+ * outcome semantics (ok / unavailable / error) are identical.
+ */
+export function postErpBackends(
+  slug: string,
+  csv: string
+): Promise<ErpMutateOutcome<{ ok?: boolean; settings?: ErpSettings }>> {
+  return postErpSettings(slug, { erpBackends: csv } as Partial<ErpSettings>);
+}
+// ---------------------------------------------------------------------------
+// R3 — generic collection write wrappers (WSE-10 créances, and any future
+// studio-owned collection with no dedicated bridge route). Reads already go
+// through fetchErpCollection (public v2 GET, no token). WRITES from the studio
+// have a constraint: the v2 data routes require a per-slug HMAC write token
+// that only the PUBLISHED app carries — the owner's browser does not have it.
+// The v1 data routes (/api/apps-data/:slug/:collection) accept POST/DELETE with
+// NO token (open, same-origin), which is exactly the path a first-party studio
+// session can use. So these wrappers target v1 and mirror the erpMutate outcome
+// shape (ErpMutateOutcome<T>) so callers get the same ok/unavailable/error
+// branching every other mutation here uses. Records are schemaless; the data
+// API assigns id + createdAt on create. There is no update route, so callers
+// implement "edit" as deleteErpRecord + postErpRecord (delete+recreate), the
+// same pattern the published templates' replaceRec() uses.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/apps-data/:slug/:collection (v1, open) — append one record to a
+ * collection. `record` is any JSON object (< 8KB); the server stamps id +
+ * createdAt and echoes the stored record. A 404/absent collection is created on
+ * first write. Never throws — network failure and the server's own
+ * unavailability come back as typed outcomes.
+ */
+export async function postErpRecord<T = Record<string, unknown>>(
+  storeSlug: string,
+  collection: string,
+  record: Record<string, unknown>
+): Promise<ErpMutateOutcome<T>> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/apps-data/${encodeURIComponent(storeSlug)}/${encodeURIComponent(collection)}`
+      ),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(record),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was saved.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  // The open v1 write route has no owner session; a 401/403 here means the
+  // server can't accept the write (locked-down deployment) → 'unavailable' so
+  // the caller degrades to read-only rather than surfacing a scary error.
+  if (
+    data?.error === 'admin_writes_unavailable' ||
+    res.status === 401 ||
+    res.status === 403
+  ) {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 429
+        ? 'Trop de changements d’un coup — patientez un instant puis réessayez.'
+        : typeof data?.message === 'string'
+          ? (data.message as string)
+          : `L’enregistrement a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: data as T };
+}
+
+/**
+ * DELETE /api/apps-data/:slug/:collection/:id (v1, open) — remove one record by
+ * its data-API id. A 404 (already gone) converges to 'ok' so the UI settles
+ * either way. Mirrors deleteErpWarehouse's outcome handling.
+ */
+export async function deleteErpRecord(
+  storeSlug: string,
+  collection: string,
+  id: string
+): Promise<ErpMutateOutcome<{ ok?: boolean }>> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/apps-data/${encodeURIComponent(storeSlug)}/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`
+      ),
+      { method: 'DELETE', headers: { Accept: 'application/json' } }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was changed.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (
+    data?.error === 'admin_writes_unavailable' ||
+    res.status === 401 ||
+    res.status === 403
+  ) {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok && res.status !== 404) {
+    const message =
+      res.status === 429
+        ? 'Trop de changements d’un coup — patientez un instant puis réessayez.'
+        : typeof data?.message === 'string'
+          ? (data.message as string)
+          : `La suppression a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: { ok: true } };
+}
+
+// ---------------------------------------------------------------------------
+// WSE-11 (R3-f) RAPPORTS — caisse month rollup for the studio Reports page. The
+// deep reporting surface (reports.tsx) needs a period's cash summary; it reads
+// ONE monthly caisse partition via the authed bridge route
+//   GET /api/v1/apps/:slug/erp/caisse?month=YYYYMM → { collection, entries }
+// and rolls the raw entries up client-side into in/out/net (+ pending-COD),
+// mirroring the server's buildDayClose math (kind 'in'/'out', integer DZD,
+// pending markers tracked apart). This is additive + fail-soft: a 404 (route
+// absent / flag off) or a 502 data_api_unavailable resolves to 'unavailable' so
+// the caller renders a quiet "activation en attente" state; only an unexpected
+// failure is 'error'. Named distinctly (…Month) to avoid colliding with any
+// sibling caisse wrapper merged the same round.
+// ---------------------------------------------------------------------------
+
+/** Client-rolled caisse totals for one month (mirrors DayCloseSummary math). */
+export interface CaisseMonthTotals {
+  /** The resolved partition, e.g. 'caisse-202607'. */
+  collection: string;
+  inTotal: number;
+  outTotal: number;
+  net: number;
+  pendingCodTotal: number;
+  entryCount: number;
+}
+
+export type CaisseMonthOutcome =
+  | { status: 'ok'; totals: CaisseMonthTotals }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/**
+ * GET /erp/caisse?month=YYYYMM and roll the raw entries up into month totals.
+ * `month` must be 6 digits (YYYYMM); anything else lets the server default to
+ * the current month. Pending-COD markers (`pending===true`) are summed apart
+ * and excluded from in/out/net — they are expectations, not drawer movements.
+ */
+export async function fetchErpCaisseMonth(
+  slug: string,
+  month: string
+): Promise<CaisseMonthOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/erp/caisse?month=${encodeURIComponent(month)}`
+      ),
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error while loading caisse.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | {
+        collection?: string;
+        entries?: unknown;
+        error?: unknown;
+        message?: unknown;
+      }
+    | null;
+  // Route missing (flag off / older server) OR the data API is unreachable →
+  // treat as a quiet "not activated yet" state, never a hard failure.
+  if (res.status === 404 || data?.error === 'data_api_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in to view caisse.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Could not load caisse (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const entries = Array.isArray(data?.entries)
+    ? (data.entries as Array<Record<string, unknown>>)
+    : [];
+  let inTotal = 0;
+  let outTotal = 0;
+  let pendingCodTotal = 0;
+  let entryCount = 0;
+  for (const r of entries) {
+    const amount = num(r?.amount);
+    if (!(amount > 0)) continue;
+    entryCount += 1;
+    if (r?.pending === true) {
+      pendingCodTotal += amount;
+      continue;
+    }
+    const kind = String(r?.kind ?? '');
+    if (kind === 'in') inTotal += amount;
+    else if (kind === 'out') outTotal += amount;
+  }
+  return {
+    status: 'ok',
+    totals: {
+      collection: typeof data?.collection === 'string' ? data.collection : '',
+      inTotal,
+      outTotal,
+      net: inTotal - outTotal,
+      pendingCodTotal,
+      entryCount,
+    },
+  };
+}
+
+// ===========================================================================
+// WSE-13 (R3-g) — ERP STAFF & ROLES wrappers (Portail). Owner-authed CRUD over
+// the published-app staff auth (POST/GET /erp/staff, PUT/revoke), plus a small
+// wa.me link helper. Every route is gated server-side by CDZ_ERP_STAFF_AUTH:
+// while OFF the bridge returns a typed 404, which we surface as a discriminated
+// 'disabled' outcome so the Équipe page renders a quiet "activation en attente"
+// state instead of an error. All calls use credentials:'include' (owner session
+// cookie), mirroring fetchErpInventory/postErpWarehouse above.
+// ===========================================================================
+
+// Declaration-merge the published staff-login flag onto the settings singleton
+// (ErpSettings is declared earlier in this file). staffAuth==='1' turns the
+// published ERP's staff-token login ON; absent/'0' keeps the legacy PIN. The
+// bridge allowlist (normalizeErpSettings) must preserve this key — see NOTES.
+export interface ErpSettings {
+  /** '1' = published-app staff-token login; absent/'0' = legacy PIN (default). */
+  staffAuth?: string;
+}
+
+/** The three ERP roles, matching StaffRole in cdz-data-token.ts (BE). */
+export type StaffRoleId = 'owner' | 'manager' | 'staff';
+
+/** A staff member as returned by GET/POST/PUT /erp/staff (NEVER any secret). */
+export interface StaffMember {
+  id: string;
+  name: string;
+  phone: string;
+  role: string;
+  active: boolean;
+  createdAt: string;
+}
+
+/** FR role metadata for studio pickers + explainer (label + app-scope copy). */
+export const STAFF_ROLE_META: Record<
+  StaffRoleId,
+  { label: string; scope: string }
+> = {
+  owner: {
+    label: 'Propriétaire',
+    scope: 'Tous les onglets, y compris Réglages et la gestion de l’équipe.',
+  },
+  manager: {
+    label: 'Gérant',
+    scope: 'Tous les onglets sauf Réglages (commandes, stock, clients, dépenses…).',
+  },
+  staff: {
+    label: 'Employé',
+    scope: 'Commandes uniquement — prise et suivi des commandes.',
+  },
+};
+
+/** Result of GET /erp/staff: 'disabled' = flag OFF (404) → quiet gate. */
+export type StaffListOutcome =
+  | { status: 'ok'; staff: StaffMember[] }
+  | { status: 'disabled' }
+  | { status: 'error'; message: string };
+
+/** Staff mutations: adds 'disabled' (flag-off 404) to the standard outcome. */
+export type StaffMutateOutcome<T> =
+  | { status: 'ok'; data: T }
+  | { status: 'disabled' }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** Normalize one raw staff row from the bridge to the pinned StaffMember shape. */
+function toStaffMember(raw: unknown): StaffMember | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const id = String(r.id || '');
+  if (!id) return null;
+  return {
+    id,
+    name: String(r.name || ''),
+    phone: String(r.phone || ''),
+    role: String(r.role || ''),
+    active: r.active !== false,
+    createdAt: String(r.createdAt || ''),
+  };
+}
+
+/** Build a wa.me link for a DZ phone (0X… → 213X…); '' → bare wa.me. */
+export function waHref(phone: string | undefined): string {
+  let d = String(phone || '').replace(/[^0-9]/g, '');
+  if (!d) return 'https://wa.me/';
+  if (d.charAt(0) === '0') d = '213' + d.slice(1);
+  return 'https://wa.me/' + d;
+}
+
+/** GET /api/v1/apps/:slug/erp/staff — list staff (owner-authed). */
+export async function fetchStaff(slug: string): Promise<StaffListOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/erp/staff`),
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — impossible de charger l’équipe.' };
+  }
+  // 404 = CDZ_ERP_STAFF_AUTH off (route absent) → quiet "activation en attente".
+  if (res.status === 404) {
+    return { status: 'disabled' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { staff?: unknown; message?: unknown })
+    | null;
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Connectez-vous pour gérer l’équipe.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Impossible de charger l’équipe (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const staff = Array.isArray(data?.staff)
+    ? (data.staff as unknown[])
+        .map(toStaffMember)
+        .filter((m): m is StaffMember => m != null)
+    : [];
+  return { status: 'ok', staff };
+}
+
+/** Shared response handler for the staff mutation routes (create/update/revoke). */
+async function staffMutate<T>(
+  path: string,
+  method: 'POST' | 'PUT',
+  body?: Record<string, unknown>
+): Promise<StaffMutateOutcome<T>> {
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(path), {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+  }
+  // 404 = flag off (route absent) → 'disabled'. NOTE: the update/revoke routes
+  // also 404 on a genuinely missing staff id, but that path only runs when the
+  // list (same flag) already returned rows, so a 404 here means the flag flipped.
+  if (res.status === 404) {
+    return { status: 'disabled' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { error?: unknown; message?: unknown })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Reconnectez-vous.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : res.status === 400 && typeof data?.message === 'string'
+            ? (data.message as string)
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `L’opération a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return { status: 'ok', data: data as T };
+}
+
+/**
+ * POST /api/v1/apps/:slug/erp/staff — create a staff member. Returns the record
+ * PLUS a ONE-TIME staffToken (shown once; never re-derivable from the list).
+ */
+export function createStaff(
+  slug: string,
+  body: { name: string; phone?: string; role: StaffRoleId }
+): Promise<StaffMutateOutcome<{ ok?: boolean; staff?: StaffMember; staffToken?: string }>> {
+  return staffMutate(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/staff`,
+    'POST',
+    body
+  );
+}
+
+/** PUT /api/v1/apps/:slug/erp/staff/:id — update role and/or active flag. */
+export function updateStaff(
+  slug: string,
+  id: string,
+  patch: { role?: StaffRoleId; active?: boolean }
+): Promise<StaffMutateOutcome<{ ok?: boolean; staff?: StaffMember }>> {
+  return staffMutate(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/staff/${encodeURIComponent(id)}`,
+    'PUT',
+    patch
+  );
+}
+
+/**
+ * POST /api/v1/apps/:slug/erp/staff/:id/revoke — rotate the revocation nonce
+ * (every old token for this member dies immediately) and return a fresh
+ * one-time staffToken so the owner can re-share access.
+ */
+export function revokeStaff(
+  slug: string,
+  id: string
+): Promise<StaffMutateOutcome<{ ok?: boolean; staffToken?: string }>> {
+  return staffMutate(
+    `/api/v1/apps/${encodeURIComponent(slug)}/erp/staff/${encodeURIComponent(id)}/revoke`,
+    'POST'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// R3-h (WSB-4/5) — "Modifier avec l'IA" API layer. Thin wrappers over the R2
+// shop-AI-edit + ShopState + staleness routes, each returning a discriminated
+// outcome so the panel (shop-ai-edit.tsx) renders loading/error/quiet-gate
+// states without guessing. Flag-gated routes (CDZ_SHOP_AI_EDIT / CDZ_SHOP_STATE
+// / CDZ_FEATURES_ENABLED) 404 when OFF → surfaced as 'unavailable' so the UI
+// quiet-gates to "bientôt" rather than erroring. All same-origin via cdzApiUrl +
+// credentials:'include' (first-party session cookie), matching the wrappers
+// above. NONE of these throw for a documented status — network faults degrade to
+// a typed 'error'.
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/apps/:slug/source — recover the live storefront HTML (edit base). */
+export type ShopSourceOutcome =
+  | { status: 'ok'; html: string; source: string }
+  | { status: 'unavailable' } // route 404 (CDZ_SHOP_AI_EDIT off) or app not found
+  | { status: 'error'; message: string };
+
+/**
+ * GET the current published HTML for a store (server-side recovery so editing
+ * works cross-device). A 404 means the flag is off OR the app is unknown →
+ * 'unavailable' (caller quiet-gates). A 502 source_fetch_failed is a transient
+ * recovery problem → typed 'error'.
+ */
+export async function fetchShopSource(slug: string): Promise<ShopSourceOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/source`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement de la boutique.' };
+  }
+  if (res.status === 404) {
+    return { status: 'unavailable' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<{ html: string; source: string }> & { error?: unknown; message?: unknown })
+    | null;
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Impossible de récupérer la source (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const html = typeof data?.html === 'string' ? data.html : '';
+  if (!html) {
+    return { status: 'error', message: 'La source récupérée est vide — réessayez.' };
+  }
+  return {
+    status: 'ok',
+    html,
+    source: typeof data?.source === 'string' ? data.source : 'render',
+  };
+}
+
+/** POST /api/v1/apps/:slug/ai-edit response — does NOT deploy (FE previews then deploys). */
+export type AiEditOutcome =
+  | { status: 'ok'; html: string; bytes: number; seconds?: number; summary?: string }
+  | { status: 'contract'; violations: string[]; message: string } // 422 contract_violation
+  | { status: 'unavailable' } // route 404 (CDZ_SHOP_AI_EDIT off)
+  | { status: 'error'; message: string };
+
+/**
+ * POST an AI edit instruction for a store. On 422 the shop-contract lint (+ one
+ * server-side auto-retry) still failed → the violation list comes back so the
+ * caller can show a friendly error + réessayer. On success the FULL edited HTML
+ * comes back for a srcdoc preview; publishing goes through the existing deployApp
+ * (same slug = cap-safe). Never throws for a documented status.
+ */
+export async function aiEditShop(
+  slug: string,
+  instruction: string
+): Promise<AiEditOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/ai-edit`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ instruction }),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — aucune modification effectuée.' };
+  }
+  if (res.status === 404) {
+    return { status: 'unavailable' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<{
+        ok: boolean;
+        html: string;
+        bytes: number;
+        seconds: number;
+        summary: string;
+        error: string | { message?: string };
+        violations: unknown;
+        message: string;
+      }>)
+    | null;
+  if (res.status === 422 && (data?.error as string) === 'contract_violation') {
+    const violations = Array.isArray(data?.violations)
+      ? (data.violations as unknown[]).map(v => String(v)).filter(Boolean)
+      : [];
+    return {
+      status: 'contract',
+      violations,
+      message:
+        typeof data?.message === 'string' && data.message
+          ? data.message
+          : 'La modification proposée casserait votre boutique.',
+    };
+  }
+  if (!res.ok) {
+    const message =
+      typeof data?.error === 'object' && data.error?.message
+        ? (data.error.message as string)
+        : res.status === 401
+          ? 'Veuillez vous reconnecter.'
+          : res.status === 403
+            ? 'Cette boutique appartient à un autre compte.'
+            : res.status === 413
+              ? 'Votre instruction est trop longue — raccourcissez-la.'
+              : res.status === 502
+                ? 'Le générateur est indisponible pour le moment — réessayez dans un instant.'
+                : typeof data?.message === 'string'
+                  ? (data.message as string)
+                  : `La modification a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const html = typeof data?.html === 'string' ? data.html : '';
+  if (!html) {
+    return { status: 'error', message: 'Le générateur a renvoyé une page vide — réessayez.' };
+  }
+  return {
+    status: 'ok',
+    html,
+    bytes: typeof data?.bytes === 'number' ? data.bytes : html.length,
+    ...(typeof data?.seconds === 'number' ? { seconds: data.seconds } : {}),
+    ...(typeof data?.summary === 'string' && data.summary ? { summary: data.summary } : {}),
+  };
+}
+
+/** One recorded ShopState version — METADATA only (HTML fetched via versions/:id). */
+export interface ShopStateVersion {
+  id: string;
+  at: string;
+  note: string;
+  bytes: number;
+}
+
+/** One ShopState activity-log entry. */
+export interface ShopStateLogEntry {
+  at: string;
+  kind: 'deploy' | 'ai' | 'feature' | 'appearance' | 'rollback' | 'note';
+  note: string;
+}
+
+/** Client-safe ShopState projection (GET /state) — never carries raw HTML. */
+export interface ShopStateMeta {
+  templateId: string | null;
+  featureSet: string[];
+  hasAiPatch: boolean;
+  versions: ShopStateVersion[];
+  log: ShopStateLogEntry[];
+}
+
+export type ShopStateOutcome =
+  | { status: 'ok'; state: ShopStateMeta }
+  | { status: 'unavailable' } // route 404 (CDZ_SHOP_STATE off) or app not found
+  | { status: 'error'; message: string };
+
+/** GET /api/v1/apps/:slug/state — the server-side ShopState metadata + versions. */
+export async function fetchShopState(slug: string): Promise<ShopStateOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/state`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement de l’historique.' };
+  }
+  if (res.status === 404) {
+    return { status: 'unavailable' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { ok?: boolean; state?: Partial<ShopStateMeta> & Record<string, unknown>; message?: unknown }
+    | null;
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Veuillez vous reconnecter.'
+        : res.status === 403
+          ? 'Cette boutique appartient à un autre compte.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Impossible de charger l’historique (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const s = (data?.state && typeof data.state === 'object' ? data.state : {}) as Record<
+    string,
+    unknown
+  >;
+  const versions = Array.isArray(s.versions)
+    ? (s.versions as unknown[])
+        .map(v => v as Partial<ShopStateVersion>)
+        .filter(v => v && typeof v.id === 'string' && v.id)
+        .map(v => ({
+          id: String(v.id),
+          at: typeof v.at === 'string' ? v.at : '',
+          note: typeof v.note === 'string' ? v.note : '',
+          bytes: typeof v.bytes === 'number' ? v.bytes : 0,
+        }))
+    : [];
+  const log = Array.isArray(s.log)
+    ? (s.log as unknown[])
+        .map(l => l as Partial<ShopStateLogEntry>)
+        .filter(l => l && typeof l.kind === 'string')
+        .map(l => ({
+          at: typeof l.at === 'string' ? l.at : '',
+          kind: (l.kind as ShopStateLogEntry['kind']) || 'note',
+          note: typeof l.note === 'string' ? l.note : '',
+        }))
+    : [];
+  return {
+    status: 'ok',
+    state: {
+      templateId: typeof s.templateId === 'string' ? s.templateId : null,
+      featureSet: Array.isArray(s.featureSet)
+        ? (s.featureSet as unknown[]).map(f => String(f)).filter(Boolean)
+        : [],
+      hasAiPatch: s.hasAiPatch === true,
+      versions,
+      log,
+    },
+  };
+}
+
+export type ShopStateVersionOutcome =
+  | { status: 'ok'; html: string; bytes: number }
+  | { status: 'not-found' }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/** GET /api/v1/apps/:slug/state/versions/:id — one version's full HTML. */
+export async function fetchShopStateVersion(
+  slug: string,
+  versionId: string
+): Promise<ShopStateVersionOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(slug)}/state/versions/${encodeURIComponent(versionId)}`
+      ),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau lors du chargement de la version.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<{ html: string; bytes: number }> & { message?: unknown })
+    | null;
+  if (res.status === 404) {
+    // Ambiguous (flag off vs unknown id); the caller treats both as recoverable.
+    return { status: 'not-found' };
+  }
+  if (!res.ok) {
+    const message =
+      typeof data?.message === 'string'
+        ? (data.message as string)
+        : `Impossible de charger la version (${res.status}).`;
+    return { status: 'error', message };
+  }
+  const html = typeof data?.html === 'string' ? data.html : '';
+  return {
+    status: 'ok',
+    html,
+    bytes: typeof data?.bytes === 'number' ? data.bytes : html.length,
+  };
+}
+
+export type RollbackOutcome =
+  | { status: 'ok'; url: string; rolledBackTo: string }
+  | { status: 'not-found' }
+  | { status: 'writes-blocked' }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/**
+ * POST /api/v1/apps/:slug/state/rollback { versionId } — re-deploy that version's
+ * HTML under the same slug (idempotent, never trips the publish cap) and record a
+ * fresh append-only history point. Never throws for a documented status.
+ */
+export async function rollbackShopState(
+  slug: string,
+  versionId: string
+): Promise<RollbackOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/state/rollback`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ versionId }),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — aucune restauration effectuée.' };
+  }
+  if (res.status === 404) {
+    return { status: 'not-found' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<{ url: string; deploymentUrl: string; rolledBackTo: string }> & {
+        error?: unknown;
+        message?: unknown;
+      })
+    | null;
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'writes-blocked' };
+  }
+  if (!res.ok) {
+    const message =
+      typeof data?.error === 'object' && (data.error as { message?: string })?.message
+        ? ((data.error as { message?: string }).message as string)
+        : res.status === 401
+          ? 'Veuillez vous reconnecter.'
+          : res.status === 403
+            ? 'Cette boutique appartient à un autre compte.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `La restauration a échoué (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return {
+    status: 'ok',
+    url: String(data?.url || data?.deploymentUrl || ''),
+    rolledBackTo: typeof data?.rolledBackTo === 'string' ? data.rolledBackTo : versionId,
+  };
+}
+
+/** GET /api/v1/apps/:slug/staleness — model-version drift hint. */
+export type StalenessOutcome =
+  | { status: 'ok'; stale: boolean; from?: string; to?: string; templateId?: string }
+  | { status: 'unavailable' } // route 404 (CDZ_FEATURES_ENABLED off)
+  | { status: 'error'; message: string };
+
+/**
+ * GET the staleness status for a store. The route is fail-soft server-side
+ * (never 5xx for a source problem → { stale:false }); here a 404 (flag off) maps
+ * to 'unavailable' so the caller simply hides the hint.
+ */
+export async function fetchStaleness(slug: string): Promise<StalenessOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/staleness`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau.' };
+  }
+  if (res.status === 404) {
+    return { status: 'unavailable' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<{ stale: boolean; from: string; to: string; templateId: string }> & {
+        message?: unknown;
+      })
+    | null;
+  if (!res.ok) {
+    return { status: 'error', message: `Impossible de vérifier la version (${res.status}).` };
+  }
+  return {
+    status: 'ok',
+    stale: data?.stale === true,
+    ...(typeof data?.from === 'string' ? { from: data.from } : {}),
+    ...(typeof data?.to === 'string' ? { to: data.to } : {}),
+    ...(typeof data?.templateId === 'string' ? { templateId: data.templateId } : {}),
+  };
+}
+
 export type FeatureParamValue = string | number | boolean;
 
 /** POST /customize body — a {features,params} diff (+ optional appearance). */

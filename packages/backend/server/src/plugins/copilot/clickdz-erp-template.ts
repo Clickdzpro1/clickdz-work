@@ -40,6 +40,19 @@
  * Their real UIs land in R3; v1 shows a tiny "Configurez depuis le studio"
  * placeholder. No new __CLICKDZ_*__ token is introduced (flags are pure runtime).
  *
+ * STAFF LOGIN (WSE-13, R3): a second OPT-IN gate, also driven purely by the
+ * shared settings singleton — key "staffAuth". When staffAuth==='1' the single
+ * dashboard is placed behind a staff-token login screen: the owner mints a
+ * per-employee token in the studio (Équipe page), the employee pastes it here,
+ * and the app POSTs { slug, token } to /api/v1/apps-staff/verify (origin derived
+ * from the Data URL) to learn its role + permissions. The token is cached in
+ * localStorage ("cdz.erp.staff.<slug>") and auto-verified on load; the tabs are
+ * role-gated client-side (owner=all, manager=all−reglages, staff=commandes-only)
+ * ON TOP of moduleOn. A verify 404 (flag off / older server) or network failure
+ * falls back SILENTLY to the legacy no-gate dashboard. When staffAuth is
+ * absent/0 (the default) the entire mechanism is inert and the ERP renders
+ * BYTE-IDENTICALLY to today. No new __CLICKDZ_*__ token is introduced.
+ *
  * ESCAPE AUDIT: the HTML below is emitted with String.raw so the app can use
  * normal JS quotes freely. The source HTML is verified at build time to contain
  * ZERO backticks and ZERO dollar-brace sequences, so nothing inside can terminate
@@ -260,6 +273,28 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   var DATA_URL = "__CLICKDZ_DATA_URL__";
   var DATA_TOKEN = "__CLICKDZ_DATA_TOKEN__";
   var SLUG = "__CLICKDZ_SLUG__";
+  /* Bridge API origin, derived from DATA_URL (which is
+     <externalBase>/api/v2/apps-data/<slug>) by stripping that suffix. Used ONLY
+     by the optional staff-token login (WSE-13) to reach the @Public verify
+     route; when staff auth is off nothing here runs. No new serve-time token. */
+  var API_BASE = String(DATA_URL || "").replace(/\/api\/v2\/apps-data\/[^\/]*\/?$/, "");
+  var STAFF_KEY = "cdz.erp.staff." + SLUG;
+  /* French role labels + descending privilege order (mirrors StaffRole in
+     cdz-data-token.ts: owner|manager|staff). */
+  var ROLE_LABELS = { owner:"Propriétaire", manager:"Gérant", staff:"Employé" };
+  /* Staff-auth session state. Inert unless the shared settings singleton has
+     staffAuth==='1' (see staffGateActive): every field below is ignored and the
+     app renders EXACTLY like today (legacy no-gate path). */
+  var auth = {
+    token: null,      // the stored staff token (localStorage), if any
+    ok: false,        // a verify call succeeded this session
+    verifying: false, // a verify call is in flight
+    checked: false,   // an auto-verify has completed (success or failure)
+    role: null,       // 'owner' | 'manager' | 'staff'
+    staffId: null,    // the verified staff record id (display only)
+    perms: [],        // permission strings from the verify response
+    error: null       // last login error message (FR), if any
+  };
 
   var STATUSES = ["Nouvelle","Confirmée","Expédiée","Livrée","Retournée"];
   var STATUS_NEXT = { "Nouvelle":"Confirmée", "Confirmée":"Expédiée", "Expédiée":"Livrée" };
@@ -346,6 +381,117 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   }
 
   /* ============================================================
+     Staff auth (WSE-13) — OPT-IN via shared settings staffAuth==='1'.
+     When absent/0 (the default), staffGateActive() is false and EVERY function
+     below short-circuits so the app is byte-identical to the legacy no-gate ERP.
+     When '1', the single dashboard is placed behind a staff-token login: the
+     owner mints a per-employee token in the studio (Équipe), the employee pastes
+     it here, we POST /api/v1/apps-staff/verify {slug,token} to learn role +
+     permissions, persist the token in localStorage, and role-gate the tabs. A
+     404/network failure (flag flipped off, older server) falls back to the
+     legacy screen silently — the dashboard renders as today.
+     ============================================================ */
+  function staffGateActive(){
+    var s = store.settings || {};
+    return String(s.staffAuth) === "1";
+  }
+  function loadStoredToken(){
+    if(auth.token != null) return auth.token;
+    var t = null;
+    try{ t = localStorage.getItem(STAFF_KEY); }catch(e){}
+    auth.token = t || "";
+    return auth.token;
+  }
+  function storeToken(t){
+    auth.token = t || "";
+    try{ if(t) localStorage.setItem(STAFF_KEY, t); else localStorage.removeItem(STAFF_KEY); }catch(e){}
+  }
+  function roleLabel(role){ return ROLE_LABELS[role] || role || "—"; }
+  /* Client-side tab gate (defence-in-depth is on the bridge; this only hides
+     chrome). Gate INACTIVE or unknown role ⇒ allow everything (byte-identical).
+       staff   → commandes only
+       manager → all except reglages
+       owner   → all */
+  function roleAllowsTab(id){
+    if(!staffGateActive() || !auth.ok) return true;
+    if(auth.role === "owner") return true;
+    if(auth.role === "manager") return id !== "reglages";
+    if(auth.role === "staff") return id === "commandes";
+    return true;
+  }
+  /* Apply the token → role verification against the bridge. Resolves to a plain
+     result object; NEVER rejects (network/404 handled as a graceful fallback so
+     the caller can drop to the legacy dashboard). */
+  function verifyToken(tok){
+    if(!tok || !API_BASE){ return Promise.resolve({ ok:false, fallback:!API_BASE }); }
+    return fetch(API_BASE + "/api/v1/apps-staff/verify", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body:JSON.stringify({ slug:SLUG, token:tok })
+    }).then(function(r){
+      // 404 = staff auth disabled on this server (flag off / older build) →
+      // signal a silent fallback to the legacy dashboard, never an error toast.
+      if(r.status === 404){ return { ok:false, fallback:true }; }
+      if(!r.ok){ return { ok:false }; }
+      return r.json().then(function(j){ return j || { ok:false }; });
+    }).catch(function(){ return { ok:false, fallback:true }; });
+  }
+  /* Auto-verify a stored token on boot (called once settings confirm the gate is
+     on). On success populates auth + renders the dashboard; on a soft failure
+     (fallback:true) marks the gate as passed so the legacy dashboard shows. */
+  function autoVerify(){
+    if(auth.checked || auth.verifying) return;
+    var tok = loadStoredToken();
+    if(!tok){ auth.checked = true; render(); return; }
+    auth.verifying = true; render();
+    verifyToken(tok).then(function(res){
+      auth.verifying = false; auth.checked = true;
+      if(res && res.ok){
+        auth.ok = true; auth.role = res.role || null; auth.staffId = res.staffId || null;
+        auth.perms = Array.isArray(res.permissions) ? res.permissions : [];
+        auth.error = null;
+      } else if(res && res.fallback){
+        // Server says staff auth is off — behave like the legacy app.
+        auth.ok = true; auth.role = null; auth.staffId = null; auth.perms = []; auth.error = null;
+      } else {
+        // A real bad/expired/revoked token — clear it and show the login.
+        auth.ok = false; auth.role = null; auth.staffId = null; auth.perms = [];
+        storeToken("");
+      }
+      render();
+    });
+  }
+  /* Manual login from the token field on the staff screen. */
+  function submitStaffToken(tok){
+    tok = String(tok || "").trim();
+    if(!tok){ auth.error = "Collez votre jeton d'accès."; render(); return; }
+    auth.verifying = true; auth.error = null; render();
+    verifyToken(tok).then(function(res){
+      auth.verifying = false; auth.checked = true;
+      if(res && res.ok){
+        storeToken(tok);
+        auth.ok = true; auth.role = res.role || null; auth.staffId = res.staffId || null;
+        auth.perms = Array.isArray(res.permissions) ? res.permissions : [];
+        auth.error = null;
+        toast("Bienvenue — " + roleLabel(auth.role), "ok");
+      } else if(res && res.fallback){
+        // Staff auth turned off server-side → let them straight through.
+        auth.ok = true; auth.role = null; auth.staffId = null; auth.perms = []; auth.error = null;
+      } else {
+        auth.ok = false;
+        auth.error = "Jeton invalide, expiré ou révoqué. Demandez-en un nouveau au propriétaire.";
+      }
+      render();
+    });
+  }
+  function logoutStaff(){
+    storeToken("");
+    auth.ok = false; auth.role = null; auth.staffId = null; auth.perms = []; auth.error = null; auth.checked = true;
+    toast("Déconnecté", "ok");
+    render();
+  }
+
+  /* ============================================================
      Global store
      ============================================================ */
   var store = {
@@ -365,6 +511,9 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
       store.expenses  = res[3];
       store.settings  = (res[4] && res[4][0]) || null;
       store.loaded = true; store.loading = false; store.error = null;
+      // WSE-13: once settings confirm the staff gate is on, verify any stored
+      // token (one-shot). No-op when staffAuth is absent/0 → legacy behaviour.
+      if(staffGateActive()) autoVerify();
     }).catch(function(e){
       store.loading = false;
       store.error = (e && e.message) || "Erreur réseau";
@@ -578,8 +727,11 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     if(FUTURE_IDS.indexOf(id)>=0) return moduleBackendOn(id);
     return true;
   }
-  /* The nav/tabs actually rendered right now (order preserved). */
-  function activeTabs(){ return TABS.filter(function(t){ return moduleOn(t.id); }); }
+  /* The nav/tabs actually rendered right now (order preserved). moduleOn gating
+     is joined with the staff role gate (roleAllowsTab): a tab shows only when
+     BOTH pass. When staff auth is off, roleAllowsTab is always true, so this is
+     byte-identical to the module-only filter. */
+  function activeTabs(){ return TABS.filter(function(t){ return moduleOn(t.id) && roleAllowsTab(t.id); }); }
   function go(tab){ ui.tab=tab; if(location.hash!=="#"+tab) location.hash=tab; render(); }
   window.addEventListener("hashchange", function(){
     var t=(location.hash||"#apercu").replace("#","");
@@ -1016,11 +1168,19 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
      Render
      ============================================================ */
   /* A tab is valid only if it is a KNOWN module that is currently visible
-     (moduleOn). An unknown hash, or a disabled/dormant module id, falls back to
-     the Aperçu core — same effect as today for any non-tab hash. */
+     (moduleOn) AND allowed for the signed-in role (roleAllowsTab). An unknown
+     hash, a dormant module id, or a tab the role can't see falls back to the
+     first visible tab. When staff auth is off, roleAllowsTab is always true and
+     the fallback is the Aperçu core — same effect as today for any non-tab hash. */
+  function fallbackTab(){
+    var vis = activeTabs();
+    // Prefer apercu when it is visible (today's default), else the first tab.
+    for(var i=0;i<vis.length;i++){ if(vis[i].id==="apercu") return "apercu"; }
+    return vis.length ? vis[0].id : "apercu";
+  }
   function currentTab(){
     var known = TABS.some(function(t){ return t.id===ui.tab; });
-    return (known && moduleOn(ui.tab)) ? ui.tab : "apercu";
+    return (known && moduleOn(ui.tab) && roleAllowsTab(ui.tab)) ? ui.tab : fallbackTab();
   }
 
   function sidebar(){
@@ -1056,8 +1216,49 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     return bar;
   }
 
+  /* WSE-13 — the staff-token login screen. Rendered ONLY when the shared
+     settings enable the gate (staffAuth==='1') and no verified session exists.
+     dir="auto" keeps the copy correct should the shared chrome ever run RTL. */
+  function staffLogin(){
+    var val = "";
+    var root = $("#root");
+    root.innerHTML="";
+    var wrap = el("div",{style:"min-height:100vh;display:grid;place-items:center;padding:24px",dir:"auto"});
+    var card = el("div",{class:"card panel",style:"max-width:400px;width:100%;text-align:center;padding:30px 26px"});
+    card.appendChild(el("div",{style:"font-size:42px;margin-bottom:10px"},"🔐"));
+    card.appendChild(el("h1",{style:"font-size:20px;font-weight:750;margin:0 0 4px"},"Espace équipe"));
+    card.appendChild(el("div",{class:"p-sub",style:"margin-bottom:18px"},"Collez votre jeton d'accès pour ouvrir le tableau de bord."));
+    if(auth.error) card.appendChild(el("div",{class:"banner err",style:"margin-bottom:14px;text-align:start"},[ el("span",{html:"⚠️"}), el("span",{}, auth.error) ]));
+    var input = el("input",{class:"input",type:"password",placeholder:"Jeton d'accès",autocomplete:"off",style:"text-align:center;letter-spacing:.5px",value:"",oninput:function(e){ val=e.target.value; }});
+    var go = function(){ submitStaffToken(input.value); };
+    input.addEventListener("keydown", function(e){ if(e.key==="Enter") go(); });
+    card.appendChild(el("div",{style:"margin-bottom:12px;text-align:start"}, input));
+    var btn = el("button",{class:"btn primary",style:"width:100%",disabled:!!auth.verifying,onclick:go}, auth.verifying?"Vérification…":"Se connecter");
+    card.appendChild(btn);
+    card.appendChild(el("div",{class:"count-tag",style:"display:block;margin-top:16px"},"Le propriétaire crée les jetons depuis le studio ClickDz (onglet Équipe)."));
+    wrap.appendChild(card);
+    root.appendChild(wrap);
+    // Auto-focus the field so a paste can happen immediately.
+    try{ input.focus(); }catch(e){}
+  }
+
   function render(){
     var root = $("#root");
+
+    // WSE-13 gate: when staff auth is ON and this session is not verified yet,
+    // show the login screen (or a verifying spinner) instead of the dashboard.
+    // This whole block is inert when staffAuth is absent/0 → byte-identical.
+    if(staffGateActive() && !auth.ok){
+      if(auth.verifying && !auth.checked){
+        root.innerHTML="";
+        root.appendChild(el("div",{style:"min-height:100vh;display:grid;place-items:center",dir:"auto"},
+          el("div",{class:"state"},[ el("div",{class:"spin"}), el("div",{class:"st-t"},"Vérification…"), el("div",{class:"st-s"},"Connexion à votre espace") ])));
+        return;
+      }
+      staffLogin();
+      return;
+    }
+
     root.innerHTML="";
 
     root.appendChild(sidebar());
@@ -1074,6 +1275,14 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     ]));
     var right = el("div",{class:"right"});
     right.appendChild(el("button",{class:"btn icon ghost",title:"Rafraîchir",onclick:function(){loadAll();}}, store.loading?"…":"↻"));
+    // WSE-13: signed-in staff identity + logout — only when the gate is active
+    // and a session is verified with an actual role (fallback pass = no chip).
+    if(staffGateActive() && auth.ok && auth.role){
+      right.appendChild(el("span",{class:"chip",title:"Identifiant : "+(auth.staffId||"—"),style:"font-size:11.5px"},[
+        el("span",{html:"👤"}), document.createTextNode(" " + roleLabel(auth.role))
+      ]));
+      right.appendChild(el("button",{class:"btn sm",title:"Se déconnecter",onclick:logoutStaff}, "Déconnexion"));
+    }
     topbar.appendChild(right);
     main.appendChild(topbar);
 
@@ -1130,7 +1339,8 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   // expose a tiny hook for smoke tests (no-op in production use)
   window.__CDZ_ERP__ = { store:store, metrics:metrics, deriveCustomers:deriveCustomers,
     chartRevenue:chartRevenue, chartStatus:chartStatus, loadAll:loadAll, advanceStatus:advanceStatus,
-    changeStock:changeStock, ui:ui, moduleOn:moduleOn, activeTabs:activeTabs, render:render, TABS:TABS };
+    changeStock:changeStock, ui:ui, moduleOn:moduleOn, activeTabs:activeTabs, render:render, TABS:TABS,
+    auth:auth, staffGateActive:staffGateActive, roleAllowsTab:roleAllowsTab, logoutStaff:logoutStaff };
 })();
 </script>
 </body>

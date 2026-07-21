@@ -26,6 +26,14 @@ import { StockAdmin } from './admin-stock';
 import { Inventory } from './inventory';
 import { ShopAppearance } from './shop-appearance';
 import { ShopFeatures } from './shop-features';
+import { ShopTour, DEFAULT_SHOP_TOUR_STEPS, isShopTourDone } from './shop-tour';
+import { ShopAiEdit } from './shop-ai-edit';
+import { InvoicingPanel } from './invoicing';
+import { ProcurementPanel } from './procurement';
+import { ShippingPanel } from './shipping';
+import { CaissePanel } from './caisse';
+import { ReportsPanel } from './reports';
+import { TeamPanel } from './team';
 import {
   Banner,
   C,
@@ -73,7 +81,14 @@ export type DashboardSection =
   | 'clients'
   | 'settings'
   | 'appearance'
-  | 'features';
+  | 'features'
+  | 'ai-edit'
+  | 'invoicing'
+  | 'procurement'
+  | 'shipping'
+  | 'caisse'
+  | 'reports'
+  | 'team';
 
 const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'overview', label: 'Overview', icon: '📊' },
@@ -83,6 +98,13 @@ const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'clients', label: 'Clients', icon: '👥' },
   { id: 'appearance', label: 'Appearance', icon: '🎨' },
   { id: 'features', label: 'Fonctionnalités', icon: '🧩' },
+  { id: 'ai-edit', label: "Modifier avec l'IA", icon: '✨' },
+  { id: 'invoicing', label: 'Facturation', icon: '🧾' },
+  { id: 'procurement', label: 'Fournisseurs', icon: '📦' },
+  { id: 'shipping', label: 'Livraison', icon: '🚚' },
+  { id: 'caisse', label: 'Caisse', icon: '💰' },
+  { id: 'reports', label: 'Rapports', icon: '📈' },
+  { id: 'team', label: 'Équipe', icon: '👥' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -249,6 +271,7 @@ export const ErpDashboard = ({
         {SECTIONS.map(s => (
           <button
             key={s.id}
+            data-cdz-tour={s.id}
             style={tabStyle(section === s.id)}
             onClick={() => setSection(s.id)}
           >
@@ -335,6 +358,20 @@ export const ErpDashboard = ({
             onWritesBlocked={handleWritesBlocked}
             onMutated={refetch}
           />
+        ) : section === 'ai-edit' ? (
+          <ShopAiEdit slug={slug} url={url} onWritesBlocked={handleWritesBlocked} />
+        ) : section === 'invoicing' ? (
+          <InvoicingPanel slug={slug} settings={summary.settings} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
+        ) : section === 'procurement' ? (
+          <ProcurementPanel slug={slug} currency={currency} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
+        ) : section === 'shipping' ? (
+          <ShippingPanel slug={slug} settings={summary.settings} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
+        ) : section === 'caisse' ? (
+          <CaissePanel slug={slug} settings={summary.settings} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
+        ) : section === 'reports' ? (
+          <ReportsPanel slug={slug} currency={currency} onWritesBlocked={handleWritesBlocked} />
+        ) : section === 'team' ? (
+          <TeamPanel slug={slug} settings={summary.settings} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
         ) : section === 'features' ? (
           <ShopFeatures
             slug={slug}
@@ -356,6 +393,15 @@ export const ErpDashboard = ({
             onMutated={refetch}
           />
         )
+      ) : null}
+      {phase === 'ready' && !isShopTourDone(slug) ? (
+        <ShopTour
+          slug={slug}
+          steps={DEFAULT_SHOP_TOUR_STEPS}
+          sections={SECTIONS.map(s => s.id)}
+          onGoTo={s => setSection(s as DashboardSection)}
+          onDone={() => {}}
+        />
       ) : null}
     </div>
   );
