@@ -1,0 +1,639 @@
+import { AgentPalette } from '@affine/core/modules/agents/components';
+// Jauge's compact spend estimate (token/tool-call → DZD "estimé"). Imported by
+// CONTRACT NAME from the components barrel; when the sibling export isn't on
+// disk yet the barrel still resolves because the merged barrel re-exports it.
+import { SpendMeter } from '@affine/core/modules/agents/components';
+import { AgentApiError, listAgentRuns } from '@affine/core/modules/agents/api';
+import type {
+  AgentName,
+  AgentRunState,
+  AgentRunSummary,
+} from '@affine/core/modules/agents/types';
+import {
+  ViewBody,
+  ViewHeader,
+  ViewIcon,
+  ViewTitle,
+  WorkbenchService,
+} from '@affine/core/modules/workbench';
+import { useService } from '@toeverything/infra';
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+
+// ---------------------------------------------------------------------------
+// ClickDz Agents — Exécutions (run history), full-page.
+//
+// The dedicated, full-page version of the Hermes dashboard's inline
+// "Exécutions" panel (hermes/dashboard.tsx). Lists the signed-in user's durable
+// background runs for the selected agent (hermes / openclaw), newest first,
+// with a state chip, prompt preview, relative time, and a COMPACT spend
+// estimate (Jauge). Clicking a row navigates to the single-run live view
+// (run.tsx) at `/agents/run/:id?agent=<agent>`.
+//
+// Data: `listAgentRuns(agent)` — the same call the dashboard uses, which also
+// doubles as a capability probe: a 404 means CDZ_AGENTS_ENABLED is off, so we
+// show a quiet "Agents non activés" fallback instead of an error (flag-off /
+// 404 quiet fallback, per the R7 rules). Every surface has loading / empty /
+// error states.
+//
+// Agent selection is driven by the `?agent=` search param so the choice is
+// shareable/bookmarkable; it defaults to `hermes`. Mobile: single column, chips
+// wrap.
+//
+// House rules: inline styles only (no .css.ts), no new deps, shared AgentPalette
+// tokens, FR primary + darja hints, boot-safe (no runtime icon-lib dependency
+// beyond what the shared kit already pulls). Exports BOTH `Component` (the
+// react-router lazy convention every sibling page uses) and a default export.
+// ---------------------------------------------------------------------------
+
+const C = AgentPalette.color;
+const R = AgentPalette.radius;
+
+// The agents that own a durable-runs history. Kept local (not imported as a
+// runtime const) so this file never hard-depends on a registry export.
+const AGENTS: { id: AgentName; label: string; emoji: string }[] = [
+  { id: 'hermes', label: 'Hermes', emoji: '🤝' },
+  { id: 'openclaw', label: 'OpenClaw', emoji: '🛠️' },
+];
+
+type LoadState = 'loading' | 'ready' | 'error';
+
+// Per-state chip metadata (colour + FR label). Mirrors the dashboard's
+// RUN_STATE_META but scoped to the AgentRunState union so it stays exhaustive.
+const RUN_STATE_META: Record<
+  AgentRunState,
+  { label: string; color: string; bg: string; border: string }
+> = {
+  queued: {
+    label: 'En file',
+    color: C.muted,
+    bg: 'transparent',
+    border: C.border,
+  },
+  running: {
+    label: 'En cours',
+    color: C.accent,
+    bg: C.accentSoft,
+    border: C.accentBorder,
+  },
+  waiting_approval: {
+    label: 'Approbation',
+    color: C.warn,
+    bg: C.warnBg,
+    border: C.warnBorder,
+  },
+  done: {
+    label: 'Terminé',
+    color: C.okText,
+    bg: C.okBg,
+    border: C.okBorder,
+  },
+  failed: {
+    label: 'Échec',
+    color: C.errText,
+    bg: C.errBg,
+    border: C.errBorder,
+  },
+  stopped: {
+    label: 'Arrêté',
+    color: C.muted,
+    bg: 'transparent',
+    border: C.border,
+  },
+};
+
+// Coerce an unknown/loose state string into a known AgentRunState.
+function coerceRunState(v: unknown): AgentRunState {
+  const s = typeof v === 'string' ? v : '';
+  return s in RUN_STATE_META ? (s as AgentRunState) : 'queued';
+}
+
+// Coerce a search-param string into a known AgentName ('hermes' default).
+function coerceAgent(v: string | null): AgentName {
+  return v === 'openclaw' ? 'openclaw' : 'hermes';
+}
+
+// Relative-time formatter (FR). Small + dependency-free — mirrors the
+// hermes-shared `timeAgo` idiom so the two surfaces read identically.
+function timeAgo(ts?: number): string {
+  if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return '';
+  const diff = Date.now() - ts;
+  if (diff < 0) return "à l'instant";
+  const s = Math.floor(diff / 1000);
+  if (s < 45) return "à l'instant";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `il y a ${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `il y a ${h} h`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `il y a ${d} j`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `il y a ${mo} mois`;
+  return `il y a ${Math.floor(mo / 12)} an(s)`;
+}
+
+const AgentsRunsPage = () => {
+  const [params, setParams] = useSearchParams();
+  const agent = coerceAgent(params.get('agent'));
+
+  const workbench = useService(WorkbenchService).workbench;
+
+  const [state, setState] = useState<LoadState>('loading');
+  const [runs, setRuns] = useState<AgentRunSummary[]>([]);
+  // One-shot capability probe: null = probing, true = runs API answered, false
+  // = 404 (CDZ_AGENTS_ENABLED off) → the quiet "Agents non activés" fallback.
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+
+  const load = useCallback(async () => {
+    setState('loading');
+    try {
+      const rows = await listAgentRuns(agent);
+      const sorted = [...rows].sort(
+        (a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0)
+      );
+      setRuns(sorted);
+      setEnabled(true);
+      setState('ready');
+    } catch (err) {
+      // 404 ⇒ feature flag off: quiet fallback, no error surfaced.
+      if (err instanceof AgentApiError && err.status === 404) {
+        setEnabled(false);
+        setRuns([]);
+        setState('ready');
+        return;
+      }
+      // Any other failure keeps the section visible with a retryable error.
+      setEnabled(prev => (prev === true ? true : prev));
+      setState('error');
+    }
+  }, [agent]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const openRun = useCallback(
+    (runId: string) => {
+      // Navigate to the single-run live view. The agent rides along as a search
+      // param because run ids are per-agent (run.tsx needs to know which agent
+      // to attach to).
+      workbench.open(
+        `/agents/run/${encodeURIComponent(runId)}?agent=${agent}`
+      );
+    },
+    [agent, workbench]
+  );
+
+  const selectAgent = useCallback(
+    (next: AgentName) => {
+      const p = new URLSearchParams(params);
+      p.set('agent', next);
+      setParams(p, { replace: true });
+    },
+    [params, setParams]
+  );
+
+  const showQuietFallback = enabled === false;
+
+  return (
+    <>
+      <ViewTitle title="Exécutions" />
+      <ViewIcon icon="edgeless" />
+      <ViewHeader>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            height: '100%',
+            padding: '0 16px',
+            fontSize: 14,
+            fontWeight: 600,
+            color: C.text,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 16 }}>
+            🗂️
+          </span>
+          Exécutions
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              lineHeight: '15px',
+              padding: '0 6px',
+              borderRadius: 5,
+              letterSpacing: '0.05em',
+              color: C.muted,
+              backgroundColor:
+                'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
+            }}
+          >
+            béta
+          </span>
+        </div>
+      </ViewHeader>
+      <ViewBody>
+        <div
+          style={{
+            height: '100%',
+            width: '100%',
+            overflow: 'auto',
+            background: C.bg,
+            color: C.text,
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 920,
+              margin: '0 auto',
+              padding: '28px 24px 48px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 18,
+            }}
+          >
+            {/* Header + agent filter chips */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 14,
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <h1
+                  style={{
+                    margin: 0,
+                    fontSize: 22,
+                    fontWeight: 800,
+                    color: C.text,
+                    lineHeight: 1.2,
+                  }}
+                >
+                  Exécutions
+                </h1>
+                <p style={{ margin: '4px 0 0', fontSize: 12.5, color: C.muted }}>
+                  L'historique de tes runs en arrière-plan · el historique
+                  ta3 les runs · streaming en direct au clic.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void load()}
+                title="Rafraîchir"
+                style={{
+                  appearance: 'none',
+                  flexShrink: 0,
+                  width: 32,
+                  height: 32,
+                  borderRadius: R.md,
+                  border: `1px solid ${C.border}`,
+                  background: C.panel,
+                  color: C.muted,
+                  cursor: 'pointer',
+                  fontSize: 15,
+                  lineHeight: 1,
+                }}
+              >
+                ↻
+              </button>
+            </div>
+
+            {/* Agent filter */}
+            <div
+              role="tablist"
+              aria-label="Filtrer par agent"
+              style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}
+            >
+              {AGENTS.map(a => {
+                const activeAgent = a.id === agent;
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeAgent}
+                    onClick={() => selectAgent(a.id)}
+                    style={{
+                      appearance: 'none',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 7,
+                      padding: '7px 14px',
+                      borderRadius: R.pill,
+                      cursor: 'pointer',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: activeAgent ? C.accent : C.muted,
+                      background: activeAgent ? C.accentSoft : 'transparent',
+                      border: `1px solid ${
+                        activeAgent ? C.accentBorder : C.border
+                      }`,
+                      transition: 'background 150ms ease, color 150ms ease',
+                    }}
+                  >
+                    <span aria-hidden style={{ fontSize: 15 }}>
+                      {a.emoji}
+                    </span>
+                    {a.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Body: quiet fallback | loading | error | empty | list */}
+            {showQuietFallback ? (
+              <QuietFallback />
+            ) : state === 'loading' ? (
+              <LoadingRow />
+            ) : state === 'error' ? (
+              <ErrorRow onRetry={() => void load()} />
+            ) : runs.length === 0 ? (
+              <EmptyRow agentLabel={agentLabel(agent)} />
+            ) : (
+              <div
+                style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+              >
+                {runs.map(run => (
+                  <ExecutionRow
+                    key={run.runId}
+                    run={run}
+                    onOpen={() => openRun(run.runId)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </ViewBody>
+    </>
+  );
+};
+
+function agentLabel(agent: AgentName): string {
+  return AGENTS.find(a => a.id === agent)?.label ?? agent;
+}
+
+// ---- rows / states ---------------------------------------------------------
+
+const ExecutionRow = ({
+  run,
+  onOpen,
+}: {
+  run: AgentRunSummary;
+  onOpen: () => void;
+}) => {
+  const runState = coerceRunState(run.state);
+  const when = run.startedAt ?? run.endedAt;
+  const preview = (run.prompt ?? '').trim() || 'Run sans titre';
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      style={{
+        appearance: 'none',
+        textAlign: 'left',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '11px 13px',
+        borderRadius: R.lg,
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        color: C.text,
+        transition: 'background 150ms ease, border-color 150ms ease',
+      }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = C.accentSoft;
+        e.currentTarget.style.borderColor = C.accentBorder;
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = C.panel;
+        e.currentTarget.style.borderColor = C.border;
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 30,
+          height: 30,
+          flexShrink: 0,
+          borderRadius: R.md,
+          display: 'grid',
+          placeItems: 'center',
+          fontSize: 14,
+          background: C.bg,
+          border: `1px solid ${C.border}`,
+          color: C.muted,
+        }}
+      >
+        {run.channel === 'telegram' ? '✈️' : '🌙'}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span
+          style={{
+            display: 'block',
+            fontSize: 13.5,
+            fontWeight: 600,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {preview}
+        </span>
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 11,
+            color: C.muted,
+            flexWrap: 'wrap',
+            marginTop: 2,
+          }}
+        >
+          <span>{when ? timeAgo(when) : "à l'instant"}</span>
+          <span aria-hidden>·</span>
+          {/* Compact spend estimate (Jauge). Reads whatever the run summary
+              exposes; if there's no token field it estimates from step/tool-call
+              counts and labels it clearly as an estimate. Never gates a run. */}
+          <SpendMeter run={run} compact />
+        </span>
+      </span>
+      <RunStateChip state={runState} />
+      <span aria-hidden style={{ color: C.muted, fontSize: 14, flexShrink: 0 }}>
+        →
+      </span>
+    </button>
+  );
+};
+
+const RunStateChip = ({ state }: { state: AgentRunState }) => {
+  const meta = RUN_STATE_META[state];
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 10.5,
+        fontWeight: 700,
+        letterSpacing: '0.04em',
+        textTransform: 'uppercase',
+        padding: '2px 9px',
+        borderRadius: R.pill,
+        color: meta.color,
+        background: meta.bg,
+        border: `1px solid ${meta.border}`,
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: meta.color,
+          flexShrink: 0,
+        }}
+      />
+      {meta.label}
+    </span>
+  );
+};
+
+const LoadingRow = () => (
+  <div
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '18px 4px',
+      color: C.muted,
+    }}
+  >
+    <Spinner /> Chargement des exécutions…
+  </div>
+);
+
+const ErrorRow = ({ onRetry }: { onRetry: () => void }) => (
+  <div
+    style={{
+      borderRadius: R.lg,
+      border: `1px solid ${C.errBorder}`,
+      background: C.errBg,
+      padding: '14px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      flexWrap: 'wrap',
+    }}
+  >
+    <span style={{ flex: 1, minWidth: 180, fontSize: 13, color: C.text }}>
+      Impossible de charger les exécutions.
+    </span>
+    <button
+      type="button"
+      onClick={onRetry}
+      style={{
+        appearance: 'none',
+        padding: '6px 14px',
+        borderRadius: R.md,
+        border: `1px solid ${C.border}`,
+        background: C.panel,
+        color: C.text,
+        cursor: 'pointer',
+        fontSize: 12.5,
+        fontWeight: 600,
+      }}
+    >
+      Réessayer
+    </button>
+  </div>
+);
+
+const EmptyRow = ({ agentLabel }: { agentLabel: string }) => (
+  <div
+    style={{
+      borderRadius: R.lg,
+      border: `1px dashed ${C.border}`,
+      background: C.panel,
+      padding: '26px 20px',
+      textAlign: 'center',
+      color: C.muted,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+    }}
+  >
+    <span aria-hidden style={{ fontSize: 28, opacity: 0.7 }}>
+      🌙
+    </span>
+    <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+      Pas encore d'exécutions
+    </span>
+    <span style={{ fontSize: 12.5, maxWidth: 420, margin: '0 auto' }}>
+      Lance un run en arrière-plan avec {agentLabel} — makach walou pour
+      l'instant. Il continue même si tu fermes l'onglet.
+    </span>
+  </div>
+);
+
+// Flag-off / 404 quiet fallback — the whole feature is dark server-side.
+const QuietFallback = () => (
+  <div
+    style={{
+      borderRadius: R.lg,
+      border: `1px solid ${C.border}`,
+      background: C.panel,
+      padding: '26px 20px',
+      textAlign: 'center',
+      color: C.muted,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 6,
+    }}
+  >
+    <span aria-hidden style={{ fontSize: 26, opacity: 0.7 }}>
+      🔒
+    </span>
+    <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+      Agents non activés
+    </span>
+    <span style={{ fontSize: 12.5, maxWidth: 400, margin: '0 auto' }}>
+      Les exécutions d'agents ne sont pas activées sur ce serveur.
+    </span>
+  </div>
+);
+
+// Minimal local spinner (reuses the shared keyframe injected by the kit; falls
+// back to a static ring if the keyframe isn't present).
+const Spinner = () => (
+  <span
+    aria-hidden
+    style={{
+      display: 'inline-block',
+      width: 14,
+      height: 14,
+      borderRadius: '50%',
+      border: `2px solid color-mix(in srgb, ${C.accent} 30%, transparent)`,
+      borderTopColor: C.accent,
+      animation: 'cdz-agent-spin 0.7s linear infinite',
+      flex: '0 0 auto',
+    }}
+  />
+);
+
+export const Component = () => {
+  return <AgentsRunsPage />;
+};
+
+export default AgentsRunsPage;

@@ -2,10 +2,11 @@
  * Left-rail "Studios" group — quick access to the ClickDz creative surfaces.
  * Renders as a collapsible section at the top of the scrollable sidebar area.
  */
+import { useAgents } from '@affine/core/modules/agents/use-agents';
 import { MenuLinkItem } from '@affine/core/modules/app-sidebar/views';
 import {
   RecentStudiosService,
-  STUDIOS,
+  visibleStudios,
 } from '@affine/core/modules/studio';
 import { WorkbenchService } from '@affine/core/modules/workbench';
 import { useLiveData, useService } from '@toeverything/infra';
@@ -56,6 +57,13 @@ export const StudiosSection = () => {
   const workbench = useService(WorkbenchService).workbench;
   const recentStudios = useService(RecentStudiosService);
   const location = useLiveData(workbench.location$);
+  // Capability flags for the unified /agents studio. useAgents() starts from a
+  // safe default (caps.multi === false) and treats the feature-dark 404 as
+  // "disabled" without surfacing an error, so BEFORE caps resolve and whenever
+  // CDZ_AGENTS_MULTI is off, `caps.multi` is false ⇒ visibleStudios(caps)
+  // returns the legacy roster and this section renders BYTE-IDENTICAL to today.
+  // The only new effect is one fail-soft GET /api/v1/agents on mount.
+  const { caps } = useAgents();
 
   return (
     <CollapsibleSection
@@ -63,7 +71,7 @@ export const StudiosSection = () => {
       title="Studios"
       contentStyle={{ padding: '6px 8px 0 8px' }}
     >
-      {STUDIOS.map(studio => {
+      {visibleStudios(caps).map(studio => {
         const postfix =
           studio.id === 'vdz' ? (
             <NewChip />
