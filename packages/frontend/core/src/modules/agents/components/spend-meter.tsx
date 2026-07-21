@@ -22,10 +22,20 @@
 //   Number(process.env.CDZ_DZD_PER_1K||'0')) is the DZD price per 1k tokens.
 //   When it is 0 / unset we show the raw counts and a neutral "—" for cost — no
 //   invented money figure.
+//
+// R8 (POLI, additive): the user-facing copy — title, count labels, token label,
+// price line + the "estimé" note — flows through the agents i18n table via
+// `useAgentLang()` (FR default + Algerian darja). The PURE math/format helpers
+// (`estimateSpend`, `formatDzd`, `formatTokens`, `NOMINAL_TOKENS_PER_TOOL_CALL`)
+// and ALL exports + prop signatures are BYTE-IDENTICAL — only presentational
+// strings inside the component were localised. RTL-safe: the card flips for 'ar'
+// while numeric/technical spans (DZD figures, token counts) stay LTR. A couple
+// of hover-only tooltips with no catalogue key keep their FR text (fail-soft).
 
 import type { CSSProperties, ReactNode } from 'react';
 
 import type { AgentRunRecord, AgentRunSummary } from '../types';
+import { useAgentLang } from '../i18n';
 import { AgentPalette as P } from './palette';
 import { Chip } from './primitives';
 
@@ -167,6 +177,9 @@ export function estimateSpend(props: SpendMeterProps): SpendEstimate {
 // ---------------------------------------------------------------------------
 export function SpendMeter(props: SpendMeterProps) {
   const { compact, style, children } = props;
+  // Language-aware copy (FR default). Subscribes this meter to the module-level
+  // language so a toggle anywhere re-renders it.
+  const { t, dir } = useAgentLang();
   const est = estimateSpend(props);
   const hasCost = est.dzd != null;
   const costLabel = hasCost ? `≈ ${formatDzd(est.dzd as number)} DZD` : '—';
@@ -177,12 +190,15 @@ export function SpendMeter(props: SpendMeterProps) {
     // tool-call count so the chip is never empty/misleading.
     const chipText = hasCost
       ? costLabel
-      : `${est.toolCalls} ${est.toolCalls === 1 ? 'outil' : 'outils'}`;
+      : `${est.toolCalls} ${
+          est.toolCalls === 1 ? t('spend.tool.one') : t('spend.tool.many')
+        }`;
+    // Priced tooltip reuses the "estimé" note copy; unpriced uses its own key.
     const title = hasCost
-      ? `Coût estimé (estimation${
-          est.tokensExact ? '' : ' d’après le nombre d’appels d’outils'
-        }) — non exact`
-      : 'Prix par 1k tokens non configuré — appels d’outils uniquement';
+      ? est.tokensExact
+        ? t('spend.note.exact')
+        : t('spend.note.estimated')
+      : t('spend.title.compact.unpriced');
     return (
       <Chip
         color={hasCost ? P.color.text : P.color.muted}
@@ -191,7 +207,7 @@ export function SpendMeter(props: SpendMeterProps) {
         title={title}
         style={style}
       >
-        {chipText}
+        <span dir={hasCost ? 'ltr' : dir}>{chipText}</span>
       </Chip>
     );
   }
@@ -199,12 +215,13 @@ export function SpendMeter(props: SpendMeterProps) {
   // ── Full: a small card (counts + DZD estimate + an "estimé" note) ─────────
   const noteText = hasCost
     ? est.tokensExact
-      ? 'Estimé — coût indicatif, non facturé ici.'
-      : 'Estimé d’après le nombre d’appels d’outils — pas une facture.'
-    : 'Prix par 1k tokens non configuré : aucun montant affiché.';
+      ? t('spend.note.exact')
+      : t('spend.note.estimated')
+    : t('spend.note.unpriced');
 
   return (
     <div
+      dir={dir}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -235,14 +252,15 @@ export function SpendMeter(props: SpendMeterProps) {
             color: P.color.muted,
           }}
         >
-          Coût estimé
+          {t('spend.title')}
         </span>
         <span
+          dir="ltr"
           title={
             hasCost
               ? est.tokensExact
-                ? 'Estimation — non exact'
-                : 'Estimation d’après les appels d’outils — non exact'
+                ? t('spend.note.exact')
+                : t('spend.note.estimated')
               : undefined
           }
           style={{
@@ -268,7 +286,8 @@ export function SpendMeter(props: SpendMeterProps) {
         }}
       >
         <Chip title="Appels d’outils facturés sur ce run">
-          {est.toolCalls} {est.toolCalls === 1 ? 'appel d’outil' : 'appels d’outils'}
+          {est.toolCalls}{' '}
+          {est.toolCalls === 1 ? t('spend.toolCall.one') : t('spend.toolCall.many')}
         </Chip>
         <Chip
           title={
@@ -277,19 +296,22 @@ export function SpendMeter(props: SpendMeterProps) {
               : `Tokens estimés (~${NOMINAL_TOKENS_PER_TOOL_CALL}/appel d’outil)`
           }
         >
-          {est.tokensExact ? '' : '≈ '}
-          {formatTokens(est.tokens)} tokens
-          {est.tokensExact ? '' : ' (est.)'}
+          <span dir="ltr">
+            {est.tokensExact
+              ? t('spend.tokens', { value: formatTokens(est.tokens) })
+              : t('spend.tokens.est', { value: formatTokens(est.tokens) })}
+          </span>
         </Chip>
         {est.dzdPer1k > 0 ? (
           <span
+            dir="ltr"
             style={{
               fontSize: P.font.size.xs,
               color: P.color.muted,
               fontFamily: P.font.mono,
             }}
           >
-            {formatDzd(est.dzdPer1k)} DZD / 1k
+            {t('spend.perThousand', { price: formatDzd(est.dzdPer1k) })}
           </span>
         ) : null}
       </div>

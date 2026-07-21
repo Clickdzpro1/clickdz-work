@@ -197,7 +197,7 @@ export type AgentRunState =
   | 'stopped';
 
 /** How the run was started (web console vs an inbound Telegram message). */
-export type AgentRunChannel = 'web' | 'telegram';
+export type AgentRunChannel = 'web' | 'telegram' | 'schedule' | 'webhook';
 
 /**
  * Compact background-run row for the Exécutions list (`GET /runs`), newest

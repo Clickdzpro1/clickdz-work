@@ -247,6 +247,14 @@ export function buildDefaultRegistry(
   // construction), so a tool landing a few ms later is fine.
   void registerTelegramFailSoft(registry, deps).catch(() => {});
 
+  // whatsapp_send — built by Wassila in a sibling module (clickdz-wa-client).
+  // Imported fail-soft on the SAME terms as telegram above: a missing module,
+  // a non-function export, or a factory throw all resolve to a silent no-op, so
+  // this file boots whether or not that module is present. Fire-and-forget from
+  // the synchronous builder; the tool lands on the live registry a few ms later
+  // (the catalog is read per-run, well after construction).
+  void registerWhatsappFailSoft(registry, deps).catch(() => {});
+
   if (Array.isArray(deps.extraTools)) {
     for (const def of deps.extraTools) {
       if (def) registry.register(def);
@@ -384,6 +392,30 @@ export async function registerTelegramFailSoft(
     }
   } catch {
     /* Telegram module absent or errored — silently skip. */
+  }
+}
+
+/**
+ * WhatsApp twin of registerTelegramFailSoft: load Wassila's sibling module and,
+ * if it exports `createWhatsappSendTool(deps) => AgentToolDef`, register that
+ * tool. Fail-soft on every failure mode (absent module, non-function export,
+ * factory throw). Returns a promise callers may ignore (fire-and-forget from the
+ * synchronous builder) or await (tests). MIRRORS the telegram loader exactly.
+ */
+export async function registerWhatsappFailSoft(
+  registry: ClickDzToolRegistry,
+  deps: AgentToolRegistryDeps
+): Promise<void> {
+  try {
+    const mod: any = await import('./clickdz-wa-client');
+    if (mod && typeof mod.createWhatsappSendTool === 'function') {
+      const def = mod.createWhatsappSendTool(deps);
+      if (def && typeof def.name === 'string') {
+        registry.register(def as AgentToolDef);
+      }
+    }
+  } catch {
+    /* WhatsApp module absent or errored — silently skip. */
   }
 }
 

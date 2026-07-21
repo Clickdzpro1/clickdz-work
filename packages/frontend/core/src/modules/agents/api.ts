@@ -365,6 +365,126 @@ export function listAgents(): Promise<AgentsListResponse> {
   return requestJson<AgentsListResponse>(`/api/v1/agents`);
 }
 
+// ── Agent triggers (R8: scheduled + webhook) ──────────────────────────────────
+//
+// A trigger turns an agent into something that runs ITSELF: on a preset schedule
+// (a backend cron sweep fires it) or on an inbound webhook POST. These helpers
+// wrap the Horloge trigger controller (SEPARATE from the run console — note the
+// plural `agents` segment): CRUD under `/api/v1/agents/:agent/triggers`, gated by
+// `CDZ_AGENT_TRIGGERS_ENABLED` (+ `CDZ_AGENTS_ENABLED`) on the backend. Like
+// {@link listAgentRuns}, each doubles as a capability probe — a caller catches
+// {@link AgentApiError} and treats `.status === 404` as "feature off" (hide the
+// UI). The wire record mirrors the backend `view(rec)` shape EXACTLY (the record
+// plus, for a webhook, the copy-paste `webhookUrl` — the secret is embedded in
+// that URL; it is also returned raw as {@link AgentTrigger.hookSecret}). Preset
+// ids are the backend contract: `hourly` | `daily@HH:MM` | `weekly@D@HH:MM`
+// (D = 1=Mon .. 7=Sun).
+
+/** How a trigger fires: on a preset schedule (`cron`) or an inbound webhook POST. */
+export type AgentTriggerKind = 'cron' | 'webhook';
+
+/**
+ * A persisted agent trigger (GET/POST `/api/v1/agents/:agent/triggers`). Mirrors
+ * the backend record plus the derived `webhookUrl` (present only for webhook
+ * triggers). All optional fields tolerate a partial/evolving payload so the UI
+ * never crashes on an older record.
+ */
+export interface AgentTrigger {
+  /** Server-allocated id (UUID). */
+  id: string;
+  /** Owner user id (echoed back by the backend). */
+  userId: string;
+  /** Which agent this trigger drives. */
+  agent: AgentName;
+  /** Schedule (`cron`) vs inbound webhook (`webhook`). */
+  kind: AgentTriggerKind;
+  /** Preset schedule id for a `cron` trigger: `hourly` | `daily@HH:MM` | `weekly@D@HH:MM`. */
+  preset?: string;
+  /** Webhook secret (webhook kind only); also embedded in {@link webhookUrl}. */
+  hookSecret?: string;
+  /** The task the agent runs each time the trigger fires. */
+  prompt: string;
+  /** Whether the trigger is active (a paused trigger never fires). */
+  active: boolean;
+  /** ms since epoch the trigger last fired, when it has. */
+  lastFiredAt?: number;
+  /** ms since epoch the trigger will next fire (cron kind). */
+  nextFireAt?: number;
+  /** ms since epoch the trigger was created. */
+  createdAt: number;
+  /** Copy-paste inbound webhook URL (webhook kind only): `.../api/v1/agents/hooks/{id}.{secret}`. */
+  webhookUrl?: string;
+}
+
+/** Fields accepted when creating a trigger (POST body). */
+export interface CreateTriggerInput {
+  kind: AgentTriggerKind;
+  /** Required for `cron`: `hourly` | `daily@HH:MM` | `weekly@D@HH:MM`. Omitted for `webhook`. */
+  preset?: string;
+  /** The task prompt (2..8000 chars, enforced server-side). */
+  prompt: string;
+}
+
+/**
+ * List the signed-in user's triggers for an agent (newest first). Throws {@link
+ * AgentApiError} — a `.status === 404` means the triggers feature is off, so the
+ * caller can flag-detect and show a quiet fallback. Returns `[]` on a non-array
+ * body.
+ */
+export async function listTriggers(agent: AgentName): Promise<AgentTrigger[]> {
+  const rows = await requestJson<AgentTrigger[]>(
+    `/api/v1/agents/${agent}/triggers`
+  );
+  return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Create a trigger for an agent. For `kind: 'cron'` pass a valid `preset`; for
+ * `kind: 'webhook'` the backend mints a secret and returns the record with a
+ * copy-paste {@link AgentTrigger.webhookUrl}. Throws {@link AgentApiError}
+ * (notably `.status === 404` when the feature is off, `.status === 400` on an
+ * invalid preset/prompt).
+ */
+export function createTrigger(
+  agent: AgentName,
+  input: CreateTriggerInput
+): Promise<AgentTrigger> {
+  return requestJson<AgentTrigger>(`/api/v1/agents/${agent}/triggers`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify(input),
+  });
+}
+
+/** Delete a trigger by id (idempotent server-side). Throws {@link AgentApiError} on a transport/HTTP failure. */
+export async function deleteTrigger(
+  agent: AgentName,
+  id: string
+): Promise<void> {
+  await requestJson<unknown>(
+    `/api/v1/agents/${agent}/triggers/${encodeURIComponent(id)}`,
+    { method: 'DELETE' }
+  );
+}
+
+/**
+ * Toggle a trigger active/paused. Returns the updated record (the backend
+ * recomputes `nextFireAt` for a re-activated cron trigger). Throws {@link
+ * AgentApiError}.
+ */
+export function toggleTrigger(
+  agent: AgentName,
+  id: string
+): Promise<AgentTrigger> {
+  return requestJson<AgentTrigger>(
+    `/api/v1/agents/${agent}/triggers/${encodeURIComponent(id)}/toggle`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+    }
+  );
+}
+
 /**
  * Load one background run's full record (state, steps timeline, finalText,
  * timings) by id. Used to seed a live view so an already-finished run renders

@@ -10,10 +10,21 @@
 // they flip to past tense with the ok/error pill. Non-tool steps keep the exact
 // prior behaviour (title || kind label). The StepList + ToolCallCard exports and
 // their props are UNCHANGED so existing Scene/Vitrail callers compile identically.
+//
+// R8 upgrade (POLI, additive): all user-facing copy — verb labels, status pills,
+// and the expanded section labels — flows through the agents i18n table via the
+// `useAgentLang()` hook (FR default + Algerian darja). VERB_MAP is now lang-aware:
+// it keeps the per-slug glyph while the running/done labels resolve from the
+// `verbs.<slug>.running|.done` keys. Exports + props are BYTE-IDENTICAL, so the
+// legacy Hermes/OpenClaw pages (which import StepList/ToolCallCard) render exactly
+// as before at the default 'fr' language. RTL-safe: technical spans (tool slug,
+// args/result/error blocks) stay dir="ltr" while natural-language copy follows
+// the active direction.
 
 import { useState } from 'react';
 
 import type { AgentStep } from '../types';
+import { type TFunc, useAgentLang } from '../i18n';
 import { AgentPalette as P, ensureAgentKeyframes } from './palette';
 import {
   Chip,
@@ -26,73 +37,46 @@ import {
 } from './primitives';
 
 // ---------------------------------------------------------------------------
-// Verb presentation for tool calls (R7). Maps a tool slug → a small glyph and
-// a { running, done } French label pair. The keys cover the agent-runtime tools
-// (web_search / web_fetch / telegram_send / shop_erp_summary / shops_list /
-// whatsapp_send / code|run …); anything unknown falls back to a humanised slug.
-// Emoji glyphs are fine here (house rule) and degrade to KIND_META otherwise.
+// Verb presentation for tool calls (R7 + R8). Maps a tool slug → a small glyph;
+// the running/done labels are LANGUAGE-AWARE and resolved at render time from
+// the i18n `verbs.<slug>.running|.done` keys. The keys cover the agent-runtime
+// tools (web_search / web_fetch / telegram_send / shop_erp_summary / shops_list /
+// whatsapp_send / code|run|shell …); anything unknown falls back to a humanised
+// slug. Emoji glyphs are fine here (house rule) and degrade to KIND_META otherwise.
 // ---------------------------------------------------------------------------
 interface Verb {
+  /** Small glyph shown before the verb label (present + past). */
   icon: string;
-  /** Present-continuous label shown while the step is in-flight. */
-  running: string;
-  /** Past-tense label shown once the step has completed. */
-  done: string;
 }
 
+// Per-slug glyphs. The running/past labels live in i18n (`verbs.<slug>.*`) so a
+// language switch flips them; keeping the icon here preserves the exact glyphs.
 const VERB_MAP: Record<string, Verb> = {
-  web_search: { icon: '🔎', running: 'Recherche web…', done: 'Recherche web' },
-  web_fetch: {
-    icon: '🌐',
-    running: "Lecture d'une page…",
-    done: 'Page lue',
-  },
-  web_crawl: {
-    icon: '🌐',
-    running: "Lecture d'une page…",
-    done: 'Page lue',
-  },
-  web_browse: {
-    icon: '🌐',
-    running: "Lecture d'une page…",
-    done: 'Page lue',
-  },
-  telegram_send: {
-    icon: '📨',
-    running: 'Envoi Telegram…',
-    done: 'Message Telegram envoyé',
-  },
-  whatsapp_send: {
-    icon: '💬',
-    running: 'Envoi WhatsApp…',
-    done: 'Message WhatsApp envoyé',
-  },
-  shop_erp_summary: {
-    icon: '📊',
-    running: 'Lecture ERP…',
-    done: 'ERP consulté',
-  },
-  shops_list: {
-    icon: '🏪',
-    running: 'Liste des boutiques…',
-    done: 'Boutiques listées',
-  },
-  code: { icon: '⌨️', running: 'Exécution…', done: 'Code exécuté' },
-  run: { icon: '›_', running: 'Exécution…', done: 'Commande exécutée' },
-  shell: { icon: '›_', running: 'Exécution…', done: 'Commande exécutée' },
+  web_search: { icon: '🔎' },
+  web_fetch: { icon: '🌐' },
+  web_crawl: { icon: '🌐' },
+  web_browse: { icon: '🌐' },
+  telegram_send: { icon: '📨' },
+  whatsapp_send: { icon: '💬' },
+  shop_erp_summary: { icon: '📊' },
+  shops_list: { icon: '🏪' },
+  code: { icon: '⌨️' },
+  run: { icon: '›_' },
+  shell: { icon: '›_' },
 };
 
 // Humanise an unknown tool slug into a readable label: strip a common provider
 // prefix, split on _/-/. and Title-case the words ("composio.gmail_send" →
-// "Gmail send"). Keeps it short; never throws on odd input.
-function humanizeTool(tool: string): string {
+// "Gmail send"). Keeps it short; never throws on odd input. `fallback` is the
+// (already-localised) label used when the slug yields no words.
+function humanizeTool(tool: string, fallback: string): string {
   const cleaned = (tool || '').split(/[.:/]/).pop() ?? tool;
   const words = cleaned
     .replace(/[_-]+/g, ' ')
     .trim()
     .split(/\s+/)
     .filter(Boolean);
-  if (words.length === 0) return tool || 'Outil';
+  if (words.length === 0) return tool || fallback;
   const [first, ...rest] = words;
   return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ');
 }
@@ -100,24 +84,28 @@ function humanizeTool(tool: string): string {
 /**
  * Derive the headline + glyph for a step. Tool-call steps get the verb
  * treatment (present tense while running, past tense once done); every other
- * kind keeps the historical `title || KIND_META.label` behaviour.
+ * kind keeps the historical `title || KIND_META.label` behaviour. `t` resolves
+ * the language-aware verb labels + the humanise fallback.
  */
 function stepPresentation(
   step: AgentStep,
-  running: boolean
+  running: boolean,
+  t: TFunc
 ): { label: string; icon: string; isVerb: boolean } {
   const meta = KIND_META[(step.kind as StepKind) ?? 'tool'] ?? KIND_META.tool;
   if (step.kind === 'tool' && step.tool) {
     const verb = VERB_MAP[step.tool];
     if (verb) {
       return {
-        label: running ? verb.running : verb.done,
+        label: running
+          ? t(`verbs.${step.tool}.running`)
+          : t(`verbs.${step.tool}.done`),
         icon: verb.icon,
         isVerb: true,
       };
     }
     // Unknown tool: humanise the slug, add an ellipsis while running.
-    const human = humanizeTool(step.tool);
+    const human = humanizeTool(step.tool, t('toolcall.fallback'));
     return {
       label: running ? `${human}…` : human,
       icon: meta.icon,
@@ -131,7 +119,12 @@ function stepPresentation(
   };
 }
 
-function statusPill(step: AgentStep): {
+// Status pill: colours are fixed; the short text label is language-aware
+// (toolcall.pill.failed|ok|thinking|pending).
+function statusPill(
+  step: AgentStep,
+  t: TFunc
+): {
   text: string;
   color: string;
   bg: string;
@@ -139,7 +132,7 @@ function statusPill(step: AgentStep): {
 } {
   if (step.error || step.ok === false) {
     return {
-      text: 'failed',
+      text: t('toolcall.pill.failed'),
       color: P.color.errText,
       bg: P.color.errBg,
       border: P.color.errBorder,
@@ -147,7 +140,7 @@ function statusPill(step: AgentStep): {
   }
   if (step.ok === true) {
     return {
-      text: 'ok',
+      text: t('toolcall.pill.ok'),
       color: P.color.okText,
       bg: P.color.okBg,
       border: P.color.okBorder,
@@ -155,7 +148,9 @@ function statusPill(step: AgentStep): {
   }
   // Undefined ok → in-progress / informational (thoughts, planned calls).
   return {
-    text: step.kind === 'thought' ? 'thinking' : 'pending',
+    text: step.kind === 'thought'
+      ? t('toolcall.pill.thinking')
+      : t('toolcall.pill.pending'),
     color: P.color.muted,
     bg: 'transparent',
     border: P.color.border,
@@ -174,14 +169,17 @@ export function ToolCallCard({
   defaultOpen?: boolean;
 }) {
   ensureAgentKeyframes();
+  // Language-aware copy (FR default). The hook subscribes this card to the
+  // module-level language so a toggle anywhere re-renders it.
+  const { t, dir } = useAgentLang();
   const meta = KIND_META[(step.kind as StepKind) ?? 'tool'] ?? KIND_META.tool;
   const failed = step.error || step.ok === false;
   // "Running" = actively-highlighted AND not yet resolved (no ok/error yet).
   const running = !!active && step.ok === undefined && !step.error;
-  const present = stepPresentation(step, running);
+  const present = stepPresentation(step, running, t);
   const [open, setOpen] = useState(() => defaultOpen ?? !!failed);
   const argsText = formatArgs(step.args);
-  const pill = statusPill(step);
+  const pill = statusPill(step, t);
   const n = index ?? step.i;
   const dur = formatDuration((step as { durationMs?: number }).durationMs);
   const hasBody =
@@ -194,6 +192,7 @@ export function ToolCallCard({
   return (
     <div
       className="cdz-agent-step"
+      dir={dir}
       style={{
         borderRadius: P.radius.md,
         background: P.color.bg,
@@ -253,6 +252,7 @@ export function ToolCallCard({
               fontSize: P.font.size.md,
               fontWeight: 600,
               flex: 1,
+              minWidth: 0,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -264,6 +264,7 @@ export function ToolCallCard({
           </span>
           {step.tool ? (
             <span
+              dir="ltr"
               style={{
                 fontFamily: P.font.mono,
                 fontSize: P.font.size.sm,
@@ -271,6 +272,7 @@ export function ToolCallCard({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
+                minWidth: 0,
                 maxWidth: 160,
               }}
             >
@@ -290,7 +292,10 @@ export function ToolCallCard({
             </Chip>
           ) : null}
           {dur ? (
-            <span style={{ fontSize: P.font.size.xs, color: P.color.muted }}>
+            <span
+              dir="ltr"
+              style={{ fontSize: P.font.size.xs, color: P.color.muted }}
+            >
               {dur}
             </span>
           ) : null}
@@ -337,7 +342,7 @@ export function ToolCallCard({
         >
           {step.detail ? (
             <div>
-              <div style={labelStyle}>Detail</div>
+              <div style={labelStyle}>{t('toolcall.detail')}</div>
               <div
                 style={{
                   fontSize: P.font.size.md,
@@ -353,28 +358,29 @@ export function ToolCallCard({
           ) : null}
           {step.tool ? (
             <div>
-              <div style={labelStyle}>Tool call</div>
-              <pre style={preStyle}>
+              <div style={labelStyle}>{t('toolcall.toolCall')}</div>
+              <pre dir="ltr" style={preStyle}>
                 {step.tool}
                 {argsText ? `\n${argsText}` : ''}
               </pre>
             </div>
           ) : argsText ? (
             <div>
-              <div style={labelStyle}>Arguments</div>
-              <pre style={preStyle}>{argsText}</pre>
+              <div style={labelStyle}>{t('toolcall.arguments')}</div>
+              <pre dir="ltr" style={preStyle}>{argsText}</pre>
             </div>
           ) : null}
           {step.resultPreview ? (
             <div>
-              <div style={labelStyle}>Result</div>
-              <pre style={preStyle}>{step.resultPreview}</pre>
+              <div style={labelStyle}>{t('toolcall.result')}</div>
+              <pre dir="ltr" style={preStyle}>{step.resultPreview}</pre>
             </div>
           ) : null}
           {step.error ? (
             <div>
-              <div style={labelStyle}>Error</div>
+              <div style={labelStyle}>{t('toolcall.error')}</div>
               <pre
+                dir="ltr"
                 style={{
                   ...preStyle,
                   color: P.color.stderrText,

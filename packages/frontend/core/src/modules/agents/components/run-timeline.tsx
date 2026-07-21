@@ -8,8 +8,16 @@
 // component never fetches. Scene mounts it in the single-run live view, feeding
 // it straight from the durable `useAgentRunStream` hook
 // ({ steps, state, finalText, pendingApproval, approve }).
+//
+// R8 (POLI): user-facing copy now flows through the agents i18n table via the
+// `useAgentLang()` hook (FR default + Algerian darja; module-level listener so a
+// language switch re-renders every mounted component at once). The exported
+// props are UNCHANGED (RunTimeline / RunTimelineProps), so every Scene caller
+// compiles + behaves identically at the default 'fr' language. RTL-safe: the
+// rail flips for 'ar' but mixed technical content stays LTR inside the cards.
 
 import type { AgentRunState, AgentStep } from '../types';
+import { type TFunc, useAgentLang } from '../i18n';
 import {
   ApprovalPrompt,
   type ApprovalRequest,
@@ -35,12 +43,14 @@ interface BannerMeta {
   border: string;
 }
 
-function bannerFor(state: AgentRunState): BannerMeta | null {
+// Banner label copy is language-aware: `t` resolves the terminal-state label
+// (timeline.done / .failed / .stopped) — icons + colours stay in the component.
+function bannerFor(state: AgentRunState, t: TFunc): BannerMeta | null {
   switch (state) {
     case 'done':
       return {
         icon: '✓',
-        label: 'Terminé',
+        label: t('timeline.done'),
         color: P.color.okText,
         bg: P.color.okBg,
         border: P.color.okBorder,
@@ -48,7 +58,7 @@ function bannerFor(state: AgentRunState): BannerMeta | null {
     case 'failed':
       return {
         icon: '✕',
-        label: 'Échec',
+        label: t('timeline.failed'),
         color: P.color.errText,
         bg: P.color.errBg,
         border: P.color.errBorder,
@@ -56,7 +66,7 @@ function bannerFor(state: AgentRunState): BannerMeta | null {
     case 'stopped':
       return {
         icon: '■',
-        label: 'Arrêté',
+        label: t('timeline.stopped'),
         color: P.color.muted,
         bg: 'transparent',
         border: P.color.border,
@@ -162,10 +172,13 @@ export function RunTimeline({
   loading,
 }: RunTimelineProps) {
   ensureAgentKeyframes();
+  // Language-aware copy (FR default). The hook subscribes this component to the
+  // module-level language so a toggle anywhere re-renders the whole timeline.
+  const { t, dir } = useAgentLang();
 
   const running = state === 'running' || state === 'queued';
   const terminal = TERMINAL_STATES.has(state);
-  const banner = bannerFor(state);
+  const banner = bannerFor(state, t);
   const hasSteps = Array.isArray(steps) && steps.length > 0;
 
   // Index of the step that should pulse: the last step, while the run is live
@@ -196,7 +209,7 @@ export function RunTimeline({
         }}
       >
         <Spinner size={18} />
-        <span style={{ fontSize: P.font.size.md }}>Chargement du run…</span>
+        <span style={{ fontSize: P.font.size.md }}>{t('timeline.loading')}</span>
       </div>
     );
   }
@@ -207,6 +220,7 @@ export function RunTimeline({
       <div
         role="status"
         aria-live="polite"
+        dir={dir}
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -226,8 +240,8 @@ export function RunTimeline({
             <Spinner size={18} />
             <span style={{ fontSize: P.font.size.md }}>
               {state === 'queued'
-                ? 'En file d’attente…'
-                : "L'agent démarre…"}
+                ? t('timeline.queued')
+                : t('timeline.starting')}
             </span>
           </>
         ) : banner ? (
@@ -239,11 +253,11 @@ export function RunTimeline({
               {banner.icon}
             </span>
             <span style={{ fontSize: P.font.size.md }}>
-              {banner.label} — aucune étape enregistrée.
+              {t('timeline.terminalNoSteps', { state: banner.label })}
             </span>
           </>
         ) : (
-          <span style={{ fontSize: P.font.size.md }}>Aucune étape.</span>
+          <span style={{ fontSize: P.font.size.md }}>{t('timeline.noSteps')}</span>
         )}
       </div>
     );
@@ -252,6 +266,7 @@ export function RunTimeline({
   return (
     <div
       className="cdz-agent-fade"
+      dir={dir}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -265,7 +280,7 @@ export function RunTimeline({
       {hasSteps ? (
         <div
           role="list"
-          aria-label="Étapes du run"
+          aria-label={t('timeline.stepsLabel')}
           style={{ display: 'flex', flexDirection: 'column' }}
         >
           {steps.map((step, idx) => (
@@ -299,7 +314,7 @@ export function RunTimeline({
                 }}
               >
                 <Spinner size={13} />
-                <span>L'agent réfléchit…</span>
+                <span>{t('timeline.thinking')}</span>
               </div>
             </TimelineRow>
           ) : null}
@@ -378,7 +393,7 @@ export function RunTimeline({
             <span aria-hidden="true" style={{ color: P.color.accent }}>
               ✦
             </span>
-            Réponse finale
+            {t('timeline.finalAnswer')}
           </div>
           <MarkdownLite text={finalText} />
         </div>

@@ -6,6 +6,7 @@ import {
   Spinner,
 } from '@affine/core/modules/agents/components';
 import { AgentApiError, pairTelegram } from '@affine/core/modules/agents/api';
+import { type TFunc, useAgentLang } from '@affine/core/modules/agents/i18n';
 import { useAgents } from '@affine/core/modules/agents/use-agents';
 import {
   ViewBody,
@@ -23,8 +24,9 @@ import {
 import { type CSSProperties, type ReactNode, useCallback, useState } from 'react';
 
 // ---------------------------------------------------------------------------
-// ClickDz Agents — CONNEXIONS (WSU-5). The channels tab of the unified /agents
-// studio: how the user's agents reach the outside world.
+// ClickDz Agents — CONNEXIONS (WSU-5; R8 WhatsApp cap + Planification + i18n +
+// mobile). The channels tab of the unified /agents studio: how the user's
+// agents reach the outside world.
 //
 //   1. Telegram   — pair a Telegram chat to the account. GET /api/v1/agents/
 //                   telegram/pair mints a one-shot deep link (t.me/<bot>?start=
@@ -32,24 +34,34 @@ import { type CSSProperties, type ReactNode, useCallback, useState } from 'react
 //                   webhook binds the chat. Gated CDZ_AGENT_TELEGRAM_ENABLED on
 //                   the backend → a 404 here means "no bot configured yet", shown
 //                   as a quiet "bientôt disponible" state (never an error).
-//   2. WhatsApp   — a "bientôt" stub. Wired in R8 via the ERP WhatsApp gateway
-//                   (the store's own WA number). Reads caps only, no action yet.
+//   2. WhatsApp   — R8: reads `caps.whatsappEnabled` (Fanal). When true the card
+//                   shows a "configuré" state and a note that the agent WhatsApp
+//                   tool is active (send on the store's own number via the ERP
+//                   gateway); when false it keeps the existing "bientôt" stub.
 //   3. Accès web  — informational. caps.webEnabled reflects the runtime web tool
 //                   (CDZ_AGENT_WEB_ENABLED, ON in prod): "vos agents peuvent
 //                   chercher sur le web".
-//   4. Intégrations (Composio) — an entry link to the existing /integrations
+//   4. Planification — R8: an entry link to the triggers page (/agents/triggers,
+//                   gated CDZ_AGENT_TRIGGERS_ENABLED) for scheduled / webhook
+//                   runs. In-workbench <WorkbenchLink>, mirrors the Composio card.
+//   5. Intégrations (Composio) — an entry link to the existing /integrations
 //                   studio for connecting external apps (Gmail, Sheets, …).
 //
+// R8 (WSU-7 / RETOUCHE): all user-facing copy comes from the shared agents i18n
+// catalogue via `useAgentLang()` (FR default + Algerian darja); the page root
+// gets `dir={dir}` (Arabic → RTL); the card grid already collapses to one column
+// on phones (a tighter mobile padding is added). Behaviour + exports unchanged.
+//
 // Data seam: useAgents() (Annuaire, R7) → { caps, loading, error, disabled }.
-// `caps` = { multi, dzdPer1k, telegramEnabled, webEnabled }. When the whole
-// endpoint 404s (disabled) or a flag is off, the relevant card degrades to a
-// quiet informational state — every surface here is fail-soft, byte-identical
-// to "the feature doesn't exist" when its gate is dark.
+// `caps` = { multi, dzdPer1k, telegramEnabled, webEnabled, whatsappEnabled }.
+// When the whole endpoint 404s (disabled) or a flag is off, the relevant card
+// degrades to a quiet informational state — every surface here is fail-soft,
+// byte-identical to "the feature doesn't exist" when its gate is dark.
 //
 // House rules: inline styles only (no .css.ts), no new deps, the SHARED agent
-// palette + primitives (Chip/Spinner/IconButton), boot-safe rc icons, FR primary
-// with darja hints. External links carry target=_blank rel="noopener noreferrer";
-// the Composio link is an in-workbench <WorkbenchLink>. Mobile: the card grid
+// palette + primitives (Chip/Spinner/IconButton), boot-safe rc icons. External
+// links carry target=_blank rel="noopener noreferrer"; the Composio +
+// Planification links are in-workbench <WorkbenchLink>s. Mobile: the card grid
 // collapses to a single column (auto-fill minmax + a media query).
 // ---------------------------------------------------------------------------
 
@@ -58,7 +70,7 @@ const P = AgentPalette.color;
 // Page-scoped keyframes + the single-column mobile collapse. Injected once via a
 // <style> tag (same idiom the hermes/openclaw pages use for GLOBAL_CSS). The grid
 // auto-fills wide cards, and under 720px hard-collapses to one column so DZ users
-// on phones read the channels stacked.
+// on phones read the channels stacked; a tighter canvas padding kicks in ≤560px.
 const GLOBAL_CSS = `
 .cdz-conn-grid{
   display:grid;
@@ -67,6 +79,9 @@ const GLOBAL_CSS = `
 }
 @media (max-width: 720px){
   .cdz-conn-grid{grid-template-columns:1fr}
+}
+@media (max-width: 560px){
+  .cdz-conn-canvas{padding:20px 14px 40px !important;}
 }
 `;
 
@@ -100,7 +115,8 @@ const ghostBtnStyle: CSSProperties = {
 
 // ---------------------------------------------------------------------------
 // ChannelCard — the shared shell for every channel row: an icon tile, a title +
-// subtitle, a status chip, and a `children` slot for the action(s). Pure.
+// subtitle, a status chip, and a `children` slot for the action(s). Pure —
+// receives already-translated strings.
 // ---------------------------------------------------------------------------
 function ChannelCard({
   icon,
@@ -205,7 +221,13 @@ function ChannelCard({
 // The pair code is short-lived (10 min server-side); we surface the link, not the
 // raw code, since the code lives inside the deep link.
 // ---------------------------------------------------------------------------
-function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
+function TelegramCard({
+  t,
+  telegramEnabled,
+}: {
+  t: TFunc;
+  telegramEnabled: boolean;
+}) {
   const [loading, setLoading] = useState(false);
   const [deepLink, setDeepLink] = useState<string | null>(null);
   const [dark, setDark] = useState(false);
@@ -235,14 +257,14 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
           setDark(true);
         } else {
           setError(
-            err instanceof Error ? err.message : 'Liaison Telegram indisponible.'
+            err instanceof Error ? err.message : t('connections.telegram.err')
           );
         }
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [t]);
 
   const onCopy = useCallback(() => {
     if (!deepLink || typeof navigator === 'undefined' || !navigator.clipboard) {
@@ -262,12 +284,12 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
   // Status chip: connecté once we hold a link, en attente while linking, sinon
   // non-configuré (dark) or non-lié (ready to pair).
   const status: { label: string; tone: 'ok' | 'warn' | 'muted' } = deepLink
-    ? { label: 'en attente', tone: 'warn' }
+    ? { label: t('connections.status.connected'), tone: 'warn' }
     : dark || !telegramEnabled
-      ? { label: 'non-configuré', tone: 'muted' }
+      ? { label: t('connections.status.unconfigured'), tone: 'muted' }
       : loading
-        ? { label: 'en attente', tone: 'warn' }
-        : { label: 'non-lié', tone: 'muted' };
+        ? { label: t('connections.status.connected'), tone: 'warn' }
+        : { label: t('connections.status.unlinked'), tone: 'muted' };
 
   // If we already know the channel is dark (caps say so) AND the user hasn't
   // forced a probe, show the quiet state up-front. A probe can still confirm it.
@@ -276,8 +298,8 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
   return (
     <ChannelCard
       icon={<TelegramIcon />}
-      title="Telegram"
-      subtitle="Discutez avec vos agents depuis Telegram — donnez vos tâches men l'application."
+      title={t('connections.telegram.title')}
+      subtitle={t('connections.telegram.subtitle')}
       status={status}
     >
       {showDark ? (
@@ -292,8 +314,7 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
             lineHeight: 1.5,
           }}
         >
-          Telegram bientôt disponible — un bot doit être configuré.{' '}
-          <span style={{ opacity: 0.85 }}>Reviens bientôt.</span>
+          {t('connections.telegram.dark')}
         </div>
       ) : deepLink ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -313,6 +334,7 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
               href={deepLink}
               target="_blank"
               rel="noopener noreferrer"
+              dir="ltr"
               style={{
                 flex: 1,
                 minWidth: 0,
@@ -327,7 +349,14 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
             >
               {deepLink}
             </a>
-            <IconButton label={copied ? 'Copié' : 'Copier le lien'} onClick={onCopy}>
+            <IconButton
+              label={
+                copied
+                  ? t('connections.telegram.copied')
+                  : t('connections.telegram.copy')
+              }
+              onClick={onCopy}
+            >
               {copied ? '✓' : '⧉'}
             </IconButton>
           </div>
@@ -337,7 +366,7 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
             rel="noopener noreferrer"
             style={{ ...actionBtnStyle, alignSelf: 'flex-start' }}
           >
-            <TelegramIcon style={{ fontSize: 16 }} /> Ouvrir Telegram
+            <TelegramIcon style={{ fontSize: 16 }} /> {t('connections.telegram.open')}
           </a>
           <p
             style={{
@@ -347,8 +376,7 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
               lineHeight: 1.5,
             }}
           >
-            Ouvre le lien, appuie sur <strong style={{ color: P.text }}>Démarrer</strong>{' '}
-            (Start) — w rak lié. Le lien expire après 10 minutes.
+            {t('connections.telegram.instructions')}
           </p>
         </div>
       ) : (
@@ -366,7 +394,9 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
             }}
           >
             {loading ? <Spinner size={14} color={P.onAccent} /> : <LinkIcon style={{ fontSize: 16 }} />}
-            {loading ? 'Génération du lien…' : 'Lier mon Telegram'}
+            {loading
+              ? t('connections.telegram.linking')
+              : t('connections.telegram.link')}
           </button>
           {error ? (
             <div
@@ -378,9 +408,10 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
                 borderRadius: AgentPalette.radius.sm,
                 padding: '8px 10px',
                 lineHeight: 1.5,
+                wordBreak: 'break-word',
               }}
             >
-              {error} — 3awd mera (réessayez).
+              {t('connections.telegram.err.retry', { error })}
             </div>
           ) : null}
         </div>
@@ -396,11 +427,18 @@ function TelegramCard({ telegramEnabled }: { telegramEnabled: boolean }) {
 // ---------------------------------------------------------------------------
 function ConnectionsPage() {
   ensureAgentKeyframes();
+  const { t, dir } = useAgentLang();
   const { caps, loading, error, disabled, reload } = useAgents();
+
+  // R8: the master WhatsApp-tool gate, surfaced on caps by Fanal. When true the
+  // agent WhatsApp send tool is active (gateway wired); when false/absent the
+  // card keeps the "bientôt" stub. Read defensively so the page is byte-safe
+  // even before the caps field lands.
+  const whatsappOn = !!caps.whatsappEnabled;
 
   return (
     <>
-      <ViewTitle title="Connexions" />
+      <ViewTitle title={t('connections.tabTitle')} />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
@@ -416,7 +454,7 @@ function ConnectionsPage() {
           }}
         >
           <LinkIcon style={{ fontSize: 16 }} />
-          Connexions
+          {t('connections.tabTitle')}
         </div>
       </ViewHeader>
       <ViewBody>
@@ -433,6 +471,8 @@ function ConnectionsPage() {
         >
           <style>{GLOBAL_CSS}</style>
           <div
+            dir={dir}
+            className="cdz-conn-canvas"
             style={{
               maxWidth: 900,
               margin: '0 auto',
@@ -453,7 +493,7 @@ function ConnectionsPage() {
                   letterSpacing: '-0.02em',
                 }}
               >
-                Connexions
+                {t('connections.title')}
               </h1>
               <p
                 style={{
@@ -464,8 +504,7 @@ function ConnectionsPage() {
                   maxWidth: 620,
                 }}
               >
-                Branchez vos agents aux canaux de vos clients. Telegram, WhatsApp,
-                accès web et intégrations — koulech f blasa wehda.
+                {t('connections.subtitle')}
               </p>
             </div>
 
@@ -487,15 +526,15 @@ function ConnectionsPage() {
                   padding: '12px 14px',
                 }}
               >
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  Impossible de charger vos connexions : {error}
+                <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>
+                  {t('connections.error.load', { error })}
                 </span>
                 <button
                   type="button"
                   onClick={reload}
                   style={{ ...ghostBtnStyle, padding: '6px 12px' }}
                 >
-                  Réessayer
+                  {t('common.retry')}
                 </button>
               </div>
             ) : null}
@@ -511,7 +550,7 @@ function ConnectionsPage() {
                   padding: '8px 2px',
                 }}
               >
-                <Spinner size={16} /> Chargement des connexions…
+                <Spinner size={16} /> {t('connections.loading')}
               </div>
             ) : null}
 
@@ -519,15 +558,20 @@ function ConnectionsPage() {
                 card reads caps defensively and shows its own quiet fallback when
                 its gate is dark, so the grid is always useful. */}
             <div className="cdz-conn-grid">
-              <TelegramCard telegramEnabled={!!caps.telegramEnabled} />
+              <TelegramCard t={t} telegramEnabled={!!caps.telegramEnabled} />
 
-              {/* WhatsApp — R8 stub. Reads caps only (no WA flag yet); explains
-                  it will connect the store's own WA number via the ERP gateway. */}
+              {/* WhatsApp — R8: reads caps.whatsappEnabled. Configured ⇒ the
+                  agent WA send tool is active (store's own number via the ERP
+                  gateway); otherwise the existing "bientôt" stub. */}
               <ChannelCard
                 icon={<CommentIcon />}
-                title="WhatsApp"
-                subtitle="Vos agents répondront aux clients sur WhatsApp — 3la numéro du magasin."
-                status={{ label: 'bientôt', tone: 'muted' }}
+                title={t('connections.whatsapp.title')}
+                subtitle={t('connections.whatsapp.subtitle')}
+                status={
+                  whatsappOn
+                    ? { label: t('connections.status.ok'), tone: 'ok' }
+                    : { label: t('connections.status.soon'), tone: 'muted' }
+                }
               >
                 <div
                   style={{
@@ -536,13 +580,15 @@ function ConnectionsPage() {
                     padding: '10px 12px',
                     borderRadius: AgentPalette.radius.sm,
                     background: P.panel,
-                    border: `1px dashed ${P.border}`,
+                    border: whatsappOn
+                      ? `1px solid ${P.border}`
+                      : `1px dashed ${P.border}`,
                     lineHeight: 1.5,
                   }}
                 >
-                  Bientôt : connectez le numéro WhatsApp de votre boutique via la
-                  passerelle ERP. Vos agents confirmeront les commandes COD et
-                  répondront aux clients directement sur WhatsApp.
+                  {whatsappOn
+                    ? t('connections.whatsapp.configured')
+                    : t('connections.whatsapp.soon')}
                 </div>
               </ChannelCard>
 
@@ -550,12 +596,12 @@ function ConnectionsPage() {
                   web tool). Enabled in prod; a green/quiet chip either way. */}
               <ChannelCard
                 icon={<SearchIcon />}
-                title="Accès web"
-                subtitle="La recherche web pour vos agents — bech ylo9aw l'info f'internet."
+                title={t('connections.web.title')}
+                subtitle={t('connections.web.subtitle')}
                 status={
                   caps.webEnabled
-                    ? { label: 'activé', tone: 'ok' }
-                    : { label: 'désactivé', tone: 'muted' }
+                    ? { label: t('connections.status.ok'), tone: 'ok' }
+                    : { label: t('connections.status.off'), tone: 'muted' }
                 }
               >
                 <div
@@ -570,18 +616,19 @@ function ConnectionsPage() {
                   }}
                 >
                   {caps.webEnabled
-                    ? 'Vos agents peuvent chercher sur le web pour répondre avec des infos à jour (prix concurrents, actualités, recherche produit).'
-                    : "L'accès web est actuellement désactivé pour vos agents. Contactez l'admin pour l'activer."}
+                    ? t('connections.web.on')
+                    : t('connections.web.off')}
                 </div>
               </ChannelCard>
 
-              {/* Composio / intégrations — an entry link to the existing studio.
-                  In-workbench nav, so a <WorkbenchLink> (not target=_blank). */}
+              {/* Planification — R8: entry link to the triggers page for
+                  scheduled / webhook runs. In-workbench nav (WorkbenchLink),
+                  mirrors the Composio card below. */}
               <ChannelCard
-                icon={<LinkIcon />}
-                title="Intégrations"
-                subtitle="Connectez Gmail, Sheets, et +100 apps via Composio — zid les outils l'agents."
-                status={{ label: 'studio', tone: 'muted' }}
+                icon={<span aria-hidden>⏰</span>}
+                title={t('connections.schedule.title')}
+                subtitle={t('connections.schedule.subtitle')}
+                status={{ label: t('connections.status.studio'), tone: 'muted' }}
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <p
@@ -592,15 +639,46 @@ function ConnectionsPage() {
                       lineHeight: 1.5,
                     }}
                   >
-                    Ouvrez le studio d'intégrations pour connecter vos applications
-                    externes et donner de nouveaux outils à vos agents.
+                    {t('connections.schedule.body')}
+                  </p>
+                  <WorkbenchLink
+                    to="/agents/triggers"
+                    draggable={false}
+                    style={{ ...ghostBtnStyle, alignSelf: 'flex-start' }}
+                  >
+                    <span aria-hidden style={{ fontSize: 16 }}>
+                      ⏰
+                    </span>{' '}
+                    {t('connections.schedule.open')}
+                  </WorkbenchLink>
+                </div>
+              </ChannelCard>
+
+              {/* Composio / intégrations — an entry link to the existing studio.
+                  In-workbench nav, so a <WorkbenchLink> (not target=_blank). */}
+              <ChannelCard
+                icon={<LinkIcon />}
+                title={t('connections.integrations.title')}
+                subtitle={t('connections.integrations.subtitle')}
+                status={{ label: t('connections.status.studio'), tone: 'muted' }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: AgentPalette.font.size.md,
+                      color: P.muted,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {t('connections.integrations.body')}
                   </p>
                   <WorkbenchLink
                     to="/integrations"
                     draggable={false}
                     style={{ ...ghostBtnStyle, alignSelf: 'flex-start' }}
                   >
-                    <LinkIcon style={{ fontSize: 16 }} /> Ouvrir les intégrations
+                    <LinkIcon style={{ fontSize: 16 }} /> {t('connections.integrations.open')}
                   </WorkbenchLink>
                 </div>
               </ChannelCard>

@@ -68,7 +68,7 @@ declare global {
 // R6 — RUN RECORD shape (exact). Persisted JSON at the record key below.
 // ===========================================================================
 
-export type RunChannel = 'web' | 'telegram';
+export type RunChannel = 'web' | 'telegram' | 'schedule' | 'webhook';
 
 export type RunState =
   | 'queued'
@@ -356,7 +356,7 @@ function safeParse<T>(raw: string | null): T | null {
 }
 
 function normalizeChannel(c: unknown): RunChannel {
-  return c === 'telegram' ? 'telegram' : 'web';
+  return c === 'telegram' || c === 'schedule' || c === 'webhook' ? c : 'web';
 }
 
 /** Coerce a possibly-partial persisted record into a well-formed record. */

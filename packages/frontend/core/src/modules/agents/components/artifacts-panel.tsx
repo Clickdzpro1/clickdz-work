@@ -18,26 +18,36 @@
 // artifact URLs (relative / same-origin) prefer `onOpen` so the app can route
 // them in-app, falling back to a normal anchor when no handler is given.
 // Inline styles only (house rule); reuses the shared palette + primitives kit.
+//
+// R8 (POLI, additive): user-facing copy — panel title, group headers, empty
+// state, card fallbacks + open/download affordances — flows through the agents
+// i18n table via `useAgentLang()` (FR default + Algerian darja). The `title`
+// prop stays `title?: string`; when omitted it now resolves from i18n
+// (`artifacts.title`, which is "Livrables" in FR → byte-identical default). The
+// export + props are backward-compatible. RTL-safe: the panel flips for 'ar'
+// while technical spans (file paths, link host/path, language chip) stay LTR.
 
 import type { CSSProperties, ReactNode } from 'react';
 
 import type { AgentArtifact } from '../types';
+import { type TFunc, useAgentLang } from '../i18n';
 import { AgentPalette as P, ensureAgentKeyframes } from './palette';
 import { Chip, IconButton, truncate } from './primitives';
 
 // ---------------------------------------------------------------------------
-// Per-kind presentation metadata (glyph + accent), mirroring the KIND_META
-// idiom in primitives.tsx so the panel reads like the rest of the kit.
+// Per-kind presentation metadata (glyph + accent + group-label key), mirroring
+// the KIND_META idiom in primitives.tsx so the panel reads like the rest of the
+// kit. The group label is a language-aware i18n key resolved at render time.
 // ---------------------------------------------------------------------------
 type ArtifactKind = AgentArtifact['kind'];
 
 const KIND_UI: Record<
   ArtifactKind,
-  { icon: string; groupLabel: string; color: string }
+  { icon: string; groupLabelKey: string; color: string }
 > = {
-  file: { icon: '🗎', groupLabel: 'Fichiers', color: P.color.kindWrite },
-  output: { icon: '❖', groupLabel: 'Sorties', color: P.color.kindFinal },
-  link: { icon: '🔗', groupLabel: 'Liens', color: P.color.kindTool },
+  file: { icon: '🗎', groupLabelKey: 'artifacts.group.file', color: P.color.kindWrite },
+  output: { icon: '❖', groupLabelKey: 'artifacts.group.output', color: P.color.kindFinal },
+  link: { icon: '🔗', groupLabelKey: 'artifacts.group.link', color: P.color.kindTool },
 };
 
 // Group order in the panel (files, then generated outputs, then links).
@@ -47,12 +57,13 @@ const GROUP_ORDER: ArtifactKind[] = ['file', 'output', 'link'];
 // Small helpers — all pure, defensive against partial/odd payloads.
 // ---------------------------------------------------------------------------
 
-/** Last path segment (basename) of a file artifact's path. */
-function basename(path: string): string {
+/** Last path segment (basename) of a file artifact's path. `fallback` is the
+ *  (already-localised) label used when the path yields no name. */
+function basename(path: string, fallback: string): string {
   const clean = (path || '').replace(/[\\/]+$/, '');
   const idx = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
   const name = idx >= 0 ? clean.slice(idx + 1) : clean;
-  return name || path || 'fichier';
+  return name || path || fallback;
 }
 
 /** Directory portion of a file path (everything before the basename). */
@@ -130,14 +141,15 @@ interface CardView {
   meta?: string;
 }
 
-function toCardView(a: AgentArtifact): CardView {
+// `t` resolves the language-aware title fallbacks (file / output / link / generic).
+function toCardView(a: AgentArtifact, t: TFunc): CardView {
   switch (a.kind) {
     case 'file': {
       const dir = dirname(a.path);
       const size = formatBytes(a.bytes);
       const parts = [dir, size].filter(Boolean);
       return {
-        title: basename(a.path),
+        title: basename(a.path, t('artifacts.file.fallback')),
         subtitle: parts.length ? truncate(parts.join(' · '), 56) : '',
         external: false,
         meta: a.language || undefined,
@@ -145,14 +157,14 @@ function toCardView(a: AgentArtifact): CardView {
     }
     case 'output': {
       return {
-        title: a.label || 'Sortie',
+        title: a.label || t('artifacts.output.fallback'),
         subtitle: a.text ? truncate(a.text, 72) : '',
         external: false,
       };
     }
     case 'link': {
       return {
-        title: a.label || linkSubtitle(a.url) || 'Lien',
+        title: a.label || linkSubtitle(a.url) || t('artifacts.link.fallback'),
         subtitle: linkSubtitle(a.url),
         url: a.url,
         external: isExternalUrl(a.url),
@@ -162,7 +174,7 @@ function toCardView(a: AgentArtifact): CardView {
       // Exhaustive over the union; a future kind renders as a bare row.
       const anyA = a as { label?: string; kind?: string };
       return {
-        title: anyA.label || anyA.kind || 'Livrable',
+        title: anyA.label || anyA.kind || t('artifacts.fallback'),
         subtitle: '',
         external: false,
       };
@@ -177,12 +189,16 @@ function ArtifactCard({
   artifact,
   index,
   onOpen,
+  t,
+  dir,
 }: {
   artifact: AgentArtifact;
   index: number;
   onOpen?: (artifact: AgentArtifact, index: number) => void;
+  t: TFunc;
+  dir: 'rtl' | 'ltr';
 }) {
-  const view = toCardView(artifact);
+  const view = toCardView(artifact, t);
   const ui = KIND_UI[artifact.kind] ?? KIND_UI.output;
 
   // The open affordance differs by kind:
@@ -193,11 +209,11 @@ function ArtifactCard({
   const canHandle = typeof onOpen === 'function';
   const affordanceLabel = isLink
     ? view.external
-      ? 'Ouvrir dans un nouvel onglet'
-      : 'Ouvrir'
+      ? t('artifacts.open.newTab')
+      : t('artifacts.open')
     : artifact.kind === 'file'
-      ? 'Télécharger'
-      : 'Ouvrir';
+      ? t('artifacts.download')
+      : t('artifacts.open');
   const affordanceGlyph = isLink && view.external ? '↗' : '⤓';
 
   const rowStyle: CSSProperties = {
@@ -255,6 +271,8 @@ function ArtifactCard({
         </span>
         {view.subtitle ? (
           <span
+            // File paths + link host/path are technical → keep LTR even in RTL.
+            dir={artifact.kind === 'file' || isLink ? 'ltr' : dir}
             style={{
               fontSize: P.font.size.sm,
               color: P.color.muted,
@@ -275,7 +293,7 @@ function ArtifactCard({
           border={`color-mix(in srgb, ${ui.color} 34%, transparent)`}
           style={{ flex: '0 0 auto' }}
         >
-          {view.meta}
+          <span dir="ltr">{view.meta}</span>
         </Chip>
       ) : null}
     </>
@@ -355,7 +373,7 @@ function ArtifactCard({
 export function ArtifactsPanel({
   artifacts,
   onOpen,
-  title = 'Livrables',
+  title,
   style,
 }: {
   /** Artifacts collected during the run (order = chronological). */
@@ -367,11 +385,18 @@ export function ArtifactsPanel({
    * fall back to plain-anchor navigation.
    */
   onOpen?: (artifact: AgentArtifact, index: number) => void;
-  /** Header title override (default "Livrables"). */
+  /**
+   * Header title override. When omitted it resolves from i18n
+   * (`artifacts.title` — "Livrables" in FR, so the default is unchanged).
+   */
   title?: string;
   style?: CSSProperties;
 }) {
   ensureAgentKeyframes();
+  // Language-aware copy (FR default). Subscribes the panel to the module-level
+  // language so a toggle anywhere re-renders it.
+  const { t, dir } = useAgentLang();
+  const resolvedTitle = title ?? t('artifacts.title');
 
   const list = Array.isArray(artifacts) ? artifacts : [];
   const count = list.length;
@@ -407,7 +432,7 @@ export function ArtifactsPanel({
           color: P.color.text,
         }}
       >
-        {title}
+        {resolvedTitle}
       </span>
       {count > 0 ? (
         <Chip
@@ -436,7 +461,7 @@ export function ArtifactsPanel({
 
   if (count === 0) {
     return (
-      <section aria-label={title} style={containerStyle}>
+      <section aria-label={resolvedTitle} dir={dir} style={containerStyle}>
         {header}
         <div
           style={{
@@ -454,10 +479,10 @@ export function ArtifactsPanel({
             🗂
           </span>
           <span style={{ fontSize: P.font.size.md, color: P.color.muted }}>
-            Aucun livrable pour l'instant
+            {t('artifacts.empty.title')}
           </span>
           <span style={{ fontSize: P.font.size.sm, color: P.color.muted }}>
-            Les fichiers, pages et liens produits par l'agent apparaîtront ici.
+            {t('artifacts.empty.body')}
           </span>
         </div>
       </section>
@@ -465,7 +490,7 @@ export function ArtifactsPanel({
   }
 
   return (
-    <section aria-label={title} style={containerStyle}>
+    <section aria-label={resolvedTitle} dir={dir} style={containerStyle}>
       {header}
       <div
         style={{
@@ -499,7 +524,7 @@ export function ArtifactsPanel({
                 <span aria-hidden="true" style={{ color: ui.color }}>
                   {ui.icon}
                 </span>
-                <span>{ui.groupLabel}</span>
+                <span>{t(ui.groupLabelKey)}</span>
                 <span style={{ opacity: 0.7 }}>({group.items.length})</span>
               </div>
               <div
@@ -511,6 +536,8 @@ export function ArtifactsPanel({
                     artifact={a}
                     index={i}
                     onOpen={onOpen}
+                    t={t}
+                    dir={dir}
                   />
                 ))}
               </div>
