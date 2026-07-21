@@ -1,4 +1,11 @@
-import { type CSSProperties, useCallback, useMemo, useState } from 'react';
+import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 
 import {
   ACCENT_RE,
@@ -50,7 +57,77 @@ import {
 // staged storefront HTML under the same slug (see republishShop). Everything is
 // read-only-safe: when the server reports admin_writes_unavailable the whole
 // editor stays usable, controls disable, and we tell the user why.
+//
+// WSB-7 — CONVERGENCE / REBASE UX. Appearance is runtime-settings-driven
+// (theme / font / accent / sections are read at load by SHOP-TEMPLATE's
+// applyTheme), so those changes COMPOSE with any AI-authored HTML patch and are
+// saved SILENTLY — exactly today's behavior. The one control that changes the
+// storefront's STRUCTURE is the layout `template` switch (standard ↔ boutique):
+// if this store has a staged AI patch (ShopState.hasAiPatch), a clean template
+// swap can be MASKED by that patch. So when — and ONLY when — the template
+// actually changes AND an AI patch is staged, we interpose a keep/discard
+// dialog before saving:
+//   • Garder  → save as usual (the AI patch stays; the new gabarit may be
+//     hidden until the AI layer is re-done) — byte-identical to current save.
+//   • Repartir → additionally POST /apps/:slug/state/note documenting the reset
+//     (the actual clean re-mint lands via the existing Re-publish path), then
+//     save. The note is the audit trail that the owner chose the clean gabarit.
+// Detection is fail-soft: GET /state 404 (flag off) / any error ⇒ hasAiPatch
+// false ⇒ NO dialog, exactly current behavior. The state read is a tiny
+// file-local helper (kept out of the shared client to avoid a parallel-build
+// symbol race with the WSB-5 wrappers) that only ever reads the boolean flag.
 // ---------------------------------------------------------------------------
+
+// The client-safe ShopState projection GET /api/v1/apps/:slug/state returns
+// (clickdz-shop-state.ts → publicShopState). We only consume `hasAiPatch`.
+interface ShopStateMeta {
+  hasAiPatch: boolean;
+}
+
+/**
+ * GET /api/v1/apps/:slug/state — read ONLY the `hasAiPatch` flag. Never throws:
+ * a 404 (CDZ_SHOP_STATE off / route absent / app not found), a non-OK status,
+ * or a network error all resolve to `{ hasAiPatch: false }` so the appearance
+ * editor behaves byte-identically to today whenever ShopState isn't available.
+ */
+async function fetchShopStateMeta(slug: string): Promise<ShopStateMeta> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/state`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { hasAiPatch: false };
+  }
+  if (!res.ok) return { hasAiPatch: false };
+  const data = (await res.json().catch(() => null)) as
+    | { ok?: boolean; state?: { hasAiPatch?: unknown } }
+    | null;
+  return { hasAiPatch: data?.state?.hasAiPatch === true };
+}
+
+/**
+ * POST /api/v1/apps/:slug/state/note {note} — append a free-text entry to the
+ * ShopState activity log (documents the "repartir du gabarit propre" choice).
+ * Best-effort: any failure is swallowed (the save/re-publish is the money path
+ * and must never be blocked by a missing/again-flagged-off state route).
+ */
+async function postShopStateNote(slug: string, note: string): Promise<void> {
+  try {
+    await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/state/note`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ note }),
+      }
+    );
+  } catch {
+    /* audit note is best-effort — never block the save */
+  }
+}
 
 export const ShopAppearance = ({
   slug,
@@ -101,6 +178,28 @@ export const ShopAppearance = ({
   const [republishing, setRepublishing] = useState(false);
   const [republished, setRepublished] = useState<string | null>(null);
 
+  // WSB-7 — whether this store has a staged AI-authored HTML patch (ShopState).
+  // Read once, fail-soft (false whenever the state route is unavailable). Only
+  // used to decide if a STRUCTURAL (template) switch needs the keep/discard
+  // dialog; appearance-only changes never consult it.
+  const [hasAiPatch, setHasAiPatch] = useState(false);
+  // Non-null while the keep/discard dialog is up (a template swap + AI patch).
+  const [rebasePrompt, setRebasePrompt] = useState<{
+    from: string;
+    to: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const meta = await fetchShopStateMeta(slug);
+      if (alive) setHasAiPatch(meta.hasAiPatch);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [slug]);
+
   const disabled = readOnly || saving;
 
   // ---- Dirty tracking (send only changed fields) ---------------------------
@@ -129,61 +228,98 @@ export const ShopAppearance = ({
     setNotice(null);
   }, [settings]);
 
+  // Does the current draft change the STRUCTURAL layout template? (standard ↔
+  // boutique). This is the only appearance control that alters the storefront's
+  // HTML structure — the one that an AI patch can mask.
+  const templateChanged = template !== resolveTemplate(settings.template).id;
+
+  // Commit the settings patch to the server (the money path). `rebaseNote`, when
+  // present, is first appended to the ShopState log (best-effort) to document a
+  // "repartir du gabarit propre" choice. Everything after the note is identical
+  // to the original save, so a plain appearance save is byte-for-byte unchanged.
+  const commitSave = useCallback(
+    async (rebaseNote?: string) => {
+      if (disabled) return;
+      setNotice(null);
+      const trimmedAccent = accent.trim();
+      const aErr = validateAccent(trimmedAccent);
+      setAccentErr(aErr);
+      if (aErr) return;
+
+      // Build a patch of only the fields that actually changed.
+      const patch: Partial<ErpSettings> = {};
+      if (theme !== resolveTheme(settings.theme).id) patch.theme = theme;
+      if (template !== resolveTemplate(settings.template).id) {
+        patch.template = template;
+      }
+      if (font !== resolveFont(settings.font).id) patch.font = font;
+      if (trimmedAccent !== String(settings.accent ?? '#0f766e').trim()) {
+        patch.accent = trimmedAccent;
+      }
+      if (draftSectionsCsv !== storedSectionsCsv) {
+        patch.sections = draftSectionsCsv;
+      }
+
+      if (Object.keys(patch).length === 0) {
+        setNotice({ tone: 'info', text: 'Nothing to save — no changes.' });
+        return;
+      }
+
+      setSaving(true);
+      // Document the reset BEFORE saving so the audit order reads naturally.
+      // Best-effort + fire-first: never blocks or fails the save below.
+      if (rebaseNote) {
+        await postShopStateNote(slug, rebaseNote);
+      }
+      const out = await postErpSettings(slug, patch);
+      if (out.status === 'ok') {
+        setSaved(true);
+        setRepublished(null);
+        setNotice({
+          tone: 'ok',
+          text: rebaseNote
+            ? 'Appearance saved on the clean template — re-publish to drop the AI layer and apply it.'
+            : 'Appearance saved. Re-publish the shop to apply it to the live storefront.',
+        });
+        onMutated(); // refresh the summary so the stored settings stay in sync
+      } else if (out.status === 'unavailable') {
+        onWritesBlocked();
+      } else {
+        // A rejected id (e.g. server allowlist mismatch) surfaces here.
+        setNotice({ tone: 'error', text: out.message });
+      }
+      setSaving(false);
+    },
+    [
+      disabled,
+      accent,
+      theme,
+      template,
+      font,
+      draftSectionsCsv,
+      storedSectionsCsv,
+      settings,
+      slug,
+      onMutated,
+      onWritesBlocked,
+    ]
+  );
+
+  // Save entry point. When the ONLY-structural template switch would collide
+  // with a staged AI patch, interpose the keep/discard dialog first; otherwise
+  // (appearance-only change, or no AI patch, or state unavailable) save straight
+  // through — byte-identical to the pre-WSB-7 behavior.
   const save = useCallback(async () => {
     if (disabled) return;
-    setNotice(null);
-    const trimmedAccent = accent.trim();
-    const aErr = validateAccent(trimmedAccent);
-    setAccentErr(aErr);
-    if (aErr) return;
-
-    // Build a patch of only the fields that actually changed.
-    const patch: Partial<ErpSettings> = {};
-    if (theme !== resolveTheme(settings.theme).id) patch.theme = theme;
-    if (template !== resolveTemplate(settings.template).id) {
-      patch.template = template;
-    }
-    if (font !== resolveFont(settings.font).id) patch.font = font;
-    if (trimmedAccent !== String(settings.accent ?? '#0f766e').trim()) {
-      patch.accent = trimmedAccent;
-    }
-    if (draftSectionsCsv !== storedSectionsCsv) patch.sections = draftSectionsCsv;
-
-    if (Object.keys(patch).length === 0) {
-      setNotice({ tone: 'info', text: 'Nothing to save — no changes.' });
+    if (templateChanged && hasAiPatch) {
+      setRebasePrompt({
+        from: resolveTemplate(settings.template).label,
+        to: resolveTemplate(template).label,
+      });
       return;
     }
-
-    setSaving(true);
-    const out = await postErpSettings(slug, patch);
-    if (out.status === 'ok') {
-      setSaved(true);
-      setRepublished(null);
-      setNotice({
-        tone: 'ok',
-        text: 'Appearance saved. Re-publish the shop to apply it to the live storefront.',
-      });
-      onMutated(); // refresh the summary so the stored settings stay in sync
-    } else if (out.status === 'unavailable') {
-      onWritesBlocked();
-    } else {
-      // A rejected id (e.g. server allowlist mismatch) surfaces here.
-      setNotice({ tone: 'error', text: out.message });
-    }
-    setSaving(false);
-  }, [
-    disabled,
-    accent,
-    theme,
-    template,
-    font,
-    draftSectionsCsv,
-    storedSectionsCsv,
-    settings,
-    slug,
-    onMutated,
-    onWritesBlocked,
-  ]);
+    await commitSave();
+  }, [disabled, templateChanged, hasAiPatch, settings, template, commitSave]);
 
   const doRepublish = useCallback(async () => {
     if (republishing) return;
@@ -226,6 +362,26 @@ export const ShopAppearance = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* WSB-7 — keep/discard dialog: a structural template switch on a shop
+          that carries a staged AI patch. */}
+      {rebasePrompt ? (
+        <RebaseDialog
+          fromLabel={rebasePrompt.from}
+          toLabel={rebasePrompt.to}
+          busy={saving}
+          onKeep={() => {
+            setRebasePrompt(null);
+            void commitSave();
+          }}
+          onReset={() => {
+            const note = `Apparence : repartir du gabarit propre (${rebasePrompt.from} → ${rebasePrompt.to}) — modifications IA à supprimer à la prochaine re-publication.`;
+            setRebasePrompt(null);
+            void commitSave(note);
+          }}
+          onCancel={() => setRebasePrompt(null)}
+        />
+      ) : null}
+
       {notice ? (
         <Banner
           tone={
@@ -855,6 +1011,137 @@ const MockPreview = ({
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// WSB-7 — the keep/discard (rebase) dialog. Shown only when a structural
+// template switch would collide with a staged AI patch. Modal-lite: a dark
+// scrim + a centered card, FR copy + a short darja hint. No deps, inline styles.
+// ---------------------------------------------------------------------------
+
+const RebaseDialog = ({
+  fromLabel,
+  toLabel,
+  busy,
+  onKeep,
+  onReset,
+  onCancel,
+}: {
+  fromLabel: string;
+  toLabel: string;
+  busy: boolean;
+  onKeep: () => void;
+  onReset: () => void;
+  onCancel: () => void;
+}) => (
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-label="Modifications IA"
+    style={{
+      position: 'fixed',
+      inset: 0,
+      zIndex: 2147483000,
+      display: 'grid',
+      placeItems: 'center',
+      padding: 16,
+      background: 'rgba(8,10,16,0.62)',
+    }}
+    onClick={onCancel}
+  >
+    <div
+      style={{
+        width: '100%',
+        maxWidth: 460,
+        boxSizing: 'border-box',
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        borderRadius: 14,
+        padding: 20,
+        boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+      onClick={e => e.stopPropagation()}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 22 }} aria-hidden>
+          ⚠️
+        </span>
+        <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>
+          Cette boutique a des modifications IA
+        </div>
+      </div>
+      <p style={{ margin: 0, fontSize: 13.5, color: C.muted, lineHeight: 1.6 }}>
+        Vous changez le gabarit&nbsp;: <strong style={{ color: C.text }}>{fromLabel}</strong>{' '}
+        →&nbsp;<strong style={{ color: C.text }}>{toLabel}</strong>. Vos
+        modifications IA peuvent <strong>masquer</strong> le nouveau gabarit.
+        Voulez-vous les garder, ou repartir du gabarit propre&nbsp;?
+      </p>
+      <div
+        dir="rtl"
+        style={{
+          fontSize: 12.5,
+          color: C.text,
+          lineHeight: 1.6,
+          padding: '8px 11px',
+          borderRadius: 8,
+          background: C.accentSoft,
+          border: `1px solid ${C.border}`,
+        }}
+      >
+        الحانوت فيه تبديلات بالذكاء الاصطناعي — تنجم تخبّي القالب الجديد. تخلّيهم
+        ولا تبدا من القالب النظيف؟
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          gap: 10,
+          flexWrap: 'wrap',
+          marginTop: 4,
+          alignItems: 'center',
+        }}
+      >
+        <button
+          style={btnStyle('secondary', busy)}
+          disabled={busy}
+          onClick={onCancel}
+        >
+          Annuler
+        </button>
+        <div style={{ flex: 1 }} />
+        <button
+          style={btnStyle('secondary', busy)}
+          disabled={busy}
+          onClick={onReset}
+          title="Repartir du gabarit propre — les modifications IA seront supprimées à la prochaine re-publication."
+        >
+          {busy ? (
+            <>
+              <Spinner /> …
+            </>
+          ) : (
+            'Repartir du gabarit propre'
+          )}
+        </button>
+        <button
+          style={btnStyle('primary', busy)}
+          disabled={busy}
+          onClick={onKeep}
+          title="Garder les modifications IA (elles peuvent masquer le nouveau gabarit)."
+        >
+          {busy ? (
+            <>
+              <Spinner dark /> …
+            </>
+          ) : (
+            'Garder les modifications IA'
+          )}
+        </button>
+      </div>
+    </div>
+  </div>
+);
 
 // ---------------------------------------------------------------------------
 // Small presentational helpers (inline styles only).
