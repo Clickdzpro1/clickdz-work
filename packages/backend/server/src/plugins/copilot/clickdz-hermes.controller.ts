@@ -25,11 +25,39 @@ import { CurrentUser } from '../../core/auth';
 // PX ttl — fail-soft: undefined/false on any error, never throws) — the SAME
 // provider ClickDzAgentRuntime uses for thread persistence. The per-user agent
 // config singleton is persisted through it, mirroring that Pattern-B idiom.
-import { BadRequest, Cache, NotFound, Throttle } from '../../base';
+// R6/WSA-2: `Config` is the @Global copilot config (has `.copilot.exa.key`),
+// injected the same way controller.ts / runtime/tool-runtime.ts do — the shared
+// tool registry reads it to gate the first-party web tools (Exa) behind
+// CDZ_AGENT_WEB_ENABLED + key presence.
+import { BadRequest, Cache, Config, NotFound, Throttle } from '../../base';
 // CacheRedis is a @Global provider (same injection style as
 // ClickDzDataController / ClickDzVdzController) — the internal read tools below
 // read the SAME Redis records the bridge + data API expose.
 import { CacheRedis } from '../../base/redis';
+// R6/WSA-1 (Regis): the unified agent tool registry both agents dispatch
+// through. HERMES routes its catalog + tool dispatch through a registry built by
+// buildDefaultRegistry with the hermes-specific tools injected as `extraTools`
+// (IDENTICAL behavior — the defs delegate to the private tool methods below).
+// buildDefaultRegistry ALSO wires the first-party web tools (web_search/
+// web_fetch), gated behind CDZ_AGENT_WEB_ENABLED — flag off ⇒ they never appear
+// and the planner prompt / dispatch stay byte-identical to today.
+import {
+  type AgentToolCtx,
+  type AgentToolDef,
+  buildDefaultRegistry,
+  ClickDzToolRegistry,
+} from './clickdz-agent-tools';
+// R6/WSA-3 (Moteur): the background run engine. HERMES registers its detached
+// plan→act loop body via registerAgentLoop('hermes', …) so `copilot.agent.run`
+// jobs execute the SAME logic decoupled from any SSE socket. Everything here is
+// inert unless CDZ_AGENTS_ENABLED is set (the loop is only registered then, and
+// only Canal/Telegramme create+enqueue runs). Flags off ⇒ byte-identical.
+import {
+  type AgentLoopContext,
+  type AgentLoopDeps,
+  type AgentRunRecord,
+  registerAgentLoop,
+} from './clickdz-agent-runs';
 // WS12/C3+C5: the shared agent runtime service (SSE writer + Redis threads +
 // stop/approval registries) owned by RUNTIME. HERMESB2 injects it and drives
 // the streaming console through it. Types (AgentEvent/AgentStep/AgentMessage/
@@ -81,6 +109,19 @@ import {
 // as the sibling controllers' module-level env reads). Missing key => the
 // matching tools are marked unavailable; nothing reaches that upstream.
 const COMPOSIO_API_KEY = process.env.COMPOSIO_API_KEY || '';
+
+// R6/WSA-2 master gate. Controls ONLY the NEW background-run seam: the detached
+// plan→act loop is registered with Moteur's job engine (registerAgentLoop) at
+// construction time IFF this is '1'. When unset/absent the request-scoped
+// /run + /stream routes + /capabilities behave EXACTLY as before (the registry
+// is still used for dispatch — with the legacy tool set only, since the web
+// flag is independent and also off — so behavior is byte-identical). Read like
+// every other CDZ env in this plugin (`process.env.CDZ_...`).
+const CDZ_AGENTS_ENABLED = process.env.CDZ_AGENTS_ENABLED === '1';
+// The first-party web tools (web_search/web_fetch) are gated INSIDE the shared
+// registry by CDZ_AGENT_WEB_ENABLED (+ exa key presence) — this controller only
+// reflects that gate when composing the planner prompt / known-slug set below.
+const CDZ_AGENT_WEB_ENABLED = process.env.CDZ_AGENT_WEB_ENABLED === '1';
 
 // Composio public REST surface (plain fetch — NO SDK dependency). Same
 // endpoints the integrations controller uses for its /run orchestrator.
@@ -256,6 +297,15 @@ interface ToolOutcome {
   ok: boolean;
   resultPreview?: string;
   error?: string;
+}
+
+// R6/WSA-2: the per-dispatch tool ctx. Extends Regis's AgentToolCtx with the
+// remaining wall-clock budget the hermes tool defs thread into `executeTool`
+// (Regis's ctx has no timeout field; carrying it here keeps the legacy per-call
+// budget behavior EXACTLY — /run shrinks it, /stream + the detached loop use the
+// per-surface timeout). Private to this controller.
+interface HermesDispatchCtx extends AgentToolCtx {
+  __remainingMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +532,15 @@ function allToolSlugs(): Set<string> {
   return new Set(buildToolCatalog().map(t => t.slug));
 }
 
+// R6/WSA-2: the set of LEGACY hermes tool slugs (module-cached — the catalog is
+// static). Used to tell a hermes tool (whose registry def returns a ToolOutcome
+// as `result`) apart from a built-in registry tool (web_*), so dispatchTool can
+// map each envelope back to a ToolOutcome correctly.
+const HERMES_SLUGS: ReadonlySet<string> = allToolSlugs();
+function isHermesSlug(slug: string): boolean {
+  return HERMES_SLUGS.has(slug);
+}
+
 /**
  * Sanitize a persisted (possibly partial/corrupt) Hermes config read back from
  * the cache into the canonical GET shape. Unknown/invalid fields are dropped;
@@ -571,11 +630,47 @@ export class ClickDzHermesController {
   // WS14/C5: `Cache` (the @Global JSON provider) is added for the per-user agent
   // config singleton — the SAME provider the runtime persists threads through,
   // so config get/set reuses the proven fail-soft (de)serialization idiom.
+  // R6/WSA-2: `Config` is added for the shared tool registry's web-tool gate.
+  //
+  // The unified tool registry (Regis) is built ONCE at construction (cheap,
+  // synchronous, fail-soft) with the hermes-specific tools injected as
+  // `extraTools`. It is the SINGLE dispatch path for /run + /stream + the
+  // detached background loop. When CDZ_AGENTS_ENABLED is set we ALSO register
+  // the detached loop body with Moteur's run engine so `copilot.agent.run` jobs
+  // execute — otherwise the engine simply has no hermes loop and background
+  // runs no-op (byte-identical when the flag is off).
+  private readonly registry: ClickDzToolRegistry;
+
   constructor(
     private readonly redis: CacheRedis,
     private readonly runtime: ClickDzAgentRuntime,
-    private readonly cache: Cache
-  ) {}
+    private readonly cache: Cache,
+    private readonly config: Config
+  ) {
+    // Build the shared registry. `extraTools` = the hermes-specific defs, which
+    // delegate to the private tool methods below so behavior/args/results are
+    // IDENTICAL to the legacy switch. The built-in web tools register too but
+    // stay unavailable unless CDZ_AGENT_WEB_ENABLED + an exa key are present.
+    this.registry = buildDefaultRegistry({
+      redis: this.redis,
+      config: this.config,
+      extraTools: this.buildHermesToolDefs(),
+    });
+
+    // R6/WSA-2: register the detached loop with Moteur's engine ONLY behind the
+    // master flag. registerAgentLoop is idempotent (last wins); the factory
+    // closes over `this` so the job handler can drive the SAME plan→act logic.
+    if (CDZ_AGENTS_ENABLED) {
+      registerAgentLoop('hermes', (rec: AgentRunRecord): AgentLoopDeps => ({
+        redis: this.redis as any,
+        planner: null,
+        registry: this.registry,
+        config: this.config,
+        runtime: this.runtime,
+        loop: (ctx: AgentLoopContext) => this.runHermesLoop(ctx, rec),
+      }));
+    }
+  }
 
   /**
    * Read + normalize the caller's persisted Hermes config (fail-soft). Returns
@@ -887,8 +982,15 @@ export class ClickDzHermesController {
     const available = catalog.filter(t => t.available);
     const knownSlugs = new Set(available.map(t => t.slug));
 
+    // R6/WSA-2: fold in the registry's first-party web tools when (and only
+    // when) CDZ_AGENT_WEB_ENABLED + an exa key are present. `web` is empty
+    // otherwise, so both the prompt block AND the known-slug set are byte-
+    // identical to today when the flag is off.
+    const web = this.webTools(user.id);
+    for (const slug of web.slugs) knownSlugs.add(slug);
+
     const systemPrompt = this.buildPlannerSystemPrompt(
-      buildToolBlock(catalog),
+      buildToolBlock(catalog) + web.block,
       dryRun
     );
 
@@ -969,7 +1071,7 @@ export class ClickDzHermesController {
         continue;
       }
 
-      const outcome = await this.executeTool(toolSlug, args, user.id, timeLeft());
+      const outcome = await this.dispatchTool(toolSlug, args, user.id, timeLeft());
       steps.push({
         i: steps.length + 1,
         thought: decision.thought,
@@ -1186,8 +1288,14 @@ export class ClickDzHermesController {
       catalog.filter(t => t.consequential).map(t => t.slug)
     );
 
+    // R6/WSA-2: fold in the registry's first-party web tools when enabled (web
+    // reads are non-consequential, so consequentialSlugs is untouched). Empty
+    // when the flag/key are off ⇒ byte-identical prompt + guard set.
+    const web = this.webTools(userId);
+    for (const slug of web.slugs) knownSlugs.add(slug);
+
     const systemPrompt = this.buildPlannerSystemPrompt(
-      buildToolBlock(catalog),
+      buildToolBlock(catalog) + web.block,
       dryRun
     );
 
@@ -1368,7 +1476,7 @@ export class ClickDzHermesController {
 
       // Streaming has no hard wall clock (the heartbeat keeps SSE alive); give
       // each tool its full per-surface budget rather than a shrinking remainder.
-      const outcome = await this.executeTool(
+      const outcome = await this.dispatchTool(
         toolSlug,
         args,
         userId,
@@ -1878,6 +1986,460 @@ export class ClickDzHermesController {
       const detail = (err as Error)?.message ?? 'tool_execute_failed';
       this.logger.warn(`[hermes] execute ${toolSlug} threw: ${detail}`);
       return { ok: false, error: detail };
+    }
+  }
+
+  // =========================================================================
+  // R6/WSA-2 — REGISTRY BRIDGE. The catalog + dispatch route through Regis's
+  // ClickDzToolRegistry. The hermes-specific tools are wrapped as AgentToolDefs
+  // that DELEGATE to the private tool methods above, so behavior/args/results
+  // are IDENTICAL to the legacy switch. The registry also carries the built-in
+  // web tools (Regis), which stay unavailable unless CDZ_AGENT_WEB_ENABLED.
+  // =========================================================================
+
+  /**
+   * The hermes-specific tool defs (`extraTools` for buildDefaultRegistry). Each
+   * def mirrors ONE entry of `buildToolCatalog()` (same slug/description/args
+   * hint/consequential/availability gate) and its `run()` delegates to the
+   * existing `executeTool` switch — so a call through the registry is
+   * byte-for-byte the same as the legacy direct call. The per-call remaining
+   * wall-clock budget is threaded on the dispatch ctx (`__remainingMs`), set by
+   * `dispatchTool` right before dispatch; absent (e.g. a direct registry call)
+   * it falls back to the per-surface timeout.
+   */
+  private buildHermesToolDefs(): AgentToolDef[] {
+    const catalog = buildToolCatalog();
+    const byslug = (slug: string): HermesTool =>
+      catalog.find(t => t.slug === slug) as HermesTool;
+    // Availability predicates mirror buildToolCatalog() EXACTLY (env-derived).
+    const composioOn = (): boolean => !!COMPOSIO_API_KEY;
+    const makeOn = (): boolean => !!(MAKE_API_KEY && MAKE_TEAM_ID && MAKE_AGENT_ID);
+    const avail: Record<string, () => boolean> = {
+      shops_list: () => true,
+      shop_erp_summary: () => true,
+      composio_discover: composioOn,
+      composio_execute: composioOn,
+      make_agent_run: makeOn,
+    };
+    const mk = (slug: string): AgentToolDef => {
+      const t = byslug(slug);
+      return {
+        name: slug,
+        description: t.description,
+        scope: 'hermes',
+        consequential: t.consequential,
+        inputSummary: t.argsHint,
+        available: () => avail[slug](),
+        run: async (args: Record<string, unknown>, ctx: AgentToolCtx) => {
+          const rem =
+            typeof (ctx as HermesDispatchCtx).__remainingMs === 'number'
+              ? (ctx as HermesDispatchCtx).__remainingMs
+              : this.toolTimeout(slug);
+          const outcome = await this.executeTool(slug, args, ctx.userId, rem);
+          return {
+            ok: outcome.ok,
+            result: outcome,
+            preview:
+              outcome.resultPreview !== undefined
+                ? outcome.resultPreview
+                : outcome.error,
+          };
+        },
+      };
+    };
+    return [
+      mk('shops_list'),
+      mk('shop_erp_summary'),
+      mk('composio_discover'),
+      mk('composio_execute'),
+      mk('make_agent_run'),
+    ];
+  }
+
+  /**
+   * Route a single tool call through the shared registry and NORMALIZE the
+   * envelope back to the legacy `ToolOutcome` the plan→act loops consume.
+   *
+   * For the hermes-specific slugs the registry def returns the ORIGINAL
+   * ToolOutcome as `result`, so we return it verbatim (byte-identical to the
+   * legacy `executeTool` call these two loops used before). For the built-in
+   * web tools (only reachable when CDZ_AGENT_WEB_ENABLED) we synthesize a
+   * ToolOutcome from the envelope. `dispatch` never throws (Regis contract), so
+   * this never throws either.
+   */
+  private async dispatchTool(
+    toolSlug: string,
+    args: Record<string, unknown>,
+    userId: string,
+    remainingMs: number
+  ): Promise<ToolOutcome> {
+    const ctx: HermesDispatchCtx = {
+      userId,
+      agent: 'hermes',
+      log: (m: string) => this.logger.warn(`[hermes] ${m}`),
+      services: { redis: this.redis, config: this.config },
+      __remainingMs: remainingMs,
+    };
+    const res = await this.registry.dispatch(toolSlug, args, ctx);
+    // Hermes tools hand back the ToolOutcome as `result` — return it as-is.
+    if (isHermesSlug(toolSlug)) {
+      const r = res.result as ToolOutcome | undefined;
+      if (r && typeof r === 'object' && typeof r.ok === 'boolean') {
+        return r;
+      }
+      // Defensive fallback (a def should always return the outcome).
+      return res.ok
+        ? { ok: true, resultPreview: res.preview ?? '' }
+        : { ok: false, error: res.preview ?? 'tool_failed' };
+    }
+    // Web / other registry tools: build a ToolOutcome from the envelope.
+    if (res.ok) {
+      return {
+        ok: true,
+        resultPreview:
+          res.result !== undefined
+            ? truncatePreview(res.result)
+            : (res.preview ?? ''),
+      };
+    }
+    return {
+      ok: false,
+      error:
+        res.preview ??
+        (typeof (res.result as any)?.error === 'string'
+          ? (res.result as any).error
+          : 'tool_failed'),
+    };
+  }
+
+  /**
+   * The extra planner-prompt lines + known-slug set for any NON-legacy registry
+   * tools currently available for this user (the first-party web tools, gated
+   * by CDZ_AGENT_WEB_ENABLED + exa key; plus any fail-soft telegram_send behind
+   * its own flag). Rendered in the SAME `- slug: desc arguments: hint` shape as
+   * `buildToolBlock`. When nothing extra is available (the default — every new
+   * gate off) this returns an EMPTY block and empty set, so the composed prompt
+   * and guard set are byte-identical to today. Never throws.
+   */
+  private webTools(userId: string): { block: string; slugs: Set<string> } {
+    const slugs = new Set<string>();
+    const lines: string[] = [];
+    try {
+      const ctx: AgentToolCtx = {
+        userId,
+        agent: 'hermes',
+        log: () => {},
+        services: { redis: this.redis, config: this.config },
+      };
+      for (const def of this.registry.listFor(ctx)) {
+        if (isHermesSlug(def.name)) continue; // legacy tools already in the block
+        slugs.add(def.name);
+        lines.push(
+          `- ${def.name}: ${def.description} arguments: ${def.inputSummary ?? '{}'}`
+        );
+      }
+    } catch {
+      return { block: '', slugs: new Set<string>() };
+    }
+    return { block: lines.length ? `\n${lines.join('\n')}` : '', slugs };
+  }
+
+  // =========================================================================
+  // R6/WSA-2 — DETACHED PLAN→ACT CORE (Moteur seam). Registered via
+  // registerAgentLoop('hermes', …) in the constructor (behind CDZ_AGENTS_ENABLED)
+  // so `copilot.agent.run` jobs drive the SAME cdz-flash plan→act logic as the
+  // request-scoped /stream route — but decoupled from any SSE socket. It emits
+  // through Moteur's `ctx.emit` (durably buffered + live-forwarded), records the
+  // step trail via `ctx.recordStep`, charges the tool-call budget via
+  // `ctx.chargeToolCall`, and honors the wall-clock/stop `ctx.signal`. Runs in
+  // 'auto' mode (a background run has no live user to approve). Returns the final
+  // answer text; the engine persists state/finalText + fires the completion hook.
+  // NEVER throws out (a throw would only mark the run failed) — but we keep the
+  // same defensive posture as the streaming loop.
+  // =========================================================================
+  private async runHermesLoop(
+    ctx: AgentLoopContext,
+    rec: AgentRunRecord
+  ): Promise<string> {
+    const userId = rec.userId;
+    const emit = ctx.emit;
+
+    const catalog = buildToolCatalog();
+    const knownSlugs = new Set(catalog.filter(t => t.available).map(t => t.slug));
+    const web = this.webTools(userId);
+    for (const slug of web.slugs) knownSlugs.add(slug);
+    const systemPrompt = this.buildPlannerSystemPrompt(
+      buildToolBlock(catalog) + web.block,
+      false
+    );
+
+    // Seed context: system + any prior thread turns (multi-turn continuity when
+    // the run is bound to a thread) + the run's prompt. Rehydration is best-
+    // effort/fail-soft (Redis is a cache).
+    const messages: Array<{ role: string; content: string }> = [
+      { role: 'system', content: systemPrompt },
+    ];
+    let thread: AgentThread | null = null;
+    if (rec.threadId) {
+      try {
+        thread = await this.runtime.getThread(userId, rec.threadId);
+      } catch {
+        thread = null;
+      }
+    }
+    if (thread) {
+      for (const m of thread.messages) {
+        if (m.role === 'user' || m.role === 'assistant') {
+          messages.push({ role: m.role, content: m.content });
+        }
+      }
+    }
+    // Ensure the run's prompt is the last user turn (avoid a duplicate if the
+    // thread already ends with it).
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== 'user' || last.content !== rec.prompt) {
+      messages.push({ role: 'user', content: rec.prompt });
+    }
+
+    const steps: AgentStep[] = [];
+    let iterations = 0;
+    let answer: string | null = null;
+    let stopped = false;
+
+    // A step recorder that mirrors the streaming loop's `pushStep` but routes
+    // through Moteur's recordStep (persists on the run record + emits `step`).
+    const pushStep = async (step: {
+      kind: AgentStep['kind'];
+      tool?: string;
+      detail?: string;
+      ok?: boolean;
+      resultPreview?: string;
+      error?: string;
+    }) => {
+      steps.push({
+        i: steps.length + 1,
+        kind: step.kind,
+        title: step.tool ? this.toolTitle(step.tool) : step.kind,
+        detail: step.detail,
+        tool: step.tool,
+        ok: step.ok,
+        ...(step.resultPreview !== undefined
+          ? { resultPreview: step.resultPreview }
+          : {}),
+        ...(step.error !== undefined ? { error: step.error } : {}),
+        ts: Date.now(),
+      });
+      await ctx.recordStep({
+        kind: step.kind === 'tool' ? 'tool' : 'plan',
+        tool: step.tool,
+        argsPreview: step.detail,
+        ok: step.ok,
+        preview:
+          step.resultPreview !== undefined ? step.resultPreview : step.error,
+      });
+    };
+
+    emit({ type: 'status', phase: 'planning', label: 'Planning' });
+
+    while (iterations < HERMES_STREAM_MAX_ITERATIONS) {
+      if (await ctx.isStopped()) {
+        stopped = true;
+        break;
+      }
+
+      const planned = await this.callPlanner(
+        messages,
+        HERMES_STREAM_PLANNER_TIMEOUT_MS
+      );
+
+      if (planned === null) {
+        if (steps.length === 0) {
+          emit({ type: 'status', phase: 'error', label: 'Planner unavailable' });
+          answer =
+            "I couldn't reach the planner just now, so I didn't run anything. Please try again in a moment.";
+          break;
+        }
+        answer = this.synthesizeAnswer(steps as HermesStep[], false);
+        break;
+      }
+
+      messages.push({ role: 'assistant', content: planned.raw });
+      const decision = parsePlannerJson(planned.raw);
+
+      if (decision.action === 'final') {
+        answer = decision.answer ?? '';
+        break;
+      }
+
+      const toolSlug = decision.tool ?? '';
+      const args = decision.arguments ?? {};
+
+      if (!knownSlugs.has(toolSlug)) {
+        iterations++;
+        await pushStep({
+          kind: 'tool',
+          tool: toolSlug,
+          detail: decision.thought,
+          ok: false,
+          error: 'unknown_or_unavailable_tool',
+        });
+        messages.push({
+          role: 'user',
+          content: `Tool "${toolSlug}" is not in the available tools. Choose one of the listed tool slugs, or finish with {"action":"final","answer":"..."}.`,
+        });
+        continue;
+      }
+
+      // Charge the tool-call budget BEFORE executing (Moteur enforces the cap).
+      const charge = await ctx.chargeToolCall();
+      if (!charge.allowed) {
+        await pushStep({
+          kind: 'tool',
+          tool: toolSlug,
+          detail: decision.thought,
+          ok: false,
+          error: 'tool_budget_exhausted',
+        });
+        break;
+      }
+
+      iterations++;
+
+      // Background runs execute in 'auto' mode (no live approver) — consequential
+      // tools run without a gate, exactly like /run and /stream in 'auto'.
+      const callId = randomUUID();
+      const startedAt = Date.now();
+      emit({
+        type: 'tool_call',
+        id: callId,
+        tool: toolSlug,
+        title: this.toolTitle(toolSlug),
+        args,
+      });
+
+      const outcome = await this.dispatchTool(
+        toolSlug,
+        args,
+        userId,
+        this.toolTimeout(toolSlug)
+      );
+      const durationMs = Date.now() - startedAt;
+
+      const resultPreview =
+        outcome.resultPreview !== undefined
+          ? truncatePreview(outcome.resultPreview)
+          : undefined;
+      const errorPreview =
+        outcome.error !== undefined
+          ? truncatePreview(outcome.error, 500)
+          : undefined;
+
+      emit({
+        type: 'tool_result',
+        id: callId,
+        ok: outcome.ok,
+        ...(resultPreview !== undefined ? { resultPreview } : {}),
+        ...(errorPreview !== undefined ? { error: errorPreview } : {}),
+        durationMs,
+      });
+
+      await pushStep({
+        kind: 'tool',
+        tool: toolSlug,
+        detail: decision.thought,
+        ok: outcome.ok,
+        ...(resultPreview !== undefined ? { resultPreview } : {}),
+        ...(errorPreview !== undefined ? { error: errorPreview } : {}),
+      });
+
+      const feedback = outcome.ok
+        ? `Result of ${toolSlug} (ok): ${truncatePreview(outcome.resultPreview ?? '', RESULT_FEEDBACK_CHAR_CAP)}`
+        : `Error from ${toolSlug} (failed): ${truncatePreview(outcome.error ?? 'tool_failed', RESULT_FEEDBACK_CHAR_CAP)}`;
+      messages.push({ role: 'user', content: feedback });
+    }
+
+    if (stopped) {
+      const partial =
+        answer ??
+        (steps.length
+          ? this.synthesizeAnswer(steps as HermesStep[], false)
+          : 'Stopped before completing the task.');
+      await this.persistAssistantTurn(userId, thread, partial, steps);
+      return partial;
+    }
+
+    emit({ type: 'status', phase: 'finalizing', label: 'Finalizing' });
+
+    // A small writer shim so streamFinalAnswer can reuse its exact token-stream
+    // path: `closed` tracks the run's abort signal (wall-clock / stop).
+    const shim = {
+      get closed() {
+        return ctx.signal.aborted;
+      },
+    };
+
+    if (answer === null) {
+      const forced = await this.streamFinalAnswer(
+        emit,
+        shim,
+        [
+          ...messages,
+          {
+            role: 'user',
+            content:
+              'You have reached the step limit. Reply now in plain language, summarizing what you did or what the user should do next. No JSON, no tool calls.',
+          },
+        ]
+      );
+      answer = forced ?? this.synthesizeAnswer(steps as HermesStep[], false);
+      await this.persistAssistantTurn(userId, thread, answer, steps);
+      return answer;
+    }
+
+    const polished = await this.streamFinalAnswer(
+      emit,
+      shim,
+      [
+        {
+          role: 'system',
+          content:
+            'You are HERMES, an operations assistant. Rewrite the assistant\'s final answer below as a clear, friendly, plain-language reply for the user. Keep all facts; do not invent new ones. No JSON, no markdown fences.',
+        },
+        { role: 'user', content: answer },
+      ],
+      answer
+    );
+    const finalText = polished ?? answer;
+    await this.persistAssistantTurn(userId, thread, finalText, steps);
+    return finalText;
+  }
+
+  /**
+   * Best-effort persistence of the background run's assistant turn onto its
+   * thread, so a later /stream on the same thread has multi-turn context and the
+   * console shows the run in thread history. Fail-soft: Redis is a cache and the
+   * run record (owned by Moteur) is the source of truth for a background run.
+   */
+  private async persistAssistantTurn(
+    userId: string,
+    thread: AgentThread | null,
+    answer: string,
+    steps: AgentStep[]
+  ): Promise<void> {
+    if (!thread) return;
+    try {
+      const assistantMsg: AgentMessage = {
+        id: randomUUID(),
+        role: 'assistant',
+        content: answer,
+        steps,
+        createdAt: Date.now(),
+        agent: 'hermes',
+      };
+      thread.messages.push(assistantMsg);
+      await this.runtime.saveThread(userId, thread);
+    } catch {
+      /* fail-soft — the run record still holds the answer */
     }
   }
 

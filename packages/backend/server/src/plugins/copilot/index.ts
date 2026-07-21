@@ -12,11 +12,14 @@ import { WorkspaceModule } from '../../core/workspaces';
 import { IndexerModule } from '../indexer';
 import { ClickDzBridgeController } from './clickdz-bridge.controller';
 import { ClickDzDataController } from './clickdz-data.controller';
+import { ClickDzAgentTelegramController } from './clickdz-agent-telegram';
 import { ClickDzHermesController } from './clickdz-hermes.controller';
 import { ClickDzIntegrationsController } from './clickdz-integrations.controller';
 import { ClickDzOpenclawController } from './clickdz-openclaw.controller';
 import { ClickDzPulseController } from './clickdz-pulse.controller';
+import { ClickDzAgentsController } from './clickdz-agents.controller';
 import { ClickDzReleasesController } from './clickdz-releases.controller';
+import { ClickDzAgentRunsController } from './clickdz-agent-runs.controller';
 import { ClickDzVdzController } from './clickdz-vdz.controller';
 import { ClickDzVdzComposeController } from './clickdz-vdz-compose.controller';
 import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
@@ -90,11 +93,14 @@ export class CopilotApiModule {}
     CopilotController,
     ClickDzBridgeController,
     ClickDzDataController,
+    ClickDzAgentTelegramController,
     ClickDzHermesController,
     ClickDzIntegrationsController,
     ClickDzOpenclawController,
     ClickDzPulseController,
+    ClickDzAgentsController,
     ClickDzReleasesController,
+    ClickDzAgentRunsController,
     ClickDzVdzController,
     ClickDzVdzComposeController,
     ClickDzVdzRenderController,

@@ -1,4 +1,5 @@
 import { ClickDzAgentRuntime } from './clickdz-agent-runtime';
+import { ClickDzAgentRunJob } from './clickdz-agent-runs';
 import { CopilotAccessPolicy } from './access';
 import {
   ByokEntitlementPolicy,
@@ -145,7 +146,11 @@ export const COPILOT_RESOLVER_PROVIDERS = [
   WorkspaceByokResolver,
 ];
 
-export const COPILOT_JOB_PROVIDERS = [CopilotEmbeddingJob, CopilotCronJobs];
+export const COPILOT_JOB_PROVIDERS = [
+  CopilotEmbeddingJob,
+  CopilotCronJobs,
+  ClickDzAgentRunJob,
+];
 
 export const COPILOT_MCP_PROVIDERS = [WorkspaceMcpProvider];
 
