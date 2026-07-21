@@ -25,6 +25,7 @@ import { SettingsAdmin } from './admin-settings';
 import { StockAdmin } from './admin-stock';
 import { Inventory } from './inventory';
 import { ShopAppearance } from './shop-appearance';
+import { ShopFeatures } from './shop-features';
 import {
   Banner,
   C,
@@ -71,7 +72,8 @@ export type DashboardSection =
   | 'inventory'
   | 'clients'
   | 'settings'
-  | 'appearance';
+  | 'appearance'
+  | 'features';
 
 const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'overview', label: 'Overview', icon: '📊' },
@@ -80,6 +82,7 @@ const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'inventory', label: 'Inventory', icon: '🏬' },
   { id: 'clients', label: 'Clients', icon: '👥' },
   { id: 'appearance', label: 'Appearance', icon: '🎨' },
+  { id: 'features', label: 'Fonctionnalités', icon: '🧩' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -328,6 +331,18 @@ export const ErpDashboard = ({
             url={url}
             // The managed shop's slug IS its store/pairing key + publish slug.
             storeSlug={slug}
+            readOnly={writesBlocked}
+            onWritesBlocked={handleWritesBlocked}
+            onMutated={refetch}
+          />
+        ) : section === 'features' ? (
+          <ShopFeatures
+            slug={slug}
+            settings={summary.settings}
+            url={url}
+            // The managed shop's slug IS its store/pairing key + publish slug.
+            storeSlug={slug}
+            scope="shop"
             readOnly={writesBlocked}
             onWritesBlocked={handleWritesBlocked}
             onMutated={refetch}
