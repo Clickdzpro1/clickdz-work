@@ -1,11 +1,18 @@
-// ClickDz Agents — the unified /agents HOME (R7, WSU-3 / FOYER).
+// ClickDz Agents — the unified /agents HOME (R7, WSU-3 / FOYER; R8 i18n + mobile).
 //
 // This is the router lazy target for the /agents route (Nav registers it),
 // reached ONLY when `caps.multi` is on (the sidebar entry is gated) — but it
 // degrades gracefully if reached otherwise. It follows the studio-page scaffold
 // of hermes/shoperp exactly: ViewTitle / ViewIcon / ViewHeader / ViewBody, a
-// centered scrolling canvas, inline styles (no .css.ts), FR-primary copy with a
-// darja hint, and full loading / disabled / error states.
+// centered scrolling canvas, inline styles (no .css.ts), and full loading /
+// disabled / error states.
+//
+// R8 (WSU-7 / RETOUCHE): every user-facing string now comes from the shared
+// agents i18n catalogue via `useAgentLang()` (FR default + Algerian darja), the
+// home header carries a FR/عربية language toggle (AGENT_LANG_LABELS + setLang),
+// the page root gets `dir={dir}` so Arabic renders RTL, and the layout is
+// mobile-polished (≤560px: single-column grid, tighter paddings, no horizontal
+// overflow). All R7 behaviour / props / exports are preserved.
 //
 // Data comes from Annuaire's `useAgents()` (GET /api/v1/agents → { agents, caps,
 // loading, error, disabled, reload }). The page shows a header, a "Créer un
@@ -17,6 +24,12 @@
 // Spinner/Chip primitives, mobile single-column (auto-fill grid collapses).
 
 import { AgentPalette, Chip, Spinner } from '@affine/core/modules/agents/components';
+import {
+  AGENT_LANG_LABELS,
+  type AgentLang,
+  type TFunc,
+  useAgentLang,
+} from '@affine/core/modules/agents/i18n';
 import { useAgents } from '@affine/core/modules/agents/use-agents';
 import type { AgentName, AgentSummary } from '@affine/core/modules/agents/types';
 import {
@@ -52,31 +65,33 @@ function runsRoute(agent: AgentName): string {
   return `/agents/runs?agent=${agent}`;
 }
 
-// Run-state → chip tint + FR label for the recent-runs strip (mirrors the
-// card's map; kept local so the two surfaces stay independent files).
-const RUN_STATE_META: Record<
+// Run-state → chip tint (labels come from the i18n catalogue at render, via
+// `states.<state>`). Mirrors the card's map; kept local so the two surfaces
+// stay independent files.
+const RUN_STATE_TINT: Record<
   string,
-  { label: string; color: string; bg: string; border: string }
+  { color: string; bg: string; border: string }
 > = {
-  queued: { label: 'En file', color: C.muted, bg: 'transparent', border: C.border },
-  running: { label: 'En cours', color: C.accent, bg: C.accentSoft, border: C.accentBorder },
-  waiting_approval: { label: 'En attente', color: C.warn, bg: C.warnBg, border: C.warnBorder },
-  done: { label: 'Terminé', color: C.okText, bg: C.okBg, border: C.okBorder },
-  failed: { label: 'Échoué', color: C.errText, bg: C.errBg, border: C.errBorder },
-  stopped: { label: 'Arrêté', color: C.muted, bg: 'transparent', border: C.border },
+  queued: { color: C.muted, bg: 'transparent', border: C.border },
+  running: { color: C.accent, bg: C.accentSoft, border: C.accentBorder },
+  waiting_approval: { color: C.warn, bg: C.warnBg, border: C.warnBorder },
+  done: { color: C.okText, bg: C.okBg, border: C.okBorder },
+  failed: { color: C.errText, bg: C.errBg, border: C.errBorder },
+  stopped: { color: C.muted, bg: 'transparent', border: C.border },
 };
 
-function relativeTime(ms?: number): string {
+// Relative-time formatter using the shared `time.*` catalogue keys ({n} slot).
+function relativeTime(t: TFunc, ms?: number): string {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '';
   const diff = Date.now() - ms;
-  if (diff < 60000) return "à l'instant";
+  if (diff < 60000) return t('time.now');
   const min = Math.floor(diff / 60000);
-  if (min < 60) return `il y a ${min} min`;
+  if (min < 60) return t('time.minAgo', { n: min });
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `il y a ${hr} h`;
+  if (hr < 24) return t('time.hrAgo', { n: hr });
   const day = Math.floor(hr / 24);
-  if (day < 7) return `il y a ${day} j`;
-  return `il y a ${Math.floor(day / 7)} sem`;
+  if (day < 7) return t('time.dayAgo', { n: day });
+  return t('time.weekAgo', { n: Math.floor(day / 7) });
 }
 
 const AGENT_LABEL: Record<AgentName, string> = {
@@ -85,11 +100,76 @@ const AGENT_LABEL: Record<AgentName, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Language toggle — a small FR/عربية segmented control (uses AGENT_LANG_LABELS
+// + setLang from the i18n hook). Purely presentational; flipping it re-renders
+// the whole studio via the module-level broadcast.
+// ---------------------------------------------------------------------------
+const LANG_ORDER: AgentLang[] = ['fr', 'ar'];
+
+function LangToggle({
+  lang,
+  setLang,
+  t,
+}: {
+  lang: AgentLang;
+  setLang: (l: AgentLang) => void;
+  t: TFunc;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={t('lang.toggleTitle')}
+      title={t('lang.toggleTitle')}
+      dir="ltr"
+      style={{
+        display: 'inline-flex',
+        flex: '0 0 auto',
+        padding: 2,
+        gap: 2,
+        borderRadius: AgentPalette.radius.pill,
+        border: `1px solid ${C.border}`,
+        background: C.panel,
+      }}
+    >
+      {LANG_ORDER.map(l => {
+        const active = l === lang;
+        return (
+          <button
+            key={l}
+            type="button"
+            aria-pressed={active}
+            onClick={() => setLang(l)}
+            style={{
+              appearance: 'none',
+              cursor: 'pointer',
+              fontFamily: 'inherit',
+              fontSize: 12,
+              fontWeight: 700,
+              lineHeight: 1.2,
+              padding: '4px 12px',
+              borderRadius: AgentPalette.radius.pill,
+              border: 'none',
+              whiteSpace: 'nowrap',
+              color: active ? C.onAccent : C.muted,
+              background: active ? C.accent : 'transparent',
+              transition: 'background 150ms ease, color 150ms ease',
+            }}
+          >
+            {AGENT_LANG_LABELS[l]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The page body (inside the ViewBody canvas). Owns the state machine on the
 // useAgents() lifecycle.
 // ---------------------------------------------------------------------------
 const AgentsHome = () => {
   const workbench = useService(WorkbenchService).workbench;
+  const { lang, setLang, t, dir } = useAgentLang();
   const { agents, caps, loading, error, disabled, reload } = useAgents();
 
   const go = useCallback(
@@ -114,6 +194,7 @@ const AgentsHome = () => {
   if (loading && agents.length === 0) {
     return (
       <div
+        dir={dir}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -122,7 +203,7 @@ const AgentsHome = () => {
           color: C.muted,
         }}
       >
-        <Spinner /> Chargement de vos agents…
+        <Spinner /> {t('home.loading')}
       </div>
     );
   }
@@ -131,6 +212,7 @@ const AgentsHome = () => {
   if (disabled) {
     return (
       <div
+        dir={dir}
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -143,11 +225,10 @@ const AgentsHome = () => {
         }}
       >
         <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
-          Les agents ne sont pas activés
+          {t('home.disabled.title')}
         </div>
         <p style={{ margin: 0, fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
-          Cette fonctionnalité est désactivée sur ce serveur. Revenez plus tard
-          — vos employés IA vous attendront ici.
+          {t('home.disabled.body')}
         </p>
       </div>
     );
@@ -157,6 +238,7 @@ const AgentsHome = () => {
   if (error && agents.length === 0) {
     return (
       <div
+        dir={dir}
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -169,14 +251,22 @@ const AgentsHome = () => {
         }}
       >
         <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
-          Impossible de charger vos agents
+          {t('home.error.title')}
         </div>
-        <p style={{ margin: 0, fontSize: 12.5, color: C.muted, lineHeight: 1.5 }}>
+        <p
+          style={{
+            margin: 0,
+            fontSize: 12.5,
+            color: C.muted,
+            lineHeight: 1.5,
+            wordBreak: 'break-word',
+          }}
+        >
           {error}
         </p>
         <div>
           <button type="button" onClick={() => reload()} style={primaryBtn}>
-            Réessayer
+            {t('common.retry')}
           </button>
         </div>
       </div>
@@ -185,32 +275,41 @@ const AgentsHome = () => {
 
   // ---- ready -------------------------------------------------------------
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-      {/* Header + darja subtitle. */}
-      <header style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <h1
-          style={{
-            margin: 0,
-            fontSize: 24,
-            fontWeight: 800,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            color: C.text,
-          }}
-        >
-          <AiIcon style={{ fontSize: 22 }} /> Vos agents
-        </h1>
-        <p style={{ margin: 0, fontSize: 13.5, color: C.muted, lineHeight: 1.5 }}>
-          Vos employés IA — ils travaillent pour vous, jour et nuit.
-        </p>
-        <div dir="rtl" style={{ fontSize: 12.5, color: C.muted }}>
-          الموظفين تاعك بالذكاء الاصطناعي — يخدمو عليك ليل و نهار.
+    <div dir={dir} style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+      {/* Header + darja subtitle + language toggle. */}
+      <header
+        className="cdz-agents-home-head"
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 14,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: '1 1 260px', minWidth: 0 }}>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: 24,
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              color: C.text,
+            }}
+          >
+            <AiIcon style={{ fontSize: 22 }} /> {t('home.title')}
+          </h1>
+          <p style={{ margin: 0, fontSize: 13.5, color: C.muted, lineHeight: 1.5 }}>
+            {t('home.subtitle')}
+          </p>
         </div>
+        <LangToggle lang={lang} setLang={setLang} t={t} />
       </header>
 
       {/* "Créer un agent" CTA — opens the goal-first wizard. */}
       <div
+        className="cdz-agents-home-cta"
         style={{
           borderRadius: AgentPalette.radius.lg,
           border: `1px solid ${C.border}`,
@@ -224,15 +323,13 @@ const AgentsHome = () => {
       >
         <div style={{ flex: '1 1 300px', minWidth: 0 }}>
           <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>
-            Recrutez un nouvel employé IA
+            {t('home.cta.title')}
           </div>
           <p style={{ margin: '6px 0 0', fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
-            Choisissez une mission — confirmer vos commandes, répondre sur
-            WhatsApp, surveiller vos concurrents — donnez-lui un nom, ses outils,
-            et lancez un test.
+            {t('home.cta.body')}
           </p>
           <div dir="rtl" style={{ marginTop: 6, fontSize: 12.5, color: C.muted }}>
-            اختار الخدمة، سمّيه، و جرّبه فدقيقة.
+            {t('home.cta.hint')}
           </div>
         </div>
         <button
@@ -240,13 +337,14 @@ const AgentsHome = () => {
           onClick={openWizard}
           style={{ ...primaryBtn, fontSize: 14.5, padding: '11px 20px' }}
         >
-          + Créer un agent
+          {t('home.cta.button')}
         </button>
       </div>
 
       {/* Agent cards grid — auto-fill collapses to a single column on mobile. */}
       {agents.length > 0 ? (
         <div
+          className="cdz-agents-grid"
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
@@ -274,13 +372,13 @@ const AgentsHome = () => {
             fontSize: 13,
           }}
         >
-          Aucun agent pour l’instant. Créez votre premier employé IA ci-dessus.
+          {t('home.empty')}
         </div>
       )}
 
       {/* Compact recent-runs strip. */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={sectionTitleStyle}>Exécutions récentes</div>
+        <div style={sectionTitleStyle}>{t('home.recent.title')}</div>
         {recentRuns.length > 0 ? (
           <div
             style={{
@@ -293,13 +391,14 @@ const AgentsHome = () => {
             }}
           >
             {recentRuns.map((a, i) => {
-              const rm =
-                RUN_STATE_META[a.lastRun.state] ?? {
-                  label: a.lastRun.state || 'Inconnu',
-                  color: C.muted,
-                  bg: 'transparent',
-                  border: C.border,
-                };
+              const tint = RUN_STATE_TINT[a.lastRun.state] ?? {
+                color: C.muted,
+                bg: 'transparent',
+                border: C.border,
+              };
+              const stateLabel = RUN_STATE_TINT[a.lastRun.state]
+                ? t(`states.${a.lastRun.state}`)
+                : a.lastRun.state || t('states.unknown');
               return (
                 <button
                   key={a.id}
@@ -307,7 +406,7 @@ const AgentsHome = () => {
                   onClick={() => go(runsRoute(a.id))}
                   style={{
                     appearance: 'none',
-                    textAlign: 'left',
+                    textAlign: 'start',
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
@@ -330,12 +429,12 @@ const AgentsHome = () => {
                   >
                     {AGENT_LABEL[a.id] ?? a.label}
                   </span>
-                  <Chip color={rm.color} bg={rm.bg} border={rm.border}>
-                    {rm.label}
+                  <Chip color={tint.color} bg={tint.bg} border={tint.border}>
+                    {stateLabel}
                   </Chip>
                   <span style={{ flex: 1 }} />
                   <span style={{ fontSize: 12, color: C.muted, whiteSpace: 'nowrap' }}>
-                    {relativeTime(a.lastRun.at)}
+                    {relativeTime(t, a.lastRun.at)}
                   </span>
                   <span
                     style={{
@@ -345,7 +444,7 @@ const AgentsHome = () => {
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    Voir →
+                    {t('common.view')}
                   </span>
                 </button>
               );
@@ -361,7 +460,7 @@ const AgentsHome = () => {
               fontSize: 12.5,
             }}
           >
-            Aucune exécution récente. Ouvrez un agent et donnez-lui une mission.
+            {t('home.recent.empty')}
           </div>
         )}
       </section>
@@ -374,9 +473,10 @@ const AgentsHome = () => {
 // hermes + shoperp idiom so /agents reads as a first-class studio.
 // ---------------------------------------------------------------------------
 const AgentsPage = () => {
+  const { t } = useAgentLang();
   return (
     <>
-      <ViewTitle title="Agents" />
+      <ViewTitle title={t('home.tabTitle')} />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
@@ -392,7 +492,7 @@ const AgentsPage = () => {
           }}
         >
           <AiIcon style={{ fontSize: 16 }} />
-          Agents
+          {t('home.tabTitle')}
           <span
             style={{
               fontSize: 10,
@@ -406,7 +506,7 @@ const AgentsPage = () => {
                 'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
             }}
           >
-            béta
+            {t('common.beta')}
           </span>
         </div>
       </ViewHeader>
@@ -422,7 +522,9 @@ const AgentsPage = () => {
             lineHeight: 1.5,
           }}
         >
+          <style>{HOME_CSS}</style>
           <div
+            className="cdz-agents-home-canvas"
             style={{
               maxWidth: 1120,
               margin: '0 auto',
@@ -436,6 +538,16 @@ const AgentsPage = () => {
     </>
   );
 };
+
+// Mobile polish: tighten the canvas padding, collapse the card grid to one
+// column, and let the header wrap cleanly (title + toggle stack) on phones.
+const HOME_CSS = `
+@media (max-width: 560px){
+  .cdz-agents-home-canvas{padding:18px 14px 40px !important;}
+  .cdz-agents-grid{grid-template-columns:1fr !important;}
+  .cdz-agents-home-cta{padding:16px 14px !important;gap:12px !important;}
+}
+`;
 
 const sectionTitleStyle: CSSProperties = {
   fontSize: 12,

@@ -1,4 +1,5 @@
-// AgentCard — one roster tile on the unified /agents home (R7, WSU-3 / FOYER).
+// AgentCard — one roster tile on the unified /agents home (R7, WSU-3 / FOYER;
+// R8 i18n + mobile).
 //
 // Presentational only: it receives ONE {@link AgentSummary} (the wire row from
 // GET /api/v1/agents, surfaced by Annuaire's `useAgents()`) plus click handlers,
@@ -7,16 +8,21 @@
 // compact last-run summary (state chip + relative time), and the primary
 // "Ouvrir" action with secondary "Exécutions" / "Configurer".
 //
+// R8 (WSU-7 / RETOUCHE): all user-facing copy comes from the shared agents i18n
+// catalogue via `useAgentLang()` (FR default + Algerian darja). The card lives
+// under the home root's `dir`, so it flips RTL automatically in Arabic; the
+// darja hint line keeps its own dir="rtl". Layout unchanged (fluid; the parent
+// grid collapses to one column on mobile). All props / exports preserved.
+//
 // House rules: inline styles only (no .css.ts), reuse the shared AgentPalette +
 // Chip primitives from the agent-console kit, boot-safe rc icons only
-// (ChatWithAiIcon for Hermes = chat glyph, KeyboardIcon for OpenClaw), and the
-// FR-primary copy the hermes/shoperp pages use today (darja hint where natural).
-// Mobile degrades to a single column via the parent grid; the card itself is
-// fluid. Every navigation goes through the handlers the parent wires to
+// (ChatWithAiIcon for Hermes = chat glyph, KeyboardIcon for OpenClaw).
+// Every navigation goes through the handlers the parent wires to
 // WorkbenchLink so clicks stay inside the workbench.
 
 import { Chip } from '@affine/core/modules/agents/components';
 import { AgentPalette } from '@affine/core/modules/agents/components';
+import { type TFunc, useAgentLang } from '@affine/core/modules/agents/i18n';
 import type { AgentName, AgentSummary } from '@affine/core/modules/agents/types';
 import { ChatWithAiIcon, KeyboardIcon } from '@blocksuite/icons/rc';
 import type { CSSProperties, ReactNode } from 'react';
@@ -27,25 +33,24 @@ const C = AgentPalette.color;
 // Per-agent presentation metadata. Icons are the SAME boot-safe rc glyphs the
 // studio registry + the legacy pages use (Hermes → chat, OpenClaw → keyboard),
 // so the home reads consistently with the sidebar and the /hermes /openclaw
-// surfaces. `blurb` is a one-line FR job description; `route` is the legacy
-// per-agent studio the "Ouvrir" action targets by default.
+// surfaces. `blurbKey` / `darjaKey` are i18n catalogue keys (FR + darja).
 // ---------------------------------------------------------------------------
 interface AgentMeta {
   icon: ReactNode;
-  blurb: string;
-  darja: string;
+  blurbKey: string;
+  darjaKey: string | null;
 }
 
 const AGENT_META: Record<AgentName, AgentMeta> = {
   hermes: {
     icon: <ChatWithAiIcon style={{ fontSize: 22 }} />,
-    blurb: 'Agent des opérations — commandes, clients, messages.',
-    darja: 'يدبّرلك الخدمة اليومية.',
+    blurbKey: 'card.hermes.blurb',
+    darjaKey: 'card.hermes.darja',
   },
   openclaw: {
     icon: <KeyboardIcon style={{ fontSize: 22 }} />,
-    blurb: 'Agent développeur — code, outils et automatisations.',
-    darja: 'يكوديلك الأدوات و يأتمت.',
+    blurbKey: 'card.openclaw.blurb',
+    darjaKey: 'card.openclaw.darja',
   },
 };
 
@@ -53,54 +58,50 @@ const AGENT_META: Record<AgentName, AgentMeta> = {
 // evolving roster (defensive — the union is closed today).
 const FALLBACK_META: AgentMeta = {
   icon: <ChatWithAiIcon style={{ fontSize: 22 }} />,
-  blurb: 'Agent IA.',
-  darja: '',
+  blurbKey: 'card.fallback.blurb',
+  darjaKey: null,
 };
 
 // ---------------------------------------------------------------------------
-// Run-state → chip tint + FR label. Mirrors AgentRunState (queued | running |
-// waiting_approval | done | failed | stopped); `at` is a ms epoch. Unknown
-// states degrade to a neutral grey chip echoing the raw string.
+// Run-state → chip tint. Mirrors AgentRunState (queued | running |
+// waiting_approval | done | failed | stopped); `at` is a ms epoch. Labels come
+// from the i18n catalogue (`states.<state>`); an unknown state degrades to a
+// neutral grey chip echoing the raw string.
 // ---------------------------------------------------------------------------
-const RUN_STATE_META: Record<
+const RUN_STATE_TINT: Record<
   string,
-  { label: string; color: string; bg: string; border: string }
+  { color: string; bg: string; border: string }
 > = {
-  queued: { label: 'En file', color: C.muted, bg: 'transparent', border: C.border },
-  running: { label: 'En cours', color: C.accent, bg: C.accentSoft, border: C.accentBorder },
-  waiting_approval: {
-    label: 'En attente',
-    color: C.warn,
-    bg: C.warnBg,
-    border: C.warnBorder,
-  },
-  done: { label: 'Terminé', color: C.okText, bg: C.okBg, border: C.okBorder },
-  failed: { label: 'Échoué', color: C.errText, bg: C.errBg, border: C.errBorder },
-  stopped: { label: 'Arrêté', color: C.muted, bg: 'transparent', border: C.border },
+  queued: { color: C.muted, bg: 'transparent', border: C.border },
+  running: { color: C.accent, bg: C.accentSoft, border: C.accentBorder },
+  waiting_approval: { color: C.warn, bg: C.warnBg, border: C.warnBorder },
+  done: { color: C.okText, bg: C.okBg, border: C.okBorder },
+  failed: { color: C.errText, bg: C.errBg, border: C.errBorder },
+  stopped: { color: C.muted, bg: 'transparent', border: C.border },
 };
 
 // A run in one of these coarse states counts as "active" for the status dot.
 const ACTIVE_STATES = new Set(['queued', 'running', 'waiting_approval']);
 
-// Relative-time formatter (FR, compact). Best-effort: a missing/absurd
-// timestamp yields '' so the row simply omits the time.
-function relativeTime(ms?: number): string {
+// Relative-time formatter using the shared `time.*` catalogue keys ({n} slot).
+// Best-effort: a missing/absurd timestamp yields '' so the row omits the time.
+function relativeTime(t: TFunc, ms?: number): string {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return '';
   const diff = Date.now() - ms;
-  if (diff < 0) return "à l'instant";
+  if (diff < 0) return t('time.now');
   const sec = Math.floor(diff / 1000);
-  if (sec < 60) return "à l'instant";
+  if (sec < 60) return t('time.now');
   const min = Math.floor(sec / 60);
-  if (min < 60) return `il y a ${min} min`;
+  if (min < 60) return t('time.minAgo', { n: min });
   const hr = Math.floor(min / 60);
-  if (hr < 24) return `il y a ${hr} h`;
+  if (hr < 24) return t('time.hrAgo', { n: hr });
   const day = Math.floor(hr / 24);
-  if (day < 7) return `il y a ${day} j`;
+  if (day < 7) return t('time.dayAgo', { n: day });
   const wk = Math.floor(day / 7);
-  if (wk < 5) return `il y a ${wk} sem`;
+  if (wk < 5) return t('time.weekAgo', { n: wk });
   const mo = Math.floor(day / 30);
-  if (mo < 12) return `il y a ${mo} mois`;
-  return `il y a ${Math.floor(day / 365)} an(s)`;
+  if (mo < 12) return t('time.monthAgo', { n: mo });
+  return t('time.yearAgo', { n: Math.floor(day / 365) });
 }
 
 // ---------------------------------------------------------------------------
@@ -108,11 +109,11 @@ function relativeTime(ms?: number): string {
 // (i.e. it is "on"/reachable), muted grey otherwise. Purely derived from the
 // summary; no polling.
 // ---------------------------------------------------------------------------
-function StatusDot({ on }: { on: boolean }) {
+function StatusDot({ on, t }: { on: boolean; t: TFunc }) {
   return (
     <span
       aria-hidden
-      title={on ? 'Actif' : 'Inactif'}
+      title={on ? t('card.status.active') : t('card.status.inactive')}
       style={{
         width: 8,
         height: 8,
@@ -186,17 +187,22 @@ export function AgentCard({
   onOpenRuns,
   onConfigure,
 }: AgentCardProps) {
+  const { t } = useAgentLang();
   const meta = AGENT_META[agent.id] ?? FALLBACK_META;
   const telegramOn = !!agent.channels?.telegram;
   const lastRun = agent.lastRun;
-  const runMeta = lastRun
-    ? RUN_STATE_META[lastRun.state] ?? {
-        label: lastRun.state || 'Inconnu',
+  const runTint = lastRun
+    ? RUN_STATE_TINT[lastRun.state] ?? {
         color: C.muted,
         bg: 'transparent',
         border: C.border,
       }
     : null;
+  const runLabel = lastRun
+    ? RUN_STATE_TINT[lastRun.state]
+      ? t(`states.${lastRun.state}`)
+      : lastRun.state || t('states.unknown')
+    : '';
 
   // "On" if it has a recent run OR a bound channel (Telegram) — the presence of
   // either signals the agent is set up and reachable. Web is always available
@@ -218,7 +224,7 @@ export function AgentCard({
         minWidth: 0,
       }}
     >
-      {/* Identity row: icon + name + beta chip, status dot pinned right. */}
+      {/* Identity row: icon + name + beta chip, status dot pinned to the end. */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
         <div
           aria-hidden
@@ -261,7 +267,7 @@ export function AgentCard({
                 bg="color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)"
                 border="transparent"
               >
-                béta
+                {t('common.beta')}
               </Chip>
             ) : null}
           </div>
@@ -273,35 +279,35 @@ export function AgentCard({
               lineHeight: 1.45,
             }}
           >
-            {meta.blurb}
+            {t(meta.blurbKey)}
           </p>
-          {meta.darja ? (
+          {meta.darjaKey ? (
             <div
               dir="rtl"
               style={{ marginTop: 2, fontSize: 12, color: C.muted, opacity: 0.9 }}
             >
-              {meta.darja}
+              {t(meta.darjaKey)}
             </div>
           ) : null}
         </div>
-        <StatusDot on={isOn} />
+        <StatusDot on={isOn} t={t} />
       </div>
 
       {/* Channels + last-run summary. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           <ChannelBadge
-            label="Web"
+            label={t('card.channel.web')}
             active
-            title="Accessible depuis le web"
+            title={t('card.channel.web.title')}
           />
           <ChannelBadge
-            label="Telegram"
+            label={t('card.channel.telegram')}
             active={telegramOn}
             title={
               telegramOn
-                ? 'Telegram connecté'
-                : 'Telegram non connecté — à lier dans les connexions'
+                ? t('card.channel.telegram.on')
+                : t('card.channel.telegram.off')
             }
           />
         </div>
@@ -314,12 +320,13 @@ export function AgentCard({
             fontSize: 12,
             color: C.muted,
             minHeight: 20,
+            flexWrap: 'wrap',
           }}
         >
-          <span style={{ fontWeight: 600 }}>Dernière exécution</span>
-          {runMeta ? (
+          <span style={{ fontWeight: 600 }}>{t('card.lastRun')}</span>
+          {runTint ? (
             <>
-              <Chip color={runMeta.color} bg={runMeta.bg} border={runMeta.border}>
+              <Chip color={runTint.color} bg={runTint.bg} border={runTint.border}>
                 {activeRun ? (
                   <span
                     className="cdz-agent-motion"
@@ -328,20 +335,20 @@ export function AgentCard({
                       width: 6,
                       height: 6,
                       borderRadius: '50%',
-                      background: runMeta.color,
+                      background: runTint.color,
                       animation: 'cdz-agent-pulse 1.4s ease-in-out infinite',
                     }}
                   />
                 ) : null}
-                {runMeta.label}
+                {runLabel}
               </Chip>
-              {relativeTime(lastRun?.at) ? (
-                <span style={{ color: C.muted }}>{relativeTime(lastRun?.at)}</span>
+              {relativeTime(t, lastRun?.at) ? (
+                <span style={{ color: C.muted }}>{relativeTime(t, lastRun?.at)}</span>
               ) : null}
             </>
           ) : (
             <span style={{ color: C.muted, fontStyle: 'italic' }}>
-              Aucune pour l’instant
+              {t('card.lastRun.none')}
             </span>
           )}
         </div>
@@ -350,13 +357,13 @@ export function AgentCard({
       {/* Actions: primary Ouvrir + secondary Exécutions / Configurer. */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
         <button type="button" onClick={onOpen} style={primaryBtn}>
-          Ouvrir
+          {t('card.action.open')}
         </button>
         <button type="button" onClick={onOpenRuns} style={ghostBtn}>
-          Exécutions
+          {t('card.action.runs')}
         </button>
         <button type="button" onClick={onConfigure} style={ghostBtn}>
-          Configurer
+          {t('card.action.configure')}
         </button>
       </div>
     </div>

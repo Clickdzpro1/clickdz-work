@@ -71,6 +71,25 @@ import {
   type AgentThreadSummary,
   ClickDzAgentRuntime,
 } from './clickdz-agent-runtime';
+// R8/WSA-10 (Souvenir): per-agent long-term memory. VALUE imports (these are
+// CALLED at runtime — the R6 lesson: an unimported identifier crashes prod at
+// boot since the image build is transpile-only). ALL self-gate on
+// memoryEnabled()=CDZ_AGENT_MEMORY_ENABLED==='1': off/absent ⇒ readAgentMemory
+// returns an empty blob, buildMemoryPromptBlock returns '' (zero prompt bytes),
+// createMemoryTools returns [] (no tools registered), registerMemorySummarizer
+// installs a callback that early-returns — so flags-off is byte-identical.
+import {
+  buildMemoryPromptBlock,
+  createMemoryTools,
+  memoryEnabled,
+  readAgentMemory,
+  registerMemorySummarizer,
+} from './clickdz-agent-memory';
+// R8/WSA-11 (Horloge): a run started by a schedule/webhook trigger is
+// UNSUPERVISED. deferConsequential(rec) is true for those channels only (web /
+// telegram interactive runs → false), so the detached loop defers a
+// consequential tool instead of firing it unattended. VALUE import (called).
+import { deferConsequential } from './clickdz-agent-triggers';
 
 // ---------------------------------------------------------------------------
 // HERMES — ClickDz autonomous OPERATIONS agent.
@@ -651,10 +670,17 @@ export class ClickDzHermesController {
     // delegate to the private tool methods below so behavior/args/results are
     // IDENTICAL to the legacy switch. The built-in web tools register too but
     // stay unavailable unless CDZ_AGENT_WEB_ENABLED + an exa key are present.
+    //
+    // R8/WSA-10: also fold in the memory tools (memory_write / memory_read).
+    // createMemoryTools() SELF-GATES on memoryEnabled() — it returns [] when
+    // memory is OFF, so the spread contributes NOTHING and the registry is
+    // byte-identical to today when the flag is unset (verified against
+    // clickdz-agent-memory.ts). The tools read Redis from ctx.services.redis
+    // (already the raw CacheRedis this controller wires), so no deps are needed.
     this.registry = buildDefaultRegistry({
       redis: this.redis,
       config: this.config,
-      extraTools: this.buildHermesToolDefs(),
+      extraTools: [...this.buildHermesToolDefs(), ...createMemoryTools()],
     });
 
     // R6/WSA-2: register the detached loop with Moteur's engine ONLY behind the
@@ -669,6 +695,15 @@ export class ClickDzHermesController {
         runtime: this.runtime,
         loop: (ctx: AgentLoopContext) => this.runHermesLoop(ctx, rec),
       }));
+    }
+
+    // R8/WSA-10: register the memory summarizer with Moteur's run engine behind
+    // BOTH flags (memory + agents). It hooks onAgentRunDone and, on a DONE run,
+    // appends a cdz-flash one-line summary to that user's memory. Idempotent +
+    // fail-soft (Souvenir): a missing engine or a summary hiccup is swallowed,
+    // never breaking a run. Off/absent flags ⇒ not registered ⇒ byte-identical.
+    if (memoryEnabled() && CDZ_AGENTS_ENABLED) {
+      registerMemorySummarizer({ redis: this.redis });
     }
   }
 
@@ -989,9 +1024,13 @@ export class ClickDzHermesController {
     const web = this.webTools(user.id);
     for (const slug of web.slugs) knownSlugs.add(slug);
 
+    // R8/WSA-10: prime the prompt with the agent's memory ('' when OFF/empty ⇒
+    // byte-identical). Single async read, injected at the one shared assembler.
+    const memBlock = await this.hermesMemoryBlock(user.id);
     const systemPrompt = this.buildPlannerSystemPrompt(
       buildToolBlock(catalog) + web.block,
-      dryRun
+      dryRun,
+      memBlock
     );
 
     // Conversation seed: system + the user's goal.
@@ -1294,9 +1333,13 @@ export class ClickDzHermesController {
     const web = this.webTools(userId);
     for (const slug of web.slugs) knownSlugs.add(slug);
 
+    // R8/WSA-10: prime the prompt with the agent's memory ('' when OFF/empty ⇒
+    // byte-identical). Single async read, injected at the one shared assembler.
+    const memBlock = await this.hermesMemoryBlock(userId);
     const systemPrompt = this.buildPlannerSystemPrompt(
       buildToolBlock(catalog) + web.block,
-      dryRun
+      dryRun,
+      memBlock
     );
 
     // Rehydrate prior turns so the stream is genuinely multi-turn. The just-
@@ -1854,11 +1897,26 @@ export class ClickDzHermesController {
 
   // ---- /run internals -----------------------------------------------------
 
-  /** Compose the planner system prompt from the tool block (+ dry-run note). */
-  private buildPlannerSystemPrompt(toolBlock: string, dryRun: boolean): string {
+  /**
+   * Compose the planner system prompt from the tool block (+ dry-run note).
+   *
+   * R8/WSA-10: `memoryBlock` is the SINGLE point where the agent's long-term
+   * memory is injected into the planner prompt — the one shared assembly
+   * function every loop (legacy /run, streaming /stream, detached run) routes
+   * its system prompt through. It is appended verbatim AFTER the base prompt
+   * when non-empty; buildMemoryPromptBlock returns '' when memory is OFF or
+   * empty, so the DEFAULT ('' — nothing passed, or the flag off) yields a
+   * BYTE-IDENTICAL prompt to today. Pure + sync (the async read happens once in
+   * hermesMemoryBlock and is threaded in as this ready string).
+   */
+  private buildPlannerSystemPrompt(
+    toolBlock: string,
+    dryRun: boolean,
+    memoryBlock: string = ''
+  ): string {
     const tools =
       toolBlock || '(no tools are currently available — answer from reasoning alone)';
-    return [
+    const base = [
       "You are HERMES, ClickDz's autonomous operations agent. You accomplish the",
       "user's GOAL by calling the available tools below, one at a time, observing",
       'each result before deciding the next step.',
@@ -1891,6 +1949,28 @@ export class ClickDzHermesController {
           ]
         : []),
     ].join('\n');
+    // R8/WSA-10: append the agent's memory block when present. Empty ('' — the
+    // default / memory OFF) leaves `base` untouched, so the prompt is
+    // byte-identical to today.
+    return memoryBlock ? `${base}\n\n${memoryBlock}` : base;
+  }
+
+  /**
+   * R8/WSA-10: read + render this user's Hermes memory as the FR-framed prompt
+   * block that buildPlannerSystemPrompt appends. The ONE place the async memory
+   * read happens; every loop threads its return in. Fully fail-soft + gated:
+   * returns '' immediately when memory is OFF (no Redis touch), and swallows any
+   * store/parse hiccup — a memory problem must NEVER break or slow a run. The
+   * agent is always 'hermes' in this controller.
+   */
+  private async hermesMemoryBlock(userId: string): Promise<string> {
+    if (!memoryEnabled()) return '';
+    try {
+      const mem = await readAgentMemory(this.redis, userId, 'hermes');
+      return buildMemoryPromptBlock(mem);
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -2166,11 +2246,21 @@ export class ClickDzHermesController {
 
     const catalog = buildToolCatalog();
     const knownSlugs = new Set(catalog.filter(t => t.available).map(t => t.slug));
+    // R8/WSA-11: consequential-tool slugs (same derivation as runStreamingLoop),
+    // used by the deferral guard below. Empty-effect when deferConsequential is
+    // false (web/telegram runs), so a non-scheduled run is unaffected.
+    const consequentialSlugs = new Set(
+      catalog.filter(t => t.consequential).map(t => t.slug)
+    );
     const web = this.webTools(userId);
     for (const slug of web.slugs) knownSlugs.add(slug);
+    // R8/WSA-10: prime the prompt with the agent's memory ('' when OFF/empty ⇒
+    // byte-identical). Single async read, injected at the one shared assembler.
+    const memBlock = await this.hermesMemoryBlock(userId);
     const systemPrompt = this.buildPlannerSystemPrompt(
       buildToolBlock(catalog) + web.block,
-      false
+      false,
+      memBlock
     );
 
     // Seed context: system + any prior thread turns (multi-turn continuity when
@@ -2304,6 +2394,30 @@ export class ClickDzHermesController {
       }
 
       iterations++;
+
+      // R8/WSA-11: DEFER a consequential tool on an UNSUPERVISED run. A run
+      // started by a schedule/webhook trigger (deferConsequential(rec) → true;
+      // false for web/telegram interactive runs, so this is a no-op today and
+      // whenever triggers are off) has no live human to approve a write/send, so
+      // we DO NOT execute it. Instead we record a deferred step (the planner sees
+      // it as a failed result and can plan around it or finish) and fire a
+      // fail-soft Telegram ping to the owner. The run continues.
+      if (consequentialSlugs.has(toolSlug) && deferConsequential(rec)) {
+        await pushStep({
+          kind: 'tool',
+          tool: toolSlug,
+          detail: decision.thought,
+          ok: false,
+          resultPreview:
+            '⏸ Différé — approbation requise (exécution non surveillée)',
+        });
+        await this.pingDeferredTool(userId, toolSlug);
+        messages.push({
+          role: 'user',
+          content: `The call to ${toolSlug} was DEFERRED: this is an unattended (scheduled/webhook) run, so no write/send tool can execute without approval. Do NOT retry it. Continue with a different approach, or finish with {"action":"final","answer":"..."} noting what still needs the user's approval.`,
+        });
+        continue;
+      }
 
       // Background runs execute in 'auto' mode (no live approver) — consequential
       // tools run without a gate, exactly like /run and /stream in 'auto'.
@@ -2440,6 +2554,33 @@ export class ClickDzHermesController {
       await this.runtime.saveThread(userId, thread);
     } catch {
       /* fail-soft — the run record still holds the answer */
+    }
+  }
+
+  /**
+   * R8/WSA-11: notify the run owner over Telegram that a consequential tool was
+   * DEFERRED on their unattended run. Fully fail-soft + dark by default: the
+   * TelegramClient no-ops (zero network) when CDZ_TG_TOKEN is absent, and an
+   * unpaired user simply has no bound chat. Dynamic-imported (like other
+   * cross-module hooks) so it adds no static edge; the owner-chat binding is
+   * read via the JSON Cache under Telegramme's documented
+   * `clickdz:tg:user:{userId}` namespace (mirrored here the same way this file
+   * mirrors the bridge/data keys). NEVER throws.
+   */
+  private async pingDeferredTool(userId: string, toolSlug: string): Promise<void> {
+    try {
+      const bind = await this.cache.get<{ chatId?: number | string }>(
+        `clickdz:tg:user:${userId}`
+      );
+      const chatId = bind?.chatId;
+      if (chatId == null) return;
+      const { TelegramClient } = await import('./clickdz-agent-telegram');
+      await new TelegramClient().sendMessage(
+        chatId,
+        `⏸ HERMES a différé une action (${toolSlug}) lors d'une exécution automatique non surveillée. Ouvrez l'agent pour l'approuver.`
+      );
+    } catch {
+      /* fail-soft — a deferral ping must never surface to the run */
     }
   }
 

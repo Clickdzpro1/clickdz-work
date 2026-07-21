@@ -1,5 +1,6 @@
 import { ClickDzAgentRuntime } from './clickdz-agent-runtime';
 import { ClickDzAgentRunJob } from './clickdz-agent-runs';
+import { ClickDzAgentTriggerSweep } from './clickdz-agent-triggers';
 import { CopilotAccessPolicy } from './access';
 import {
   ByokEntitlementPolicy,
@@ -150,6 +151,7 @@ export const COPILOT_JOB_PROVIDERS = [
   CopilotEmbeddingJob,
   CopilotCronJobs,
   ClickDzAgentRunJob,
+  ClickDzAgentTriggerSweep,
 ];
 
 export const COPILOT_MCP_PROVIDERS = [WorkspaceMcpProvider];

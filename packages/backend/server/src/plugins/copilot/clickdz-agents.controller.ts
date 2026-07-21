@@ -19,6 +19,13 @@ import { CurrentUser } from '../../core/auth';
 // Called fail-soft below so a missing/partial engine never crashes this read.
 // The orchestrator merges all R6 files, so this static import resolves at boot.
 import { type AgentName, listAgentRuns } from './clickdz-agent-runs';
+// Wassila's WhatsApp stub (clickdz-wa-client.ts). waCapsEnabled() is an env-ONLY,
+// fetch-free predicate (CDZ_WA_URL && CDZ_WA_TOKEN && CDZ_AGENT_WHATSAPP_ENABLED
+// === '1'); today all unset ⇒ false. VALUE import — it is CALLED at runtime by
+// buildCaps below, so it must be a real binding (not `import type`). Pure, so it
+// is safe on the caps hot path (no I/O). The orchestrator merges R8 files, so
+// this static import resolves at boot; flags-off it just returns false.
+import { waCapsEnabled } from './clickdz-wa-client';
 
 // ---------------------------------------------------------------------------
 // CDZ AGENTS — STATUS + STATE (WSU-8, R6 §"Agents status backend").
@@ -89,6 +96,13 @@ interface AgentCaps {
   dzdPer1k: number;
   telegramEnabled: boolean;
   webEnabled: boolean;
+  // R8 additions (all default OFF/false ⇒ unset env == feature dark on the
+  // client): WhatsApp tool availability (env-only, via Wassila's waCapsEnabled),
+  // per-agent memory, and scheduled/webhook triggers. The R7 keys above are kept
+  // verbatim so existing FE consumers are unaffected.
+  whatsappEnabled: boolean;
+  memoryEnabled: boolean;
+  triggersEnabled: boolean;
 }
 
 // Build the caps object from the environment. Pure; no I/O. Kept a tiny helper
@@ -100,6 +114,12 @@ function buildCaps(): AgentCaps {
     dzdPer1k: Number(process.env.CDZ_DZD_PER_1K || '0'),
     telegramEnabled: process.env.CDZ_AGENT_TELEGRAM_ENABLED === '1',
     webEnabled: process.env.CDZ_AGENT_WEB_ENABLED === '1',
+    // R8: WhatsApp cap is Wassila's env-only predicate (URL+TOKEN pair AND the
+    // master WA flag) — a fetch-free read on the caps hot path; false today.
+    whatsappEnabled: waCapsEnabled(),
+    // R8: memory + triggers gates, same inline process.env idiom; default OFF.
+    memoryEnabled: process.env.CDZ_AGENT_MEMORY_ENABLED === '1',
+    triggersEnabled: process.env.CDZ_AGENT_TRIGGERS_ENABLED === '1',
   };
 }
 

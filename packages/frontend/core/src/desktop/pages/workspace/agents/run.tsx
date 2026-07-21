@@ -12,6 +12,7 @@ import {
   SpendMeter,
 } from '@affine/core/modules/agents/components';
 import { AgentApiError, getAgentRun } from '@affine/core/modules/agents/api';
+import { type TFunc, useAgentLang } from '@affine/core/modules/agents/i18n';
 import type {
   AgentArtifact,
   AgentEvent,
@@ -39,7 +40,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
-// ClickDz Agents — single-run live view, full-page.
+// ClickDz Agents — single-run live view, full-page (R8 i18n + mobile).
 //
 // The dedicated full-page version of the Hermes dashboard's inline RunLiveView
 // overlay (hermes/dashboard.tsx). It attaches to a durable background run via
@@ -56,6 +57,11 @@ import { useParams, useSearchParams } from 'react-router-dom';
 //     fed by the file/terminal/preview deltas seen on the stream. If nothing was
 //     captured we simply link out to /openclaw rather than forking the UI.
 //
+// R8 (WSU-7 / RETOUCHE): all user-facing copy comes from the shared agents i18n
+// catalogue via `useAgentLang()` (FR default + Algerian darja); the page root
+// gets `dir={dir}` (Arabic → RTL); the run-prompt block word-breaks long URLs.
+// Behaviour, routing, props and exports are unchanged.
+//
 // The durable hook exposes only {steps, state, finalText, pendingApproval,
 // error, reattach, stop}; it deliberately ignores artifact/file/terminal/
 // preview frames. So we pass its `onEvent` a collector that accumulates those
@@ -70,9 +76,8 @@ import { useParams, useSearchParams } from 'react-router-dom';
 // Mobile: single column — timeline first, artifacts + sandbox collapse below.
 //
 // House rules: inline styles only (no .css.ts), no new deps, shared
-// AgentPalette, FR primary + darja hints, loading/empty/error + flag-off/404
-// quiet fallback. Exports BOTH `Component` (react-router lazy convention) and a
-// default export.
+// AgentPalette, loading/empty/error + flag-off/404 quiet fallback. Exports BOTH
+// `Component` (react-router lazy convention) and a default export.
 // ---------------------------------------------------------------------------
 
 const C = AgentPalette.color;
@@ -80,41 +85,35 @@ const R = AgentPalette.radius;
 
 type LoadState = 'loading' | 'ready' | 'error';
 
-const RUN_STATE_META: Record<
+// Per-state chip tint (colour). Labels come from the i18n catalogue at render
+// (`states.<state>` with the `.short` variants run.tsx uses for approval /
+// failed).
+const RUN_STATE_TINT: Record<
   AgentRunState,
-  { label: string; color: string; bg: string; border: string }
+  { color: string; bg: string; border: string }
 > = {
-  queued: {
-    label: 'En file',
-    color: C.muted,
-    bg: 'transparent',
-    border: C.border,
-  },
-  running: {
-    label: 'En cours',
-    color: C.accent,
-    bg: C.accentSoft,
-    border: C.accentBorder,
-  },
-  waiting_approval: {
-    label: 'Approbation',
-    color: C.warn,
-    bg: C.warnBg,
-    border: C.warnBorder,
-  },
-  done: { label: 'Terminé', color: C.okText, bg: C.okBg, border: C.okBorder },
-  failed: { label: 'Échec', color: C.errText, bg: C.errBg, border: C.errBorder },
-  stopped: {
-    label: 'Arrêté',
-    color: C.muted,
-    bg: 'transparent',
-    border: C.border,
-  },
+  queued: { color: C.muted, bg: 'transparent', border: C.border },
+  running: { color: C.accent, bg: C.accentSoft, border: C.accentBorder },
+  waiting_approval: { color: C.warn, bg: C.warnBg, border: C.warnBorder },
+  done: { color: C.okText, bg: C.okBg, border: C.okBorder },
+  failed: { color: C.errText, bg: C.errBg, border: C.errBorder },
+  stopped: { color: C.muted, bg: 'transparent', border: C.border },
+};
+
+// i18n key for a run state's SHORT chip label (run.tsx uses the compact
+// register: "Approbation" / "Échec").
+const RUN_STATE_KEY: Record<AgentRunState, string> = {
+  queued: 'states.queued',
+  running: 'states.running',
+  waiting_approval: 'states.waiting_approval.short',
+  done: 'states.done',
+  failed: 'states.failed.short',
+  stopped: 'states.stopped',
 };
 
 function coerceRunState(v: unknown): AgentRunState {
   const s = typeof v === 'string' ? v : '';
-  return s in RUN_STATE_META ? (s as AgentRunState) : 'queued';
+  return s in RUN_STATE_TINT ? (s as AgentRunState) : 'queued';
 }
 
 function coerceAgent(v: string | null): AgentName {
@@ -185,6 +184,7 @@ const AgentRunPage = () => {
   const runId = routeParams.id ?? routeParams.runId ?? '';
   const agent = coerceAgent(searchParams.get('agent'));
 
+  const { t, dir } = useAgentLang();
   const workbench = useService(WorkbenchService).workbench;
 
   const [record, setRecord] = useState<AgentRunRecord | null>(null);
@@ -351,7 +351,7 @@ const AgentRunPage = () => {
 
   return (
     <>
-      <ViewTitle title={`${AGENT_LABEL[agent]} · run`} />
+      <ViewTitle title={t('run.tabTitle', { agent: AGENT_LABEL[agent] })} />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
@@ -370,7 +370,7 @@ const AgentRunPage = () => {
           <button
             type="button"
             onClick={goBack}
-            title="Retour aux exécutions"
+            title={t('run.back.title')}
             style={{
               appearance: 'none',
               border: 'none',
@@ -379,7 +379,7 @@ const AgentRunPage = () => {
               cursor: 'pointer',
               fontSize: 15,
               padding: 0,
-              marginRight: 2,
+              marginInlineEnd: 2,
             }}
           >
             ←
@@ -394,7 +394,7 @@ const AgentRunPage = () => {
               whiteSpace: 'nowrap',
             }}
           >
-            {AGENT_LABEL[agent]} · exécution
+            {t('run.header.title', { agent: AGENT_LABEL[agent] })}
           </span>
         </div>
       </ViewHeader>
@@ -411,6 +411,8 @@ const AgentRunPage = () => {
           }}
         >
           <div
+            dir={dir}
+            className="cdz-agents-run-canvas"
             style={{
               maxWidth: 1120,
               margin: '0 auto',
@@ -421,11 +423,12 @@ const AgentRunPage = () => {
             }}
           >
             {featureOff ? (
-              <QuietFallback onBack={goBack} />
+              <QuietFallback t={t} onBack={goBack} />
             ) : (
               <>
                 {/* Run header card */}
                 <RunHeader
+                  t={t}
                   agent={agent}
                   state={state}
                   isLive={isLive}
@@ -452,11 +455,12 @@ const AgentRunPage = () => {
                     {recordState === 'loading' &&
                     steps.length === 0 &&
                     !finalText ? (
-                      <LoadingRow label="Attache à l'exécution…" />
+                      <LoadingRow label={t('run.loading')} />
                     ) : recordState === 'error' &&
                       steps.length === 0 &&
                       !finalText ? (
                       <ErrorRow
+                        t={t}
                         onRetry={() => {
                           void loadRecord();
                           stream.reattach?.();
@@ -487,9 +491,10 @@ const AgentRunPage = () => {
                           padding: '12px 14px',
                           fontSize: 13,
                           color: C.text,
+                          wordBreak: 'break-word',
                         }}
                       >
-                        <strong>Erreur du run.</strong> {errorText}
+                        <strong>{t('run.error.title')}</strong> {errorText}
                       </div>
                     ) : null}
                   </div>
@@ -507,12 +512,13 @@ const AgentRunPage = () => {
                 {isOpenClaw ? (
                   hasSandbox ? (
                     <OpenClawSandbox
+                      t={t}
                       files={fileList}
                       terminal={terminal}
                       preview={preview}
                     />
                   ) : (
-                    <OpenClawLinkOut onOpen={goToOpenClaw} />
+                    <OpenClawLinkOut t={t} onOpen={goToOpenClaw} />
                   )
                 ) : null}
               </>
@@ -526,6 +532,9 @@ const AgentRunPage = () => {
 @media (max-width: 860px){
   .cdz-agents-run-grid{grid-template-columns: minmax(0,1fr) !important;}
 }
+@media (max-width: 560px){
+  .cdz-agents-run-canvas{padding:18px 14px 40px !important;}
+}
 `}
         </style>
       </ViewBody>
@@ -536,6 +545,7 @@ const AgentRunPage = () => {
 // ---- header ----------------------------------------------------------------
 
 const RunHeader = ({
+  t,
   agent,
   state,
   isLive,
@@ -544,6 +554,7 @@ const RunHeader = ({
   steps,
   onStop,
 }: {
+  t: TFunc;
   agent: AgentName;
   state: AgentRunState;
   isLive: boolean;
@@ -552,7 +563,7 @@ const RunHeader = ({
   steps: AgentStep[];
   onStop: () => void;
 }) => {
-  const meta = RUN_STATE_META[state];
+  const tint = RUN_STATE_TINT[state];
   return (
     <div
       style={{
@@ -601,7 +612,7 @@ const RunHeader = ({
             {AGENT_LABEL[agent]}
           </div>
           <div style={{ fontSize: 11.5, color: C.muted }}>
-            Exécution en arrière-plan · run f el background
+            {t('run.header.subtitle')}
           </div>
         </div>
 
@@ -621,9 +632,9 @@ const RunHeader = ({
             textTransform: 'uppercase',
             padding: '2px 9px',
             borderRadius: R.pill,
-            color: meta.color,
-            background: meta.bg,
-            border: `1px solid ${meta.border}`,
+            color: tint.color,
+            background: tint.bg,
+            border: `1px solid ${tint.border}`,
             whiteSpace: 'nowrap',
             flexShrink: 0,
           }}
@@ -634,10 +645,10 @@ const RunHeader = ({
               width: 6,
               height: 6,
               borderRadius: '50%',
-              background: meta.color,
+              background: tint.color,
             }}
           />
-          {meta.label}
+          {t(RUN_STATE_KEY[state])}
         </span>
 
         {/* Stop — only while live. */}
@@ -645,7 +656,7 @@ const RunHeader = ({
           <button
             type="button"
             onClick={onStop}
-            title="Arrêter l'exécution"
+            title={t('run.stop.title')}
             style={{
               appearance: 'none',
               display: 'inline-flex',
@@ -662,7 +673,7 @@ const RunHeader = ({
               flexShrink: 0,
             }}
           >
-            ⏹ Arrêter
+            {t('run.stop')}
           </button>
         ) : null}
       </div>
@@ -691,10 +702,12 @@ const RunHeader = ({
 // ---- OpenClaw sandbox (reused components) ----------------------------------
 
 const OpenClawSandbox = ({
+  t,
   files,
   terminal,
   preview,
 }: {
+  t: TFunc;
   files: { path: string; bytes?: number; language?: string }[];
   terminal: { stream: 'stdout' | 'stderr'; data: string }[];
   preview: { url: string; status: 'starting' | 'ready' } | null;
@@ -717,7 +730,7 @@ const OpenClawSandbox = ({
           color: C.muted,
         }}
       >
-        Espace de travail · sandbox
+        {t('run.sandbox.title')}
       </div>
       <div
         style={{
@@ -774,7 +787,7 @@ const OpenClawSandbox = ({
   );
 };
 
-const OpenClawLinkOut = ({ onOpen }: { onOpen: () => void }) => (
+const OpenClawLinkOut = ({ t, onOpen }: { t: TFunc; onOpen: () => void }) => (
   <div
     style={{
       display: 'flex',
@@ -792,10 +805,10 @@ const OpenClawLinkOut = ({ onOpen }: { onOpen: () => void }) => (
     </span>
     <div style={{ flex: 1, minWidth: 180 }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-        Espace de travail OpenClaw
+        {t('run.openclaw.title')}
       </div>
       <div style={{ fontSize: 12, color: C.muted }}>
-        Les fichiers, le terminal et l'aperçu vivent dans le studio OpenClaw.
+        {t('run.openclaw.body')}
       </div>
     </div>
     <button
@@ -814,7 +827,7 @@ const OpenClawLinkOut = ({ onOpen }: { onOpen: () => void }) => (
         flexShrink: 0,
       }}
     >
-      Ouvrir OpenClaw →
+      {t('run.openclaw.open')}
     </button>
   </div>
 );
@@ -835,7 +848,7 @@ const LoadingRow = ({ label }: { label: string }) => (
   </div>
 );
 
-const ErrorRow = ({ onRetry }: { onRetry: () => void }) => (
+const ErrorRow = ({ t, onRetry }: { t: TFunc; onRetry: () => void }) => (
   <div
     style={{
       borderRadius: R.lg,
@@ -849,7 +862,7 @@ const ErrorRow = ({ onRetry }: { onRetry: () => void }) => (
     }}
   >
     <span style={{ flex: 1, minWidth: 180, fontSize: 13, color: C.text }}>
-      Impossible de charger cette exécution.
+      {t('run.error.load')}
     </span>
     <button
       type="button"
@@ -866,12 +879,12 @@ const ErrorRow = ({ onRetry }: { onRetry: () => void }) => (
         fontWeight: 600,
       }}
     >
-      Réessayer
+      {t('common.retry')}
     </button>
   </div>
 );
 
-const QuietFallback = ({ onBack }: { onBack: () => void }) => (
+const QuietFallback = ({ t, onBack }: { t: TFunc; onBack: () => void }) => (
   <div
     style={{
       borderRadius: R.lg,
@@ -890,11 +903,10 @@ const QuietFallback = ({ onBack }: { onBack: () => void }) => (
       🔒
     </span>
     <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
-      Agents non activés
+      {t('run.quiet.title')}
     </span>
     <span style={{ fontSize: 12.5, maxWidth: 400 }}>
-      Cette exécution est introuvable ou les agents ne sont pas activés sur ce
-      serveur.
+      {t('run.quiet.body')}
     </span>
     <button
       type="button"
@@ -912,7 +924,7 @@ const QuietFallback = ({ onBack }: { onBack: () => void }) => (
         marginTop: 4,
       }}
     >
-      ← Retour
+      {t('common.back')}
     </button>
   </div>
 );

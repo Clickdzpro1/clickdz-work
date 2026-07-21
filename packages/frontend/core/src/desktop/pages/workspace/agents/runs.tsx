@@ -4,6 +4,7 @@ import { AgentPalette } from '@affine/core/modules/agents/components';
 // disk yet the barrel still resolves because the merged barrel re-exports it.
 import { SpendMeter } from '@affine/core/modules/agents/components';
 import { AgentApiError, listAgentRuns } from '@affine/core/modules/agents/api';
+import { type TFunc, useAgentLang } from '@affine/core/modules/agents/i18n';
 import type {
   AgentName,
   AgentRunState,
@@ -21,7 +22,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 // ---------------------------------------------------------------------------
-// ClickDz Agents — Exécutions (run history), full-page.
+// ClickDz Agents — Exécutions (run history), full-page (R8 i18n + mobile).
 //
 // The dedicated, full-page version of the Hermes dashboard's inline
 // "Exécutions" panel (hermes/dashboard.tsx). Lists the signed-in user's durable
@@ -30,6 +31,12 @@ import { useSearchParams } from 'react-router-dom';
 // estimate (Jauge). Clicking a row navigates to the single-run live view
 // (run.tsx) at `/agents/run/:id?agent=<agent>`.
 //
+// R8 (WSU-7 / RETOUCHE): all user-facing copy comes from the shared agents i18n
+// catalogue via `useAgentLang()` (FR default + Algerian darja); the page root
+// gets `dir={dir}` (Arabic → RTL); the layout is mobile-polished (≤560px:
+// tighter paddings, filter chips wrap, no horizontal overflow). Behaviour,
+// routing (?agent=), props and exports are unchanged.
+//
 // Data: `listAgentRuns(agent)` — the same call the dashboard uses, which also
 // doubles as a capability probe: a 404 means CDZ_AGENTS_ENABLED is off, so we
 // show a quiet "Agents non activés" fallback instead of an error (flag-off /
@@ -37,20 +44,19 @@ import { useSearchParams } from 'react-router-dom';
 // error states.
 //
 // Agent selection is driven by the `?agent=` search param so the choice is
-// shareable/bookmarkable; it defaults to `hermes`. Mobile: single column, chips
-// wrap.
+// shareable/bookmarkable; it defaults to `hermes`.
 //
 // House rules: inline styles only (no .css.ts), no new deps, shared AgentPalette
-// tokens, FR primary + darja hints, boot-safe (no runtime icon-lib dependency
-// beyond what the shared kit already pulls). Exports BOTH `Component` (the
-// react-router lazy convention every sibling page uses) and a default export.
+// tokens, boot-safe. Exports BOTH `Component` (the react-router lazy convention
+// every sibling page uses) and a default export.
 // ---------------------------------------------------------------------------
 
 const C = AgentPalette.color;
 const R = AgentPalette.radius;
 
 // The agents that own a durable-runs history. Kept local (not imported as a
-// runtime const) so this file never hard-depends on a registry export.
+// runtime const) so this file never hard-depends on a registry export. Labels
+// are proper nouns (Hermes / OpenClaw) — not localized.
 const AGENTS: { id: AgentName; label: string; emoji: string }[] = [
   { id: 'hermes', label: 'Hermes', emoji: '🤝' },
   { id: 'openclaw', label: 'OpenClaw', emoji: '🛠️' },
@@ -58,54 +64,36 @@ const AGENTS: { id: AgentName; label: string; emoji: string }[] = [
 
 type LoadState = 'loading' | 'ready' | 'error';
 
-// Per-state chip metadata (colour + FR label). Mirrors the dashboard's
-// RUN_STATE_META but scoped to the AgentRunState union so it stays exhaustive.
-const RUN_STATE_META: Record<
+// Per-state chip tint (colour). Labels come from the i18n catalogue at render
+// (`states.<state>` with the `.short` variants runs.tsx uses for approval /
+// failed). Scoped to the AgentRunState union so it stays exhaustive.
+const RUN_STATE_TINT: Record<
   AgentRunState,
-  { label: string; color: string; bg: string; border: string }
+  { color: string; bg: string; border: string }
 > = {
-  queued: {
-    label: 'En file',
-    color: C.muted,
-    bg: 'transparent',
-    border: C.border,
-  },
-  running: {
-    label: 'En cours',
-    color: C.accent,
-    bg: C.accentSoft,
-    border: C.accentBorder,
-  },
-  waiting_approval: {
-    label: 'Approbation',
-    color: C.warn,
-    bg: C.warnBg,
-    border: C.warnBorder,
-  },
-  done: {
-    label: 'Terminé',
-    color: C.okText,
-    bg: C.okBg,
-    border: C.okBorder,
-  },
-  failed: {
-    label: 'Échec',
-    color: C.errText,
-    bg: C.errBg,
-    border: C.errBorder,
-  },
-  stopped: {
-    label: 'Arrêté',
-    color: C.muted,
-    bg: 'transparent',
-    border: C.border,
-  },
+  queued: { color: C.muted, bg: 'transparent', border: C.border },
+  running: { color: C.accent, bg: C.accentSoft, border: C.accentBorder },
+  waiting_approval: { color: C.warn, bg: C.warnBg, border: C.warnBorder },
+  done: { color: C.okText, bg: C.okBg, border: C.okBorder },
+  failed: { color: C.errText, bg: C.errBg, border: C.errBorder },
+  stopped: { color: C.muted, bg: 'transparent', border: C.border },
+};
+
+// i18n key for a run state's SHORT chip label (runs.tsx uses the compact
+// register: "Approbation" / "Échec").
+const RUN_STATE_KEY: Record<AgentRunState, string> = {
+  queued: 'states.queued',
+  running: 'states.running',
+  waiting_approval: 'states.waiting_approval.short',
+  done: 'states.done',
+  failed: 'states.failed.short',
+  stopped: 'states.stopped',
 };
 
 // Coerce an unknown/loose state string into a known AgentRunState.
 function coerceRunState(v: unknown): AgentRunState {
   const s = typeof v === 'string' ? v : '';
-  return s in RUN_STATE_META ? (s as AgentRunState) : 'queued';
+  return s in RUN_STATE_TINT ? (s as AgentRunState) : 'queued';
 }
 
 // Coerce a search-param string into a known AgentName ('hermes' default).
@@ -113,29 +101,29 @@ function coerceAgent(v: string | null): AgentName {
   return v === 'openclaw' ? 'openclaw' : 'hermes';
 }
 
-// Relative-time formatter (FR). Small + dependency-free — mirrors the
-// hermes-shared `timeAgo` idiom so the two surfaces read identically.
-function timeAgo(ts?: number): string {
+// Relative-time formatter using the shared `time.*` catalogue keys ({n} slot).
+function timeAgo(t: TFunc, ts?: number): string {
   if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return '';
   const diff = Date.now() - ts;
-  if (diff < 0) return "à l'instant";
+  if (diff < 0) return t('time.now');
   const s = Math.floor(diff / 1000);
-  if (s < 45) return "à l'instant";
+  if (s < 45) return t('time.now');
   const m = Math.floor(s / 60);
-  if (m < 60) return `il y a ${m} min`;
+  if (m < 60) return t('time.minAgo', { n: m });
   const h = Math.floor(m / 60);
-  if (h < 24) return `il y a ${h} h`;
+  if (h < 24) return t('time.hrAgo', { n: h });
   const d = Math.floor(h / 24);
-  if (d < 30) return `il y a ${d} j`;
+  if (d < 30) return t('time.dayAgo', { n: d });
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `il y a ${mo} mois`;
-  return `il y a ${Math.floor(mo / 12)} an(s)`;
+  if (mo < 12) return t('time.monthAgo', { n: mo });
+  return t('time.yearAgo', { n: Math.floor(mo / 12) });
 }
 
 const AgentsRunsPage = () => {
   const [params, setParams] = useSearchParams();
   const agent = coerceAgent(params.get('agent'));
 
+  const { t, dir } = useAgentLang();
   const workbench = useService(WorkbenchService).workbench;
 
   const [state, setState] = useState<LoadState>('loading');
@@ -197,7 +185,7 @@ const AgentsRunsPage = () => {
 
   return (
     <>
-      <ViewTitle title="Exécutions" />
+      <ViewTitle title={t('runs.tabTitle')} />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
@@ -215,7 +203,7 @@ const AgentsRunsPage = () => {
           <span aria-hidden style={{ fontSize: 16 }}>
             🗂️
           </span>
-          Exécutions
+          {t('runs.tabTitle')}
           <span
             style={{
               fontSize: 10,
@@ -229,7 +217,7 @@ const AgentsRunsPage = () => {
                 'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
             }}
           >
-            béta
+            {t('common.beta')}
           </span>
         </div>
       </ViewHeader>
@@ -245,7 +233,10 @@ const AgentsRunsPage = () => {
             lineHeight: 1.5,
           }}
         >
+          <style>{RUNS_CSS}</style>
           <div
+            dir={dir}
+            className="cdz-agents-runs-canvas"
             style={{
               maxWidth: 920,
               margin: '0 auto',
@@ -274,17 +265,16 @@ const AgentsRunsPage = () => {
                     lineHeight: 1.2,
                   }}
                 >
-                  Exécutions
+                  {t('runs.title')}
                 </h1>
                 <p style={{ margin: '4px 0 0', fontSize: 12.5, color: C.muted }}>
-                  L'historique de tes runs en arrière-plan · el historique
-                  ta3 les runs · streaming en direct au clic.
+                  {t('runs.subtitle')}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => void load()}
-                title="Rafraîchir"
+                title={t('common.refresh')}
                 style={{
                   appearance: 'none',
                   flexShrink: 0,
@@ -306,7 +296,7 @@ const AgentsRunsPage = () => {
             {/* Agent filter */}
             <div
               role="tablist"
-              aria-label="Filtrer par agent"
+              aria-label={t('runs.filter.label')}
               style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}
             >
               {AGENTS.map(a => {
@@ -347,13 +337,13 @@ const AgentsRunsPage = () => {
 
             {/* Body: quiet fallback | loading | error | empty | list */}
             {showQuietFallback ? (
-              <QuietFallback />
+              <QuietFallback t={t} />
             ) : state === 'loading' ? (
-              <LoadingRow />
+              <LoadingRow t={t} />
             ) : state === 'error' ? (
-              <ErrorRow onRetry={() => void load()} />
+              <ErrorRow t={t} onRetry={() => void load()} />
             ) : runs.length === 0 ? (
-              <EmptyRow agentLabel={agentLabel(agent)} />
+              <EmptyRow t={t} agentLabel={agentLabel(agent)} />
             ) : (
               <div
                 style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
@@ -361,6 +351,7 @@ const AgentsRunsPage = () => {
                 {runs.map(run => (
                   <ExecutionRow
                     key={run.runId}
+                    t={t}
                     run={run}
                     onOpen={() => openRun(run.runId)}
                   />
@@ -378,25 +369,35 @@ function agentLabel(agent: AgentName): string {
   return AGENTS.find(a => a.id === agent)?.label ?? agent;
 }
 
+// Mobile polish: tighten the canvas padding on phones (the flex/wrap layout
+// already stacks; this just reclaims horizontal space).
+const RUNS_CSS = `
+@media (max-width: 560px){
+  .cdz-agents-runs-canvas{padding:18px 14px 40px !important;}
+}
+`;
+
 // ---- rows / states ---------------------------------------------------------
 
 const ExecutionRow = ({
+  t,
   run,
   onOpen,
 }: {
+  t: TFunc;
   run: AgentRunSummary;
   onOpen: () => void;
 }) => {
   const runState = coerceRunState(run.state);
   const when = run.startedAt ?? run.endedAt;
-  const preview = (run.prompt ?? '').trim() || 'Run sans titre';
+  const preview = (run.prompt ?? '').trim() || t('runs.untitled');
   return (
     <button
       type="button"
       onClick={onOpen}
       style={{
         appearance: 'none',
-        textAlign: 'left',
+        textAlign: 'start',
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',
@@ -458,7 +459,7 @@ const ExecutionRow = ({
             marginTop: 2,
           }}
         >
-          <span>{when ? timeAgo(when) : "à l'instant"}</span>
+          <span>{when ? timeAgo(t, when) : t('time.now')}</span>
           <span aria-hidden>·</span>
           {/* Compact spend estimate (Jauge). Reads whatever the run summary
               exposes; if there's no token field it estimates from step/tool-call
@@ -466,7 +467,7 @@ const ExecutionRow = ({
           <SpendMeter run={run} compact />
         </span>
       </span>
-      <RunStateChip state={runState} />
+      <RunStateChip t={t} state={runState} />
       <span aria-hidden style={{ color: C.muted, fontSize: 14, flexShrink: 0 }}>
         →
       </span>
@@ -474,8 +475,8 @@ const ExecutionRow = ({
   );
 };
 
-const RunStateChip = ({ state }: { state: AgentRunState }) => {
-  const meta = RUN_STATE_META[state];
+const RunStateChip = ({ t, state }: { t: TFunc; state: AgentRunState }) => {
+  const tint = RUN_STATE_TINT[state];
   return (
     <span
       style={{
@@ -488,9 +489,9 @@ const RunStateChip = ({ state }: { state: AgentRunState }) => {
         textTransform: 'uppercase',
         padding: '2px 9px',
         borderRadius: R.pill,
-        color: meta.color,
-        background: meta.bg,
-        border: `1px solid ${meta.border}`,
+        color: tint.color,
+        background: tint.bg,
+        border: `1px solid ${tint.border}`,
         whiteSpace: 'nowrap',
         flexShrink: 0,
       }}
@@ -501,16 +502,16 @@ const RunStateChip = ({ state }: { state: AgentRunState }) => {
           width: 6,
           height: 6,
           borderRadius: '50%',
-          background: meta.color,
+          background: tint.color,
           flexShrink: 0,
         }}
       />
-      {meta.label}
+      {t(RUN_STATE_KEY[state])}
     </span>
   );
 };
 
-const LoadingRow = () => (
+const LoadingRow = ({ t }: { t: TFunc }) => (
   <div
     style={{
       display: 'flex',
@@ -520,11 +521,11 @@ const LoadingRow = () => (
       color: C.muted,
     }}
   >
-    <Spinner /> Chargement des exécutions…
+    <Spinner /> {t('runs.loading')}
   </div>
 );
 
-const ErrorRow = ({ onRetry }: { onRetry: () => void }) => (
+const ErrorRow = ({ t, onRetry }: { t: TFunc; onRetry: () => void }) => (
   <div
     style={{
       borderRadius: R.lg,
@@ -538,7 +539,7 @@ const ErrorRow = ({ onRetry }: { onRetry: () => void }) => (
     }}
   >
     <span style={{ flex: 1, minWidth: 180, fontSize: 13, color: C.text }}>
-      Impossible de charger les exécutions.
+      {t('runs.error.load')}
     </span>
     <button
       type="button"
@@ -555,12 +556,12 @@ const ErrorRow = ({ onRetry }: { onRetry: () => void }) => (
         fontWeight: 600,
       }}
     >
-      Réessayer
+      {t('common.retry')}
     </button>
   </div>
 );
 
-const EmptyRow = ({ agentLabel }: { agentLabel: string }) => (
+const EmptyRow = ({ t, agentLabel }: { t: TFunc; agentLabel: string }) => (
   <div
     style={{
       borderRadius: R.lg,
@@ -578,17 +579,16 @@ const EmptyRow = ({ agentLabel }: { agentLabel: string }) => (
       🌙
     </span>
     <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
-      Pas encore d'exécutions
+      {t('runs.empty.title')}
     </span>
     <span style={{ fontSize: 12.5, maxWidth: 420, margin: '0 auto' }}>
-      Lance un run en arrière-plan avec {agentLabel} — makach walou pour
-      l'instant. Il continue même si tu fermes l'onglet.
+      {t('runs.empty.body', { agent: agentLabel })}
     </span>
   </div>
 );
 
 // Flag-off / 404 quiet fallback — the whole feature is dark server-side.
-const QuietFallback = () => (
+const QuietFallback = ({ t }: { t: TFunc }) => (
   <div
     style={{
       borderRadius: R.lg,
@@ -606,10 +606,10 @@ const QuietFallback = () => (
       🔒
     </span>
     <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
-      Agents non activés
+      {t('runs.quiet.title')}
     </span>
     <span style={{ fontSize: 12.5, maxWidth: 400, margin: '0 auto' }}>
-      Les exécutions d'agents ne sont pas activées sur ce serveur.
+      {t('runs.quiet.body')}
     </span>
   </div>
 );

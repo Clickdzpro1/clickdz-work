@@ -1,0 +1,797 @@
+// ---------------------------------------------------------------------------
+// ClickDz Agents — i18n (R8, WSU-7 / LOCALE). The SINGLE source of truth for
+// every user-facing string in the unified /agents studio (home, agent cards,
+// hire wizard, run + runs views, connections, the run timeline / artifacts /
+// spend / tool-call components) plus the upcoming triggers page.
+//
+// WHY this file exists: the R7 agents surfaces hard-coded FR copy inline (with a
+// scattered darja hint here and there). R8 makes the studio bilingual — French
+// (default) + Algerian darja (Arabic script) — via ONE tiny, dependency-free
+// module. Consumers (Cadence/Retouche/Poli) import `useAgentLang()` (or the pure
+// `tFor(lang)`) and call `t('home.title')` instead of writing literals, so a
+// language switch flips the whole studio at once and RTL is applied for Arabic.
+//
+// DESIGN (house rules honored):
+//   · ZERO new deps. Only `react` (useState/useEffect) — already everywhere.
+//   · Boot-safe: no top-level throws, all storage access guarded (private mode /
+//     SSR / disabled storage are non-fatal). Missing key FAILS SOFT — `t()`
+//     returns the FR string if present, else the key itself. It NEVER throws.
+//   · No React context / provider: the hook reads MODULE-LEVEL state and
+//     subscribes to a module-level listener set, so any number of mounted
+//     components (card, timeline, spend chip…) re-render together on setLang —
+//     no tree wrapping required. A `storage` event bridges other tabs.
+//   · Interpolation is `{var}` style: `t('runs.subtitle', { agent: 'Hermes' })`.
+//
+// The full dotted-key catalogue (key → FR) is exported in the builder NOTES so
+// the consuming builders use EXACT keys. `ar` = short, commerce-appropriate
+// Algerian darja in Arabic script (the register the DZ shop pages already use).
+// ---------------------------------------------------------------------------
+
+import { useEffect, useState } from 'react';
+
+// ---------------------------------------------------------------------------
+// Public types.
+// ---------------------------------------------------------------------------
+
+/** The two languages the agents studio speaks. FR is the default. */
+export type AgentLang = 'fr' | 'ar';
+
+/** A dotted string key into {@link AGENT_STRINGS}. */
+export type AgentStringKey = string;
+
+/** Interpolation variables for `{var}` placeholders. Values are coerced to string. */
+export type TVars = Record<string, string | number>;
+
+/** The translator function shape returned by {@link tFor} and exposed by the hook. */
+export type TFunc = (key: AgentStringKey, vars?: TVars) => string;
+
+// ---------------------------------------------------------------------------
+// Storage + module-level reactive state (no provider).
+// ---------------------------------------------------------------------------
+
+/** localStorage key persisting the chosen language across reloads / tabs. */
+export const AGENT_LANG_STORAGE_KEY = 'cdz:agent-lang';
+
+/** The default language when nothing is stored (or storage is unavailable). */
+export const DEFAULT_AGENT_LANG: AgentLang = 'fr';
+
+/** Human labels for a language toggle (FR button says "عربية", AR says "Français"). */
+export const AGENT_LANG_LABELS: Record<AgentLang, string> = {
+  fr: 'Français',
+  ar: 'العربية',
+};
+
+/** Coerce any loose value to a known {@link AgentLang} (defaults to FR). */
+export function coerceLang(v: unknown): AgentLang {
+  return v === 'ar' ? 'ar' : 'fr';
+}
+
+/** Text direction for a language — 'rtl' for Arabic, 'ltr' otherwise. */
+export function dirFor(lang: AgentLang): 'rtl' | 'ltr' {
+  return lang === 'ar' ? 'rtl' : 'ltr';
+}
+
+// Guarded storage helpers — private mode / SSR / disabled storage are non-fatal.
+function readStoredLang(): AgentLang {
+  try {
+    const raw = globalThis.localStorage?.getItem(AGENT_LANG_STORAGE_KEY);
+    return coerceLang(raw);
+  } catch {
+    return DEFAULT_AGENT_LANG;
+  }
+}
+
+function writeStoredLang(lang: AgentLang): void {
+  try {
+    globalThis.localStorage?.setItem(AGENT_LANG_STORAGE_KEY, lang);
+  } catch {
+    // Non-fatal: the in-memory module state still drives this session.
+  }
+}
+
+// Module-level current language. Seeded from storage at import time (guarded).
+let currentLang: AgentLang = readStoredLang();
+
+// Module-level subscriber set: every mounted component's hook registers a
+// listener so a single setLang() re-renders them all — the provider-free
+// broadcast. A plain Set keeps it dependency-free.
+const listeners = new Set<(lang: AgentLang) => void>();
+
+function emit(lang: AgentLang): void {
+  for (const fn of Array.from(listeners)) {
+    try {
+      fn(lang);
+    } catch {
+      // A misbehaving subscriber must never break the broadcast to the rest.
+    }
+  }
+}
+
+// Bridge other tabs / windows: a `storage` event for our key updates the
+// module state + notifies local subscribers. Registered once, guarded.
+let storageBridgeArmed = false;
+function armStorageBridge(): void {
+  if (storageBridgeArmed) return;
+  storageBridgeArmed = true;
+  try {
+    globalThis.addEventListener?.('storage', (e: StorageEvent) => {
+      if (e.key !== AGENT_LANG_STORAGE_KEY) return;
+      const next = coerceLang(e.newValue);
+      if (next === currentLang) return;
+      currentLang = next;
+      emit(next);
+    });
+  } catch {
+    // No window / addEventListener (SSR) — single-tab reactivity still works.
+  }
+}
+armStorageBridge();
+
+/** Read the current agents-studio language (module state; SSR-safe). */
+export function getAgentLang(): AgentLang {
+  return currentLang;
+}
+
+/**
+ * Set the agents-studio language: persist to localStorage, update module state,
+ * and notify every mounted hook so the whole studio re-renders. Pure side-effect
+ * (no return); a no-op broadcast is skipped when the value is unchanged.
+ */
+export function setAgentLang(lang: AgentLang): void {
+  const next = coerceLang(lang);
+  writeStoredLang(next);
+  if (next === currentLang) return;
+  currentLang = next;
+  emit(next);
+}
+
+// ---------------------------------------------------------------------------
+// Interpolation — pure `{var}` replacement.
+// ---------------------------------------------------------------------------
+
+/** Replace `{name}` placeholders in `template` from `vars` (missing → left as-is). */
+export function interpolate(template: string, vars?: TVars): string {
+  if (!vars || typeof template !== 'string' || template.indexOf('{') === -1) {
+    return template;
+  }
+  return template.replace(/\{(\w+)\}/g, (whole, name: string) => {
+    const v = vars[name];
+    return v === undefined || v === null ? whole : String(v);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The pure translator.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a pure translator for `lang`. Fail-soft: an unknown key returns the FR
+ * string when the entry exists but lacks the language, else the key itself —
+ * it NEVER throws, so a missing key can only ever degrade to readable text.
+ */
+export function tFor(lang: AgentLang): TFunc {
+  const safeLang = coerceLang(lang);
+  return (key: AgentStringKey, vars?: TVars): string => {
+    const entry = AGENT_STRINGS[key];
+    if (!entry) {
+      // Unknown key: return the key so a typo is visible but never fatal.
+      return key;
+    }
+    // Prefer the requested language; fall back to FR; finally the key.
+    const raw =
+      (safeLang === 'ar' ? entry.ar : entry.fr) || entry.fr || key;
+    return interpolate(raw, vars);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The hook. Reads module state, subscribes for cross-component re-render.
+// ---------------------------------------------------------------------------
+
+export interface UseAgentLang {
+  /** The active language. */
+  lang: AgentLang;
+  /** Switch language (persists + broadcasts to every mounted hook). */
+  setLang: (lang: AgentLang) => void;
+  /** Translator bound to `lang` (interpolates `{var}`; fail-soft). */
+  t: TFunc;
+  /** Text direction — 'rtl' for Arabic, 'ltr' otherwise. */
+  dir: 'rtl' | 'ltr';
+}
+
+/**
+ * React hook exposing `{ lang, setLang, t, dir }`. Provider-free: it seeds from
+ * the module-level current language and registers a listener so `setLang` from
+ * ANY component (or another tab, via the storage bridge) re-renders every mount.
+ * The listener is torn down on unmount. `t` is rebuilt per-render bound to the
+ * current language (cheap — it closes over the static table).
+ */
+export function useAgentLang(): UseAgentLang {
+  const [lang, setLangState] = useState<AgentLang>(currentLang);
+
+  useEffect(() => {
+    // Subscribe. If the module language changed between initial render and this
+    // effect (a fast race), sync immediately so we never show a stale language.
+    const listener = (next: AgentLang) => setLangState(next);
+    listeners.add(listener);
+    if (currentLang !== lang) setLangState(currentLang);
+    return () => {
+      listeners.delete(listener);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return {
+    lang,
+    setLang: setAgentLang,
+    t: tFor(lang),
+    dir: dirFor(lang),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// THE STRING CATALOGUE.
+//
+// fr = the CURRENT R7 strings VERBATIM (scanned from the agents pages +
+// components). ar = short, commerce-appropriate Algerian darja in Arabic
+// script. Keys are dotted + grouped by surface. Interpolation uses `{var}`.
+//
+// The full key list (key → fr) is mirrored in NOTES.md §KEY-CATALOG so the
+// consuming builders (Cadence / Retouche / Poli) reference EXACT keys.
+// ---------------------------------------------------------------------------
+
+export interface AgentStringPair {
+  fr: string;
+  ar: string;
+}
+
+export const AGENT_STRINGS: Record<string, AgentStringPair> = {
+  // ── common / shared (buttons, generic states reused across surfaces) ──────
+  'common.retry': { fr: 'Réessayer', ar: 'عاود' },
+  'common.back': { fr: '← Retour', ar: '← ارجع' },
+  'common.cancel': { fr: 'Annuler', ar: 'ألغِ' },
+  'common.continue': { fr: 'Continuer →', ar: 'كمّل →' },
+  'common.beta': { fr: 'béta', ar: 'تجريبي' },
+  'common.open': { fr: 'Ouvrir', ar: 'حل' },
+  'common.soon': { fr: 'Bientôt', ar: 'قريب' },
+  'common.active': { fr: 'Actif', ar: 'يخدم' },
+  'common.view': { fr: 'Voir →', ar: 'شوف →' },
+  'common.refresh': { fr: 'Rafraîchir', ar: 'حدّث' },
+
+  // ── language toggle ───────────────────────────────────────────────────────
+  'lang.toggleTitle': { fr: 'Changer de langue', ar: 'بدّل اللغة' },
+  'lang.fr': { fr: 'Français', ar: 'الفرنسية' },
+  'lang.ar': { fr: 'العربية', ar: 'العربية' },
+
+  // ── /agents HOME (index.tsx) ──────────────────────────────────────────────
+  'home.tabTitle': { fr: 'Agents', ar: 'الوكلاء' },
+  'home.title': { fr: 'Vos agents', ar: 'الوكلاء تاعك' },
+  'home.subtitle': {
+    fr: 'Vos employés IA — ils travaillent pour vous, jour et nuit.',
+    ar: 'الموظفين تاعك بالذكاء الاصطناعي — يخدمو عليك ليل و نهار.',
+  },
+  'home.loading': { fr: 'Chargement de vos agents…', ar: 'كي نحمّلو الوكلاء تاعك…' },
+  'home.disabled.title': {
+    fr: 'Les agents ne sont pas activés',
+    ar: 'الوكلاء ماشي مفعّلين',
+  },
+  'home.disabled.body': {
+    fr: 'Cette fonctionnalité est désactivée sur ce serveur. Revenez plus tard — vos employés IA vous attendront ici.',
+    ar: 'هاد الخاصية مطفية على هاد السيرفور. ارجع من بعد — الموظفين تاعك يستناوك هنا.',
+  },
+  'home.error.title': {
+    fr: 'Impossible de charger vos agents',
+    ar: 'ما قدرناش نحمّلو الوكلاء تاعك',
+  },
+  'home.cta.title': { fr: 'Recrutez un nouvel employé IA', ar: 'وظّف موظّف جديد بالذكاء الاصطناعي' },
+  'home.cta.body': {
+    fr: 'Choisissez une mission — confirmer vos commandes, répondre sur WhatsApp, surveiller vos concurrents — donnez-lui un nom, ses outils, et lancez un test.',
+    ar: 'اختار خدمة — تأكيد الكوموندات، الرد على واتساب، مراقبة لكونكيران — سمّيه، اختارلو الأدوات، و جرّبه.',
+  },
+  'home.cta.hint': { fr: 'اختار الخدمة، سمّيه، و جرّبه فدقيقة.', ar: 'اختار الخدمة، سمّيه، و جرّبه فدقيقة.' },
+  'home.cta.button': { fr: '+ Créer un agent', ar: '+ زيد وكيل' },
+  'home.empty': {
+    fr: 'Aucun agent pour l’instant. Créez votre premier employé IA ci-dessus.',
+    ar: 'ما كاش وكلاء دروك. زيد أول موظّف تاعك من فوق.',
+  },
+  'home.recent.title': { fr: 'Exécutions récentes', ar: 'العمليات الأخيرة' },
+  'home.recent.empty': {
+    fr: 'Aucune exécution récente. Ouvrez un agent et donnez-lui une mission.',
+    ar: 'ما كاش عمليات أخيرة. حل وكيل و أعطيه خدمة.',
+  },
+
+  // ── AGENT CARD (agent-card.tsx) ───────────────────────────────────────────
+  'card.hermes.blurb': {
+    fr: 'Agent des opérations — commandes, clients, messages.',
+    ar: 'وكيل العمليات — الكوموندات، الكليان، الرسائل.',
+  },
+  'card.hermes.darja': { fr: 'يدبّرلك الخدمة اليومية.', ar: 'يدبّرلك الخدمة اليومية.' },
+  'card.openclaw.blurb': {
+    fr: 'Agent développeur — code, outils et automatisations.',
+    ar: 'وكيل مطوّر — كود، أدوات و أتمتة.',
+  },
+  'card.openclaw.darja': { fr: 'يكوديلك الأدوات و يأتمت.', ar: 'يكوديلك الأدوات و يأتمت.' },
+  'card.fallback.blurb': { fr: 'Agent IA.', ar: 'وكيل بالذكاء الاصطناعي.' },
+  'card.status.active': { fr: 'Actif', ar: 'يخدم' },
+  'card.status.inactive': { fr: 'Inactif', ar: 'ما يخدمش' },
+  'card.channel.web': { fr: 'Web', ar: 'ويب' },
+  'card.channel.web.title': { fr: 'Accessible depuis le web', ar: 'تقدر تحلّو من الويب' },
+  'card.channel.telegram': { fr: 'Telegram', ar: 'تيليغرام' },
+  'card.channel.telegram.on': { fr: 'Telegram connecté', ar: 'تيليغرام مربوط' },
+  'card.channel.telegram.off': {
+    fr: 'Telegram non connecté — à lier dans les connexions',
+    ar: 'تيليغرام ماشي مربوط — اربطو من الاتصالات',
+  },
+  'card.lastRun': { fr: 'Dernière exécution', ar: 'آخر عملية' },
+  'card.lastRun.none': { fr: 'Aucune pour l’instant', ar: 'ما كاش دروك' },
+  'card.action.open': { fr: 'Ouvrir', ar: 'حل' },
+  'card.action.runs': { fr: 'Exécutions', ar: 'العمليات' },
+  'card.action.configure': { fr: 'Configurer', ar: 'إعدادات' },
+
+  // ── relative time (shared by home + card + runs) ──────────────────────────
+  'time.now': { fr: "à l'instant", ar: 'دروك' },
+  'time.minAgo': { fr: 'il y a {n} min', ar: 'من {n} دقيقة' },
+  'time.hrAgo': { fr: 'il y a {n} h', ar: 'من {n} سا' },
+  'time.dayAgo': { fr: 'il y a {n} j', ar: 'من {n} يوم' },
+  'time.weekAgo': { fr: 'il y a {n} sem', ar: 'من {n} سيمانة' },
+  'time.monthAgo': { fr: 'il y a {n} mois', ar: 'من {n} شهر' },
+  'time.yearAgo': { fr: 'il y a {n} an(s)', ar: 'من {n} عام' },
+
+  // ── run STATES (shared chips: home / card / runs / run) ───────────────────
+  'states.queued': { fr: 'En file', ar: 'فالدور' },
+  'states.running': { fr: 'En cours', ar: 'يخدم' },
+  'states.waiting_approval': { fr: 'En attente', ar: 'يستنى' },
+  'states.waiting_approval.short': { fr: 'Approbation', ar: 'موافقة' },
+  'states.done': { fr: 'Terminé', ar: 'كمل' },
+  'states.failed': { fr: 'Échoué', ar: 'فشل' },
+  'states.failed.short': { fr: 'Échec', ar: 'فشل' },
+  'states.stopped': { fr: 'Arrêté', ar: 'موقّف' },
+  'states.unknown': { fr: 'Inconnu', ar: 'ماشي معروف' },
+
+  // ── HIRE WIZARD (wizard.tsx) ──────────────────────────────────────────────
+  'wizard.tabTitle': { fr: 'Embaucher un agent', ar: 'وظّف وكيل' },
+  'wizard.step.job': { fr: 'Le poste', ar: 'المنصب' },
+  'wizard.step.identity': { fr: 'Identité', ar: 'الهوية' },
+  'wizard.step.tools': { fr: 'Outils & canaux', ar: 'الأدوات و القنوات' },
+  'wizard.step.trigger': { fr: 'Déclencheur', ar: 'المشغّل' },
+  'wizard.step.test': { fr: 'Essai', ar: 'تجربة' },
+  'wizard.progress': { fr: 'Étape {current}/{total} · {label}', ar: 'مرحلة {current}/{total} · {label}' },
+
+  'wizard.job.title': { fr: 'Quel poste voulez-vous pourvoir ?', ar: 'أنهي منصب تحب تعمّر ؟' },
+  'wizard.job.subtitle': {
+    fr: 'Choisissez le travail à confier — واش تحب يدير ليك. On préremplit tout le reste.',
+    ar: 'اختار الخدمة اللي تحب توكّلها — واش تحب يدير ليك. الباقي نعمّروه حنا.',
+  },
+  'wizard.job.opsTag': { fr: '🪽 Agent opérations', ar: '🪽 وكيل العمليات' },
+  'wizard.job.devTag': { fr: '🛠️ Agent développeur', ar: '🛠️ وكيل مطوّر' },
+  'wizard.job.scratch.title': { fr: 'Partir de zéro', ar: 'ابدا من الصفر' },
+  'wizard.job.scratch.darja': { fr: 'نبدا من الصفر', ar: 'نبدا من الصفر' },
+  'wizard.job.scratch.desc': {
+    fr: 'Configurez un agent opérations vierge et décrivez son rôle vous-même.',
+    ar: 'إعمل وكيل عمليات فارغ و وصّف دورو بيدك.',
+  },
+
+  'wizard.identity.title': { fr: 'Présentez votre nouvel employé', ar: 'قدّم الموظّف الجديد تاعك' },
+  'wizard.identity.subtitle.preset': {
+    fr: 'Pour le poste « {job} » — ajustez son nom et sa mission.',
+    ar: 'للمنصب « {job} » — بدّل الاسم و المهمة.',
+  },
+  'wizard.identity.subtitle.blank': {
+    fr: 'Donnez-lui un nom et décrivez sa mission.',
+    ar: 'سمّيه و وصّف مهمتو.',
+  },
+  'wizard.identity.name.label': { fr: 'Nom de l’agent', ar: 'اسم الوكيل' },
+  'wizard.identity.name.hint': {
+    fr: 'Jusqu’à 40 caractères — c’est le nom affiché.',
+    ar: 'حتى 40 حرف — هذا الاسم اللي يبان.',
+  },
+  'wizard.identity.persona.label': { fr: 'Mission / persona', ar: 'المهمة / الشخصية' },
+  'wizard.identity.persona.hint': {
+    fr: 'Une phrase ou deux. Modifiable plus tard.',
+    ar: 'جملة ولا زوج. تقدر تبدّلها من بعد.',
+  },
+  'wizard.identity.openclaw.note': {
+    fr: 'L’agent développeur écrit et exécute du code dans un sandbox isolé — pas besoin de persona. Vous pourrez ajuster ses préférences après l’embauche.',
+    ar: 'الوكيل المطوّر يكتب و يشغّل الكود ف سandbox معزول — ما يلزمش شخصية. تقدر تبدّل الإعدادات من بعد التوظيف.',
+  },
+
+  'wizard.tools.title': { fr: 'Outils & canaux', ar: 'الأدوات و القنوات' },
+  'wizard.tools.subtitle': {
+    fr: 'Ce que votre agent peut utiliser. Vous pourrez tout changer plus tard.',
+    ar: 'واش يقدر يستعمل الوكيل تاعك. تقدر تبدّل كلش من بعد.',
+  },
+  'wizard.tools.web.label': { fr: 'Accès web', ar: 'الوصول للويب' },
+  'wizard.tools.web.on': {
+    fr: 'Recherche et lecture de pages web en direct.',
+    ar: 'يقلّب و يقرا صفحات الويب مباشرة.',
+  },
+  'wizard.tools.web.off': {
+    fr: 'L’accès web n’est pas activé sur ce serveur pour l’instant.',
+    ar: 'الوصول للويب ماشي مفعّل على هاد السيرفور دروك.',
+  },
+  'wizard.tools.channels': { fr: 'Canaux', ar: 'القنوات' },
+  'wizard.tools.channels.hint': {
+    fr: 'Les canaux se relient après l’embauche depuis la page Connexions. {telegram}WhatsApp arrivent bientôt.',
+    ar: 'القنوات تتربط من بعد التوظيف من صفحة الاتصالات. {telegram}واتساب جايين قريب.',
+  },
+  'wizard.tools.channels.hint.telegramPrefix': { fr: 'Telegram et ', ar: 'تيليغرام و ' },
+  'wizard.tools.suggested': { fr: 'Outils suggérés pour ce poste', ar: 'أدوات مقترحة للمنصب' },
+  'wizard.tools.suggested.hint': {
+    fr: 'Ces outils seront proposés à votre agent selon ce qui est disponible sur votre compte. Gérez les connexions depuis {link}.',
+    ar: 'هاد الأدوات تتقترح على الوكيل حسب واش متوفّر ف الكونط تاعك. دبّر الاتصالات من {link}.',
+  },
+  'wizard.tools.integrationsLink': { fr: 'Intégrations', ar: 'التكاملات' },
+  'wizard.tools.noTools': {
+    fr: 'Aucun outil spécifique pour ce poste — votre agent planifiera ses actions et vous pourrez connecter des apps depuis Intégrations.',
+    ar: 'ما كاش أدوات خاصة للمنصب — الوكيل يخطّط خدمتو و تقدر تربط أبليكاسيونات من التكاملات.',
+  },
+  'wizard.tools.openclaw.note': {
+    fr: 'L’agent développeur travaille dans son sandbox de code — les outils sont l’éditeur, le terminal et l’aperçu en direct.',
+    ar: 'الوكيل المطوّر يخدم ف سandbox الكود تاعو — الأدوات هوما المحرّر، التيرمينال و المعاينة المباشرة.',
+  },
+
+  'wizard.trigger.title': { fr: 'Quand doit-il travailler ?', ar: 'وقتاش يخدم ؟' },
+  'wizard.trigger.subtitle': {
+    fr: 'Pour l’instant, votre agent travaille à la demande.',
+    ar: 'دروك، الوكيل تاعك يخدم كي تطلب منو.',
+  },
+  'wizard.trigger.manual.title': { fr: 'Manuel', ar: 'يدوي' },
+  'wizard.trigger.manual.hint': {
+    fr: 'Vous lancez chaque tâche vous-même depuis la page de l’agent.',
+    ar: 'تطلق كل خدمة بيدك من صفحة الوكيل.',
+  },
+  'wizard.trigger.schedule.title': { fr: 'Planification', ar: 'برمجة' },
+  'wizard.trigger.schedule.hint': {
+    fr: 'Faire tourner l’agent automatiquement (ex. tous les matins). لسه ماشي جاهز.',
+    ar: 'خلّي الوكيل يخدم وحدو (مثلا كل صباح). لسه ماشي جاهز.',
+  },
+  'wizard.trigger.banner': {
+    fr: 'La planification automatique arrive prochainement. Pour l’instant, tout est manuel — vous gardez le contrôle sur chaque exécution.',
+    ar: 'البرمجة الأوتوماتيكية جاية قريب. دروك كلش يدوي — راك تتحكّم ف كل عملية.',
+  },
+
+  'wizard.test.title': { fr: 'Faites-lui passer un essai', ar: 'جرّبو' },
+  'wizard.test.subtitle': {
+    fr: 'Lancez une première tâche pour voir {name} à l’œuvre — c’est optionnel avant l’embauche.',
+    ar: 'أطلق أول خدمة باش تشوف {name} كيفاش يخدم — اختياري قبل التوظيف.',
+  },
+  'wizard.test.taskLabel': { fr: 'Tâche d’essai', ar: 'خدمة التجربة' },
+  'wizard.test.start': { fr: '▶️ Lancer l’essai', ar: '▶️ أطلق التجربة' },
+  'wizard.test.starting': { fr: 'Lancement de l’essai…', ar: 'كي نطلقو التجربة…' },
+  'wizard.test.started': {
+    fr: 'Essai lancé ✓ — {name} travaille en arrière-plan. Vous pouvez suivre son exécution en direct.',
+    ar: 'التجربة تطلقت ✓ — {name} يخدم ف الخلفية. تقدر تتبّع العملية مباشرة.',
+  },
+  'wizard.test.openRun': { fr: 'Voir l’exécution →', ar: 'شوف العملية →' },
+  'wizard.test.banner': {
+    fr: 'Prêt ? Cliquez sur « Embaucher » ci-dessous : on enregistre votre agent et on vous emmène à la page des agents.',
+    ar: 'واجد ؟ أضغط على « وظّف » من تحت: نسجّلو الوكيل تاعك و نوديوك لصفحة الوكلاء.',
+  },
+  'wizard.test.err.404': {
+    fr: 'Les essais en direct ne sont pas encore activés sur ce serveur — vous pourrez lancer votre agent depuis /agents après l’embauche.',
+    ar: 'التجارب المباشرة لسه ماشي مفعّلة على هاد السيرفور — تقدر تطلق الوكيل من /agents من بعد التوظيف.',
+  },
+  'wizard.test.err.429': {
+    fr: 'Limite d’essais atteinte pour aujourd’hui. Réessayez plus tard.',
+    ar: 'وصلت حدّ التجارب تاع اليوم. عاود من بعد.',
+  },
+  'wizard.test.err.generic': { fr: 'Impossible de lancer l’essai. Réessayez.', ar: 'ما قدرناش نطلقو التجربة. عاود.' },
+
+  'wizard.hire.openclaw': { fr: '🛠️ Embaucher mon agent', ar: '🛠️ وظّف الوكيل تاعي' },
+  'wizard.hire.hermes': { fr: '🪽 Embaucher mon employé', ar: '🪽 وظّف الموظّف تاعي' },
+  'wizard.hire.saving': { fr: 'Embauche…', ar: 'كي نوظّفو…' },
+  'wizard.hire.err.generic': {
+    fr: 'Impossible de finaliser l’embauche. Réessayez.',
+    ar: 'ما قدرناش نكمّلو التوظيف. عاود.',
+  },
+  'wizard.done.title': { fr: '{name} est embauché !', ar: '{name} تّوظّف !' },
+  'wizard.done.openclaw': {
+    fr: 'Votre agent développeur est prêt. Confiez-lui une tâche et regardez-le construire.',
+    ar: 'الوكيل المطوّر تاعك واجد. أعطيه خدمة و شوفو كيفاش يبني.',
+  },
+  'wizard.done.hermes': {
+    fr: 'Votre employé est prêt. Retrouvez-le sur la page des agents pour lancer des tâches et suivre ses exécutions.',
+    ar: 'الموظّف تاعك واجد. تلقاه ف صفحة الوكلاء باش تطلق الخدمات و تتبّع العمليات.',
+  },
+  'wizard.done.cta': { fr: 'Voir mes agents →', ar: 'شوف الوكلاء تاعي →' },
+
+  // ── SINGLE RUN view (run.tsx) ─────────────────────────────────────────────
+  'run.tabTitle': { fr: '{agent} · run', ar: '{agent} · عملية' },
+  'run.header.title': { fr: '{agent} · exécution', ar: '{agent} · عملية' },
+  'run.header.subtitle': {
+    fr: 'Exécution en arrière-plan · run f el background',
+    ar: 'عملية ف الخلفية · تخدم و انت مغلّق',
+  },
+  'run.back.title': { fr: 'Retour aux exécutions', ar: 'ارجع للعمليات' },
+  'run.stop': { fr: '⏹ Arrêter', ar: '⏹ وقّف' },
+  'run.stop.title': { fr: 'Arrêter l\'exécution', ar: 'وقّف العملية' },
+  'run.loading': { fr: "Attache à l'exécution…", ar: 'كي نربطو بالعملية…' },
+  'run.error.load': { fr: 'Impossible de charger cette exécution.', ar: 'ما قدرناش نحمّلو هاد العملية.' },
+  'run.error.title': { fr: 'Erreur du run.', ar: 'خطأ ف العملية.' },
+  'run.sandbox.title': { fr: 'Espace de travail · sandbox', ar: 'فضاء الخدمة · سandbox' },
+  'run.openclaw.title': { fr: 'Espace de travail OpenClaw', ar: 'فضاء خدمة OpenClaw' },
+  'run.openclaw.body': {
+    fr: 'Les fichiers, le terminal et l\'aperçu vivent dans le studio OpenClaw.',
+    ar: 'الملفات، التيرمينال و المعاينة يعيشو ف ستوديو OpenClaw.',
+  },
+  'run.openclaw.open': { fr: 'Ouvrir OpenClaw →', ar: 'حل OpenClaw →' },
+  'run.quiet.title': { fr: 'Agents non activés', ar: 'الوكلاء ماشي مفعّلين' },
+  'run.quiet.body': {
+    fr: 'Cette exécution est introuvable ou les agents ne sont pas activés sur ce serveur.',
+    ar: 'هاد العملية ما تلقاتش ولا الوكلاء ماشي مفعّلين على هاد السيرفور.',
+  },
+
+  // ── RUNS history (runs.tsx) ───────────────────────────────────────────────
+  'runs.tabTitle': { fr: 'Exécutions', ar: 'العمليات' },
+  'runs.title': { fr: 'Exécutions', ar: 'العمليات' },
+  'runs.subtitle': {
+    fr: 'L\'historique de tes runs en arrière-plan · el historique ta3 les runs · streaming en direct au clic.',
+    ar: 'تاريخ العمليات تاعك ف الخلفية · شوفها مباشرة كي تكليكي.',
+  },
+  'runs.filter.label': { fr: 'Filtrer par agent', ar: 'فلتر حسب الوكيل' },
+  'runs.loading': { fr: 'Chargement des exécutions…', ar: 'كي نحمّلو العمليات…' },
+  'runs.error.load': { fr: 'Impossible de charger les exécutions.', ar: 'ما قدرناش نحمّلو العمليات.' },
+  'runs.untitled': { fr: 'Run sans titre', ar: 'عملية بلا عنوان' },
+  'runs.empty.title': { fr: 'Pas encore d\'exécutions', ar: 'ما كاش عمليات دروك' },
+  'runs.empty.body': {
+    fr: 'Lance un run en arrière-plan avec {agent} — makach walou pour l\'instant. Il continue même si tu fermes l\'onglet.',
+    ar: 'أطلق عملية ف الخلفية مع {agent} — ما كاش والو دروك. يكمّل حتى كي تغلّق التاب.',
+  },
+  'runs.quiet.title': { fr: 'Agents non activés', ar: 'الوكلاء ماشي مفعّلين' },
+  'runs.quiet.body': {
+    fr: 'Les exécutions d\'agents ne sont pas activées sur ce serveur.',
+    ar: 'عمليات الوكلاء ماشي مفعّلة على هاد السيرفور.',
+  },
+
+  // ── CONNECTIONS (connections.tsx) ─────────────────────────────────────────
+  'connections.tabTitle': { fr: 'Connexions', ar: 'الاتصالات' },
+  'connections.title': { fr: 'Connexions', ar: 'الاتصالات' },
+  'connections.subtitle': {
+    fr: 'Branchez vos agents aux canaux de vos clients. Telegram, WhatsApp, accès web et intégrations — koulech f blasa wehda.',
+    ar: 'اربط الوكلاء تاعك بقنوات الكليان. تيليغرام، واتساب، الويب و التكاملات — كلش ف بلاصة وحدة.',
+  },
+  'connections.loading': { fr: 'Chargement des connexions…', ar: 'كي نحمّلو الاتصالات…' },
+  'connections.error.load': {
+    fr: 'Impossible de charger vos connexions : {error}',
+    ar: 'ما قدرناش نحمّلو الاتصالات تاعك : {error}',
+  },
+  'connections.status.ok': { fr: 'activé', ar: 'مفعّل' },
+  'connections.status.off': { fr: 'désactivé', ar: 'مطفي' },
+  'connections.status.soon': { fr: 'bientôt', ar: 'قريب' },
+  'connections.status.studio': { fr: 'studio', ar: 'ستوديو' },
+  'connections.status.connected': { fr: 'en attente', ar: 'يستنى' },
+  'connections.status.unconfigured': { fr: 'non-configuré', ar: 'ماشي معدّ' },
+  'connections.status.unlinked': { fr: 'non-lié', ar: 'ماشي مربوط' },
+
+  'connections.telegram.title': { fr: 'Telegram', ar: 'تيليغرام' },
+  'connections.telegram.subtitle': {
+    fr: 'Discutez avec vos agents depuis Telegram — donnez vos tâches men l\'application.',
+    ar: 'هدر مع الوكلاء تاعك من تيليغرام — أعطي خدماتك من الأبليكاسيون.',
+  },
+  'connections.telegram.dark': {
+    fr: 'Telegram bientôt disponible — un bot doit être configuré. Reviens bientôt.',
+    ar: 'تيليغرام قريب متوفّر — لازم يتعدّ بوت. ارجع قريب.',
+  },
+  'connections.telegram.link': { fr: 'Lier mon Telegram', ar: 'اربط تيليغرام تاعي' },
+  'connections.telegram.linking': { fr: 'Génération du lien…', ar: 'كي نجيبو الرابط…' },
+  'connections.telegram.open': { fr: 'Ouvrir Telegram', ar: 'حل تيليغرام' },
+  'connections.telegram.copy': { fr: 'Copier le lien', ar: 'إنسخ الرابط' },
+  'connections.telegram.copied': { fr: 'Copié', ar: 'تنسخ' },
+  'connections.telegram.instructions': {
+    fr: 'Ouvre le lien, appuie sur Démarrer (Start) — w rak lié. Le lien expire après 10 minutes.',
+    ar: 'حل الرابط، أضغط على Démarrer (Start) — و راك مربوط. الرابط يفوت من بعد 10 دقايق.',
+  },
+  'connections.telegram.err': {
+    fr: 'Liaison Telegram indisponible.',
+    ar: 'ربط تيليغرام ماشي متوفّر.',
+  },
+  'connections.telegram.err.retry': { fr: '{error} — 3awd mera (réessayez).', ar: '{error} — عاود مرة.' },
+
+  'connections.whatsapp.title': { fr: 'WhatsApp', ar: 'واتساب' },
+  'connections.whatsapp.subtitle': {
+    fr: 'Vos agents répondront aux clients sur WhatsApp — 3la numéro du magasin.',
+    ar: 'الوكلاء تاعك يجاوبو الكليان على واتساب — على نيميرو المحل.',
+  },
+  'connections.whatsapp.soon': {
+    fr: 'Bientôt : connectez le numéro WhatsApp de votre boutique via la passerelle ERP. Vos agents confirmeront les commandes COD et répondront aux clients directement sur WhatsApp.',
+    ar: 'قريب: اربط نيميرو واتساب تاع المحل عن طريق بوابة ERP. الوكلاء يأكّدو كوموندات الدفع عند الاستلام و يجاوبو الكليان مباشرة على واتساب.',
+  },
+  'connections.whatsapp.configured': {
+    fr: 'WhatsApp connecté via la passerelle ERP — vos agents peuvent envoyer des messages sur votre numéro.',
+    ar: 'واتساب مربوط عن طريق بوابة ERP — الوكلاء يقدرو يصيفطو رسائل على النيميرو تاعك.',
+  },
+
+  'connections.web.title': { fr: 'Accès web', ar: 'الوصول للويب' },
+  'connections.web.subtitle': {
+    fr: 'La recherche web pour vos agents — bech ylo9aw l\'info f\'internet.',
+    ar: 'البحث ف الويب للوكلاء تاعك — باش يلقاو المعلومة ف الأنترنت.',
+  },
+  'connections.web.on': {
+    fr: 'Vos agents peuvent chercher sur le web pour répondre avec des infos à jour (prix concurrents, actualités, recherche produit).',
+    ar: 'الوكلاء يقدرو يقلّبو ف الويب باش يجاوبو بمعلومات جديدة (أسعار لكونكيران، الأخبار، البحث على المنتوج).',
+  },
+  'connections.web.off': {
+    fr: 'L\'accès web est actuellement désactivé pour vos agents. Contactez l\'admin pour l\'activer.',
+    ar: 'الوصول للويب مطفي دروك للوكلاء تاعك. اتصل بالأدمين باش يفعّلو.',
+  },
+
+  'connections.integrations.title': { fr: 'Intégrations', ar: 'التكاملات' },
+  'connections.integrations.subtitle': {
+    fr: 'Connectez Gmail, Sheets, et +100 apps via Composio — zid les outils l\'agents.',
+    ar: 'اربط Gmail، Sheets و +100 أبليكاسيون عن طريق Composio — زيد أدوات للوكلاء.',
+  },
+  'connections.integrations.body': {
+    fr: 'Ouvrez le studio d\'intégrations pour connecter vos applications externes et donner de nouveaux outils à vos agents.',
+    ar: 'حل ستوديو التكاملات باش تربط الأبليكاسيونات الخارجية و تعطي أدوات جديدة للوكلاء.',
+  },
+  'connections.integrations.open': { fr: 'Ouvrir les intégrations', ar: 'حل التكاملات' },
+
+  'connections.schedule.title': { fr: 'Planification', ar: 'البرمجة' },
+  'connections.schedule.subtitle': {
+    fr: 'Faites tourner vos agents automatiquement — chaque heure, chaque jour, ou par webhook.',
+    ar: 'خلّي الوكلاء يخدمو وحدهم — كل ساعة، كل يوم، ولا بويبهوك.',
+  },
+  'connections.schedule.body': {
+    fr: 'Créez des déclencheurs planifiés ou par webhook pour que vos agents travaillent sans vous.',
+    ar: 'إعمل مشغّلات مبرمجة ولا بويبهوك باش الوكلاء يخدمو بلا ما تكون.',
+  },
+  'connections.schedule.open': { fr: 'Gérer la planification', ar: 'دبّر البرمجة' },
+
+  // ── RUN TIMELINE (run-timeline.tsx) ───────────────────────────────────────
+  'timeline.stepsLabel': { fr: 'Étapes du run', ar: 'مراحل العملية' },
+  'timeline.loading': { fr: 'Chargement du run…', ar: 'كي نحمّلو العملية…' },
+  'timeline.queued': { fr: 'En file d’attente…', ar: 'فالدور…' },
+  'timeline.starting': { fr: "L'agent démarre…", ar: 'الوكيل كي يبدا…' },
+  'timeline.thinking': { fr: "L'agent réfléchit…", ar: 'الوكيل كي يخمّم…' },
+  'timeline.noSteps': { fr: 'Aucune étape.', ar: 'ما كاش مراحل.' },
+  'timeline.terminalNoSteps': { fr: '{state} — aucune étape enregistrée.', ar: '{state} — ما كاش مراحل مسجّلة.' },
+  'timeline.done': { fr: 'Terminé', ar: 'كمل' },
+  'timeline.failed': { fr: 'Échec', ar: 'فشل' },
+  'timeline.stopped': { fr: 'Arrêté', ar: 'موقّف' },
+  'timeline.finalAnswer': { fr: 'Réponse finale', ar: 'الجواب النهائي' },
+
+  // ── TOOL CALL CARD (tool-call-card.tsx) — section labels + status pills ────
+  'toolcall.detail': { fr: 'Detail', ar: 'التفصيل' },
+  'toolcall.toolCall': { fr: 'Tool call', ar: 'استدعاء أداة' },
+  'toolcall.arguments': { fr: 'Arguments', ar: 'الوسائط' },
+  'toolcall.result': { fr: 'Result', ar: 'النتيجة' },
+  'toolcall.error': { fr: 'Error', ar: 'خطأ' },
+  'toolcall.pill.failed': { fr: 'failed', ar: 'فشل' },
+  'toolcall.pill.ok': { fr: 'ok', ar: 'مزيان' },
+  'toolcall.pill.thinking': { fr: 'thinking', ar: 'يخمّم' },
+  'toolcall.pill.pending': { fr: 'pending', ar: 'يستنى' },
+  'toolcall.fallback': { fr: 'Outil', ar: 'أداة' },
+
+  // ── VERBS (tool slug → running/done labels; tool-call-card.tsx VERB_MAP) ───
+  'verbs.web_search.running': { fr: 'Recherche web…', ar: 'بحث ف الويب…' },
+  'verbs.web_search.done': { fr: 'Recherche web', ar: 'بحث ف الويب' },
+  'verbs.web_fetch.running': { fr: "Lecture d'une page…", ar: 'قراية صفحة…' },
+  'verbs.web_fetch.done': { fr: 'Page lue', ar: 'الصفحة تقرات' },
+  'verbs.web_crawl.running': { fr: "Lecture d'une page…", ar: 'قراية صفحة…' },
+  'verbs.web_crawl.done': { fr: 'Page lue', ar: 'الصفحة تقرات' },
+  'verbs.web_browse.running': { fr: "Lecture d'une page…", ar: 'قراية صفحة…' },
+  'verbs.web_browse.done': { fr: 'Page lue', ar: 'الصفحة تقرات' },
+  'verbs.telegram_send.running': { fr: 'Envoi Telegram…', ar: 'إرسال تيليغرام…' },
+  'verbs.telegram_send.done': { fr: 'Message Telegram envoyé', ar: 'رسالة تيليغرام تصيفطت' },
+  'verbs.whatsapp_send.running': { fr: 'Envoi WhatsApp…', ar: 'إرسال واتساب…' },
+  'verbs.whatsapp_send.done': { fr: 'Message WhatsApp envoyé', ar: 'رسالة واتساب تصيفطت' },
+  'verbs.shop_erp_summary.running': { fr: 'Lecture ERP…', ar: 'قراية ERP…' },
+  'verbs.shop_erp_summary.done': { fr: 'ERP consulté', ar: 'ERP تشاف' },
+  'verbs.shops_list.running': { fr: 'Liste des boutiques…', ar: 'ليستة المحلات…' },
+  'verbs.shops_list.done': { fr: 'Boutiques listées', ar: 'المحلات تلستاو' },
+  'verbs.code.running': { fr: 'Exécution…', ar: 'تشغيل…' },
+  'verbs.code.done': { fr: 'Code exécuté', ar: 'الكود تشغّل' },
+  'verbs.run.running': { fr: 'Exécution…', ar: 'تشغيل…' },
+  'verbs.run.done': { fr: 'Commande exécutée', ar: 'الأمر تشغّل' },
+  'verbs.shell.running': { fr: 'Exécution…', ar: 'تشغيل…' },
+  'verbs.shell.done': { fr: 'Commande exécutée', ar: 'الأمر تشغّل' },
+
+  // ── ARTIFACTS PANEL (artifacts-panel.tsx) ─────────────────────────────────
+  'artifacts.title': { fr: 'Livrables', ar: 'المخرجات' },
+  'artifacts.group.file': { fr: 'Fichiers', ar: 'الملفات' },
+  'artifacts.group.output': { fr: 'Sorties', ar: 'المخرجات' },
+  'artifacts.group.link': { fr: 'Liens', ar: 'الروابط' },
+  'artifacts.empty.title': { fr: "Aucun livrable pour l'instant", ar: 'ما كاش مخرجات دروك' },
+  'artifacts.empty.body': {
+    fr: "Les fichiers, pages et liens produits par l'agent apparaîtront ici.",
+    ar: 'الملفات، الصفحات و الروابط اللي يديرهم الوكيل يبانو هنا.',
+  },
+  'artifacts.open': { fr: 'Ouvrir', ar: 'حل' },
+  'artifacts.open.newTab': { fr: 'Ouvrir dans un nouvel onglet', ar: 'حل ف تاب جديد' },
+  'artifacts.download': { fr: 'Télécharger', ar: 'تحميل' },
+  'artifacts.fallback': { fr: 'Livrable', ar: 'مخرج' },
+  'artifacts.file.fallback': { fr: 'fichier', ar: 'ملف' },
+  'artifacts.output.fallback': { fr: 'Sortie', ar: 'مخرج' },
+  'artifacts.link.fallback': { fr: 'Lien', ar: 'رابط' },
+
+  // ── SPEND METER (spend-meter.tsx) ─────────────────────────────────────────
+  'spend.title': { fr: 'Coût estimé', ar: 'التكلفة التقديرية' },
+  'spend.toolCall.one': { fr: 'appel d’outil', ar: 'استدعاء أداة' },
+  'spend.toolCall.many': { fr: 'appels d’outils', ar: 'استدعاءات أدوات' },
+  'spend.tool.one': { fr: 'outil', ar: 'أداة' },
+  'spend.tool.many': { fr: 'outils', ar: 'أدوات' },
+  'spend.tokens': { fr: '{value} tokens', ar: '{value} توكن' },
+  'spend.tokens.est': { fr: '≈ {value} tokens (est.)', ar: '≈ {value} توكن (تقديري)' },
+  'spend.perThousand': { fr: '{price} DZD / 1k', ar: '{price} دج / 1k' },
+  'spend.note.exact': { fr: 'Estimé — coût indicatif, non facturé ici.', ar: 'تقديري — تكلفة إرشادية، ماشي فاتورة.' },
+  'spend.note.estimated': {
+    fr: 'Estimé d’après le nombre d’appels d’outils — pas une facture.',
+    ar: 'تقديري حسب عدد استدعاءات الأدوات — ماشي فاتورة.',
+  },
+  'spend.note.unpriced': {
+    fr: 'Prix par 1k tokens non configuré : aucun montant affiché.',
+    ar: 'السعر لكل 1k توكن ماشي معدّ: ما كاش مبلغ يبان.',
+  },
+  'spend.title.compact.unpriced': {
+    fr: 'Prix par 1k tokens non configuré — appels d’outils uniquement',
+    ar: 'السعر لكل 1k توكن ماشي معدّ — استدعاءات الأدوات برك',
+  },
+
+  // ── TRIGGERS page (triggers.tsx, upcoming — Cadence owns it) ──────────────
+  'triggers.tabTitle': { fr: 'Planification', ar: 'البرمجة' },
+  'triggers.title': { fr: 'Planification', ar: 'البرمجة' },
+  'triggers.subtitle': {
+    fr: 'Faites travailler vos agents automatiquement — chaque heure, chaque jour, ou par webhook.',
+    ar: 'خلّي الوكلاء يخدمو وحدهم — كل ساعة، كل يوم، ولا بويبهوك.',
+  },
+  'triggers.loading': { fr: 'Chargement des déclencheurs…', ar: 'كي نحمّلو المشغّلات…' },
+  'triggers.error.load': { fr: 'Impossible de charger les déclencheurs.', ar: 'ما قدرناش نحمّلو المشغّلات.' },
+  'triggers.empty.title': { fr: 'Aucun déclencheur', ar: 'ما كاش مشغّلات' },
+  'triggers.empty.body': {
+    fr: 'Créez un déclencheur pour que votre agent travaille automatiquement, même quand vous êtes absent.',
+    ar: 'إعمل مشغّل باش الوكيل يخدم وحدو، حتى كي ما تكونش.',
+  },
+  'triggers.quiet.title': { fr: 'Planification non activée', ar: 'البرمجة ماشي مفعّلة' },
+  'triggers.quiet.body': {
+    fr: 'La planification d\'agents n\'est pas activée sur ce serveur.',
+    ar: 'برمجة الوكلاء ماشي مفعّلة على هاد السيرفور.',
+  },
+  'triggers.create.title': { fr: 'Nouveau déclencheur', ar: 'مشغّل جديد' },
+  'triggers.create': { fr: '+ Créer un déclencheur', ar: '+ زيد مشغّل' },
+  'triggers.creating': { fr: 'Création…', ar: 'كي نصنعو…' },
+  'triggers.create.err': { fr: 'Impossible de créer le déclencheur. Réessayez.', ar: 'ما قدرناش نصنعو المشغّل. عاود.' },
+
+  'triggers.kind.label': { fr: 'Type de déclencheur', ar: 'نوع المشغّل' },
+  'triggers.kind.cron': { fr: 'Planifié', ar: 'مبرمج' },
+  'triggers.kind.webhook': { fr: 'Webhook', ar: 'ويبهوك' },
+  'triggers.preset.label': { fr: 'Fréquence', ar: 'الوتيرة' },
+  'triggers.preset.hourly': { fr: 'Chaque heure', ar: 'كل ساعة' },
+  'triggers.preset.daily': { fr: 'Chaque jour à 09:00', ar: 'كل يوم على 09:00' },
+  'triggers.preset.weekly': { fr: 'Chaque lundi à 09:00', ar: 'كل نهار الإثنين على 09:00' },
+  'triggers.preset.custom': { fr: 'Personnalisé (HH:MM)', ar: 'مخصّص (سا:دق)' },
+
+  'triggers.prompt.label': { fr: 'Tâche à exécuter', ar: 'الخدمة اللي يدير' },
+  'triggers.prompt.hint': {
+    fr: 'Ce que l’agent fera à chaque déclenchement — comme une consigne à un employé.',
+    ar: 'واش يدير الوكيل ف كل مرة — كيما توصية لموظّف.',
+  },
+  'triggers.prompt.placeholder': {
+    fr: 'Ex. Fais-moi le brief des ventes d’aujourd’hui et signale ce qui demande mon attention.',
+    ar: 'مثلا: ديرلي ملخّص البيع تاع اليوم و بيّنلي واش يستاهل انتباهي.',
+  },
+
+  'triggers.nextRun': { fr: 'Prochaine exécution : {when}', ar: 'العملية الجاية : {when}' },
+  'triggers.lastRun': { fr: 'Dernière : {when}', ar: 'الأخيرة : {when}' },
+  'triggers.status.active': { fr: 'Actif', ar: 'يخدم' },
+  'triggers.status.paused': { fr: 'En pause', ar: 'موقّف' },
+  'triggers.toggle.activate': { fr: 'Activer', ar: 'فعّل' },
+  'triggers.toggle.pause': { fr: 'Mettre en pause', ar: 'وقّف' },
+  'triggers.delete': { fr: 'Supprimer', ar: 'إمسح' },
+  'triggers.deleted': { fr: 'Déclencheur supprimé', ar: 'المشغّل تمسح' },
+  'triggers.delete.confirm': {
+    fr: 'Supprimer ce déclencheur ? Cette action est définitive.',
+    ar: 'تمسح هاد المشغّل ؟ هاد الحاجة ما ترجعش.',
+  },
+
+  'triggers.webhook.title': { fr: 'URL du webhook', ar: 'رابط الويبهوك' },
+  'triggers.webhook.hint': {
+    fr: 'Envoyez une requête POST à cette adresse pour déclencher l’agent. Gardez-la secrète.',
+    ar: 'صيفط طلب POST لهاد العنوان باش تشغّل الوكيل. خلّيه سرّي.',
+  },
+  'triggers.webhook.copy': { fr: 'Copier l’URL', ar: 'إنسخ الرابط' },
+  'triggers.webhook.copied': { fr: 'Copié', ar: 'تنسخ' },
+};
+
+// Default export: the pure translator factory (most common consumer import
+// besides the hook), plus everything else via named exports above.
+export default tFor;
