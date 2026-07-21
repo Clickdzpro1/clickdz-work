@@ -175,3 +175,66 @@ export interface AgentThread extends AgentThreadSummary {
     updatedAt: number;
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R6 — DURABLE BACKGROUND RUNS (Phase 2)
+//
+// A background run is a detached agent turn executed on a BullMQ worker so it
+// survives the browser disconnecting. These shapes mirror the backend run
+// record (Moteur, clickdz-agent-runs.ts `AgentRunRecord` / `RunState`): the FE
+// reads them via modules/agents/api.ts (`listAgentRuns` / `getAgentRun`) and the
+// durable `useAgentRunStream` hook. All optional fields tolerate a partial
+// payload so a run view never crashes on an evolving record.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Coarse lifecycle state of a background run (mirrors the backend union). */
+export type AgentRunState =
+  | 'queued'
+  | 'running'
+  | 'waiting_approval'
+  | 'done'
+  | 'failed'
+  | 'stopped';
+
+/** How the run was started (web console vs an inbound Telegram message). */
+export type AgentRunChannel = 'web' | 'telegram';
+
+/**
+ * Compact background-run row for the Exécutions list (`GET /runs`), newest
+ * first. Enough to render a state chip, a prompt preview, and a relative time.
+ */
+export interface AgentRunSummary {
+  runId: string;
+  agent: AgentName;
+  state: AgentRunState;
+  channel?: AgentRunChannel;
+  /** The user's prompt that started the run. */
+  prompt?: string;
+  /** ms since epoch the run was created/enqueued. */
+  startedAt?: number;
+  /** ms since epoch the run reached a terminal state, when finished. */
+  endedAt?: number;
+  /** Failure message when `state === 'failed'`. */
+  error?: string;
+}
+
+/**
+ * Full background-run record (`GET /runs/:id`). Extends the summary with the
+ * step timeline, the final answer, the continued thread, and the run budget —
+ * used to seed a live view (an already-finished run renders instantly before
+ * the stream re-attaches).
+ */
+export interface AgentRunRecord extends AgentRunSummary {
+  /** The thread this run continued/created, when known. */
+  threadId?: string;
+  /** The recorded step timeline (same shape the `step` SSE frame carries). */
+  steps?: AgentStep[];
+  /** The final synthesized answer text, when the run has produced one. */
+  finalText?: string;
+  /** Tool-call/wall-clock budget accounting (loosely read). */
+  budget?: {
+    maxToolCalls?: number;
+    maxWallMs?: number;
+    toolCalls?: number;
+  };
+}

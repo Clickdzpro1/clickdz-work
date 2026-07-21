@@ -59,6 +59,14 @@ import type { Request, Response } from 'express';
 // for thread persistence. The per-user agent config singleton is persisted
 // through it, mirroring that Pattern-B idiom.
 import { BadRequest, Cache, NotFound, Throttle } from '../../base';
+import { CacheRedis } from '../../base/redis';
+import {
+  registerAgentLoop,
+  type AgentLoopContext,
+  type AgentRunRecord,
+} from './clickdz-agent-runs';
+
+const CDZ_AGENTS_ENABLED = process.env.CDZ_AGENTS_ENABLED === '1';
 import { CurrentUser } from '../../core/auth';
 // RUNTIME (contract C3): the shared agent runtime — SSE writer, Redis-backed
 // threads, cooperative stop registry — plus the wire types (C1/C2). HERMESB2
@@ -466,8 +474,33 @@ export class ClickDzOpenclawController {
   // config singleton (the SAME provider the runtime persists threads through).
   constructor(
     private readonly runtime: ClickDzAgentRuntime,
-    private readonly cache: Cache
-  ) {}
+    private readonly cache: Cache,
+    private readonly redis: CacheRedis
+  ) {
+    // R6/WSA (F-1): register the detached OpenClaw loop with Moteur's engine
+    // ONLY behind the master flag. Mirrors the Hermes port. The factory closes
+    // over `this` so the copilot.agent.run job (agent='openclaw') drives the
+    // SAME sandbox loop via the emit-backed seam. Idempotent (last wins).
+    if (CDZ_AGENTS_ENABLED) {
+      registerAgentLoop('openclaw', (rec: AgentRunRecord) => ({
+        redis: this.redis as any,
+        loop: async (ctx: AgentLoopContext) => {
+          const r = await this.runOpenclawLoop({
+            userId: rec.userId,
+            prompt: rec.prompt,
+            threadId: rec.threadId,
+            emit: ctx.emit as any,
+            signal: ctx.signal,
+            budget: rec.budget as any,
+          });
+          if (r.state === 'failed') {
+            throw new Error(r.error || 'openclaw_failed');
+          }
+          return r.finalText ?? '';
+        },
+      }));
+    }
+  }
 
   /**
    * Read + normalize the caller's persisted OpenClaw config (fail-soft). Returns
@@ -2464,6 +2497,273 @@ export class ClickDzOpenclawController {
           : `the last run exited ${lastExitCode}`;
     return `I performed ${steps.length} sandbox step(s) (${writes} write, ${runs} run); ${status}. Reached the step/time limit before a final summary — review the step timeline and output for details.`;
   }
+
+  // =========================================================================
+  // R6 — DETACHED background run (agent='openclaw'). Additive; only ever
+  // reached from Moteur's `copilot.agent.run` @OnJob handler (itself gated
+  // CDZ_AGENTS_ENABLED). Reuses the EXISTING request-scoped code paths
+  // (probeSandbox / ensurePersistentSandbox / streamAgentLoop / streamPlanOnly)
+  // by driving them through an emit-backed writer instead of a live Express SSE
+  // — no fork of the plan→act logic. The ONLY behavioural difference from
+  // /stream is (a) the emit sink + AbortSignal replace openStream(), and (b) the
+  // thread's sandbox is torn down in the finally to respect the run budget (a
+  // background run is not a warm interactive session — no leaked microVMs).
+  //
+  // Signature matches the work-item seam runOpenclawLoop(deps, {prompt,
+  // threadId, emit, signal, budget}); the free-function export at module scope
+  // forwards to this method. NEVER throws — Moteur folds the returned
+  // {state,finalText,error,threadId} onto the run record; wall-clock/stop are
+  // cooperative via the AbortSignal (mapped to writer.closed) + the runtime stop
+  // flag. Steps still stream through emit exactly as on the live console.
+  // -------------------------------------------------------------------------
+  async runOpenclawLoop(args: OpenclawLoopArgs): Promise<OpenclawLoopResult> {
+    const userId = typeof args?.userId === 'string' ? args.userId : '';
+    const prompt = typeof args?.prompt === 'string' ? args.prompt.trim() : '';
+    const emit: OpenclawRunEmit =
+      typeof args?.emit === 'function' ? args.emit : () => {};
+    const signal = args?.signal;
+
+    // The detached run is bounded by Moteur's wall-clock budget. Fuse that onto
+    // a local AbortController so an EXTERNAL abort (Moteur's own signal) and the
+    // wall-clock deadline both flip the writer to closed — the reused loops poll
+    // writer.closed each iteration and abort cooperatively with no extra wiring.
+    const wallMs =
+      typeof args?.budget?.maxWallMs === 'number' &&
+      Number.isFinite(args.budget.maxWallMs) &&
+      args.budget.maxWallMs > 0
+        ? args.budget.maxWallMs
+        : STREAM_SESSION_TIMEOUT_MS;
+    const ac = new AbortController();
+    const onExternalAbort = () => ac.abort();
+    if (signal) {
+      if (signal.aborted) ac.abort();
+      else signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+    const wallTimer = setTimeout(() => ac.abort(), wallMs);
+
+    let thread: AgentThread | null = null;
+    let threadId: string | null = null;
+    let finalText = '';
+    let capturedFinal = '';
+    // Sniff the persisted assistant turn out of the terminal `final` frame so we
+    // can hand Moteur an authoritative finalText without re-reading the thread.
+    // The writer's forward sink IS this closure, so it also fans out to Moteur.
+    const sink: OpenclawRunEmit = ev => {
+      try {
+        if (ev && (ev as { type?: string }).type === 'final') {
+          const msg = (ev as { message?: AgentMessage }).message;
+          if (msg && typeof msg.content === 'string') capturedFinal = msg.content;
+        }
+      } catch {
+        /* best-effort — never let sniffing break the forward */
+      }
+      emit(ev);
+    };
+    const writer = new EmitBackedSseWriter(sink, ac.signal);
+
+    try {
+      // ---- validate the prompt (in-band error frame, never a throw) ----
+      if (prompt.length < CLAW_TASK_MIN || prompt.length > CLAW_TASK_MAX) {
+        writer.emit({
+          type: 'error',
+          code: 'bad_request',
+          message: `"prompt" must be a string of ${CLAW_TASK_MIN}..${CLAW_TASK_MAX} chars`,
+        });
+        return { state: 'failed', error: 'bad_request' };
+      }
+
+      // ---- resolve the runtime (validate like /stream; default when absent) --
+      const runtimeRaw =
+        typeof args?.runtime === 'string' ? args.runtime.trim() : '';
+      if (runtimeRaw && !OPENCLAW_RUNTIMES.includes(runtimeRaw)) {
+        writer.emit({
+          type: 'error',
+          code: 'bad_request',
+          message: `"runtime" must be one of: ${OPENCLAW_RUNTIMES.join(', ')}`,
+        });
+        return { state: 'failed', error: 'bad_request' };
+      }
+      const requestedRuntime = runtimeRaw || OPENCLAW_DEFAULT_RUNTIME;
+
+      // ---- resolve or create the thread (same rules as /stream) ----
+      const requestedThreadId =
+        typeof args?.threadId === 'string' && args.threadId.trim()
+          ? args.threadId.trim()
+          : null;
+      if (requestedThreadId) {
+        thread = await this.runtime.getThread(userId, requestedThreadId);
+        if (!thread) {
+          writer.emit({
+            type: 'error',
+            code: 'not_found',
+            message: 'Thread not found',
+          });
+          return { state: 'failed', error: 'not_found' };
+        }
+      } else {
+        thread = await this.runtime.createThread(
+          userId,
+          AGENT_NAME,
+          this.deriveTitle(prompt)
+        );
+      }
+      threadId = thread.id;
+
+      // A fresh run supersedes any stale stop flag from a prior turn.
+      await this.runtime.clearStop(threadId);
+
+      // Mirror the external abort onto the cooperative stop flag so the reused
+      // loop's stopRequested() poll short-circuits too (belt-and-braces with the
+      // writer.closed check the loop already performs).
+      const requestStopOnAbort = () => {
+        void this.runtime.requestStop(threadId as string).catch(() => {});
+      };
+      if (ac.signal.aborted) requestStopOnAbort();
+      else ac.signal.addEventListener('abort', requestStopOnAbort, { once: true });
+
+      const runtime = thread.sandbox?.runtime || requestedRuntime;
+
+      // ---- append the user message + announce the thread (as /stream does) ---
+      const userMessage: AgentMessage = {
+        id: this.randomId('msg'),
+        role: 'user',
+        content: prompt,
+        createdAt: Date.now(),
+        agent: AGENT_NAME,
+      };
+      thread.messages.push(userMessage);
+      thread.updatedAt = Date.now();
+      await this.runtime.saveThread(userId, thread);
+
+      writer.emit({
+        type: 'thread',
+        threadId: thread.id,
+        agent: AGENT_NAME,
+        title: thread.title,
+      });
+
+      // ---- ensure a sandbox, then drive the SAME loop as the live console ----
+      writer.emit({
+        type: 'status',
+        phase: 'planning',
+        label: 'Preparing workspace',
+      });
+      const capability = await this.probeSandbox();
+
+      if (!capability.sandbox) {
+        await this.streamPlanOnly(
+          userId,
+          thread,
+          prompt,
+          runtime,
+          capability.reason ??
+            'Vercel Sandbox is not available for this deployment',
+          writer
+        );
+      } else {
+        const ready = await this.ensurePersistentSandbox(
+          userId,
+          thread,
+          runtime,
+          writer
+        );
+        if (!ready) {
+          await this.streamPlanOnly(
+            userId,
+            thread,
+            prompt,
+            runtime,
+            'the sandbox session could not be created for this run',
+            writer
+          );
+        } else {
+          await this.streamAgentLoop({
+            userId,
+            thread,
+            message: prompt,
+            runtime,
+            sessionId: thread.sandbox!.sessionId,
+            routes: thread.sandbox!.routes ?? [],
+            writer,
+          });
+        }
+      }
+
+      // Authoritative finalText: the sniffed `final` frame, else re-read the
+      // last assistant turn off the (now-persisted) thread as a fallback.
+      finalText = capturedFinal;
+      if (!finalText) {
+        const last = thread.messages[thread.messages.length - 1];
+        if (last && last.role === 'assistant') finalText = last.content ?? '';
+      }
+
+      const stopped = await this.stopRequested(threadId);
+      return {
+        state: stopped ? 'stopped' : 'done',
+        finalText,
+        threadId,
+      };
+    } catch (err) {
+      // Nothing above should throw (the reused paths are defensive), but if it
+      // does the run is failed — emit an error frame and report it, never throw.
+      const detail = (err as Error)?.message ?? 'openclaw_run_failed';
+      this.logger.warn(`[openclaw] detached run failed: ${detail}`);
+      if (!writer.closed) {
+        writer.emit({
+          type: 'error',
+          code: 'run_failed',
+          message: truncatePreview(detail, RESULT_FEEDBACK_CHAR_CAP),
+        });
+      }
+      return {
+        state: 'failed',
+        error: truncatePreview(detail, RESULT_FEEDBACK_CHAR_CAP),
+        threadId: threadId ?? undefined,
+      };
+    } finally {
+      clearTimeout(wallTimer);
+      if (signal) {
+        try {
+          signal.removeEventListener('abort', onExternalAbort);
+        } catch {
+          /* best-effort */
+        }
+      }
+      // SANDBOX BUDGET: unlike /stream (which keeps the microVM warm across
+      // turns), a DETACHED run is not an interactive session — free its sandbox
+      // so a backgrounded run can never leak a microVM past its budget. This is
+      // the ONE teardown call on the detached path, mirroring legacy /run's
+      // finally-stop. Best-effort (the VM also auto-expires at its own timeout).
+      const sessionId = thread?.sandbox?.sessionId;
+      if (sessionId) {
+        try {
+          await stopSession(sessionId);
+        } catch {
+          /* best-effort — sandbox auto-expires at its create-time timeout */
+        }
+        // The session is gone; drop it from the thread so a later turn recreates
+        // rather than trying to reuse a stopped VM (defensive, fail-soft).
+        if (thread) {
+          try {
+            thread.sandbox = undefined;
+            thread.updatedAt = Date.now();
+            await this.runtime.saveThread(userId, thread);
+          } catch {
+            /* best-effort */
+          }
+        }
+      }
+      // Clear the (possibly stale) stop flag + close the writer (terminal done).
+      if (threadId) {
+        try {
+          await this.runtime.clearStop(threadId);
+        } catch {
+          /* best-effort */
+        }
+      }
+      writer.end();
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2479,3 +2779,178 @@ interface AgentSseWriterLike {
   closed: boolean;
   end(): void;
 }
+
+// ===========================================================================
+// R6 — DETACHED background runs (agent='openclaw'). Additive + flag-gated.
+//
+// The interactive /stream path above is UNTOUCHED: it still owns openStream(),
+// keeps its sandbox persistent (never stopped), and is byte-identical when the
+// R6 agent flags are off (this whole seam is only ever reached from Moteur's
+// `copilot.agent.run` @OnJob handler, which is itself gated CDZ_AGENTS_ENABLED).
+//
+// Moteur (clickdz-agent-runs.ts) owns the AgentLoopDeps + RunEmit contract
+// types; they are re-declared STRUCTURALLY here (the same drift-proof idiom as
+// AgentSseWriterLike above) so this file compiles standalone and matches
+// Moteur's names when integrated. RunEmit === (ev: AgentEvent) => void — Moteur
+// wraps it to both RPUSH the replay buffer and forward to any live SSE.
+// ===========================================================================
+
+/** Moteur's RunEmit: forward one wire event (RPUSH replay + live SSE fan-out). */
+type OpenclawRunEmit = (ev: AgentEvent) => void;
+
+/** The per-run budget slice Moteur passes down (from CDZ_AGENT_MAX_* envs). */
+interface OpenclawRunBudget {
+  maxToolCalls?: number;
+  maxWallMs?: number;
+  toolCalls?: number;
+}
+
+/**
+ * The detached-run arguments (work-item seam signature):
+ *   runOpenclawLoop(deps, { prompt, threadId, emit, signal, budget }).
+ * userId is required to key the per-user thread namespace; Moteur carries it on
+ * the run record. `agent` is accepted-and-ignored (always 'openclaw' here) so
+ * the shape lines up with Moteur's generic dispatch.
+ */
+interface OpenclawLoopArgs {
+  userId: string;
+  prompt: string;
+  threadId?: string;
+  runtime?: string;
+  emit: OpenclawRunEmit;
+  signal?: AbortSignal;
+  budget?: OpenclawRunBudget;
+  agent?: 'openclaw';
+}
+
+/**
+ * The dependencies Moteur injects into the loop. Only the controller instance
+ * is needed here (it already holds the runtime + cache + sandbox seams) — the
+ * planner fn + registry that AgentLoopDeps also carries are used by the Hermes
+ * port, not by OpenClaw (its planner + tools are internal to this controller).
+ * Kept as an interface so Moteur's builder can widen it without a hard import.
+ */
+interface OpenclawLoopDeps {
+  controller: ClickDzOpenclawController;
+}
+
+/** The terminal outcome Moteur folds back onto the run record. */
+interface OpenclawLoopResult {
+  state: 'done' | 'failed' | 'stopped';
+  finalText?: string;
+  error?: string;
+  threadId?: string;
+}
+
+/**
+ * An AgentSseWriterLike that forwards every frame to Moteur's RunEmit instead of
+ * an Express response, and treats an aborted AbortSignal as "client closed" so
+ * the EXISTING streamAgentLoop / streamPlanOnly loops (which poll writer.closed
+ * and register writer.onClose) cooperatively abort on wall-clock/stop with ZERO
+ * changes to their bodies. `end()` emits the terminal done frame exactly once.
+ * heartbeatEvery is a no-op (a detached run has no socket to keep warm — the
+ * heartbeat's only purpose was proxy keep-alive on the live SSE).
+ */
+class EmitBackedSseWriter implements AgentSseWriterLike {
+  private ended = false;
+  private manualClosed = false;
+  private readonly closeCbs: Array<() => void> = [];
+  private readonly onAbort = () => this.markClosed();
+
+  constructor(
+    private readonly sink: OpenclawRunEmit,
+    private readonly signal?: AbortSignal
+  ) {
+    if (signal) {
+      if (signal.aborted) this.manualClosed = true;
+      else signal.addEventListener('abort', this.onAbort, { once: true });
+    }
+  }
+
+  get closed(): boolean {
+    return this.ended || this.manualClosed || !!this.signal?.aborted;
+  }
+
+  emit(ev: AgentEvent): void {
+    if (this.closed && ev.type !== 'error') return;
+    try {
+      this.sink(ev);
+    } catch {
+      /* forwarding is best-effort — a sink blip never crashes the loop */
+    }
+  }
+
+  heartbeatEvery(_ms: number): void {
+    /* no socket to keep alive in a detached run */
+  }
+
+  onClose(cb: () => void): void {
+    if (this.closed) {
+      try {
+        cb();
+      } catch {
+        /* best-effort */
+      }
+      return;
+    }
+    this.closeCbs.push(cb);
+  }
+
+  /** Emit the terminal {type:'done'} frame once + fire close callbacks. */
+  end(): void {
+    if (this.ended) return;
+    this.ended = true;
+    try {
+      this.sink({ type: 'done' } as unknown as AgentEvent);
+    } catch {
+      /* best-effort */
+    }
+    this.fireClose();
+  }
+
+  private markClosed(): void {
+    if (this.manualClosed) return;
+    this.manualClosed = true;
+    this.fireClose();
+  }
+
+  private fireClose(): void {
+    if (this.signal) {
+      try {
+        this.signal.removeEventListener('abort', this.onAbort);
+      } catch {
+        /* best-effort */
+      }
+    }
+    while (this.closeCbs.length) {
+      const cb = this.closeCbs.shift();
+      try {
+        cb?.();
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+}
+
+/**
+ * Free-function seam Moteur imports: `runOpenclawLoop(deps, args)`. Thin wrapper
+ * that forwards to the controller method holding the actual reuse logic (the
+ * controller already owns the runtime + sandbox seams via DI). Matches the
+ * work-item signature; Moteur's runDetachedAgentLoop calls this for the
+ * agent='openclaw' branch.
+ */
+export function runOpenclawLoop(
+  deps: OpenclawLoopDeps,
+  args: OpenclawLoopArgs
+): Promise<OpenclawLoopResult> {
+  return deps.controller.runOpenclawLoop(args);
+}
+
+export type {
+  OpenclawLoopArgs,
+  OpenclawLoopDeps,
+  OpenclawLoopResult,
+  OpenclawRunBudget,
+  OpenclawRunEmit,
+};

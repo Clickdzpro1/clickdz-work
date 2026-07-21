@@ -514,3 +514,59 @@ export const MODE_LABEL: Record<AgentMode, string> = {
   ask: 'Ask — pause before writes / sends',
   dry: 'Dry run — plan only',
 };
+
+// ---------------------------------------------------------------------------
+// R6 background-run lifecycle states (Exécutions). Mirrors Moteur's run-record
+// `state` union. Each entry is the display label + a colour trio for the state
+// chip (colour / soft background / border), reusing the shared C palette so the
+// chips read cohesively with the rest of the dashboard.
+// ---------------------------------------------------------------------------
+export type RunState =
+  | 'queued'
+  | 'running'
+  | 'waiting_approval'
+  | 'done'
+  | 'failed'
+  | 'stopped';
+
+export const RUN_STATE_META: Record<
+  RunState,
+  { label: string; color: string; bg: string; border: string }
+> = {
+  queued: {
+    label: 'Queued',
+    color: C.muted,
+    bg: C.panel2,
+    border: C.border,
+  },
+  running: {
+    label: 'Running',
+    color: C.accent,
+    bg: C.accentSoft,
+    border: C.accentBorder,
+  },
+  waiting_approval: {
+    label: 'Needs approval',
+    color: '#e8a33d',
+    bg: C.warnBg,
+    border: C.warnBorder,
+  },
+  done: {
+    label: 'Done',
+    color: C.okText,
+    bg: C.okSoft,
+    border: C.okBorder,
+  },
+  failed: {
+    label: 'Failed',
+    color: 'var(--affine-error-color, #eb4b4b)',
+    bg: C.errBg,
+    border: C.errBorder,
+  },
+  stopped: {
+    label: 'Stopped',
+    color: C.muted,
+    bg: C.panel2,
+    border: C.border,
+  },
+};

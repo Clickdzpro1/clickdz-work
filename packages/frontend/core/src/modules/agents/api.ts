@@ -1,7 +1,10 @@
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 
 import type {
+  AgentEvent,
   AgentName,
+  AgentRunRecord,
+  AgentRunSummary,
   AgentThread,
   AgentThreadSummary,
 } from './types';
@@ -29,6 +32,18 @@ import type {
 /** Base path for an agent's v1 API (e.g. `/api/v1/hermes`). */
 function base(agent: AgentName): string {
   return `/api/v1/${agent}`;
+}
+
+/**
+ * Base path for the R6 background-run API (e.g. `/api/v1/agents/hermes/runs`).
+ * This is a SEPARATE controller from {@link base} (note the plural `agents`
+ * segment): the fixed console lives under `/api/v1/<agent>` while durable runs
+ * live under `/api/v1/agents/<agent>/runs`, gated by `CDZ_AGENTS_ENABLED` on the
+ * backend (a typed 404 when the flag is off — callers flag-detect on
+ * {@link AgentApiError.status} === 404).
+ */
+function runsBase(agent: AgentName): string {
+  return `/api/v1/agents/${agent}/runs`;
 }
 
 /**
@@ -239,4 +254,268 @@ export function readFile(
       threadId
     )}/file?path=${encodeURIComponent(path)}`
   );
+}
+
+// ── R6 background runs ────────────────────────────────────────────────────────
+//
+// Durable, detached agent runs (Phase 2): a run is started once (POST), then
+// executed by a BullMQ worker on the backend so it survives the browser
+// disconnecting. The client attaches to `/runs/:id/stream` (fetch-SSE, same
+// transport as the console stream — see {@link openAgentRunStream}); on
+// re-attach the backend REPLAYS the recorded event list before live-attaching,
+// so a page reload / tab-return reconstructs the full timeline. The JSON side
+// (start / list / get / stop / approve) lives here; the durable stream is driven
+// by the `useAgentRunStream` hook in use-agent-stream.ts via
+// {@link openAgentRunStream}.
+//
+// Every route is gated by `CDZ_AGENTS_ENABLED` on the backend: when the flag is
+// off the controller is absent and requests 404. `listAgentRuns` therefore
+// doubles as a capability probe — a caller catches {@link AgentApiError} and
+// treats `.status === 404` as "feature off" (hide the UI), byte-identically to
+// the pre-R6 build.
+
+/** Envelope returned by {@link startBackgroundRun}. */
+export interface StartRunResult {
+  runId: string;
+}
+
+/**
+ * Start a background run for an agent. The backend enqueues the run and returns
+ * its `runId` immediately (the loop executes detached on a worker); attach to
+ * the live stream with {@link openAgentRunStream} / the `useAgentRunStream` hook.
+ * Optionally continues an existing `threadId` (otherwise the backend mints one).
+ *
+ * Throws {@link AgentApiError} on failure — notably `.status === 404` when
+ * `CDZ_AGENTS_ENABLED` is off (feature dark) and `.status === 429` when the
+ * per-user daily run cap is hit, so callers can branch on the status.
+ */
+export function startBackgroundRun(
+  agent: AgentName,
+  prompt: string,
+  threadId?: string
+): Promise<StartRunResult> {
+  return requestJson<StartRunResult>(`${runsBase(agent)}`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ prompt, threadId }),
+  });
+}
+
+/**
+ * List the signed-in user's background runs for an agent, newest first. `limit`
+ * caps the number of rows the backend returns (default server-side). Throws
+ * {@link AgentApiError} — a `.status === 404` means the runs feature is off, so
+ * callers can flag-detect and hide the section. Returns `[]` if the server sends
+ * a non-array body.
+ */
+export async function listAgentRuns(
+  agent: AgentName,
+  limit?: number
+): Promise<AgentRunSummary[]> {
+  const qs =
+    typeof limit === 'number' && Number.isFinite(limit)
+      ? `?limit=${encodeURIComponent(String(Math.floor(limit)))}`
+      : '';
+  const rows = await requestJson<AgentRunSummary[]>(`${runsBase(agent)}${qs}`);
+  return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Load one background run's full record (state, steps timeline, finalText,
+ * timings) by id. Used to seed a live view so an already-finished run renders
+ * instantly before the stream re-attaches. Throws {@link AgentApiError}.
+ */
+export function getAgentRun(
+  agent: AgentName,
+  id: string
+): Promise<AgentRunRecord> {
+  return requestJson<AgentRunRecord>(
+    `${runsBase(agent)}/${encodeURIComponent(id)}`
+  );
+}
+
+/**
+ * Cooperatively stop a background run. The backend sets a stop flag the loop
+ * checks each iteration (and aborts the wall-clock); the live stream closes on
+ * the resulting terminal `status` frame. Safe to call when the run is already
+ * finished. Best-effort — throws {@link AgentApiError} only on a transport/HTTP
+ * failure the caller may choose to ignore.
+ */
+export async function stopAgentRun(
+  agent: AgentName,
+  id: string
+): Promise<void> {
+  await requestJson<unknown>(
+    `${runsBase(agent)}/${encodeURIComponent(id)}/stop`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+    }
+  );
+}
+
+/**
+ * Resolve a pending approval for a paused background run. `approved` is `true` to
+ * let the consequential tool proceed or `false` to skip it; `stepId` identifies
+ * the awaiting step (the `approval_request` frame's id). Bridges to the backend's
+ * existing `awaitApproval` machinery. Throws {@link AgentApiError} on failure.
+ */
+export async function approveAgentRun(
+  agent: AgentName,
+  id: string,
+  stepId: string,
+  approved: boolean
+): Promise<void> {
+  await requestJson<unknown>(
+    `${runsBase(agent)}/${encodeURIComponent(id)}/approve`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ stepId, approved }),
+    }
+  );
+}
+
+// ── Fetch-SSE run stream ──────────────────────────────────────────────────────
+
+/** Handlers for {@link openAgentRunStream}. All optional except `onEvent`. */
+export interface RunStreamHandlers {
+  /** Invoked once per parsed, non-`ping` SSE frame (the RUNTIME event union). */
+  onEvent: (event: AgentEvent) => void;
+  /**
+   * Invoked with a human-readable message on a transport/HTTP failure. NOT
+   * called for a caller-initiated abort (the returned signal was aborted).
+   */
+  onError?: (message: string) => void;
+  /**
+   * Invoked exactly once when the stream ends for ANY reason (server `done`
+   * sentinel, reader close, error, or abort). Lets the caller flip a "live" flag
+   * off without racing the async loop.
+   */
+  onClose?: () => void;
+  /** Abort signal to stop reading (aborting the underlying fetch). */
+  signal?: AbortSignal;
+}
+
+/**
+ * Attach to a background run's durable Server-Sent-Events stream and pump parsed
+ * frames to `handlers.onEvent`. This is the SHARED transport used by the
+ * `useAgentRunStream` hook — it mirrors the console stream reader in
+ * use-agent-stream.ts exactly: `fetch` with `credentials: 'include'` (cookie
+ * auth via `@CurrentUser()`), `Accept: text/event-stream`, a `ReadableStream`
+ * reader, and frames split on the blank-line separator with the `data:` payload
+ * JSON-parsed into an {@link AgentEvent} (single `data:` line per frame; the
+ * `type` field discriminates — there is NO `event:` field). EventSource can't
+ * send cookies cross-origin, so the fetch-reader path is used instead.
+ *
+ * The backend REPLAYS the recorded event list first (history) then live-attaches
+ * — so calling this on mount/tab-return reconstructs the full timeline. The
+ * stream ends on a `{ type: 'done' }` sentinel or the reader closing; a terminal
+ * `status`/`final`/`error` frame is delivered to `onEvent` before that.
+ *
+ * Everything is defensive: partial frames spanning chunks are buffered, `ping`
+ * heartbeats are dropped (never forwarded), malformed JSON is skipped, and a
+ * caller-initiated abort resolves quietly (no `onError`). Returns a Promise that
+ * resolves when the stream ends (never rejects — failures go to `onError`).
+ */
+export async function openAgentRunStream(
+  agent: AgentName,
+  id: string,
+  handlers: RunStreamHandlers
+): Promise<void> {
+  const { onEvent, onError, onClose, signal } = handlers;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    try {
+      onClose?.();
+    } catch {
+      // a throwing onClose must never break the stream
+    }
+  };
+
+  try {
+    const res = await fetch(
+      cdzApiUrl(`${runsBase(agent)}/${encodeURIComponent(id)}/stream`),
+      {
+        method: 'GET',
+        headers: { Accept: 'text/event-stream' },
+        credentials: 'include',
+        signal,
+      }
+    );
+
+    if (!res.ok || !res.body) {
+      // Surface a typed message from the error body when possible.
+      const msg = res.body
+        ? await readError(res)
+        : res.statusText || `Agent stream failed (${res.status})`;
+      onError?.(msg);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    // Read chunks, accumulate a text buffer, and split complete SSE frames on
+    // the blank-line separator. A partial frame stays in `buffer` until the next
+    // chunk completes it (frames can span reads). Mirrors the console reader.
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep: number;
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        // A frame is one or more lines; collect the `data:` payload(s). (The
+        // RUNTIME emits a single data line, but we tolerate multi-line data and
+        // SSE comment/`event:` lines defensively.)
+        let data = '';
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('data:')) data += line.slice(5).trimStart();
+        }
+        if (!data) continue; // comment / heartbeat with no payload
+        let ev: AgentEvent | null = null;
+        try {
+          ev = JSON.parse(data) as AgentEvent;
+        } catch {
+          // Malformed / partial JSON that slipped a split — skip it.
+          continue;
+        }
+        // A `done` sentinel ends the stream cleanly.
+        if ((ev as { type?: string }).type === 'done') {
+          buffer = '';
+          try {
+            await reader.cancel();
+          } catch {
+            /* already closing */
+          }
+          return;
+        }
+        // Drop heartbeats here too so consumers never see them.
+        if ((ev as { type?: string }).type === 'ping') continue;
+        try {
+          onEvent(ev);
+        } catch {
+          // a throwing consumer must never break the reader loop
+        }
+      }
+    }
+  } catch (err) {
+    // A caller-initiated abort (unmount / re-attach) is not an error to surface.
+    const aborted =
+      signal?.aborted ||
+      (err instanceof Error && err.name === 'AbortError');
+    if (!aborted) {
+      onError?.(
+        err instanceof Error && err.message
+          ? err.message
+          : 'Agent run stream failed.'
+      );
+    }
+  } finally {
+    close();
+  }
 }
