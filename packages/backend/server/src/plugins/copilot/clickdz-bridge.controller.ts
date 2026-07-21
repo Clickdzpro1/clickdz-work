@@ -61,6 +61,30 @@ import { dataWriteToken, safeEqual, verifyDataToken } from './cdz-data-token';
 // __CLICKDZ_SLUG__, which /apps/template substitutes with the real minted values.
 import { CLICKDZ_SHOP_TEMPLATE_HTML } from './clickdz-shop-template';
 import { CLICKDZ_ERP_TEMPLATE_HTML } from './clickdz-erp-template';
+// R1-d (GATE): pure template-token resolver + feature-settings allowlist +
+// env gates. Logic lives in the sibling file so this controller stays thin.
+import {
+  resolveTemplateTokens,
+  resolveTemplateDef,
+  listTemplateCatalog,
+  templateCatalogEnabled,
+  featuresEnabled,
+  validateFeatureSettings,
+  featuresRequireRemint,
+  parseFeatureCsv,
+  type TemplateMintOpts,
+} from './clickdz-template-mint';
+// R0-b (WSB-2) — shop source recovery. Pure helpers behind GET /apps/:slug/source:
+// fetchDeployedHtml (recover a published app's HTML from its live Vercel URL,
+// SSRF-guarded/timed/size-capped) + resolveAppSource (template kind → server-render
+// fast path; else deployed-HTML fetch fallback). renderTemplateSource does the SAME
+// __CLICKDZ_*__ substitution templateApp does — the controller injects the template
+// HTML + minted token values so the helper stays import/env-free (boot-safe).
+import {
+  fetchDeployedHtml,
+  resolveAppSource,
+  type AppSourceRecord,
+} from './clickdz-app-source';
 
 // SECURITY: input caps for cost/side-effecting routes (images, apps, plan).
 // Non-breaking for normal use; reject oversized/abusive payloads early.
@@ -354,6 +378,10 @@ const CDZ_PUBLISH_MAX_APPS = (() => {
 // Premium gate. OFF by default: when '1', publishing requires a Pro/Lifetime
 // feature OR an allow-listed admin email; otherwise 402 upgrade_required.
 const CDZ_PUBLISH_REQUIRE_PRO = process.env.CDZ_PUBLISH_REQUIRE_PRO === '1';
+// R0-b (WSB-2). Gates GET /api/v1/apps/:slug/source (the cross-device source
+// recovery path). OFF by default → the route 404s and behaviour is byte-identical
+// to today. Turn on to let the shop studio fetch a published app's HTML server-side.
+const CDZ_SHOP_AI_EDIT = process.env.CDZ_SHOP_AI_EDIT === '1';
 // CSV of admin emails (lowercased) that bypass the premium gate.
 const CDZ_PUBLISH_ADMIN_EMAILS = (process.env.CDZ_PUBLISH_ADMIN_EMAILS || '')
   .split(',')
@@ -1033,7 +1061,7 @@ const ERP_THEME_IDS = ['classic', 'dark', 'vibrant', 'minimal'] as const;
 const ERP_DEFAULT_THEME = 'classic';
 // Layout templates (≥2, ids owned by clickdz-shop-template.ts). 'standard' ==
 // today's hero + product grid (default); 'boutique' == editorial layout.
-const ERP_TEMPLATE_IDS = ['standard', 'boutique'] as const;
+const ERP_TEMPLATE_IDS = ['standard', 'boutique', 'grid-dense', 'editorial-split'] as const;
 const ERP_DEFAULT_TEMPLATE = 'standard';
 // Font ids map to a --font stack in the template (mirrors the studio's
 // cdz-style-editor font choices). 'system' == today's stack (the default).
@@ -3215,21 +3243,21 @@ export class ClickDzBridgeController {
     // no-settings request substitutes the exact strings that used to be
     // hardcoded → byte-identical output. None of the substituted values contain
     // another __CLICKDZ_*__ sequence, so replacement order is irrelevant.
-    html = html
-      .split('__CLICKDZ_DATA_URL__')
-      .join(dataUrl)
-      .split('__CLICKDZ_DATA_TOKEN__')
-      .join(dataToken)
-      .split('__CLICKDZ_SLUG__')
-      .join(slug)
-      .split('__CLICKDZ_STORE_NAME__')
-      .join(tokens.storeName)
-      .split('__CLICKDZ_WHATSAPP__')
-      .join(tokens.whatsapp)
-      .split('__CLICKDZ_ACCENT__')
-      .join(tokens.accent)
-      .split('__CLICKDZ_PIN__')
-      .join(tokens.pin);
+    // R1-d (GATE/WS4-4): optional `templateId` selects a catalog vertical when
+    // CDZ_TEMPLATE_CATALOG is ON (shop only). def=null (no id / gate off / erp)
+    // ⇒ the resolver substitutes today's exact defaults ⇒ byte-identical mint.
+    const templateDef =
+      kind === 'shop' ? resolveTemplateDef(body?.templateId) : null;
+    const mintOpts: TemplateMintOpts = {
+      dataUrl,
+      dataToken,
+      slug,
+      storeName: tokens.storeName,
+      whatsapp: tokens.whatsapp,
+      accent: tokens.accent,
+      pin: tokens.pin,
+    };
+    html = resolveTemplateTokens(html, templateDef, mintOpts);
     if (html.length > 400_000) html = html.slice(0, 400_000);
     this.logger.log(
       `[apps] template kind=${kind} user=${user.id} slug=${slug} bytes=${html.length}`
@@ -3277,6 +3305,22 @@ export class ClickDzBridgeController {
   }
 
   /**
+   * R1-d (WS4-4) — GET /api/v1/apps/templates. The 20-vertical catalog metadata
+   * (id/name/darja/vertical/accent/hero/emoji/gradient) for the wizard gallery.
+   * Seed products are intentionally excluded (keep the payload small). Gated by
+   * CDZ_TEMPLATE_CATALOG: OFF ⇒ typed 404 (picker hidden), never an empty 200
+   * that would render a blank gallery. auth'd via the global AuthGuard.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/templates')
+  async listTemplates(@CurrentUser() _user: CurrentUser) {
+    if (!templateCatalogEnabled()) {
+      throw new NotFound('Template catalog not enabled');
+    }
+    return { templates: listTemplateCatalog() };
+  }
+
+  /**
    * WS4 — DELETE /api/v1/apps/:slug (auth'd). Unpublish one of the CALLER's own
    * apps: only if the slug is in the caller's Redis set → delete the Vercel
    * project (fail-soft on 404) + srem → { ok: true }. A slug the caller does not
@@ -3301,6 +3345,109 @@ export class ClickDzBridgeController {
     await this.sremPublishedApp(user.id, slug);
     this.logger.log(`[apps] unpublished slug=${slug} user=${user.id}`);
     return { ok: true };
+  }
+
+  /**
+   * R0-b (WSB-2) — GET /api/v1/apps/:slug/source (auth'd, owner-only). Recovers
+   * a published app's HTML SERVER-SIDE so editing works cross-device (today the
+   * only source is the browser's client `artifactStore`, so a 2nd device gets
+   * `no-source`). Two sources, chosen by `resolveAppSource`:
+   *   - RENDER (fast path): a template kind (kind 'shop'|'erp', or a record with
+   *     a `storeSlug`) is re-rendered from the sibling template via the SAME
+   *     `__CLICKDZ_*__` substitution `templateApp` performs → source:'render'.
+   *   - DEPLOYED (fallback): a plain generated app has its live HTML fetched from
+   *     its Vercel URL (SSRF-guarded/timed/size-capped) → source:'deployed'.
+   * Env-gated by CDZ_SHOP_AI_EDIT (OFF → 404, byte-identical current behaviour).
+   * Ownership reuses the /apps/mine mechanism (readPublishedApps; slug OR paired
+   * storeSlug match). Passthrough res carries the exact typed error bodies (a raw
+   * HttpException is flattened to a generic 500 by the global filter).
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/source')
+  async appSource(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    // Feature flag OFF → behave as if the route does not exist (typed 404).
+    if (!CDZ_SHOP_AI_EDIT) {
+      throw new NotFound('App not found');
+    }
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      throw new BadRequest('Invalid app slug');
+    }
+    // Ownership: the caller must own this slug (or its paired storeSlug). Same
+    // mechanism as assertOwnsErpApp / GET /apps/mine.
+    const records = await this.readPublishedApps(user.id);
+    const record =
+      records.find(r => r.slug === slug) ??
+      records.find(r => r.storeSlug === slug);
+    if (!record) {
+      throw new NotFound('App not found');
+    }
+
+    // RENDER closure: reconstruct a template-kind app's HTML with the SAME token
+    // values templateApp injects. The appearance/customization tokens are the
+    // template DEFAULTS here (the storefront reads its saved appearance at
+    // runtime, so the base render is a faithful editable skeleton); the deployed
+    // fetch is the higher-fidelity path when a re-render can't reproduce the art.
+    const externalBase = (
+      process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+    ).replace(/\/+$/, '');
+    const renderTemplate = (rec: AppSourceRecord): string => {
+      const templateHtml =
+        rec.kind === 'erp'
+          ? CLICKDZ_ERP_TEMPLATE_HTML
+          : rec.kind === 'shop'
+            ? CLICKDZ_SHOP_TEMPLATE_HTML
+            : '';
+      if (!templateHtml) return '';
+      // A shop's own slug doubles as its storeSlug (templateApp returns
+      // storeSlug === slug); prefer the paired storeSlug when present so the
+      // data namespace matches the deployed one.
+      const dataSlug = rec.storeSlug || rec.slug;
+      const dataUrl = `${externalBase}/api/v2/apps-data/${dataSlug}`;
+      const dataToken = dataWriteToken(dataSlug);
+      return renderTemplateSource({
+        templateHtml,
+        slug: dataSlug,
+        dataUrl,
+        dataToken,
+        tokens: {
+          storeName: CDZ_TPL_DEFAULT_STORE_NAME,
+          whatsapp: CDZ_TPL_DEFAULT_WHATSAPP,
+          accent:
+            rec.kind === 'erp'
+              ? CDZ_TPL_DEFAULT_ERP_ACCENT
+              : CDZ_TPL_DEFAULT_ACCENT,
+          pin: CDZ_TPL_DEFAULT_PIN,
+        },
+      });
+    };
+
+    const resolved = await resolveAppSource(record, { renderTemplate });
+    if (!resolved.ok) {
+      // Map the helper's failure reason → the right typed status. A missing/
+      // unreachable/oversized/non-HTML deployed artifact is an upstream fetch
+      // problem (502 via passthrough, like deployApp's vercel_* errors); a
+      // non-renderable template kind is a 404 (nothing to recover).
+      if (resolved.reason === 'not_renderable') {
+        throw new NotFound('App source is not available');
+      }
+      // Every other reason is a deployed-fetch problem (missing/unreachable/
+      // non-2xx/non-HTML/oversized/empty) — a typed 502, like deployApp's
+      // vercel_* upstream errors, carried via passthrough res.
+      res.status(HttpStatus.BAD_GATEWAY).json({
+        error: 'source_fetch_failed',
+        reason: resolved.reason,
+        message: 'Could not recover the published source. Please try again.',
+      });
+      return;
+    }
+    this.logger.log(
+      `[apps] source slug=${slug} user=${user.id} via=${resolved.source} bytes=${resolved.bytes}`
+    );
+    return { slug, html: resolved.html, source: resolved.source };
   }
 
   @Throttle('strict')
@@ -4455,6 +4602,101 @@ export class ClickDzBridgeController {
       `[erp] settings saved slug=${slug} user=${user.id} fields=${Object.keys(patch).join(',')}`
     );
     return { ok: true, settings: created.record };
+  }
+
+  /**
+   * R1-d (WSF-2) — POST /api/v1/apps/:slug/customize (auth'd, owner-only).
+   * The feature-aware wrapper over the settings singleton: manual toggles AND
+   * AI-chat edits converge here. BODY `{ features?, settings? }`:
+   *   • features — CSV/array of registry feature ids (Anvil). Unknown ⇒ 400.
+   *   • settings — per-feature scalar params (only keys the enabled features
+   *     declare; only scalars). Unknown key / non-scalar ⇒ 400.
+   * Validation delegates to validateFeatureSettings (ids+scalars, <8KB). The
+   * validated {features,params} is merged into the singleton via the SAME
+   * delete+recreate path /erp/settings uses (normalizeErpSettings base, 8KB cap,
+   * per-slug write token). `remint` tells the client whether a runtime:false
+   * feature was touched (⇒ it should re-publish via republishShop); pure runtime
+   * flags reflect on the next settings fetch with no redeploy. Gated by
+   * CDZ_FEATURES_ENABLED (OFF ⇒ typed 404). Invalid field ⇒ 400
+   * {error:'invalid_settings', field} via passthrough res (SAME contract).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/customize')
+  async customizeApp(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (!featuresEnabled()) {
+      throw new NotFound('Feature customization not enabled');
+    }
+    await this.assertOwnsErpApp(user, slug);
+    // Validate against the registry (shop scope — a shop slug drives storefront
+    // features; the paired ERP shares the same namespace).
+    const v = validateFeatureSettings(
+      { features: body?.features, settings: body?.settings },
+      'shop'
+    );
+    if (!v.ok) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_settings', field: v.field });
+      return;
+    }
+    // Nothing to change ⇒ no-op success (idempotent; no write, no re-publish).
+    if (
+      v.patch.features === '' &&
+      Object.keys(v.patch.params).length === 0
+    ) {
+      return { ok: true, remint: false, noop: true };
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const rows = await this.erpList(slug, 'settings');
+    if (!rows) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const baseRow = rows.find(r => erpStr(r.key) === 'settings') ?? rows[0];
+    // Merge onto the normalized singleton (same base as /erp/settings), then
+    // layer the features CSV + per-feature scalar params.
+    const merged: ErpRecord = {
+      ...normalizeErpSettings(baseRow),
+      ...v.patch.params,
+      features: v.patch.features,
+      key: 'settings',
+    };
+    if (
+      Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES
+    ) {
+      throw new BadRequest('Settings record too large');
+    }
+    // Replace the singleton (drop every row first — self-heals dup singletons).
+    for (const row of rows) {
+      const id = erpStr(row.id);
+      if (!id) continue;
+      if (!(await this.erpDeleteRecord(slug, 'settings', id, token))) {
+        res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
+        return;
+      }
+    }
+    const created = await this.erpCreateRecord(slug, 'settings', merged, token);
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    // Re-publish only when a runtime:false feature was touched.
+    const remint = featuresRequireRemint(parseFeatureCsv(v.patch.features), 'shop');
+    this.logger.log(
+      `[erp] customize slug=${slug} user=${user.id} features=${v.patch.features || '-'} remint=${remint}`
+    );
+    return { ok: true, settings: created.record, remint };
   }
 
   // =========================================================================

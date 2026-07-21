@@ -15,6 +15,26 @@
 // These feed the settings-singleton defaults, the runtime fallbacks and the
 // <title>; the runtime settings form still lets the owner edit them post-launch.
 //
+// WS4 (TEMPLATE CATALOG) — eight MORE optional tokens let a picked vertical
+// preset ship its appearance ids, copy, seed pack and reading direction. As
+// with C5, every default is the EXACT string that was hardcoded here before, so
+// a mint with NO templateId substitutes the same bytes → byte-identical output:
+//   __CLICKDZ_THEME__        → THEMES id   (default "classic")
+//   __CLICKDZ_FONT__         → FONTS id    (default "system")
+//   __CLICKDZ_LAYOUT__       → LAYOUTS id  (default "standard")
+//   __CLICKDZ_TAGLINE__      → hero/settings tagline (default the FR line below)
+//   __CLICKDZ_HERO__         → hero headline override (default "" → uses shopName)
+//   __CLICKDZ_RTL__          → <html dir> value: "ltr" [default] | "rtl"
+//   __CLICKDZ_CATEGORIES__   → reserved category hint CSV (default "" → derived)
+//   __CLICKDZ_SEED__         → first-run seed products JSON array (default the
+//                              six demoProducts() below, verbatim). MUST be a
+//                              double-quoted JSON string with no backtick, no
+//                              apostrophe and no dollar-brace template sequence,
+//                              so it survives String.raw + JSON.parse.
+// The theme/font/layout tokens seed defaultSettings() (still runtime-validated
+// against THEMES/FONTS/LAYOUTS); rtl seeds settings.rtl and the initial <html>
+// dir; seed feeds demoProducts(); tagline/hero feed the hero copy.
+//
 // Data model (ClickDz Data API — GET/POST/DELETE only, no PUT): collections
 // `products`, `orders`, `settings` (singleton). "Update" = DELETE + re-create
 // (the client tracks each record's server-assigned id). Caps: 8KB/record,
@@ -27,7 +47,7 @@
 // with a default that reproduces today's exact look, so a shop with no
 // appearance settings renders byte-identically to before:
 //   settings.theme    → THEMES id      ('classic' [default] | 'dark' | 'vibrant' | 'minimal')
-//   settings.template → LAYOUTS id     ('standard' [default] | 'boutique')
+//   settings.template → LAYOUTS id     ('standard' [default] | 'boutique' | 'grid-dense' | 'editorial-split')
 //   settings.font     → FONTS id       ('system'  [default] | 'inter' | 'poppins' | 'playfair')
 // At runtime applyTheme(settings) writes the chosen preset's CSS custom props
 // onto :root (mirroring applyAccent, which still runs AFTER so settings.accent
@@ -37,12 +57,24 @@
 // <link>. The Shop Appearance editor (SHOP-UX) and the ERP settings allowlist
 // (BRIDGE-BE normalizeErpSettings / POST /erp/settings) validate these ids.
 //
+// WSF-3 — Section gating + feature flags (data-driven runtime, like onlinePay).
+// settings.sections is a canonical CSV over the four home bands
+// ('hero','trust','categories','featured'); sectionOn(id) hides a band whose id
+// is absent from the CSV. The default is ABSENT → every band shown (byte-
+// identical to today). settings.features is the generic capability CSV read by
+// featureOn(id) (default OFF/absent, mirroring onlinePayEnabled) — the seam
+// Wave-B feature builders hang self-contained render fns on.
+// WS4-6 — settings.rtl (bool) flips the document direction at runtime via
+// applyDir(); absent/false keeps the compile-time __CLICKDZ_RTL__ dir (default
+// "ltr"). The CSS already uses logical props (inset-inline / margin-inline) so
+// the layout mirrors correctly with no per-rule work.
+//
 // String.raw is used so any backslashes in the HTML/CSS/JS survive verbatim;
 // the inner content is authored to contain no backtick or ${ sequences, so no
 // escaping is required inside the literal.
 
 export const CLICKDZ_SHOP_TEMPLATE_HTML: string = String.raw`<!doctype html>
-<html lang="fr" dir="ltr">
+<html lang="fr" dir="__CLICKDZ_RTL__">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -383,6 +415,124 @@ export const CLICKDZ_SHOP_TEMPLATE_HTML: string = String.raw`<!doctype html>
   .feature-boutique .fb-hero .fb-cap .t{font-weight:800;font-size:19px}
   .feature-boutique .fb-hero .fb-cap .p{font-weight:900;font-size:16px;margin-top:2px}
   .feature-boutique .fb-side{display:flex;flex-direction:column;gap:12px}
+
+  /* ---------- layout: grid-dense (settings.template='grid-dense') ----------
+     A compact product-forward home: a slim editorial header band (no full-bleed
+     hero gradient) + a tighter, denser product grid. Reuses .card / productCard;
+     only used when opted in, so standard/boutique are untouched. */
+  .header-dense{background:var(--card);border-bottom:1px solid var(--line)}
+  .header-dense .hd-inner{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:22px 0 20px}
+  .header-dense .hd-text{min-width:0}
+  .header-dense h1{font-size:clamp(22px,4.4vw,30px);font-weight:900;letter-spacing:-.03em}
+  .header-dense p{margin:4px 0 0;color:var(--ink-soft);font-size:14.5px;max-width:560px}
+  .header-dense .cod-pill{margin:0;background:var(--accent-l);border-color:transparent;color:var(--accent-d)}
+  .header-dense .hd-actions{margin-inline-start:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .grid-dense{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+  @media(min-width:560px){.grid-dense{grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:14px}}
+  @media(min-width:980px){.grid-dense{grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}}
+  .grid-dense .card .body{padding:10px 11px 12px;gap:5px}
+  .grid-dense .card .title{font-size:14px;min-height:2.2em}
+  .grid-dense .card .price{font-size:17px}
+
+  /* ---------- layout: editorial-split (settings.template='editorial-split') --
+     An asymmetric split hero (copy on one side, a large product/lifestyle image
+     on the other) over a standard product grid. Reuses productCard; opt-in only. */
+  .hero-split{background:linear-gradient(180deg,var(--card),var(--bg))}
+  .hero-split .hs-inner{display:grid;gap:20px;padding:40px 0 30px;align-items:center}
+  @media(min-width:820px){.hero-split .hs-inner{grid-template-columns:1.05fr .95fr;gap:40px;padding:56px 0 44px}}
+  .hero-split .hs-copy{display:flex;flex-direction:column;gap:14px;align-items:flex-start;text-align:start;min-width:0}
+  .hero-split .hs-copy .cod-pill{margin:0;background:var(--accent-l);border-color:transparent;color:var(--accent-d)}
+  .hero-split .hs-copy h1{font-size:clamp(28px,5.4vw,48px);font-weight:900;letter-spacing:-.035em;line-height:1.04;color:var(--ink)}
+  .hero-split .hs-copy p{margin:0;color:var(--ink-soft);font-size:clamp(15px,2.2vw,18px);max-width:500px}
+  .hero-split .hs-copy .cta-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
+  .hero-split .hs-media{position:relative;border-radius:calc(var(--r) + 6px);overflow:hidden;min-height:240px;background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow)}
+  .hero-split .hs-media img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+  .hero-split .hs-media .hs-ph{position:absolute;inset:0;display:grid;place-items:center;font-size:72px;color:var(--ink-mute);background:linear-gradient(135deg,#eef1f4,#e2e7ec)}
+  .hero-split .hs-media .hs-cap{position:absolute;inset-inline:0;bottom:0;padding:16px 18px;background:linear-gradient(0deg,rgba(0,0,0,.6),transparent);color:#fff}
+  .hero-split .hs-media .hs-cap .t{font-weight:800;font-size:17px}
+  .hero-split .hs-media .hs-cap .p{font-weight:900;font-size:15px;margin-top:2px}
+
+  /* ---------- WSF-4 features: wishlist / reviews / promo / variants ---------- */
+  .wish-btn{border:1px solid var(--line);background:#fff;border-radius:999px;width:38px;height:38px;display:inline-grid;place-items:center;font-size:17px;line-height:1;cursor:pointer;transition:.15s;padding:0}
+  .wish-btn:hover{border-color:var(--danger);background:var(--danger-bg)}
+  .wish-btn.on{border-color:var(--danger);background:var(--danger-bg)}
+  .card .wish-btn.card-heart{position:absolute;inset-block-start:10px;inset-inline-end:10px;width:34px;height:34px;font-size:15px;box-shadow:var(--shadow);z-index:2}
+  .card{position:relative}
+  .pd-wish{display:flex;align-items:center;gap:10px;margin-top:12px;color:var(--ink-soft);font-size:14px;font-weight:600}
+  .pd-wish .wish-btn.lg{width:44px;height:44px;font-size:19px}
+  .rev-mini{display:flex;align-items:center;gap:6px;margin-top:2px}
+  .rev-mini .rev-n{font-size:12.5px;color:var(--ink-soft);font-weight:600}
+  .stars{display:inline-flex;gap:1px;font-size:14px;line-height:1;color:#f59e0b}
+  .stars .es{color:var(--ink-mute)}
+  .reviews{margin:34px 0 6px;border-top:1px solid var(--line);padding-top:24px}
+  .reviews .rev-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:16px}
+  .reviews .rev-head h2{font-size:21px;font-weight:800;letter-spacing:-.02em}
+  .rev-head-score{display:flex;align-items:center;gap:8px;font-size:15px}
+  .rev-head-score .stars{font-size:17px}
+  .rev-head-score strong{font-size:18px;font-weight:900;color:var(--ink)}
+  .rev-list{display:flex;flex-direction:column;gap:12px;margin-bottom:20px}
+  .rev-item{background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:13px 15px;box-shadow:var(--shadow)}
+  .rev-item-top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px}
+  .rev-name{font-weight:700;font-size:14px;color:var(--ink)}
+  .rev-body{font-size:14px;color:var(--ink-soft);white-space:pre-wrap}
+  .rev-form{padding:16px;display:flex;flex-direction:column;gap:14px}
+  .rev-form-head{font-weight:800;font-size:16px;color:var(--ink)}
+  .rev-picker{display:inline-flex;gap:4px}
+  .rev-star{border:0;background:none;font-size:26px;line-height:1;color:var(--ink-mute);cursor:pointer;padding:0}
+  .rev-star.on{color:#f59e0b}
+  .promo-box{margin-top:14px;border-top:1px dashed var(--line);padding-top:14px}
+  .promo-box label{display:block;font-weight:600;font-size:14px;color:var(--ink);margin-bottom:6px}
+  .promo-row{display:flex;gap:8px}
+  .promo-row .control{flex:1}
+  .promo-row .btn{flex:0 0 auto}
+  .promo-ok{color:var(--ok);font-size:13px;font-weight:700;margin-top:8px}
+  .summary .line.promo-line{color:var(--ok);font-weight:700}
+  .variants{display:flex;flex-direction:column;gap:14px;margin:18px 0}
+  .vgroup{display:flex;flex-direction:column;gap:8px}
+  .vlabel{font-weight:700;font-size:14px;color:var(--ink)}
+  .vopts{display:flex;flex-wrap:wrap;gap:8px}
+  .vopt{border:1px solid var(--line);background:#fff;color:var(--ink);border-radius:var(--r-sm);padding:9px 15px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
+  .vopt:hover{border-color:var(--accent)}
+  .vopt.sel{background:var(--accent);border-color:var(--accent);color:#fff}
+  .ci-variant{color:var(--ink-mute);font-size:12.5px;margin-top:2px}
+
+
+  /* ---------- WSF-5 (batch B): announcement bar ---------- */
+  .cdz-ann{background:var(--accent-d);color:#fff}
+  .cdz-ann-in{display:flex;align-items:center;gap:12px;padding:9px 16px;font-size:13.5px;font-weight:600}
+  .cdz-ann-txt{flex:1;text-align:center}
+  .cdz-ann-x{margin-inline-start:auto;background:rgba(255,255,255,.16);border:0;color:#fff;width:26px;height:26px;border-radius:8px;font-size:13px;line-height:1;flex:0 0 auto}
+  .cdz-ann-x:hover{background:rgba(255,255,255,.28)}
+
+  /* ---------- lang toggle ---------- */
+  .icon-btn.cdz-lang{font-size:14px;font-weight:800;letter-spacing:.02em}
+
+  /* ---------- instagram feed ---------- */
+  .cdz-ig{margin-top:28px}
+  .ig-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  @media(min-width:560px){.ig-grid{grid-template-columns:repeat(6,1fr);gap:10px}}
+  .ig-cell{position:relative;aspect-ratio:1/1;border-radius:var(--r-sm);overflow:hidden;background:var(--bg);display:block}
+  .ig-cell img{width:100%;height:100%;object-fit:cover;transition:.2s}
+  .ig-cell:hover img{transform:scale(1.06)}
+  .ig-cell.ig-ph::after,.ig-follow{display:grid;place-items:center;color:var(--ink-mute);font-size:26px;width:100%;height:100%}
+  .ig-follow{flex-direction:column;gap:4px;font-size:24px}
+  .ig-follow span{font-size:12px;font-weight:700;color:var(--ink-soft)}
+
+  /* ---------- bundles ---------- */
+  .cdz-bundles{margin-top:28px}
+  .bn-grid{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:560px){.bn-grid{grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}}
+  .bn-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column}
+  .bn-thumbs{display:flex;gap:2px;background:var(--bg)}
+  .bn-thumbs img,.bn-thumbs .bn-ph{flex:1;aspect-ratio:1/1;object-fit:cover;min-width:0}
+  .bn-thumbs .bn-ph{display:grid;place-items:center;font-size:30px;color:var(--ink-mute)}
+  .bn-body{padding:13px 14px 15px;display:flex;flex-direction:column;gap:7px;flex:1}
+  .bn-title{font-weight:700;font-size:14.5px;color:var(--ink)}
+  .bn-price{font-weight:900;font-size:18px;color:var(--accent-d)}
+  .bn-price s{font-size:13px;font-weight:600;color:var(--ink-mute)}
+  .bn-save{font-size:12px;font-weight:800;color:var(--ok);background:var(--ok-bg);padding:2px 7px;border-radius:999px}
+  .bn-add{margin-top:auto}
+
 </style>
 </head>
 <body>
@@ -399,6 +549,12 @@ export const CLICKDZ_SHOP_TEMPLATE_HTML: string = String.raw`<!doctype html>
 var DATA_URL = '__CLICKDZ_DATA_URL__';   // e.g. https://work.clickdz.ai/api/v2/apps-data/<slug>
 var DATA_TOKEN = '__CLICKDZ_DATA_TOKEN__';
 var SLUG = '__CLICKDZ_SLUG__';
+/* WS4 catalog wiring — each default equals the value hardcoded before this seam,
+   so a mint WITHOUT a templateId substitutes the same bytes (byte-identical). */
+var TPL_RTL_DIR = '__CLICKDZ_RTL__';        // 'ltr' (default) | 'rtl'
+var TPL_HERO_LINE = '__CLICKDZ_HERO__';     // '' (default) → hero uses the shop name
+var TPL_SEED_JSON = '__CLICKDZ_SEED__';     // '' (default) → the six demoProducts below
+var TPL_CATEGORIES = '__CLICKDZ_CATEGORIES__'; // '' (default) — reserved category hint CSV; categories() still derives from products
 
 /* ---- constants ---- */
 var STATUSES = ['Nouvelle', 'Confirmée', 'Expédiée', 'Livrée', 'Retournée'];
@@ -432,21 +588,27 @@ function defaultSettings() {
   return {
     key: 'settings',
     shopName: '__CLICKDZ_STORE_NAME__',
-    tagline: 'Produits de qualité, livrés partout en Algérie — paiement à la livraison.',
+    tagline: '__CLICKDZ_TAGLINE__',
     whatsapp: '__CLICKDZ_WHATSAPP__',
     deliveryFee: 500,
     adminPin: '__CLICKDZ_PIN__',
     accent: '__CLICKDZ_ACCENT__',
     currency: 'DZD',
-    theme: 'classic',
-    template: 'standard',
-    font: 'system'
+    theme: '__CLICKDZ_THEME__',
+    template: '__CLICKDZ_LAYOUT__',
+    font: '__CLICKDZ_FONT__',
+    rtl: TPL_RTL_DIR === 'rtl'
   };
 }
 
-/* Six tasteful demo products seeded on first run. */
+/* Six tasteful demo products seeded on first run — the byte-identical default.
+   WS4-3 seed seam: when a picked vertical injects a seed via the TPL_SEED_JSON
+   wiring var above (a double-quoted, apostrophe-free JSON array), those products
+   seed instead. The default token value is '' → demoProducts() returns the exact
+   six below, so a mint with no templateId is byte-identical and first-run seeds
+   them unchanged. */
 function demoProducts() {
-  return [
+  var hardcoded = [
     { title: 'Montre Élégance Classic', price: 4900, category: 'Accessoires', stock: 24, reorderAt: 5, active: true, imageUrl: 'https://images.unsplash.com/photo-1524592094714-0f0654e20314?w=600&q=70&auto=format&fit=crop', description: 'Montre à quartz, bracelet acier inoxydable, résistante à l\'eau. Un accessoire intemporel pour le quotidien.' },
     { title: 'Sac à Main Cuir Premium', price: 6500, category: 'Mode', stock: 12, reorderAt: 4, active: true, imageUrl: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=600&q=70&auto=format&fit=crop', description: 'Sac en cuir véritable, finitions soignées, plusieurs compartiments. Élégance et robustesse au rendez-vous.' },
     { title: 'Écouteurs Sans Fil Pro', price: 3200, category: 'Électronique', stock: 3, reorderAt: 6, active: true, imageUrl: 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=600&q=70&auto=format&fit=crop', description: 'Son immersif, réduction de bruit, autonomie 24h avec le boîtier. Compatibles tous smartphones.' },
@@ -454,6 +616,28 @@ function demoProducts() {
     { title: 'Baskets Urban Confort', price: 4200, category: 'Mode', stock: 0, reorderAt: 4, active: true, imageUrl: 'https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?w=600&q=70&auto=format&fit=crop', description: 'Semelle amortissante, mesh respirant, style moderne. Idéales pour la ville comme pour le sport léger.' },
     { title: 'Lampe LED Design Bureau', price: 2400, category: 'Maison', stock: 30, reorderAt: 8, active: true, imageUrl: 'https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=600&q=70&auto=format&fit=crop', description: 'Éclairage réglable 3 intensités, port USB intégré, bras articulé. Parfaite pour le travail et la lecture.' }
   ];
+  var raw = TPL_SEED_JSON;
+  /* Default '' (or any non-array): the six above, verbatim. */
+  if (!raw || raw.charAt(0) !== '[') return hardcoded;
+  try {
+    var arr = JSON.parse(raw);
+    if (arr && arr.length) {
+      /* normalize each seed row to the fields the store/admin expect */
+      return arr.map(function (p) {
+        return {
+          title: String((p && p.title) || ''),
+          price: Number((p && p.price) || 0) || 0,
+          category: String((p && p.category) || ''),
+          stock: (p && p.stock != null) ? (Number(p.stock) || 0) : 20,
+          reorderAt: (p && p.reorderAt != null) ? (Number(p.reorderAt) || 0) : 5,
+          active: !(p && p.active === false),
+          imageUrl: String((p && p.imageUrl) || ''),
+          description: String((p && p.description) || '')
+        };
+      });
+    }
+  } catch (e) { /* malformed seed → fall through to the hardcoded six */ }
+  return hardcoded;
 }
 
 /* =========================================================================
@@ -509,6 +693,8 @@ var store = {
   orders: [],
   ordersLoaded: false,
   cart: loadCart(),
+  reviews: [],
+  promo: '',
   loading: true,
   error: null
 };
@@ -552,7 +738,7 @@ function bootstrap() {
       }
       return chain;
     })
-    .then(function () { store.loading = false; applyAppearance(); })
+    .then(function () { store.loading = false; applyAppearance(); loadReviews(); })
     .catch(function (err) {
       store.loading = false;
       store.error = (err && err.message) || 'Erreur de chargement';
@@ -578,6 +764,19 @@ function refreshProducts() {
 }
 function refreshOrders() {
   return api.list('orders').then(function (rows) { store.orders = rows; store.ordersLoaded = true; });
+}
+
+/* WSF-4 reviews — load the per-slug 'reviews' collection once, best-effort.
+   Only fetched when the feature is enabled; failure is swallowed (the block
+   degrades to 'no reviews yet'). Re-renders so aggregates/list appear. */
+function loadReviews() {
+  if (!featureOn('reviews')) return;
+  if (store.reviewsLoaded) return;
+  store.reviewsLoaded = true;
+  api.list('reviews').then(function (rows) {
+    store.reviews = Array.isArray(rows) ? rows : [];
+    render();
+  }).catch(function () { /* offline: keep whatever is in-memory */ });
 }
 
 /* =========================================================================
@@ -635,6 +834,819 @@ function orderRef() {
 function onlinePayEnabled(s) {
   s = s || store.settings || {};
   return s.onlinePay === true;
+}
+/* WSF-3 — csvHas(raw, id): membership test over a CSV string OR a string[]. */
+function csvHas(raw, id) {
+  var list = Array.isArray(raw) ? raw : String(raw == null ? '' : raw).split(',');
+  for (var i = 0; i < list.length; i++) { if (String(list[i]).trim() === id) return true; }
+  return false;
+}
+/* WSF-3 — sectionOn(id): is a home band ('hero'|'trust'|'categories'|'featured')
+   shown? settings.sections is a canonical CSV; ABSENT/undefined means "all bands
+   on" (the byte-identical default — a shop that never touched appearance shows
+   every band exactly like today). An explicit '' means all bands hidden. */
+function sectionOn(id) {
+  var s = store.settings || {};
+  var raw = s.sections;
+  if (raw === undefined || raw === null) return true;
+  return csvHas(raw, id);
+}
+/* WSF-3 — featureOn(id): generic capability flag (mirrors onlinePayEnabled).
+   settings.features is a CSV of enabled feature ids; ABSENT/empty = OFF, so
+   every add-on is dormant by default and Wave-B builders gate their render fns
+   on featureOn('<id>'). */
+function featureOn(id) {
+  var s = store.settings || {};
+  return csvHas(s.features, id);
+}
+
+
+/* =========================================================================
+   WSF-5 (Wave-B, batch B) — logistics / content / i18n features.
+   Each is dormant unless featureOn('<id>') (settings.features CSV). All render
+   fns are self-contained; zero effect when the flag is off. IDs/params are the
+   canonical registry keys (clickdz-features.ts). No backtick / dollar-brace so
+   the String.raw literal is unchanged.
+   ========================================================================= */
+
+/* ---- shared tiny helpers ---- */
+/* clamp a stored scalar to a trimmed string (settings values are always
+   strings/undefined in the singleton). */
+function sVal(key) {
+  var s = store.settings || {};
+  return (s[key] == null) ? '' : String(s[key]);
+}
+/* localStorage get/set that never throws (private-mode safe), namespaced per slug. */
+function lsGet(k) { try { return localStorage.getItem('clickdz.shop.' + k + '.' + SLUG); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem('clickdz.shop.' + k + '.' + SLUG, v); } catch (e) {} }
+
+/* =========================================================================
+   delivery-matrix — per-wilaya delivery fee.
+   settings.deliveryMatrix = compact CSV 'w16:400,w31:600' (key = 'w' + the
+   leading wilaya number). Fallback = settings.deliveryDefaultFee, then the
+   existing flat settings.deliveryFee. Only active when featureOn('delivery-matrix').
+   ========================================================================= */
+/* the leading numeric code of a wilaya option value like '16 - Alger' → '16'. */
+function wilCode(w) {
+  var m = /^\s*0*([0-9]{1,2})/.exec(String(w || ''));
+  return m ? m[1] : '';
+}
+/* parse the matrix CSV once into { '16': 400, '31': 600 }. Tolerates spaces and
+   an optional leading 'w' on each code. */
+function deliveryMatrix() {
+  var out = {};
+  var raw = sVal('deliveryMatrix');
+  if (!raw) return out;
+  raw.split(',').forEach(function (pair) {
+    var kv = pair.split(':');
+    if (kv.length < 2) return;
+    var code = String(kv[0]).trim().replace(/^w/i, '').replace(/^0+/, '');
+    var fee = Math.round(Number(kv[1]) || 0);
+    if (code) out[code] = Math.max(0, fee);
+  });
+  return out;
+}
+/* the flat/default fee used when a wilaya has no matrix entry (or matrix off). */
+function deliveryDefaultFee() {
+  var s = store.settings || defaultSettings();
+  var d = sVal('deliveryDefaultFee');
+  if (d !== '' && !isNaN(Number(d))) return Math.max(0, Math.round(Number(d)));
+  return Math.max(0, Math.round(Number(s.deliveryFee) || 0));
+}
+/* fee for a given wilaya option value. Matrix off → the flat fee (byte-identical
+   behaviour). Matrix on → per-wilaya fee, else the default fallback. */
+function deliveryFeeFor(wilaya) {
+  if (!featureOn('delivery-matrix')) return Math.max(0, Math.round(Number((store.settings || defaultSettings()).deliveryFee) || 0));
+  var code = wilCode(wilaya).replace(/^0+/, '');
+  var mtx = deliveryMatrix();
+  if (code && mtx[code] != null) return mtx[code];
+  return deliveryDefaultFee();
+}
+/* the wilaya currently chosen in the live checkout form (empty until picked). */
+function checkoutWilaya() {
+  var el = document.getElementById('f-wilaya');
+  return el ? el.value : '';
+}
+/* live-update the checkout recap + button labels when the wilaya changes. Locates
+   the recap by DOM structure (no ids needed) so it never fights the base markup:
+   at the checkout route only the checkout .summary is mounted. Total also nets
+   any bundle discount so the two features compose. Safe no-op off the route. */
+function recomputeCheckout() {
+  if (!featureOn('delivery-matrix') && !featureOn('bundles')) return;
+  var form = document.getElementById('checkout-form');
+  if (!form) return;
+  var subtotal = cartSubtotal();
+  var disc = bundleDiscount();
+  var fee = deliveryFeeFor(checkoutWilaya());
+  var total = Math.max(0, subtotal - disc) + fee;
+  var totalLine = document.querySelector('.summary .line.total span:last-child');
+  if (totalLine) totalLine.innerHTML = money(total) + ' <span class="cur">DZD</span>';
+  /* the fee line is the .line directly before .line.total in the recap */
+  var totalRow = document.querySelector('.summary .line.total');
+  if (totalRow && totalRow.previousElementSibling) {
+    var feeSpan = totalRow.previousElementSibling.querySelector('span:last-child');
+    if (feeSpan) feeSpan.textContent = money(fee) + ' DZD';
+  }
+  var placeBtn = document.getElementById('place-order');
+  if (placeBtn) placeBtn.innerHTML = '✅ Confirmer la commande (' + money(total) + ' DZD)';
+  var payBtn = document.getElementById('pay-online');
+  if (payBtn) payBtn.innerHTML = '💳 Payer en ligne (' + money(total) + ' DZD)';
+  var note = document.getElementById('cdz-ship-note');
+  if (note) {
+    var w = checkoutWilaya();
+    note.innerHTML = w
+      ? ('🚚 Frais de livraison pour ' + esc(w) + ' : <strong>' + money(fee) + ' DZD</strong>')
+      : '🚚 Sélectionnez votre wilaya pour voir les frais de livraison.';
+  }
+}
+
+/* =========================================================================
+   announcement-bar — dismissible top strip. settings.announcementText (<=140).
+   Dismissal persists in localStorage keyed by a short hash of the text, so a new
+   message re-appears. RTL-safe (logical props + inherits document dir).
+   ========================================================================= */
+/* tiny stable hash of the announcement text (djb2) → dismissal key suffix. */
+function annHash(t) {
+  var h = 5381, str = String(t || '');
+  for (var i = 0; i < str.length; i++) { h = ((h << 5) + h + str.charCodeAt(i)) | 0; }
+  return String(h >>> 0);
+}
+function announcementBar() {
+  if (!featureOn('announcement-bar')) return '';
+  var txt = sVal('announcementText').slice(0, 140);
+  if (!txt) return '';
+  if (lsGet('ann') === annHash(txt)) return '';
+  return '<div class="cdz-ann" id="cdz-ann"><div class="wrap cdz-ann-in">' +
+      '<span class="cdz-ann-txt">' + esc(txt) + '</span>' +
+      '<button class="cdz-ann-x" data-ann-dismiss type="button" aria-label="Fermer">✕</button>' +
+    '</div></div>';
+}
+
+/* =========================================================================
+   instagram-feed — a home grid. settings.instagramHandle (<=30, no @) +
+   settings.instagramImages (CSV of up to 6 image URLs). No external API call —
+   the grid just links to the public profile. Off → renders nothing.
+   ========================================================================= */
+function igHandle() { return sVal('instagramHandle').replace(/^@+/, '').trim().slice(0, 30); }
+function igImages() {
+  var raw = sVal('instagramImages');
+  if (!raw) return [];
+  return raw.split(',').map(function (u) { return String(u).trim(); }).filter(function (u) { return u; }).slice(0, 6);
+}
+function instagramSection() {
+  if (!featureOn('instagram-feed')) return '';
+  var handle = igHandle();
+  if (!handle) return '';
+  var url = 'https://instagram.com/' + encodeURIComponent(handle);
+  var imgs = igImages();
+  var cells = imgs.map(function (src) {
+    return '<a class="ig-cell" href="' + attr(url) + '" target="_blank" rel="noopener noreferrer">' +
+      '<img loading="lazy" src="' + attr(src) + '" alt="Instagram" onerror="this.style.display=\'none\';this.parentNode.classList.add(\'ig-ph\')" />' +
+    '</a>';
+  }).join('');
+  if (!cells) {
+    cells = '<a class="ig-cell ig-follow" href="' + attr(url) + '" target="_blank" rel="noopener noreferrer">📷<span>@' + esc(handle) + '</span></a>';
+  }
+  return '<section class="wrap cdz-ig" id="cdz-ig">' +
+      '<div class="section-head"><h2>' + t('ig.title') + '</h2>' +
+        '<a class="muted" href="' + attr(url) + '" target="_blank" rel="noopener noreferrer">@' + esc(handle) + ' →</a></div>' +
+      '<div class="ig-grid">' + cells + '</div>' +
+    '</section>';
+}
+
+/* =========================================================================
+   bundles — 'pack' pseudo-products. settings.bundles = compact CSV
+   'id1+id2=packPrice;id3+id4=packPrice'. A pack's discount applies at checkout
+   whenever every member is in the cart (qty>=1), so "Ajouter le pack" simply adds
+   the members. Off → no section, no discount, byte-identical checkout.
+   ========================================================================= */
+function parseBundles() {
+  var raw = sVal('bundles');
+  if (!raw) return [];
+  return raw.split(';').map(function (chunk) {
+    chunk = String(chunk).trim();
+    if (!chunk) return null;
+    var eq = chunk.split('=');
+    if (eq.length < 2) return null;
+    var ids = String(eq[0]).split('+').map(function (x) { return String(x).trim(); }).filter(function (x) { return x; });
+    var price = Math.max(0, Math.round(Number(eq[1]) || 0));
+    if (ids.length < 2 || !price) return null;
+    return { ids: ids, price: price };
+  }).filter(function (b) { return b; });
+}
+/* resolve a bundle's member products + list price (sum of member prices). */
+function bundleInfo(b) {
+  var items = [], listPrice = 0, ok = true;
+  b.ids.forEach(function (id) {
+    var p = findProduct(id);
+    if (!p) { ok = false; return; }
+    items.push(p);
+    listPrice += Number(p.price) || 0;
+  });
+  return { items: items, listPrice: listPrice, price: b.price, ok: ok, saving: Math.max(0, listPrice - b.price) };
+}
+/* is every member of bundle b currently in the cart (qty>=1)? */
+function bundleInCart(b) {
+  for (var i = 0; i < b.ids.length; i++) {
+    var found = false;
+    for (var j = 0; j < store.cart.length; j++) { if (String(store.cart[j].id) === String(b.ids[i])) { found = true; break; } }
+    if (!found) return false;
+  }
+  return true;
+}
+/* total discount from all packs whose members are all in the cart. Derived from
+   cart membership — no separate persistence needed (v1). */
+function bundleDiscount() {
+  if (!featureOn('bundles')) return 0;
+  var disc = 0;
+  parseBundles().forEach(function (b) {
+    var info = bundleInfo(b);
+    if (info.ok && info.saving > 0 && bundleInCart(b)) disc += info.saving;
+  });
+  return disc;
+}
+/* the packs currently applied — for the order payload marker. */
+function activeBundles() {
+  if (!featureOn('bundles')) return [];
+  var out = [];
+  parseBundles().forEach(function (b) {
+    var info = bundleInfo(b);
+    if (info.ok && bundleInCart(b)) out.push({ ids: b.ids.join('+'), price: b.price, saving: info.saving });
+  });
+  return out;
+}
+/* add every member of a pack to the cart (the discount is then auto-detected). */
+function addBundle(idx) {
+  var list = parseBundles();
+  var b = list[idx];
+  if (!b) return;
+  var info = bundleInfo(b);
+  if (!info.ok) { toast('Pack indisponible', 'err'); return; }
+  b.ids.forEach(function (id) { addToCart(id, 1); });
+  toast('Pack ajouté au panier', 'ok');
+}
+function bundlesSection() {
+  if (!featureOn('bundles')) return '';
+  var list = parseBundles();
+  if (!list.length) return '';
+  var cards = '';
+  list.forEach(function (b, i) {
+    var info = bundleInfo(b);
+    if (!info.ok || !info.items.length) return;
+    var thumbs = info.items.map(function (p) {
+      return p.imageUrl
+        ? '<img loading="lazy" src="' + attr(p.imageUrl) + '" alt="' + attr(p.title) + '" onerror="this.style.display=\'none\'" />'
+        : '<span class="bn-ph">🛍️</span>';
+    }).join('');
+    var names = info.items.map(function (p) { return esc(p.title); }).join(' + ');
+    cards += '<div class="bn-card">' +
+        '<div class="bn-thumbs">' + thumbs + '</div>' +
+        '<div class="bn-body">' +
+          '<div class="bn-title">' + names + '</div>' +
+          '<div class="bn-price">' + money(b.price) + ' DZD' +
+            (info.saving > 0 ? ' <s>' + money(info.listPrice) + '</s> <span class="bn-save">-' + money(info.saving) + '</span>' : '') +
+          '</div>' +
+          '<button class="btn primary sm bn-add" data-bundle="' + i + '" type="button">' + t('bundle.add') + '</button>' +
+        '</div>' +
+      '</div>';
+  });
+  if (!cards) return '';
+  return '<section class="wrap cdz-bundles" id="cdz-bundles">' +
+      '<div class="section-head"><h2>' + t('bundle.title') + '</h2><span class="muted">' + t('bundle.sub') + '</span></div>' +
+      '<div class="bn-grid">' + cards + '</div>' +
+    '</section>';
+}
+
+/* =========================================================================
+   loyalty — client-side points (v1). settings.loyaltyRate = points per 100 DZD
+   (canonical registry unit; default 1). Tally kept in localStorage keyed by phone.
+   Shows an earned-points hint + info blurb at checkout; awards on a confirmed
+   order. Off → nothing renders and no tally is kept.
+   ========================================================================= */
+function loyaltyRate() {
+  var r = Number(sVal('loyaltyRate'));
+  if (!r || isNaN(r)) r = 1;
+  return Math.max(1, Math.min(100, Math.round(r)));
+}
+function loyaltyPointsFor(amount) {
+  return Math.floor((Math.max(0, Number(amount) || 0) / 100) * loyaltyRate());
+}
+function loyaltyBalance(phone) {
+  var d = digitsOnly(phone);
+  if (!d) return 0;
+  var v = Number(lsGet('loy.' + d));
+  return (!v || isNaN(v)) ? 0 : v;
+}
+/* award points for a confirmed order, once per ref (idempotent via a stored set). */
+function loyaltyAward(order) {
+  if (!featureOn('loyalty') || !order) return;
+  var ref = String(order.ref || '');
+  var phone = digitsOnly(order.phone);
+  if (!ref || !phone) return;
+  var doneRaw = lsGet('loy.refs') || '';
+  if (csvHas(doneRaw, ref)) return;
+  var pts = loyaltyPointsFor(order.total);
+  if (pts > 0) lsSet('loy.' + phone, String(loyaltyBalance(phone) + pts));
+  lsSet('loy.refs', (doneRaw ? doneRaw + ',' : '') + ref);
+}
+/* the checkout hint block (earned points + how-to blurb). */
+function loyaltyCheckoutHint(total) {
+  if (!featureOn('loyalty')) return '';
+  var pts = loyaltyPointsFor(total);
+  return '<div class="callout cdz-loy" id="cdz-loy" style="margin-top:12px"><span class="ic">⭐</span>' +
+      '<div><strong>' + t('loy.earn') + ' ' + pts + ' ' + t('loy.points') + '</strong>' +
+      '<div style="font-size:12.5px;margin-top:2px;opacity:.85">' + t('loy.note') + '</div></div>' +
+    '</div>';
+}
+
+/* =========================================================================
+   order-tracking — a public "Suivi de commande" view (#/tracking). The customer
+   enters their phone; we list matching orders with the 5 canonical status labels.
+   Mirrors the admin order list read (api.list('orders')) — the per-slug Data API
+   GET is public by the data model — then filters client-side by phone.
+   ========================================================================= */
+var trackState = { phone: '', results: null, loading: false, done: false };
+function viewTracking() {
+  var rows = '';
+  if (trackState.loading) {
+    rows = '<div class="center-load"><div class="spinner"></div><span>' + t('track.searching') + '</span></div>';
+  } else if (trackState.done) {
+    var list = trackState.results || [];
+    if (!list.length) {
+      rows = emptyState('🔍', t('track.none'), t('track.none.sub'), '');
+    } else {
+      rows = '<div class="adm-list">' + list.map(function (o) {
+        var items = (o.items || []).map(function (it) {
+          return '<div class="li"><span>' + esc(it.title) + ' × ' + it.qty + '</span><span>' + money((Number(it.price) || 0) * it.qty) + '</span></div>';
+        }).join('');
+        var when = o.createdAt ? new Date(o.createdAt).toLocaleString('fr-DZ', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+        return '<div class="order-card">' +
+            '<div class="oc-head"><div><div class="oc-ref">' + esc(o.ref || o.id) + '</div>' +
+              '<div class="oc-meta">' + (when ? esc(when) : '') + ' · ' + esc(o.wilaya || '') + '</div></div>' +
+              '<span class="tag ' + (STATUS_CLASS[o.status] || 'nouvelle') + '">' + esc(o.status || 'Nouvelle') + '</span></div>' +
+            '<div class="oc-items">' + items + '</div>' +
+            '<div class="oc-foot"><span class="oc-total">' + money(o.total) + ' DZD</span></div>' +
+          '</div>';
+      }).join('') + '</div>';
+    }
+  }
+  return '<div class="wrap">' +
+      '<a class="back-link" href="#/"><span class="arw">←</span> ' + t('track.back') + '</a>' +
+      '<div class="section-head"><h2>' + t('track.title') + '</h2></div>' +
+      '<form class="panel" id="track-form" style="padding:18px" novalidate><div class="form">' +
+        '<div class="field"><label for="track-phone">' + t('track.phone') + '</label>' +
+          '<input class="control" id="track-phone" name="phone" type="tel" inputmode="numeric" placeholder="0555 12 34 56" value="' + attr(trackState.phone) + '" /></div>' +
+        '<button class="btn primary block" id="track-go" type="submit">' + t('track.cta') + '</button>' +
+      '</div></form>' +
+      '<div style="margin-top:14px">' + rows + '</div>' +
+    '</div>';
+}
+function trackLookup(phone) {
+  var d = digitsOnly(phone);
+  trackState.phone = phone; trackState.loading = true; trackState.done = false; trackState.results = null;
+  render();
+  if (!d || d.length < 6) { trackState.loading = false; trackState.done = true; trackState.results = []; render(); return; }
+  api.list('orders').then(function (rows) {
+    trackState.results = (rows || []).filter(function (o) { return digitsOnly(o.phone) === d; })
+      .sort(function (a, b) { return (b.createdAt || 0) < (a.createdAt || 0) ? -1 : 1; });
+    trackState.loading = false; trackState.done = true; render();
+  }).catch(function () { trackState.loading = false; trackState.done = true; trackState.results = []; render(); });
+}
+
+/* =========================================================================
+   lang-toggle — français <-> Algerian darja for the visible chrome. A compact
+   dict (t) covers the top chrome strings this feature renders; a late-binding
+   translateChrome() pass rewrites the remaining hardcoded French chrome in the
+   DOM after each render when darja is active. Darja also flips the document dir
+   (via the shared applyDir(), which treats lang 'ar' as RTL). Choice persists in
+   localStorage. Off → t() returns French and translateChrome is a no-op.
+   ========================================================================= */
+/* the active storefront language: explicit localStorage choice wins, else the
+   merchant default (settings.defaultLang), else 'fr'. */
+function shopLang() {
+  var ls = lsGet('lang');
+  if (ls === 'fr' || ls === 'ar') return ls;
+  var d = sVal('defaultLang').toLowerCase();
+  return (d === 'ar' || d === 'ar-dz' || d === 'dz') ? 'ar' : 'fr';
+}
+function isDarja() { return featureOn('lang-toggle') && shopLang() === 'ar'; }
+/* keyed strings used by THIS batch's own rendered chrome. */
+var I18N = {
+  fr: {
+    'ig.title': 'Suivez-nous sur Instagram',
+    'bundle.title': 'Packs & offres', 'bundle.sub': 'Économisez en achetant ensemble', 'bundle.add': '🛒 Ajouter le pack',
+    'loy.earn': 'Gagnez', 'loy.points': 'points', 'loy.note': 'Cumulez des points à chaque commande et profitez de réductions.',
+    'track.title': 'Suivi de commande', 'track.back': 'Retour à la boutique', 'track.phone': 'Votre numéro de téléphone',
+    'track.cta': 'Rechercher mes commandes', 'track.searching': 'Recherche…', 'track.none': 'Aucune commande trouvée',
+    'track.none.sub': 'Vérifiez le numéro saisi lors de la commande.', 'track.link': 'Suivi de commande'
+  },
+  ar: {
+    'ig.title': 'تابعنا على انستغرام',
+    'bundle.title': 'باكات و عروض', 'bundle.sub': 'اربح كي تشري مع بعض', 'bundle.add': '🛒 زيد الباك',
+    'loy.earn': 'تربح', 'loy.points': 'نقاط', 'loy.note': 'اجمع نقاط في كل طلبية و استفد من تخفيضات.',
+    'track.title': 'تتبع الطلبية', 'track.back': 'ارجع للمتجر', 'track.phone': 'رقم الهاتف تاعك',
+    'track.cta': 'قلّب على طلبياتي', 'track.searching': 'قاعد نقلب…', 'track.none': 'ما لقينا حتى طلبية',
+    'track.none.sub': 'تأكد من الرقم لي دخلتيه في الطلبية.', 'track.link': 'تتبع الطلبية'
+  }
+};
+function t(key) {
+  var lang = isDarja() ? 'ar' : 'fr';
+  var d = I18N[lang] || I18N.fr;
+  return (d[key] != null) ? d[key] : (I18N.fr[key] != null ? I18N.fr[key] : key);
+}
+/* the nav toggle button. Shows the language you'd switch TO. */
+function langToggleBtn() {
+  if (!featureOn('lang-toggle')) return '';
+  var toAr = !isDarja();
+  return '<button class="icon-btn cdz-lang" data-lang-toggle type="button" aria-label="Langue" title="FR / الدارجة">' +
+      (toAr ? 'ع' : 'FR') +
+    '</button>';
+}
+/* flip <html dir> for darja. Because Chisel's rtlOn() short-circuits on an
+   explicit settings.rtl (defaultSettings always sets rtl:false), we set BOTH
+   settings.lang and settings.rtl from the chosen language so applyDir() mirrors
+   it (darja → rtl, français → ltr). Only runs when the toggle is enabled, so a
+   shop without lang-toggle keeps Chisel's exact rtl behaviour untouched. */
+function applyLang() {
+  if (!featureOn('lang-toggle')) return;
+  var ar = shopLang() === 'ar';
+  if (store.settings) { store.settings.lang = shopLang(); store.settings.rtl = ar; }
+  applyDir();
+}
+/* the chrome phrases we late-bind to darja. Ordered LONGEST FIRST so a substring
+   (e.g. 'Total') never clobbers a longer phrase ('Total à payer'). Covers the
+   top ~24 visible chrome strings the storefront renders in French. */
+var CHROME_FR2AR = [
+  ['Boutique en ligne · COD', 'متجر أونلاين · الدفع عند الاستلام'],
+  ['Continuer mes achats', 'كمّل التسوق'],
+  ['Découvrir les produits', 'شوف المنتجات'],
+  ['Finaliser la commande', 'أكمل الطلبية'],
+  ['Adresse de livraison', 'عنوان التوصيل'],
+  ['Passer la commande →', 'أكمل الطلبية ←'],
+  ['Paiement à la livraison', 'الدفع عند الاستلام'],
+  ['Ajouter au panier', 'زيد للسلة'],
+  ['Nous contacter', 'تواصل معانا'],
+  ['Total à payer', 'المبلغ الإجمالي'],
+  ['Espace gérant', 'فضاء المسير'],
+  ['Nos produits', 'المنتجات تاعنا'],
+  ['Nom complet', 'الاسم الكامل'],
+  ['Sous-total', 'المجموع الفرعي'],
+  ['Mon panier', 'السلة تاعي'],
+  ['Téléphone', 'الهاتف'],
+  ['Livraison', 'التوصيل'],
+  ['Ajouter', 'زيد'],
+  ['Commune', 'البلدية'],
+  ['Wilaya', 'الولاية'],
+  ['Accueil', 'الرئيسية'],
+  ['Panier', 'السلة'],
+  ['Retour', 'رجوع'],
+  ['Total', 'الإجمالي']
+];
+/* walk text nodes + a few attributes under root, swapping enumerated phrases when
+   darja is active. Skips SCRIPT/STYLE and our own already-darja chrome. Cheap:
+   runs once per render only when the toggle is on and darja selected. */
+function translateChrome(root) {
+  if (!isDarja() || !root) return;
+  function swap(str) {
+    var out = str;
+    for (var i = 0; i < CHROME_FR2AR.length; i++) {
+      var pair = CHROME_FR2AR[i];
+      if (out.indexOf(pair[0]) !== -1) out = out.split(pair[0]).join(pair[1]);
+    }
+    return out;
+  }
+  var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+  var textNodes = [], nd;
+  while ((nd = walker.nextNode())) {
+    var pn = nd.parentNode;
+    if (pn && (pn.nodeName === 'SCRIPT' || pn.nodeName === 'STYLE')) continue;
+    textNodes.push(nd);
+  }
+  textNodes.forEach(function (n) {
+    var v = n.nodeValue;
+    if (!v || !v.trim()) return;
+    var sw = swap(v);
+    if (sw !== v) n.nodeValue = sw;
+  });
+  /* a few user-facing attributes */
+  var attrEls = root.querySelectorAll('[placeholder],[title],[aria-label]');
+  attrEls.forEach(function (el) {
+    ['placeholder', 'title', 'aria-label'].forEach(function (a) {
+      if (!el.hasAttribute(a)) return;
+      var val = el.getAttribute(a);
+      var sw = swap(val);
+      if (sw !== val) el.setAttribute(a, sw);
+    });
+  });
+}
+/* =========================================================================
+   home-page extra sections (bundles + instagram feed). Appended inside <main>
+   after the layout body for the home route only, so all four layout variants get
+   them uniformly. Each inner section self-gates on its own feature flag, so this
+   returns '' when neither is on (byte-identical home).
+   ========================================================================= */
+function homeExtras(route) {
+  if (!route || route.name !== 'home') return '';
+  return bundlesSection() + instagramSection();
+}
+
+/* =========================================================================
+   Wave-B global post-render hook — called from render() after storefront chrome
+   is mounted (see render-compose snippet). Order matters: translate chrome first
+   (so recomputed money strings we set below stay in digits), then recompute the
+   checkout totals, award loyalty on the success view, and bind nothing here
+   (interactions are delegated once at boot).
+   ========================================================================= */
+function wsfAfterRender(route) {
+  translateChrome(document.getElementById('app'));
+  if (route && route.name === 'checkout') recomputeCheckout();
+  if (route && route.name === 'success') loyaltyAward(lastSuccess);
+}
+
+/* =========================================================================
+   WSF-4 — Shop features batch A (wishlist · reviews · promo-codes · variants).
+   Every block below is gated by featureOn('<id>') (canonical ids, Anvil
+   registry) and is a dead branch when its flag is absent — so a shop with no
+   settings.features renders byte-identically to today. Storage stays IDs/
+   scalars only in the settings singleton (8KB cap); reviews use the existing
+   per-slug Data API exactly like orders; wishlist is client-side localStorage.
+   Authored with plain string concatenation, ES5-ish, matching the file style
+   (no backtick and no dollar-brace template sequences inside the literal).
+   ========================================================================= */
+
+/* ---- wishlist: localStorage-backed favorites, keyed per slug ---- */
+var WISH_KEY = 'clickdz.shop.wish.' + SLUG;
+function wishList() {
+  try { var v = JSON.parse(localStorage.getItem(WISH_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+}
+/* Stable per-product key for wishlist membership. Uses the product slug when a
+   record carries one, else its id — so favorites survive re-seeds that keep the
+   slug. String()'d so mixed id/slug types compare safely. */
+function wishKey(p) {
+  if (!p) return '';
+  return String((p && p.slug) || (p && p.id) || '');
+}
+function inWish(p) {
+  var k = wishKey(p); if (!k) return false;
+  var l = wishList();
+  for (var i = 0; i < l.length; i++) { if (String(l[i]) === k) return true; }
+  return false;
+}
+function wishCount() { return wishList().length; }
+function toggleWish(p) {
+  var k = wishKey(p); if (!k) return false;
+  var l = wishList(); var out = []; var had = false;
+  for (var i = 0; i < l.length; i++) { if (String(l[i]) === k) { had = true; } else { out.push(l[i]); } }
+  if (!had) out.push(k);
+  try { localStorage.setItem(WISH_KEY, JSON.stringify(out)); } catch (e) {}
+  updateWishCount();
+  return !had;
+}
+function updateWishCount() {
+  var els = document.querySelectorAll('[data-wish-count]');
+  var n = wishCount();
+  for (var i = 0; i < els.length; i++) { els[i].textContent = n; els[i].hidden = n === 0; }
+}
+function findByWishKey(k) {
+  for (var i = 0; i < store.products.length; i++) { if (wishKey(store.products[i]) === String(k)) return store.products[i]; }
+  return null;
+}
+/* A single heart button for a product (card + detail reuse it). data-wish carries
+   the wishKey; the pressed state drives the fill. */
+function wishBtn(p, cls) {
+  var on = inWish(p);
+  return '<button class="wish-btn ' + (cls || '') + (on ? ' on' : '') + '" type="button" data-wish="' + attr(wishKey(p)) +
+    '" aria-pressed="' + (on ? 'true' : 'false') + '" aria-label="' + (on ? 'Retirer des favoris' : 'Ajouter aux favoris') +
+    '" title="' + (on ? 'Retirer des favoris' : 'Ajouter aux favoris') + '">' + (on ? '❤️' : '🤍') + '</button>';
+}
+/* The wishlist page (#/wishlist) — reuses productCard so cart/stock/review/
+   variant behavior is identical to the grid. */
+function viewWishlist() {
+  var keys = wishList();
+  var prods = [];
+  for (var i = 0; i < keys.length; i++) { var p = findByWishKey(keys[i]); if (p && p.active !== false) prods.push(p); }
+  var head = '<div class="wrap">' +
+    '<a class="back-link" href="#/"><span class="arw">←</span> Continuer mes achats</a>' +
+    '<div class="section-head"><h2>Mes favoris ❤️</h2><span class="muted">' + prods.length + ' article' + (prods.length > 1 ? 's' : '') + '</span></div>';
+  if (!prods.length) {
+    return head + emptyState('🤍', 'Aucun favori pour le moment', 'Touchez le cœur sur un produit pour l\'ajouter ici.', '<a class="btn primary" href="#/">Voir les produits</a>') + '</div>';
+  }
+  return head + '<div class="grid">' + prods.map(productCard).join('') + '</div></div>';
+}
+
+/* ---- reviews: per-product ratings/comments via the Data API collection
+   'reviews' (business key productId + createdAt, mirroring how orders POST).
+   Loaded once, best-effort; graceful (empty) when the API is unreachable. ---- */
+function reviewsFor(p) {
+  var key = wishKey(p);
+  var pid = String((p && p.id) || '');
+  var out = [];
+  for (var i = 0; i < store.reviews.length; i++) {
+    var r = store.reviews[i];
+    var rk = String(r.productKey || '');
+    var rid = String(r.productId || '');
+    if ((key && rk === key) || (pid && rid === pid)) out.push(r);
+  }
+  return out;
+}
+function reviewStats(p) {
+  var rs = reviewsFor(p); var n = rs.length; var sum = 0;
+  for (var i = 0; i < n; i++) { sum += Math.max(1, Math.min(5, Number(rs[i].rating) || 0)); }
+  return { count: n, avg: n ? (sum / n) : 0 };
+}
+/* Static 5-star row for a given rating value (0..5). Filled/empty glyphs; the
+   half case rounds to nearest for the compact card display. */
+function starsHtml(val, cls) {
+  var v = Math.max(0, Math.min(5, Math.round(Number(val) || 0)));
+  var out = '<span class="stars ' + (cls || '') + '" aria-hidden="true">';
+  for (var i = 1; i <= 5; i++) { out += '<span class="' + (i <= v ? 'fs' : 'es') + '">' + (i <= v ? '★' : '☆') + '</span>'; }
+  return out + '</span>';
+}
+/* Compact aggregate shown on the product card (★ 4.5 · 12). Empty string when
+   the product has no reviews yet, so cards without reviews are unchanged. */
+function reviewMini(p) {
+  var st = reviewStats(p);
+  if (!st.count) return '';
+  return '<div class="rev-mini">' + starsHtml(st.avg) + '<span class="rev-n">' + st.avg.toFixed(1) + ' · ' + st.count + '</span></div>';
+}
+/* The reviews block on the product detail (aggregate + list + submit form). */
+function reviewsBlock(p) {
+  var st = reviewStats(p);
+  var rs = reviewsFor(p);
+  var headNum = st.count
+    ? ('<div class="rev-head-score">' + starsHtml(st.avg) + '<strong>' + st.avg.toFixed(1) + '</strong><span class="muted">sur 5 · ' + st.count + ' avis</span></div>')
+    : '<div class="rev-head-score muted">Aucun avis pour le moment — soyez le premier !</div>';
+  var listHtml = '';
+  for (var i = 0; i < rs.length; i++) {
+    var r = rs[i];
+    var nm = esc(String(r.name || 'Client'));
+    var body = esc(String(r.comment || ''));
+    listHtml += '<div class="rev-item"><div class="rev-item-top"><span class="rev-name">' + nm + '</span>' + starsHtml(r.rating) + '</div>' +
+      (body ? '<div class="rev-body">' + body + '</div>' : '') + '</div>';
+  }
+  var picker = '<div class="rev-picker" id="rev-stars" data-rating="5">';
+  for (var j = 1; j <= 5; j++) { picker += '<button type="button" class="rev-star on" data-star="' + j + '" aria-label="' + j + ' étoile' + (j > 1 ? 's' : '') + '">★</button>'; }
+  picker += '</div>';
+  var form = '<form class="rev-form panel" id="review-form" data-pid="' + attr(String(p.id)) + '" data-pkey="' + attr(wishKey(p)) + '">' +
+    '<div class="rev-form-head">Laisser un avis</div>' +
+    '<div class="field"><label for="rev-name">Votre nom</label><input class="control" id="rev-name" name="name" maxlength="40" placeholder="Ex : Ahmed" /></div>' +
+    '<div class="field"><label>Note</label>' + picker + '</div>' +
+    '<div class="field"><label for="rev-comment">Commentaire</label><textarea class="control" id="rev-comment" name="comment" maxlength="400" placeholder="Partagez votre expérience…"></textarea></div>' +
+    '<button class="btn primary" id="rev-submit" type="button">Publier mon avis</button>' +
+    '</form>';
+  return '<section class="reviews"><div class="rev-head"><h2>Avis clients</h2>' + headNum + '</div>' +
+    (listHtml ? '<div class="rev-list">' + listHtml + '</div>' : '') + form + '</section>';
+}
+function submitReview(form) {
+  if (!form) return;
+  var pid = form.getAttribute('data-pid') || '';
+  var pkey = form.getAttribute('data-pkey') || '';
+  var nameEl = form.querySelector('#rev-name');
+  var commentEl = form.querySelector('#rev-comment');
+  var starsEl = form.querySelector('#rev-stars');
+  var rating = starsEl ? (Number(starsEl.getAttribute('data-rating')) || 5) : 5;
+  var comment = commentEl ? commentEl.value.trim() : '';
+  var name = nameEl ? nameEl.value.trim() : '';
+  if (!comment) { toast('Veuillez écrire un commentaire', 'err'); if (commentEl) commentEl.focus(); return; }
+  var btn = form.querySelector('#rev-submit');
+  if (btn) { btn.disabled = true; btn.textContent = 'Envoi…'; }
+  var review = {
+    type: 'review',
+    productId: String(pid),
+    productKey: String(pkey),
+    name: (name || 'Client').slice(0, 40),
+    rating: Math.max(1, Math.min(5, Math.round(rating))),
+    comment: comment.slice(0, 400),
+    createdAt: Date.now()
+  };
+  api.create('reviews', review)
+    .then(function (created) {
+      store.reviews.push(Object.assign({}, review, created || {}));
+      toast('Merci pour votre avis !', 'ok');
+      render();
+    })
+    .catch(function () {
+      /* offline / API down: keep the UX intact — show it locally this session */
+      store.reviews.push(review);
+      toast('Avis enregistré', 'ok');
+      render();
+    });
+}
+
+/* ---- promo-codes: cart-level percentage discount. Codes are read from a
+   settings scalar CSV of code:percent pairs (see NOTES — kebab id 'promo-codes'
+   maps to settings.promoCodes by the SAME camelCase rule Anvil uses for
+   online-pay/deliveryMatrix). Absent/empty → no promo UI, byte-identical.
+   Applied code is held in-memory (store.promo) for the session. ---- */
+function promoMap() {
+  var s = store.settings || {};
+  var raw = s.promoCodes;
+  var map = {};
+  if (raw == null) return map;
+  var list = Array.isArray(raw) ? raw : String(raw).split(',');
+  for (var i = 0; i < list.length; i++) {
+    var pair = String(list[i]).split(':');
+    var code = (pair[0] || '').trim().toUpperCase();
+    var pct = Math.max(0, Math.min(100, Math.round(Number(pair[1]) || 0)));
+    if (code && pct > 0) map[code] = pct;
+  }
+  return map;
+}
+function promoPercent() {
+  if (!store.promo) return 0;
+  var map = promoMap();
+  return map[store.promo] || 0;
+}
+/* Discount (DZD) applied to a given subtotal by the active promo. Rounded. */
+function promoDiscount(subtotal) {
+  var pct = promoPercent();
+  if (!pct) return 0;
+  return Math.round((Number(subtotal) || 0) * pct / 100);
+}
+function applyPromo(codeRaw) {
+  var code = String(codeRaw || '').trim().toUpperCase();
+  var map = promoMap();
+  if (!code) { store.promo = ''; render(); return; }
+  if (map[code]) { store.promo = code; toast('Code promo appliqué : -' + map[code] + '%', 'ok'); }
+  else { store.promo = ''; toast('Code promo invalide', 'err'); }
+  render();
+}
+
+/* ---- variants: per-product option groups read from an OPTIONAL product field
+   (p.variants). Backward-compatible: absent → no selector, unchanged. Shape is
+   either an array [{label:'Taille', options:['S','M','L']}, …] OR a compact CSV
+   'Taille:S,M,L;Couleur:Noir,Blanc' (parsed to the same structure). Selection is
+   a single '/'-joined label carried on the cart line + order item. ---- */
+function productVariants(p) {
+  var raw = p && p.variants;
+  if (!raw) return [];
+  var groups = [];
+  if (Array.isArray(raw)) {
+    for (var i = 0; i < raw.length; i++) {
+      var g = raw[i]; if (!g) continue;
+      var label = String(g.label || g.name || '').trim();
+      var opts = [];
+      var src = g.options || g.values || [];
+      if (Array.isArray(src)) { for (var j = 0; j < src.length; j++) { var o = String(src[j]).trim(); if (o) opts.push(o); } }
+      else { var parts = String(src).split(','); for (var k = 0; k < parts.length; k++) { var op = parts[k].trim(); if (op) opts.push(op); } }
+      if (label && opts.length) groups.push({ label: label, options: opts });
+    }
+    return groups;
+  }
+  /* CSV form: groups separated by ';', 'label:opt,opt' each */
+  var gs = String(raw).split(';');
+  for (var a = 0; a < gs.length; a++) {
+    var seg = gs[a].split(':');
+    var lb = (seg[0] || '').trim();
+    var ov = (seg[1] || '').split(',');
+    var list2 = [];
+    for (var b = 0; b < ov.length; b++) { var v2 = ov[b].trim(); if (v2) list2.push(v2); }
+    if (lb && list2.length) groups.push({ label: lb, options: list2 });
+  }
+  return groups;
+}
+function hasVariants(p) { return productVariants(p).length > 0; }
+/* Selector UI for the product detail. Each group is a labeled chip row; the
+   first option is pre-selected so the payload always carries a valid choice. */
+function variantSelector(p) {
+  var groups = productVariants(p);
+  if (!groups.length) return '';
+  var out = '<div class="variants" id="pd-variants">';
+  for (var i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    out += '<div class="vgroup" data-vg="' + attr(g.label) + '"><span class="vlabel">' + esc(g.label) + '</span><div class="vopts">';
+    for (var j = 0; j < g.options.length; j++) {
+      out += '<button type="button" class="vopt' + (j === 0 ? ' sel' : '') + '" data-vopt="' + attr(g.options[j]) + '">' + esc(g.options[j]) + '</button>';
+    }
+    out += '</div></div>';
+  }
+  return out + '</div>';
+}
+/* Read the current selection from the rendered selector as a '/'-joined label,
+   e.g. 'Taille: M / Couleur: Noir'. '' when the product has no variants. */
+function readVariantChoice() {
+  var host = document.getElementById('pd-variants');
+  if (!host) return '';
+  var parts = [];
+  var groups = host.querySelectorAll('.vgroup');
+  for (var i = 0; i < groups.length; i++) {
+    var label = groups[i].getAttribute('data-vg') || '';
+    var sel = groups[i].querySelector('.vopt.sel');
+    if (sel) parts.push(label + ': ' + (sel.getAttribute('data-vopt') || ''));
+  }
+  return parts.join(' / ');
+}
+/* WS4-3 — the hero display copy (the paragraph under the shop name). A picked
+   vertical may override it via settings.heroLine or the TPL_HERO_LINE wiring var
+   above; when neither is set it falls back to the tagline — exactly what the hero
+   showed before this seam (byte-identical default). Kept distinct from the
+   stored/editable tagline (used by the settings form + footer/meta). */
+function heroLine() {
+  var s = store.settings || {};
+  var h = (s.heroLine != null ? String(s.heroLine) : String(TPL_HERO_LINE || '')).trim();
+  if (h) return h;
+  return (s.tagline != null) ? String(s.tagline) : defaultSettings().tagline;
 }
 /* The published-app base URL, derived from the SAME wiring the Data API uses.
    DATA_URL is '<appBase>/api/v2/apps-data/<slug>'; strip that suffix to recover
@@ -792,10 +1804,15 @@ var FONTS = {
   }
 };
 
-/* Layout ids (branched in the view functions). 'standard' === today. */
+/* Layout ids (branched in the view functions). 'standard' === today.
+   WS4-2 adds 'grid-dense' (compact header + tight grid) and 'editorial-split'
+   (asymmetric split hero + standard grid); both opt-in, both reuse productCard,
+   both honor the same section ids — standard/boutique output is untouched. */
 var LAYOUTS = {
   standard: { label: 'Standard' },
-  boutique: { label: 'Boutique' }
+  boutique: { label: 'Boutique' },
+  'grid-dense': { label: 'Grille dense' },
+  'editorial-split': { label: 'Éditorial' }
 };
 
 function themeId() {
@@ -856,11 +1873,34 @@ function applyFont() {
   }
 }
 
-/* Apply the whole appearance layer (theme → font → accent). accent LAST so a
-   merchant-chosen accent always wins over a theme's suggestion. */
+/* WS4-6 — reading direction. RTL when the merchant opts in via settings.rtl
+   (bool) or a settings.lang of 'ar'/'ar-dz'/'dz' (darja). Absent/false keeps the
+   compile-time <html dir> (default 'ltr'), so nothing changes by default. */
+function rtlOn() {
+  var s = store.settings || {};
+  if (s.rtl === true) return true;
+  if (s.rtl === false) return false;
+  var lang = String(s.lang || '').trim().toLowerCase();
+  return lang === 'ar' || lang === 'ar-dz' || lang === 'dz';
+}
+/* Flip <html dir>. The stylesheet already uses logical props (inset-inline /
+   margin-inline) + a couple of html[dir=rtl] rules, so the whole layout mirrors
+   with no per-view work. Runtime-only (mirrors applyTheme reading the singleton
+   while the token sets the initial value). */
+function applyDir() {
+  var dir = rtlOn() ? 'rtl' : (String(TPL_RTL_DIR) === 'rtl' ? 'rtl' : 'ltr');
+  var el = document.documentElement;
+  if (el.getAttribute('dir') !== dir) el.setAttribute('dir', dir);
+}
+
+/* Apply the whole appearance layer (theme → font → accent → dir). accent before
+   dir; dir is orthogonal (no accent interplay). */
 function applyAppearance() {
   applyTheme();
+
+  applyLang();
   applyAccent();
+  applyDir();
 }
 
 /* =========================================================================
@@ -884,7 +1924,7 @@ function toast(msg, kind) {
 /* =========================================================================
    Cart operations
    ========================================================================= */
-function addToCart(id, qty) {
+function addToCart(id, qty, variant) {
   var p = findProduct(id);
   if (!p) return;
   if ((Number(p.stock) || 0) <= 0) { toast('Produit en rupture de stock', 'err'); return; }
@@ -892,8 +1932,8 @@ function addToCart(id, qty) {
   var line = null;
   for (var i = 0; i < store.cart.length; i++) if (String(store.cart[i].id) === String(id)) line = store.cart[i];
   var max = Number(p.stock) || 0;
-  if (line) { line.qty = Math.min(max, line.qty + qty); }
-  else { store.cart.push({ id: String(id), qty: Math.min(max, qty) }); }
+  if (line) { line.qty = Math.min(max, line.qty + qty); if (variant) line.variant = variant; }
+  else { var nl = { id: String(id), qty: Math.min(max, qty) }; if (variant) nl.variant = variant; store.cart.push(nl); }
   saveCart();
   toast(p.title + ' ajouté au panier', 'ok');
 }
@@ -926,6 +1966,9 @@ function parseHash() {
   if (parts[0] === 'cart') return { name: 'cart' };
   if (parts[0] === 'checkout') return { name: 'checkout' };
   if (parts[0] === 'success') return { name: 'success', ref: parts[1] ? decodeURIComponent(parts[1]) : '' };
+  if (parts[0] === 'wishlist') return { name: 'wishlist' };
+  if (parts[0] === 'tracking') return { name: 'tracking' };
+
   if (parts[0] === 'admin') return { name: 'admin', tab: parts[1] || 'orders' };
   return { name: 'home' };
 }
@@ -950,10 +1993,14 @@ function render() {
     case 'cart': body = viewCart(); break;
     case 'checkout': body = viewCheckout(); break;
     case 'success': body = viewSuccess(route.ref); break;
+    case 'wishlist': body = featureOn('wishlist') ? viewWishlist() : viewHome(); break;
+    case 'tracking': body = viewTracking(); break;
+
     case 'admin': return renderAdmin(route.tab); /* admin owns full shell */
     default: body = viewHome();
   }
-  app.innerHTML = topbar() + '<main>' + body + '</main>' + footer();
+  app.innerHTML = announcementBar() + topbar() + '<main>' + body + homeExtras(route) + '</main>' + footer();
+  wsfAfterRender(route);
   bindStorefront(route);
 }
 
@@ -969,6 +2016,13 @@ function topbar() {
         '<span>' + esc(shopName()) + '<small>Boutique en ligne · COD</small></span>' +
       '</a>' +
       '<div class="top-actions">' +
+      (featureOn('wishlist')
+        ? '<a class="icon-btn" href="#/wishlist" aria-label="Favoris" title="Favoris">❤️' +
+            '<span class="cart-count" data-wish-count ' + (wishCount() === 0 ? 'hidden' : '') + '>' + wishCount() + '</span>' +
+          '</a>'
+        : '') +
+        langToggleBtn() +
+
         '<a class="icon-btn" href="#/cart" aria-label="Panier" title="Panier">🛒' +
           '<span class="cart-count" data-cart-count ' + (n === 0 ? 'hidden' : '') + '>' + n + '</span>' +
         '</a>' +
@@ -987,6 +2041,8 @@ function footer() {
         '<a href="#/">Accueil</a>' +
         '<a href="#/cart">Panier</a>' +
         (wa ? '<a href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">WhatsApp</a>' : '') +
+        (featureOn('order-tracking') ? '<a href="#/tracking">' + t('track.link') + '</a>' : '') +
+
         '<a href="#/admin">Espace gérant</a>' +
       '</div>' +
       '<div class="f-made">Boutique propulsée par <a href="https://clickdz.ai" target="_blank" rel="noopener noreferrer">ClickDz</a></div>' +
@@ -1015,30 +2071,35 @@ function digitsOnly(s) { return String(s || '').replace(/[^0-9]/g, ''); }
 var currentCat = '';
 
 function viewHome() {
-  if (layoutId() === 'boutique') return viewHomeBoutique();
+  var lid = layoutId();
+  if (lid === 'boutique') return viewHomeBoutique();
+  if (lid === 'grid-dense') return viewHomeGridDense();
+  if (lid === 'editorial-split') return viewHomeEditorial();
   var s = store.settings || defaultSettings();
   var wa = digitsOnly(s.whatsapp);
   var errBanner = store.error ? '<div class="wrap"><div class="callout" style="margin-top:16px"><span class="ic">⚠️</span><div>Certaines données n\'ont pas pu être chargées. Réessayez plus tard.</div></div></div>' : '';
 
-  var hero = '' +
+  /* WSF-3 — the four home bands are gated by settings.sections. Absent settings
+     → every band on → byte-identical to today. */
+  var hero = sectionOn('hero') ? ('' +
     '<section class="hero"><div class="wrap"><div class="hero-inner">' +
       '<span class="cod-pill">💵 Paiement à la livraison</span>' +
       '<h1>' + esc(s.shopName) + '</h1>' +
-      '<p>' + esc(s.tagline) + '</p>' +
+      '<p>' + esc(heroLine()) + '</p>' +
       '<div class="cta-row">' +
         '<a class="btn light lg" href="#products">Découvrir les produits</a>' +
         (wa ? '<a class="btn ghost lg" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Nous contacter</a>' : '') +
       '</div>' +
-    '</div></div></section>';
+    '</div></div></section>') : '';
 
-  var trust = '' +
+  var trust = sectionOn('trust') ? ('' +
     '<div class="trust"><div class="wrap"><div class="trust-inner">' +
       '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
       '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
       '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +
       '<span class="trust-item"><span class="ic">📞</span> Support WhatsApp</span>' +
       '<span class="trust-item"><span class="ic">✅</span> Produits garantis</span>' +
-    '</div></div></div>';
+    '</div></div></div>') : '';
 
   var prods = activeProducts();
   var cats = categories();
@@ -1058,10 +2119,14 @@ function viewHome() {
     gridHtml = '<div class="grid">' + shown.map(productCard).join('') + '</div>';
   }
 
+  /* categories band = the filter chip row (gated); 'featured' has no dedicated
+     band in the standard layout, so its toggle is a no-op here by design. */
+  var chipsHtml = (sectionOn('categories') && cats.length) ? ('<div class="chips">' + chips + '</div>') : '';
+
   return errBanner + hero + trust +
     '<div class="wrap" id="products">' +
       '<div class="section-head"><h2>Nos produits</h2><span class="muted">' + shown.length + ' article' + (shown.length > 1 ? 's' : '') + '</span></div>' +
-      (cats.length ? '<div class="chips">' + chips + '</div>' : '') +
+      chipsHtml +
       gridHtml +
     '</div>';
 }
@@ -1077,6 +2142,8 @@ function productCard(p) {
       '<div class="body">' +
         '<a href="#/product/' + encodeURIComponent(p.id) + '" class="title">' + esc(p.title) + '</a>' +
         priceHtml(p.price) +
+        (featureOn('reviews') ? reviewMini(p) : '') +
+        (featureOn('wishlist') ? wishBtn(p, 'card-heart') : '') +
         (out
           ? '<button class="btn ghost sm add" disabled>Rupture de stock</button>'
           : '<button class="btn primary sm add" data-add="' + attr(p.id) + '">🛒 Ajouter</button>') +
@@ -1093,17 +2160,21 @@ function viewHomeBoutique() {
   var wa = digitsOnly(s.whatsapp);
   var errBanner = store.error ? '<div class="wrap"><div class="callout" style="margin-top:16px"><span class="ic">⚠️</span><div>Certaines données n\'ont pas pu être chargées. Réessayez plus tard.</div></div></div>' : '';
 
-  var hero = '' +
+  /* WSF-3 — boutique gates the same section ids: hero + featured spotlight +
+     the category chips. Boutique has no trust strip today, so sectionOn('trust')
+     is a no-op here (there is nothing to hide) — keeping existing boutique shops
+     byte-identical. Absent settings → all bands on → identical to today. */
+  var hero = sectionOn('hero') ? ('' +
     '<section class="hero-boutique"><div class="wrap"><div class="hb-inner">' +
       '<span class="hb-kicker">✦ ' + esc(s.shopName) + '</span>' +
       '<h1>' + esc(s.shopName) + '</h1>' +
-      '<p>' + esc(s.tagline) + '</p>' +
+      '<p>' + esc(heroLine()) + '</p>' +
       '<div class="cta-row">' +
         '<a class="btn light lg" href="#products">Explorer la collection</a>' +
         (wa ? '<a class="btn ghost lg" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Nous contacter</a>' : '') +
       '</div>' +
       '<span class="cod-pill" style="background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.3)">💵 Paiement à la livraison · 58 wilayas</span>' +
-    '</div></div></section>';
+    '</div></div></section>') : '';
 
   var prods = activeProducts();
   var cats = categories();
@@ -1114,9 +2185,9 @@ function viewHomeBoutique() {
 
   var shown = currentCat ? prods.filter(function (p) { return (p.category || '') === currentCat; }) : prods;
 
-  /* featured spotlight = first shown product (only when browsing "Tous") */
+  /* featured spotlight = first shown product (only when browsing "Tous"), gated */
   var featured = '';
-  if (!currentCat && shown.length) {
+  if (sectionOn('featured') && !currentCat && shown.length) {
     var fp = shown[0];
     var fout = (Number(fp.stock) || 0) <= 0;
     var media = fp.imageUrl
@@ -1138,7 +2209,9 @@ function viewHomeBoutique() {
     '</div>';
   }
 
-  var restProducts = (!currentCat && shown.length) ? shown.slice(1) : shown;
+  /* the spotlight consumes the first product ONLY when it actually rendered, so
+     a gated-off featured keeps every product in the grid (no silent drop). */
+  var restProducts = featured ? shown.slice(1) : shown;
 
   var gridHtml;
   if (!prods.length) {
@@ -1151,12 +2224,148 @@ function viewHomeBoutique() {
     gridHtml = '<div class="grid-boutique">' + restProducts.map(productCard).join('') + '</div>';
   }
 
+  var chipsHtml = (sectionOn('categories') && cats.length) ? ('<div class="chips">' + chips + '</div>') : '';
+
   return errBanner + hero +
     '<div class="wrap" id="products">' +
       '<div class="section-head"><h2>Nos produits</h2><span class="muted">' + shown.length + ' article' + (shown.length > 1 ? 's' : '') + '</span></div>' +
-      (cats.length ? '<div class="chips">' + chips + '</div>' : '') +
+      chipsHtml +
       featured +
       (featured && gridHtml ? '<div class="section-head" style="margin:22px 0 14px"><h2>Toute la collection</h2></div>' : '') +
+      gridHtml +
+    '</div>';
+}
+
+/* ---- Grid-dense layout home (settings.template='grid-dense') ----
+   A compact, product-forward home: a slim header band replaces the full-bleed
+   hero, over a tighter grid. Same data + delegated events (data-add / data-cat)
+   and productCard as the other layouts. Section ids gate the same way: 'hero'
+   shows/hides the slim header band, 'trust' the reassurance row, 'categories'
+   the chips; 'featured' is a no-op here (no dedicated spotlight). */
+function viewHomeGridDense() {
+  var s = store.settings || defaultSettings();
+  var wa = digitsOnly(s.whatsapp);
+  var errBanner = store.error ? '<div class="wrap"><div class="callout" style="margin-top:16px"><span class="ic">⚠️</span><div>Certaines données n\'ont pas pu être chargées. Réessayez plus tard.</div></div></div>' : '';
+
+  var header = sectionOn('hero') ? ('' +
+    '<section class="header-dense"><div class="wrap"><div class="hd-inner">' +
+      '<div class="hd-text">' +
+        '<span class="cod-pill">💵 Paiement à la livraison</span>' +
+        '<h1>' + esc(s.shopName) + '</h1>' +
+        '<p>' + esc(heroLine()) + '</p>' +
+      '</div>' +
+      '<div class="hd-actions">' +
+        '<a class="btn primary" href="#products">Voir les produits</a>' +
+        (wa ? '<a class="btn ghost" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Contacter</a>' : '') +
+      '</div>' +
+    '</div></div></section>') : '';
+
+  var trust = sectionOn('trust') ? ('' +
+    '<div class="trust"><div class="wrap"><div class="trust-inner">' +
+      '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
+      '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
+      '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +
+      '<span class="trust-item"><span class="ic">📞</span> Support WhatsApp</span>' +
+      '<span class="trust-item"><span class="ic">✅</span> Produits garantis</span>' +
+    '</div></div></div>') : '';
+
+  var prods = activeProducts();
+  var cats = categories();
+  var chips = '<button class="chip ' + (currentCat === '' ? 'active' : '') + '" data-cat="">Tous</button>';
+  cats.forEach(function (c) {
+    chips += '<button class="chip ' + (currentCat === c ? 'active' : '') + '" data-cat="' + attr(c) + '">' + esc(c) + '</button>';
+  });
+
+  var shown = currentCat ? prods.filter(function (p) { return (p.category || '') === currentCat; }) : prods;
+
+  var gridHtml;
+  if (!prods.length) {
+    gridHtml = emptyState('📦', 'Aucun produit pour le moment', 'Revenez bientôt — le catalogue arrive !', wa ? '<a class="btn soft" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Nous contacter</a>' : '');
+  } else if (!shown.length) {
+    gridHtml = emptyState('🔍', 'Aucun produit dans cette catégorie', 'Essayez une autre catégorie.', '<button class="btn ghost" data-cat="">Voir tout</button>');
+  } else {
+    gridHtml = '<div class="grid-dense">' + shown.map(productCard).join('') + '</div>';
+  }
+
+  var chipsHtml = (sectionOn('categories') && cats.length) ? ('<div class="chips">' + chips + '</div>') : '';
+
+  return errBanner + header + trust +
+    '<div class="wrap" id="products">' +
+      '<div class="section-head"><h2>Nos produits</h2><span class="muted">' + shown.length + ' article' + (shown.length > 1 ? 's' : '') + '</span></div>' +
+      chipsHtml +
+      gridHtml +
+    '</div>';
+}
+
+/* ---- Editorial-split layout home (settings.template='editorial-split') ----
+   An asymmetric split hero (copy + a large lead-product image) over a standard
+   grid. Reuses productCard + delegated events. Gating: 'hero' toggles the split
+   band, 'trust' the reassurance row, 'categories' the chips; 'featured' toggles
+   whether the split hero shows a product image (falls back to a copy-only hero). */
+function viewHomeEditorial() {
+  var s = store.settings || defaultSettings();
+  var wa = digitsOnly(s.whatsapp);
+  var errBanner = store.error ? '<div class="wrap"><div class="callout" style="margin-top:16px"><span class="ic">⚠️</span><div>Certaines données n\'ont pas pu être chargées. Réessayez plus tard.</div></div></div>' : '';
+
+  var prods = activeProducts();
+  var cats = categories();
+  var chips = '<button class="chip ' + (currentCat === '' ? 'active' : '') + '" data-cat="">Tous</button>';
+  cats.forEach(function (c) {
+    chips += '<button class="chip ' + (currentCat === c ? 'active' : '') + '" data-cat="' + attr(c) + '">' + esc(c) + '</button>';
+  });
+  var shown = currentCat ? prods.filter(function (p) { return (p.category || '') === currentCat; }) : prods;
+
+  /* lead media = first shown product image (only browsing "Tous" + featured on) */
+  var lead = (sectionOn('featured') && !currentCat && shown.length) ? shown[0] : null;
+  var media = '';
+  if (lead) {
+    var inner = lead.imageUrl
+      ? '<img loading="lazy" src="' + attr(lead.imageUrl) + '" alt="' + attr(lead.title) + '" onerror="this.style.display=\'none\'" />'
+      : '<div class="hs-ph">🛍️</div>';
+    media = '<a class="hs-media" href="#/product/' + encodeURIComponent(lead.id) + '" aria-label="' + attr(lead.title) + '">' +
+      inner +
+      '<div class="hs-cap"><div class="t">' + esc(lead.title) + '</div><div class="p">' + money(lead.price) + ' DZD</div></div>' +
+    '</a>';
+  }
+
+  var hero = sectionOn('hero') ? ('' +
+    '<section class="hero-split"><div class="wrap"><div class="hs-inner">' +
+      '<div class="hs-copy">' +
+        '<span class="cod-pill">💵 Paiement à la livraison</span>' +
+        '<h1>' + esc(s.shopName) + '</h1>' +
+        '<p>' + esc(heroLine()) + '</p>' +
+        '<div class="cta-row">' +
+          '<a class="btn primary lg" href="#products">Découvrir les produits</a>' +
+          (wa ? '<a class="btn ghost lg" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Nous contacter</a>' : '') +
+        '</div>' +
+      '</div>' +
+      media +
+    '</div></div></section>') : '';
+
+  var trust = sectionOn('trust') ? ('' +
+    '<div class="trust"><div class="wrap"><div class="trust-inner">' +
+      '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
+      '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
+      '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +
+      '<span class="trust-item"><span class="ic">📞</span> Support WhatsApp</span>' +
+      '<span class="trust-item"><span class="ic">✅</span> Produits garantis</span>' +
+    '</div></div></div>') : '';
+
+  var gridHtml;
+  if (!prods.length) {
+    gridHtml = emptyState('📦', 'Aucun produit pour le moment', 'Revenez bientôt — le catalogue arrive !', wa ? '<a class="btn soft" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Nous contacter</a>' : '');
+  } else if (!shown.length) {
+    gridHtml = emptyState('🔍', 'Aucun produit dans cette catégorie', 'Essayez une autre catégorie.', '<button class="btn ghost" data-cat="">Voir tout</button>');
+  } else {
+    gridHtml = '<div class="grid">' + shown.map(productCard).join('') + '</div>';
+  }
+
+  var chipsHtml = (sectionOn('categories') && cats.length) ? ('<div class="chips">' + chips + '</div>') : '';
+
+  return errBanner + hero + trust +
+    '<div class="wrap" id="products">' +
+      '<div class="section-head"><h2>Nos produits</h2><span class="muted">' + shown.length + ' article' + (shown.length > 1 ? 's' : '') + '</span></div>' +
+      chipsHtml +
       gridHtml +
     '</div>';
 }
@@ -1185,6 +2394,8 @@ function viewProduct(id) {
         '<div class="price">' + money(p.price) + ' <span class="cur">DZD</span></div>' +
         stockLine(p) +
         (p.description ? '<div class="desc">' + esc(p.description) + '</div>' : '') +
+        (featureOn('variants') ? variantSelector(p) : '') +
+        (featureOn('wishlist') ? '<div class="pd-wish">' + wishBtn(p, 'lg') + '<span>Ajouter aux favoris</span></div>' : '') +
         (out
           ? '<button class="btn ghost lg block" disabled>Rupture de stock</button>'
           : '<div class="qtyrow"><div class="qty">' +
@@ -1193,6 +2404,7 @@ function viewProduct(id) {
               '<button data-q="+" aria-label="Augmenter">+</button>' +
             '</div></div>' +
             '<button class="btn primary lg block" id="pd-add" data-add="' + attr(p.id) + '">🛒 Ajouter au panier</button>') +
+        (featureOn('reviews') ? reviewsBlock(p) : '') +
         '<div class="meta-list">' +
           '<div class="row"><span class="ic">💵</span> Paiement à la livraison (COD)</div>' +
           '<div class="row"><span class="ic">🚚</span> Livraison dans les 58 wilayas · frais ' + money(s.deliveryFee) + ' DZD</div>' +
@@ -1229,6 +2441,7 @@ function viewCart() {
       '<div class="ci-main">' +
         '<a class="ci-title" href="#/product/' + encodeURIComponent(p.id) + '">' + esc(p.title) + '</a>' +
         '<div class="ci-price">' + money(p.price) + ' DZD × ' + l.qty + '</div>' +
+        (l.variant ? '<div class="ci-variant">' + esc(l.variant) + '</div>' : '') +
         '<div class="miniqty" style="margin-top:8px">' +
           '<button data-mq="-" data-id="' + attr(p.id) + '">−</button>' +
           '<span>' + l.qty + '</span>' +
@@ -1270,13 +2483,15 @@ function viewCheckout() {
   var s = store.settings || defaultSettings();
   var subtotal = cartSubtotal();
   var fee = Number(s.deliveryFee) || 0;
-  var total = subtotal + fee;
+  var promoOff = featureOn('promo-codes') ? promoDiscount(subtotal) : 0;
+  var total = subtotal + fee - promoOff;
   var wilOpts = '<option value="">— Sélectionnez votre wilaya —</option>' +
     WILAYAS.map(function (w) { return '<option value="' + attr(w) + '">' + esc(w) + '</option>'; }).join('');
 
   var itemsRows = store.cart.map(function (l) {
     var p = findProduct(l.id); if (!p) return '';
-    return '<div class="line"><span>' + esc(p.title) + ' × ' + l.qty + '</span><span>' + money((Number(p.price) || 0) * l.qty) + ' DZD</span></div>';
+    var vl = l.variant ? ' (' + esc(l.variant) + ')' : '';
+    return '<div class="line"><span>' + esc(p.title) + vl + ' × ' + l.qty + '</span><span>' + money((Number(p.price) || 0) * l.qty) + ' DZD</span></div>';
   }).join('');
 
   /* Online payment (Chargily) — additive, shown ONLY when the merchant enabled
@@ -1320,10 +2535,24 @@ function viewCheckout() {
             '<div class="summary">' + itemsRows +
               '<div class="line" style="border-top:1px dashed var(--line);padding-top:10px"><span>Sous-total</span><span>' + money(subtotal) + ' DZD</span></div>' +
               '<div class="line"><span>Livraison</span><span>' + money(fee) + ' DZD</span></div>' +
+              (promoOff > 0 ? '<div class="line promo-line"><span>Remise (' + esc(store.promo) + ')</span><span>-' + money(promoOff) + ' DZD</span></div>' : '') +
               '<div class="line total"><span>Total à payer</span><span>' + money(total) + ' <span class="cur">DZD</span></span></div>' +
             '</div>' +
           '</div>' +
           '<div class="callout" style="margin-top:12px"><span class="ic">💵</span><div><strong>Paiement à la livraison.</strong> Aucun paiement en ligne. Vous réglez en espèces à la réception.</div></div>' +
+          (featureOn('promo-codes')
+            ? '<div class="promo-box">' +
+                '<label for="promo-input">Code promo</label>' +
+                '<div class="promo-row">' +
+                  '<input class="control" id="promo-input" placeholder="Ex : PROMO10" value="' + attr(store.promo || '') + '" autocomplete="off" />' +
+                  '<button class="btn ghost" id="promo-apply" type="button">' + (store.promo ? 'Retirer' : 'Appliquer') + '</button>' +
+                '</div>' +
+                (promoOff > 0 ? '<div class="promo-ok">✓ -' + promoPercent() + '% appliqué</div>' : '') +
+              '</div>'
+            : '') +
+          (featureOn('delivery-matrix') ? '<div class="callout" id="cdz-ship-note" style="margin-top:12px"><span class="ic">🚚</span><div>Sélectionnez votre wilaya pour voir les frais de livraison.</div></div>' : '') +
+          loyaltyCheckoutHint(total) +
+
           '<button class="btn primary lg block" style="margin-top:14px" id="place-order" type="button">✅ Confirmer la commande (' + money(total) + ' DZD)</button>' +
           '<p style="text-align:center;color:var(--ink-mute);font-size:12.5px;margin-top:10px">En confirmant, vous serez redirigé pour envoyer votre commande via WhatsApp.</p>' +
           onlineBtn +
@@ -1382,11 +2611,14 @@ function readCheckoutOrder() {
   var s = store.settings || defaultSettings();
   var items = store.cart.map(function (l) {
     var p = findProduct(l.id) || {};
-    return { id: String(l.id), title: p.title || 'Produit', price: Number(p.price) || 0, qty: l.qty };
+    var it = { id: String(l.id), title: p.title || 'Produit', price: Number(p.price) || 0, qty: l.qty };
+    if (l.variant) it.variant = String(l.variant);
+    return it;
   });
   var subtotal = items.reduce(function (n, it) { return n + it.price * it.qty; }, 0);
   var fee = Number(s.deliveryFee) || 0;
-  var total = subtotal + fee;
+  var promoOff = featureOn('promo-codes') ? promoDiscount(subtotal) : 0;
+  var total = subtotal + fee - promoOff;
   var ref = orderRef();
 
   var order = {
@@ -1400,9 +2632,13 @@ function readCheckoutOrder() {
     note: data.note,
     items: items,
     subtotal: subtotal,
-    deliveryFee: fee,
-    total: total
+    deliveryFee: featureOn('delivery-matrix') ? deliveryFeeFor(data.wilaya) : fee,
+    total: (subtotal - bundleDiscount() - (promoOff > 0 ? promoOff : 0)) + (featureOn('delivery-matrix') ? deliveryFeeFor(data.wilaya) : fee)
   };
+  if (featureOn('delivery-matrix')) { order.deliveryZone = wilCode(data.wilaya); }
+  var __bx = activeBundles();
+  if (__bx.length) { order.bundles = __bx; order.bundleDiscount = bundleDiscount(); }
+  if (promoOff > 0) { order.promoCode = store.promo; order.discount = promoOff; }
 
   return { order: order, items: items };
 }
@@ -1537,10 +2773,11 @@ function buildWaText(o, s, ref) {
   L.push('Réf : ' + (ref || (o && o.ref) || ''));
   L.push('');
   if (o && o.items) {
-    o.items.forEach(function (it) { L.push('• ' + it.title + ' × ' + it.qty + ' = ' + money(it.price * it.qty) + ' DZD'); });
+    o.items.forEach(function (it) { L.push('• ' + it.title + (it.variant ? ' [' + it.variant + ']' : '') + ' × ' + it.qty + ' = ' + money(it.price * it.qty) + ' DZD'); });
     L.push('');
     L.push('Sous-total : ' + money(o.subtotal) + ' DZD');
     L.push('Livraison : ' + money(o.deliveryFee) + ' DZD');
+    if (o.discount) L.push('Remise (' + (o.promoCode || '') + ') : -' + money(o.discount) + ' DZD');
     L.push('*Total : ' + money(o.total) + ' DZD*');
     L.push('');
     L.push('👤 ' + (o.customer || ''));
@@ -1568,7 +2805,8 @@ function bindStorefront(route) {
       var qty = 1;
       var qi = document.getElementById('pd-qty');
       if (qi && route.name === 'product') qty = Number(qi.value) || 1;
-      addToCart(id, qty);
+      var variant = (route.name === 'product' && featureOn('variants')) ? readVariantChoice() : '';
+      addToCart(id, qty, variant);
       if (route.name === 'product') { /* stay */ } else { render(); }
       return;
     }
@@ -1600,6 +2838,50 @@ function bindStorefront(route) {
     if (po) { placeOrder(); return; }
     var pay = e.target.closest('#pay-online');
     if (pay) { payOnline(); return; }
+    var wb = e.target.closest('[data-wish]');
+    if (wb) {
+      var wp = findByWishKey(wb.getAttribute('data-wish'));
+      if (wp) {
+        var added = toggleWish(wp);
+        toast(added ? 'Ajouté aux favoris ❤️' : 'Retiré des favoris', 'ok');
+        if (route.name === 'wishlist') { render(); }
+        else {
+          wb.classList.toggle('on', added);
+          wb.setAttribute('aria-pressed', added ? 'true' : 'false');
+          wb.innerHTML = added ? '❤️' : '🤍';
+        }
+      }
+      return;
+    }
+    var vo = e.target.closest('[data-vopt]');
+    if (vo) {
+      var grp = vo.closest('.vgroup');
+      if (grp) {
+        var sibs = grp.querySelectorAll('.vopt');
+        for (var vi = 0; vi < sibs.length; vi++) sibs[vi].classList.remove('sel');
+        vo.classList.add('sel');
+      }
+      return;
+    }
+    var rstar = e.target.closest('[data-star]');
+    if (rstar) {
+      var pick = rstar.closest('#rev-stars');
+      if (pick) {
+        var val = Number(rstar.getAttribute('data-star')) || 5;
+        pick.setAttribute('data-rating', val);
+        var stbtns = pick.querySelectorAll('.rev-star');
+        for (var si = 0; si < stbtns.length; si++) { stbtns[si].classList.toggle('on', (si + 1) <= val); }
+      }
+      return;
+    }
+    var rsub = e.target.closest('#rev-submit');
+    if (rsub) { submitReview(document.getElementById('review-form')); return; }
+    var pap = e.target.closest('#promo-apply');
+    if (pap) {
+      if (store.promo) { applyPromo(''); }
+      else { var pin = document.getElementById('promo-input'); applyPromo(pin ? pin.value : ''); }
+      return;
+    }
   });
 }
 
@@ -2006,6 +3288,15 @@ function saveSettings() {
     template: template,
     font: font
   };
+  /* Preserve fields the deployed-admin form does not edit (managed by the studio
+     /erp/settings allowlist) so a basic save never wipes them. Added only when
+     already present, so a shop that never set them keeps the same body as before. */
+  if (cur.onlinePay !== undefined) body.onlinePay = cur.onlinePay;
+  if (cur.sections !== undefined) body.sections = cur.sections;
+  if (cur.features !== undefined) body.features = cur.features;
+  if (cur.rtl === true) body.rtl = true;   /* only when opted in (default false is a no-op) */
+  if (cur.lang) body.lang = cur.lang;
+  if (cur.heroLine) body.heroLine = cur.heroLine;
   var btn = document.getElementById('save-settings');
   btn.disabled = true; btn.textContent = 'Enregistrement…';
   api.replace('settings', store.settingsId, body)
@@ -2042,6 +3333,35 @@ function closeModal() {
 /* =========================================================================
    Boot
    ========================================================================= */
+/* WSF-5 (batch B) — one delegated listener set for all Wave-B interactive chrome.
+   Registered once at boot (document-level), independent of per-render binding. */
+document.addEventListener('click', function (e) {
+  var lang = e.target.closest ? e.target.closest('[data-lang-toggle]') : null;
+  if (lang) { lsSet('lang', isDarja() ? 'fr' : 'ar'); applyLang(); render(); return; }
+  var ann = e.target.closest ? e.target.closest('[data-ann-dismiss]') : null;
+  if (ann) {
+    var txt = sVal('announcementText').slice(0, 140);
+    lsSet('ann', annHash(txt));
+    var bar = document.getElementById('cdz-ann');
+    if (bar && bar.parentNode) bar.parentNode.removeChild(bar);
+    return;
+  }
+  var bn = e.target.closest ? e.target.closest('[data-bundle]') : null;
+  if (bn) { addBundle(Number(bn.getAttribute('data-bundle'))); render(); return; }
+});
+document.addEventListener('change', function (e) {
+  var w = e.target.closest ? e.target.closest('#f-wilaya') : null;
+  if (w) recomputeCheckout();
+});
+document.addEventListener('submit', function (e) {
+  var tf = e.target.closest ? e.target.closest('#track-form') : null;
+  if (tf) {
+    e.preventDefault();
+    var inp = document.getElementById('track-phone');
+    trackLookup(inp ? inp.value : '');
+  }
+});
+
 window.addEventListener('hashchange', render);
 bootstrap().then(function () {
   render();

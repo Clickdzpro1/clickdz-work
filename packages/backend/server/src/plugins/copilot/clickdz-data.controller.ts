@@ -7,6 +7,7 @@ import {
   Options,
   Param,
   Post,
+  Put,
   Query,
   Req,
   Res,
@@ -52,7 +53,7 @@ const rateLimitKey = (slug: string, epochMinute: number) =>
 
 function setCors(res: Response) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Max-Age', '86400');
 }
@@ -201,6 +202,84 @@ export class ClickDzDataController {
     if (Buffer.byteLength(serialized, 'utf8') > MAX_RECORD_BYTES) {
       badRequest(`Record too large (${MAX_RECORD_BYTES / 1024}KB max)`);
     }
+    await this.redis.hset(key, id, serialized);
+    await this.redis.expire(key, DATA_TTL_SECONDS);
+    return record;
+  }
+
+  // Native atomic upsert (v2-only). Writes a single record IN PLACE at a
+  // caller-chosen id via one HSET, so there is no delete-then-recreate window:
+  // a concurrent reader always sees either the old or the new document, never a
+  // gap. Money documents (invoices/caisse) must never vanish mid-edit under
+  // concurrency — this is the primitive the delete+recreate path cannot give.
+  //
+  // Always token-gated (there is no v1 back-compat surface for a brand-new
+  // route, so we require the write token unconditionally rather than via
+  // isV2()). Preserves the original createdAt on update and stamps updatedAt;
+  // on first write it mints createdAt like create() does. The record's id is
+  // always the path id, ignoring any id in the body (the URL is authoritative).
+  @Put(['/api/v2/apps-data/:slug/:collection/:id'])
+  async upsert(
+    @Param('slug') slug: string,
+    @Param('collection') collection: string,
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    setCors(res);
+    this.assertNames(slug, collection);
+    this.requireWriteToken(req, slug);
+    // Per-slug write throttle (typed 429 via passthrough — never raw). Applied
+    // after name/token checks so bad input still gets its precise 4xx.
+    if (await this.isRateLimited(slug)) {
+      res.status(HttpStatus.TOO_MANY_REQUESTS).json({ error: 'rate_limited' });
+      return;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      badRequest('Record must be a JSON object');
+    }
+    if (!id) badRequest('Record id is required');
+
+    const key = dataKey(slug, collection);
+    // Read the existing field (if any) so we can (a) preserve its createdAt and
+    // (b) only enforce the 500-record cap when this PUT would CREATE a new
+    // record. An in-place edit of an existing money document must never be
+    // rejected because the collection is already full — that would reintroduce
+    // exactly the "record disappears while you save it" failure this route
+    // exists to remove.
+    const existingRaw = await this.redis.hget(key, id);
+    let createdAt = new Date().toISOString();
+    if (existingRaw) {
+      try {
+        const prev = JSON.parse(existingRaw) as Record<string, unknown>;
+        if (typeof prev.createdAt === 'string' && prev.createdAt) {
+          createdAt = prev.createdAt;
+        }
+      } catch {
+        // Corrupt prior value: treat createdAt as new, still overwrite in place.
+      }
+    } else {
+      const count = await this.redis.hlen(key);
+      if (count >= MAX_RECORDS_PER_COLLECTION) {
+        throw new BadRequest(
+          `Collection is full (${MAX_RECORDS_PER_COLLECTION} records max)`
+        );
+      }
+    }
+
+    const record = {
+      ...(body as Record<string, unknown>),
+      id,
+      createdAt,
+      updatedAt: new Date().toISOString(),
+    };
+    const serialized = JSON.stringify(record);
+    if (Buffer.byteLength(serialized, 'utf8') > MAX_RECORD_BYTES) {
+      badRequest(`Record too large (${MAX_RECORD_BYTES / 1024}KB max)`);
+    }
+    // Single atomic HSET overwrite of one hash field — the whole point of this
+    // route (vs DELETE+POST). Then re-arm the collection TTL like create().
     await this.redis.hset(key, id, serialized);
     await this.redis.expire(key, DATA_TTL_SECONDS);
     return record;
