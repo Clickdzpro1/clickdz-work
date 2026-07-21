@@ -32,6 +32,7 @@ export { ConversationThread } from './conversation-thread';
 export { MessageBubble } from './message-bubble';
 export { MarkdownLite } from './markdown-lite';
 export { StepList, ToolCallCard } from './tool-call-card';
+export { RunTimeline, type RunTimelineProps } from './run-timeline';
 export { StreamingText } from './streaming-text';
 
 // ---- input + status ----
@@ -44,3 +45,17 @@ export { ApprovalPrompt, type ApprovalRequest } from './approval-prompt';
 // ---- history + hero ----
 export { ThreadSidebar } from './thread-sidebar';
 export { EmptyState } from './empty-state';
+
+// ---- spend estimate ----
+export {
+  SpendMeter,
+  estimateSpend,
+  formatDzd,
+  formatTokens,
+  NOMINAL_TOKENS_PER_TOOL_CALL,
+  type SpendMeterProps,
+  type SpendEstimate,
+} from './spend-meter';
+
+// ---- artifacts ----
+export { ArtifactsPanel } from './artifacts-panel';

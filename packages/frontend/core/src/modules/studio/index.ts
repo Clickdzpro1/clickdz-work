@@ -4,7 +4,8 @@ import { WorkspaceLocalState, WorkspaceScope } from '../workspace';
 import { RecentStudiosService } from './recent-studios';
 
 export type { StudioDef, StudioGroup, StudioId } from './registry';
-export { STUDIOS, studioForPath } from './registry';
+export type { StudioFlag } from './registry';
+export { STUDIOS, studioForPath, visibleStudios } from './registry';
 export { RecentStudiosService } from './recent-studios';
 
 export function configureStudioModule(framework: Framework) {

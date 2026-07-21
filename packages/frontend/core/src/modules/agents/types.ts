@@ -238,3 +238,66 @@ export interface AgentRunRecord extends AgentRunSummary {
     toolCalls?: number;
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R7 — AGENTS ROSTER + CAPABILITIES (unified /agents studio)
+//
+// The shape returned by GET /api/v1/agents (ClickDzAgentsController). R6 shipped
+// the per-agent roster rows ({@link AgentSummary}); R7 extends the response with
+// a top-level {@link AgentCaps} object so the whole endpoint doubles as the
+// capability probe the unified UI keys off (caps.multi gates the new UI). The FE
+// reads it via modules/agents/use-agents.ts (`useAgents()`), which treats a 404
+// (feature dark, CDZ_AGENTS_ENABLED off) as "disabled". Keep in step with the
+// backend AgentStatus row + the caps object it now serializes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One agent roster row (GET /api/v1/agents → `agents[]`). Mirrors the backend
+ * `AgentStatus`: identity + a `beta` flag, the caller's newest run projection,
+ * and per-channel binding flags. `lastRun.state` is an {@link AgentRunState}
+ * (the run engine persists that union); `at` is ms since epoch (endedAt, else
+ * startedAt).
+ */
+export interface AgentSummary {
+  /** Stable agent id (also the run/console API path segment). */
+  id: AgentName;
+  /** Product-facing display name (e.g. "Hermes"). */
+  label: string;
+  /** True while the agent is flagged beta in the roster. */
+  beta?: boolean;
+  /** The caller's most recent run for this agent, when one exists. */
+  lastRun?: {
+    runId: string;
+    state: AgentRunState;
+    /** ms since epoch — the run's endedAt, else startedAt. */
+    at: number;
+  };
+  /** Per-channel binding flags for this caller (e.g. a bound Telegram chat). */
+  channels: {
+    telegram: boolean;
+  };
+}
+
+/**
+ * Top-level capability flags on the roster response (R7). Derived on the backend
+ * from env: `multi` = CDZ_AGENTS_MULTI (the master switch for the unified UI),
+ * `dzdPer1k` = CDZ_DZD_PER_1K (spend-estimate rate, 0 = no estimate),
+ * `telegramEnabled` = CDZ_AGENT_TELEGRAM_ENABLED, `webEnabled` =
+ * CDZ_AGENT_WEB_ENABLED. Everything in the unified UI gates on `caps.multi`.
+ */
+export interface AgentCaps {
+  /** Master switch for the unified /agents UI; false ⇒ legacy behavior only. */
+  multi: boolean;
+  /** DZD per 1k tokens for the "estimé" spend display (0 ⇒ no estimate). */
+  dzdPer1k: number;
+  /** Whether the Telegram channel is enabled server-side. */
+  telegramEnabled: boolean;
+  /** Whether agent web access is enabled server-side. */
+  webEnabled: boolean;
+}
+
+/** Envelope returned by GET /api/v1/agents: the roster plus capability flags. */
+export interface AgentsListResponse {
+  agents: AgentSummary[];
+  caps: AgentCaps;
+}

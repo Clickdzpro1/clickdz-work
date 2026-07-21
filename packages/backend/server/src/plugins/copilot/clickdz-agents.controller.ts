@@ -78,6 +78,31 @@ interface AgentStatus {
   channels: { telegram: boolean };
 }
 
+// Top-level capability flags returned alongside the roster on GET /api/v1/agents.
+// The R7 unified /agents UI keys off these (multi = master switch for the unified
+// surface; dzdPer1k feeds the spend "estimé"; the channel flags toggle the
+// Telegram/WhatsApp/web affordances). Read from env per-request (same inline
+// process.env idiom the bridge controller uses); all default to the OFF value so
+// an unset env == feature dark == byte-identical legacy behavior on the client.
+interface AgentCaps {
+  multi: boolean;
+  dzdPer1k: number;
+  telegramEnabled: boolean;
+  webEnabled: boolean;
+}
+
+// Build the caps object from the environment. Pure; no I/O. Kept a tiny helper
+// so the exact env expressions live in one place (and the return object stays
+// readable). Matches the contract's literal expressions verbatim.
+function buildCaps(): AgentCaps {
+  return {
+    multi: process.env.CDZ_AGENTS_MULTI === '1',
+    dzdPer1k: Number(process.env.CDZ_DZD_PER_1K || '0'),
+    telegramEnabled: process.env.CDZ_AGENT_TELEGRAM_ENABLED === '1',
+    webEnabled: process.env.CDZ_AGENT_WEB_ENABLED === '1',
+  };
+}
+
 /** Narrow a `:agent` path segment to the known union (else null). */
 function normalizeAgent(raw: unknown): AgentName | null {
   return raw === 'hermes' || raw === 'openclaw' ? raw : null;
@@ -143,7 +168,7 @@ export class ClickDzAgentsController {
   @Get('/api/v1/agents')
   async listAgents(
     @CurrentUser() user: CurrentUser
-  ): Promise<{ agents: AgentStatus[] }> {
+  ): Promise<{ agents: AgentStatus[]; caps: AgentCaps }> {
     this.assertEnabled();
     // The tg binding is one lookup for the whole user; do it once.
     const telegram = await this.hasTelegram(user.id);
@@ -158,7 +183,12 @@ export class ClickDzAgentsController {
         channels: { telegram },
       });
     }
-    return { agents };
+    // Top-level capability flags for the R7 unified /agents UI. Env-derived,
+    // gated by the same CDZ_AGENTS_ENABLED master switch as the whole endpoint
+    // (assertEnabled above already 404'd if off), so caps only ships when the
+    // feature is on; each flag defaults OFF so an unset env == legacy behavior.
+    const caps = buildCaps();
+    return { agents, caps };
   }
 
   // POST /api/v1/agents/:agent/state — persist an informational enabled flag

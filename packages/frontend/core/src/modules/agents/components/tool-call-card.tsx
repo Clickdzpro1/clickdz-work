@@ -3,6 +3,13 @@
 // pill • duration • chevron), expanding into labelled Thought / Args / Result /
 // Error sections. Failed steps start expanded; the in-progress step can pulse.
 // Typed against AgentStep (C1). Pure presentational.
+//
+// R7 upgrade (Chrono, additive): tool-call steps now read as human "verbs" —
+// while running they show a present-tense action + pulsing tool glyph
+// ("Recherche web…", "Lecture d'une page…", "Envoi WhatsApp…"); once finished
+// they flip to past tense with the ok/error pill. Non-tool steps keep the exact
+// prior behaviour (title || kind label). The StepList + ToolCallCard exports and
+// their props are UNCHANGED so existing Scene/Vitrail callers compile identically.
 
 import { useState } from 'react';
 
@@ -17,6 +24,112 @@ import {
   preStyle,
   type StepKind,
 } from './primitives';
+
+// ---------------------------------------------------------------------------
+// Verb presentation for tool calls (R7). Maps a tool slug → a small glyph and
+// a { running, done } French label pair. The keys cover the agent-runtime tools
+// (web_search / web_fetch / telegram_send / shop_erp_summary / shops_list /
+// whatsapp_send / code|run …); anything unknown falls back to a humanised slug.
+// Emoji glyphs are fine here (house rule) and degrade to KIND_META otherwise.
+// ---------------------------------------------------------------------------
+interface Verb {
+  icon: string;
+  /** Present-continuous label shown while the step is in-flight. */
+  running: string;
+  /** Past-tense label shown once the step has completed. */
+  done: string;
+}
+
+const VERB_MAP: Record<string, Verb> = {
+  web_search: { icon: '🔎', running: 'Recherche web…', done: 'Recherche web' },
+  web_fetch: {
+    icon: '🌐',
+    running: "Lecture d'une page…",
+    done: 'Page lue',
+  },
+  web_crawl: {
+    icon: '🌐',
+    running: "Lecture d'une page…",
+    done: 'Page lue',
+  },
+  web_browse: {
+    icon: '🌐',
+    running: "Lecture d'une page…",
+    done: 'Page lue',
+  },
+  telegram_send: {
+    icon: '📨',
+    running: 'Envoi Telegram…',
+    done: 'Message Telegram envoyé',
+  },
+  whatsapp_send: {
+    icon: '💬',
+    running: 'Envoi WhatsApp…',
+    done: 'Message WhatsApp envoyé',
+  },
+  shop_erp_summary: {
+    icon: '📊',
+    running: 'Lecture ERP…',
+    done: 'ERP consulté',
+  },
+  shops_list: {
+    icon: '🏪',
+    running: 'Liste des boutiques…',
+    done: 'Boutiques listées',
+  },
+  code: { icon: '⌨️', running: 'Exécution…', done: 'Code exécuté' },
+  run: { icon: '›_', running: 'Exécution…', done: 'Commande exécutée' },
+  shell: { icon: '›_', running: 'Exécution…', done: 'Commande exécutée' },
+};
+
+// Humanise an unknown tool slug into a readable label: strip a common provider
+// prefix, split on _/-/. and Title-case the words ("composio.gmail_send" →
+// "Gmail send"). Keeps it short; never throws on odd input.
+function humanizeTool(tool: string): string {
+  const cleaned = (tool || '').split(/[.:/]/).pop() ?? tool;
+  const words = cleaned
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return tool || 'Outil';
+  const [first, ...rest] = words;
+  return [first.charAt(0).toUpperCase() + first.slice(1), ...rest].join(' ');
+}
+
+/**
+ * Derive the headline + glyph for a step. Tool-call steps get the verb
+ * treatment (present tense while running, past tense once done); every other
+ * kind keeps the historical `title || KIND_META.label` behaviour.
+ */
+function stepPresentation(
+  step: AgentStep,
+  running: boolean
+): { label: string; icon: string; isVerb: boolean } {
+  const meta = KIND_META[(step.kind as StepKind) ?? 'tool'] ?? KIND_META.tool;
+  if (step.kind === 'tool' && step.tool) {
+    const verb = VERB_MAP[step.tool];
+    if (verb) {
+      return {
+        label: running ? verb.running : verb.done,
+        icon: verb.icon,
+        isVerb: true,
+      };
+    }
+    // Unknown tool: humanise the slug, add an ellipsis while running.
+    const human = humanizeTool(step.tool);
+    return {
+      label: running ? `${human}…` : human,
+      icon: meta.icon,
+      isVerb: true,
+    };
+  }
+  return {
+    label: step.title || meta.label,
+    icon: meta.icon,
+    isVerb: false,
+  };
+}
 
 function statusPill(step: AgentStep): {
   text: string;
@@ -63,6 +176,9 @@ export function ToolCallCard({
   ensureAgentKeyframes();
   const meta = KIND_META[(step.kind as StepKind) ?? 'tool'] ?? KIND_META.tool;
   const failed = step.error || step.ok === false;
+  // "Running" = actively-highlighted AND not yet resolved (no ok/error yet).
+  const running = !!active && step.ok === undefined && !step.error;
+  const present = stepPresentation(step, running);
   const [open, setOpen] = useState(() => defaultOpen ?? !!failed);
   const argsText = formatArgs(step.args);
   const pill = statusPill(step);
@@ -118,19 +234,19 @@ export function ToolCallCard({
         >
           <span
             aria-hidden="true"
-            className={active ? 'cdz-agent-motion' : undefined}
+            className={running ? 'cdz-agent-motion' : undefined}
             style={{
               fontSize: 13,
               width: 16,
               textAlign: 'center',
               color: meta.color,
               flex: '0 0 auto',
-              animation: active
+              animation: running
                 ? 'cdz-agent-pulse 1.4s ease-in-out infinite'
                 : undefined,
             }}
           >
-            {meta.icon}
+            {present.icon}
           </span>
           <span
             style={{
@@ -140,10 +256,11 @@ export function ToolCallCard({
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
-              color: step.title ? P.color.text : P.color.muted,
+              color:
+                present.isVerb || step.title ? P.color.text : P.color.muted,
             }}
           >
-            {step.title || meta.label}
+            {present.label}
           </span>
           {step.tool ? (
             <span

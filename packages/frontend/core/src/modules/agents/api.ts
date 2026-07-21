@@ -5,6 +5,7 @@ import type {
   AgentName,
   AgentRunRecord,
   AgentRunSummary,
+  AgentsListResponse,
   AgentThread,
   AgentThreadSummary,
 } from './types';
@@ -178,6 +179,36 @@ export function getCapabilities(
   return requestJson<Record<string, unknown>>(`${base(agent)}/capabilities`);
 }
 
+// ── Telegram channel pairing ──────────────────────────────────────────────────
+
+/** Envelope returned by {@link pairTelegram}. */
+export interface TelegramPairResult {
+  /** One-shot pairing code (10 min TTL server-side); embedded in `deepLink`. */
+  code: string;
+  /**
+   * `t.me/<bot>?start=<code>` deep link the UI turns into a tappable link / copy.
+   * Empty string when the bot username can't be resolved yet (token half-set) —
+   * treat an empty `deepLink` the same as the dark state (no live pairing).
+   */
+  deepLink: string;
+  /** The bot's @username, or null when no bot token is configured. */
+  botUsername: string | null;
+}
+
+/**
+ * Mint a one-shot Telegram pairing deep link for the signed-in user
+ * (`GET /api/v1/agents/telegram/pair`). The user opens {@link
+ * TelegramPairResult.deepLink} and taps Start; the backend webhook binds their
+ * chat. Gated by `CDZ_AGENT_TELEGRAM_ENABLED` on the backend — throws {@link
+ * AgentApiError} with `.status === 404` when the channel is dark (no bot
+ * configured), so the connections UI shows a quiet "bientôt disponible" state
+ * rather than an error. `.status === 400` means Redis couldn't store the code
+ * (the caller should offer a retry).
+ */
+export function pairTelegram(): Promise<TelegramPairResult> {
+  return requestJson<TelegramPairResult>('/api/v1/agents/telegram/pair');
+}
+
 // ── Run control ──────────────────────────────────────────────────────────────
 
 /**
@@ -318,6 +349,20 @@ export async function listAgentRuns(
       : '';
   const rows = await requestJson<AgentRunSummary[]>(`${runsBase(agent)}${qs}`);
   return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * Fetch the agent roster + capability flags (`GET /api/v1/agents`, R7). Returns
+ * the {@link AgentsListResponse} envelope — the roster rows plus the top-level
+ * `caps` object the unified `/agents` UI gates on. Like {@link listAgentRuns},
+ * this doubles as a capability probe: the route is gated by `CDZ_AGENTS_ENABLED`
+ * on the backend, so when the feature is dark the controller is absent and this
+ * throws {@link AgentApiError} with `.status === 404`. The caller
+ * (`useAgents()`) catches that and treats agents as disabled (hides the unified
+ * UI) — this function itself THROWS on 404, exactly like the other helpers here.
+ */
+export function listAgents(): Promise<AgentsListResponse> {
+  return requestJson<AgentsListResponse>(`/api/v1/agents`);
 }
 
 /**

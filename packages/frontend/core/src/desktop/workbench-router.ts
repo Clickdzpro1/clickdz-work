@@ -66,6 +66,26 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/openclaw/index'),
   },
   {
+    path: '/agents',
+    lazy: () => import('./pages/workspace/agents/index'),
+  },
+  {
+    path: '/agents/new',
+    lazy: () => import('./pages/workspace/agents/wizard'),
+  },
+  {
+    path: '/agents/runs',
+    lazy: () => import('./pages/workspace/agents/runs'),
+  },
+  {
+    path: '/agents/run/:id',
+    lazy: () => import('./pages/workspace/agents/run'),
+  },
+  {
+    path: '/agents/connections',
+    lazy: () => import('./pages/workspace/agents/connections'),
+  },
+  {
     path: '/settings',
     lazy: () => import('./pages/workspace/settings'),
   },
