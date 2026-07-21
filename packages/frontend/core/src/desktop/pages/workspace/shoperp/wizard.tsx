@@ -20,6 +20,11 @@ import {
   validateStoreName,
   validateWhatsapp,
 } from './shoperp-shared';
+import {
+  TemplatePicker,
+  TemplatePickerLoading,
+  useShopTemplates,
+} from './template-picker';
 
 // ---------------------------------------------------------------------------
 // ShopERP onboarding wizard. Walks a first-time user through a per-store
@@ -40,8 +45,26 @@ const SWATCHES = [
   '#16a34a',
 ] as const;
 
-type Step = 'welcome' | 'name' | 'whatsapp' | 'accent' | 'pin' | 'review';
-const FLOW: Step[] = ['welcome', 'name', 'whatsapp', 'accent', 'pin', 'review'];
+type Step =
+  | 'welcome'
+  | 'template'
+  | 'name'
+  | 'whatsapp'
+  | 'accent'
+  | 'pin'
+  | 'review';
+// Base flow (no template step) — the exact pre-catalog order. The `template`
+// step is spliced in at runtime only when the catalog endpoint returns ≥1
+// template (see the derived `FLOW` below), so a server with the catalog flag
+// OFF walks this identical flow and mints a byte-identical (no-templateId) shop.
+const BASE_FLOW: Step[] = [
+  'welcome',
+  'name',
+  'whatsapp',
+  'accent',
+  'pin',
+  'review',
+];
 
 // The create phase after the user confirms on the Review step.
 type Phase =
@@ -106,7 +129,28 @@ export const ShopWizard = ({
   hasExistingApps: boolean;
 }) => {
   const [stepIdx, setStepIdx] = useState(0);
-  const step = FLOW[stepIdx];
+
+  // WS4-5: the shop-template catalog (fetched once). `ready` with ≥1 template
+  // inserts the picker step after `welcome`; `loading`/`unavailable` leave the
+  // base flow untouched (today's exact flow). `selectedTemplateId` (null =
+  // "Sans modèle") is forwarded into the mint call ONLY when set.
+  const templatesState = useShopTemplates();
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(
+    null
+  );
+  const FLOW = useMemo<Step[]>(() => {
+    if (templatesState.kind !== 'ready') return BASE_FLOW;
+    // Splice `template` right after `welcome`.
+    return [
+      'welcome',
+      'template',
+      ...BASE_FLOW.slice(1),
+    ] as Step[];
+  }, [templatesState.kind]);
+
+  // Clamp the cursor if the flow length changed under us (e.g. the catalog
+  // resolved while the user sat on `welcome`): keep the same logical step.
+  const step = FLOW[Math.min(stepIdx, FLOW.length - 1)];
 
   // Settings model — seeded with the template defaults so a user who clicks
   // straight through gets a valid, byte-default shop.
@@ -167,8 +211,14 @@ export const ShopWizard = ({
     async (replaceSlug?: string) => {
       setPhase({ kind: 'creating', label: 'Creating your storefront…' });
       try {
-        // 1) Storefront template with the chosen settings.
-        const shop = await fetchTemplate({ kind: 'shop', settings });
+        // 1) Storefront template with the chosen settings. WS4-5: forward
+        // the chosen templateId ONLY when set — an absent templateId keeps the
+        // request byte-identical to the pre-catalog mint.
+        const shop = await fetchTemplate({
+          kind: 'shop',
+          settings,
+          ...(selectedTemplateId ? { templateId: selectedTemplateId } : {}),
+        });
         const storeSlug = shop.storeSlug || shop.slug;
         saveArtifact({
           slug: shop.slug,
@@ -259,7 +309,7 @@ export const ShopWizard = ({
         });
       }
     },
-    [settings]
+    [settings, selectedTemplateId]
   );
 
   // ----- Terminal phases (creating / cap / done / error) render standalone --
@@ -338,6 +388,24 @@ export const ShopWizard = ({
             <li>A WhatsApp number for orders</li>
             <li>A manager PIN to protect the admin</li>
           </ul>
+        </StepShell>
+      ) : null}
+
+      {step === 'template' ? (
+        <StepShell
+          emoji="🎨"
+          title="Choisissez un modèle"
+          subtitle="Un point de départ adapté à votre activité — couleurs, catégories et produits d’exemple. Vous pourrez tout changer ensuite."
+        >
+          {templatesState.kind === 'ready' ? (
+            <TemplatePicker
+              templates={templatesState.templates}
+              selectedTemplateId={selectedTemplateId}
+              onSelect={setSelectedTemplateId}
+            />
+          ) : (
+            <TemplatePickerLoading />
+          )}
         </StepShell>
       ) : null}
 

@@ -109,11 +109,94 @@ export async function fetchMyApps(): Promise<MineApp[]> {
 }
 
 /**
+ * Catalog metadata for one shop template (WS4-5 picker). Mirrors the
+ * GET /api/v1/apps/templates item shape — metadata ONLY (id/name/darja/
+ * vertical/emoji/accent/gradient/hero), never the seed products. Every field
+ * past `id` is optional so the picker renders defensively against an older or
+ * partial server.
+ */
+export interface ShopTemplateMeta {
+  id: string;
+  name: string;
+  /** Darja label shown as the card subtitle (RTL). */
+  nameDarja?: string;
+  vertical: string;
+  /** Emoji glyph for the gallery card. */
+  emoji?: string;
+  /** Hex accent for the card swatch + badge (→ __CLICKDZ_ACCENT__ at mint). */
+  accent?: string;
+  /** Two-stop gradient for the card thumb; falls back to the accent. */
+  gradient?: [string, string];
+  /** One-line hero preview (darja or FR per vertical). */
+  heroLine?: string;
+}
+
+/**
+ * GET /api/v1/apps/templates — the vertical catalog for the wizard picker.
+ * Additive + fail-soft: the endpoint only exists when CDZ_TEMPLATE_CATALOG is
+ * ON, so a 404 (flag OFF / older server), an error, or an empty list all resolve
+ * to `[]`. The picker treats `[]` as "no catalog" and skips its step, preserving
+ * the exact pre-catalog wizard flow. NEVER throws — returns `[]` on any failure.
+ */
+export async function fetchShopTemplates(): Promise<ShopTemplateMeta[]> {
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl('/api/v1/apps/templates'), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+  } catch {
+    return [];
+  }
+  if (!res.ok) {
+    // 404 = catalog flag OFF / route absent → no picker (fall back to today).
+    return [];
+  }
+  const data = (await res.json().catch(() => null)) as
+    | { templates?: unknown }
+    | unknown[]
+    | null;
+  // Tolerate both { templates: [...] } and a bare [...] payload.
+  const raw = Array.isArray(data)
+    ? data
+    : Array.isArray((data as { templates?: unknown })?.templates)
+      ? ((data as { templates?: unknown }).templates as unknown[])
+      : [];
+  const out: ShopTemplateMeta[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const t = item as Record<string, unknown>;
+    const id = typeof t.id === 'string' ? t.id : '';
+    const name = typeof t.name === 'string' ? t.name : '';
+    if (!id || !name) continue;
+    const gradient =
+      Array.isArray(t.gradient) &&
+      t.gradient.length === 2 &&
+      typeof t.gradient[0] === 'string' &&
+      typeof t.gradient[1] === 'string'
+        ? ([String(t.gradient[0]), String(t.gradient[1])] as [string, string])
+        : undefined;
+    out.push({
+      id,
+      name,
+      vertical: typeof t.vertical === 'string' ? t.vertical : '',
+      ...(typeof t.nameDarja === 'string' ? { nameDarja: t.nameDarja } : {}),
+      ...(typeof t.emoji === 'string' ? { emoji: t.emoji } : {}),
+      ...(typeof t.accent === 'string' ? { accent: t.accent } : {}),
+      ...(gradient ? { gradient } : {}),
+      ...(typeof t.heroLine === 'string' ? { heroLine: t.heroLine } : {}),
+    });
+  }
+  return out;
+}
+
+/**
  * POST /api/v1/apps/template. `settings` is optional; when present it maps to
  * the C5 body. A 400 invalid_settings surfaces the offending field so the
  * wizard can point at the right step (defensive — the wizard validates first).
  */
 export async function fetchTemplate(body: {
+  templateId?: string;
   kind: 'shop' | 'erp';
   storeSlug?: string;
   settings?: Partial<ShopSettings>;
@@ -560,6 +643,170 @@ export function postErpSettings(
   patch: Partial<ErpSettings>
 ): Promise<ErpMutateOutcome<{ ok?: boolean; settings?: ErpSettings }>> {
   return erpMutate(slug, 'settings', { patch });
+}
+
+// ---------------------------------------------------------------------------
+// WSF-2 CUSTOMIZE — the feature-aware wrapper over the settings primitive. The
+// Fonctionnalités tab (shop-features.tsx) and AI chat edits both converge here:
+//   POST /api/v1/apps/:slug/customize { features?, params?, appearance? }
+//     → validates via the feature registry/allowlist → merges the settings
+//       singleton → re-mints HTML (same slug) if a touched feature is
+//       runtime:false → { ok, settings, remint, url? }
+// Gated server-side by CDZ_FEATURES_ENABLED (default OFF) → a 404 means the
+// flag is off on this server; callers quiet-gate to "bientôt disponible".
+// `params` are scalars only (IDs/numbers/booleans) — never raw HTML — so the
+// 8KB settings cap holds. Invalid ids/params come back via the passthrough-res
+// body (like /erp/settings), surfaced as a typed 'error'.
+// ---------------------------------------------------------------------------
+
+/** A scalar feature param — IDs / numbers / booleans only (8KB-cap safe). */
+export type FeatureParamValue = string | number | boolean;
+
+/** POST /customize body — a {features,params} diff (+ optional appearance). */
+export interface CustomizeBody {
+  features?: string[];
+  params?: Record<string, FeatureParamValue>;
+  appearance?: Partial<ErpSettings>;
+}
+
+export type CustomizeOutcome =
+  | { status: 'ok'; settings: ErpSettings; remint: boolean; url?: string }
+  | { status: 'unavailable' }
+  | { status: 'not-found' }
+  | { status: 'cap' }
+  | { status: 'upgrade' }
+  | { status: 'error'; message: string };
+
+/**
+ * POST /api/v1/apps/:slug/customize — apply a feature/param/appearance diff.
+ * Never throws for the documented 402/404/409 — those come back as typed
+ * outcomes so the UI can quiet-gate (404), prompt (409 cap), or upsell (402).
+ */
+export async function customizeApp(
+  slug: string,
+  body: CustomizeBody
+): Promise<CustomizeOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/customize`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error — nothing was changed.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<{
+        ok: boolean;
+        settings: ErpSettings;
+        remint: boolean;
+        url: string;
+        error: string | { message?: string };
+        limit: number;
+        existing: Array<{ slug: string; url: string }>;
+      }> & { message?: unknown })
+    | null;
+  // Route absent (CDZ_FEATURES_ENABLED off) → let the caller show the quiet gate.
+  if (res.status === 404) {
+    return { status: 'not-found' };
+  }
+  if (data?.error === 'admin_writes_unavailable') {
+    return { status: 'unavailable' };
+  }
+  if (res.status === 409 && (data?.error as string) === 'publish_limit_reached') {
+    return { status: 'cap' };
+  }
+  if (res.status === 402 || (data?.error as string) === 'upgrade_required') {
+    return { status: 'upgrade' };
+  }
+  if (!res.ok) {
+    const message =
+      typeof data?.error === 'object' && data.error?.message
+        ? (data.error.message as string)
+        : res.status === 401
+          ? 'Please sign in again.'
+          : res.status === 403
+            ? 'This shop belongs to another account.'
+            : typeof data?.message === 'string'
+              ? (data.message as string)
+              : `Could not apply the changes (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return {
+    status: 'ok',
+    settings: (data?.settings && typeof data.settings === 'object'
+      ? data.settings
+      : {}) as ErpSettings,
+    remint: data?.remint === true,
+    ...(typeof data?.url === 'string' && data.url ? { url: data.url } : {}),
+  };
+}
+
+/** The per-feature enablement + params view the /customize GET side returns. */
+export interface AppFeaturesState {
+  features: string[];
+  params: Record<string, FeatureParamValue>;
+}
+
+export type AppFeaturesOutcome =
+  | { status: 'ok'; state: AppFeaturesState }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string };
+
+/**
+ * GET /api/v1/apps/:slug/customize — read the live feature-set + params for a
+ * shop. The Fonctionnalités tab seeds its draft from the settings singleton it
+ * already has (via the ERP summary), so this is provided for the AI-hook / any
+ * caller that needs the enablement view standalone. A 404 (flag off) or an
+ * app-not-found is reported as 'unavailable' so callers degrade quietly.
+ */
+export async function fetchAppFeatures(
+  slug: string
+): Promise<AppFeaturesOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/customize`),
+      { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
+    );
+  } catch {
+    return { status: 'error', message: 'Network error while loading features.' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Partial<AppFeaturesState> & { error?: unknown; message?: unknown })
+    | null;
+  // 404 = route missing (flag off) OR app not found → degrade quietly.
+  if (res.status === 404) {
+    return { status: 'unavailable' };
+  }
+  if (!res.ok) {
+    const message =
+      res.status === 401
+        ? 'Please sign in to view features.'
+        : res.status === 403
+          ? 'This shop belongs to another account.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `Could not load features (${res.status}).`;
+    return { status: 'error', message };
+  }
+  return {
+    status: 'ok',
+    state: {
+      features: Array.isArray(data?.features)
+        ? (data.features as unknown[]).map(f => String(f)).filter(Boolean)
+        : [],
+      params:
+        data?.params && typeof data.params === 'object'
+          ? (data.params as Record<string, FeatureParamValue>)
+          : {},
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
