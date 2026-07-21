@@ -13,6 +13,7 @@ import { createHash, randomBytes } from 'node:crypto';
 // JobQueue is the same transport the copilot cron/session providers already
 // inject; Moteur's `enqueueAgentRun(queue, rec)` uses it to dispatch the run.
 import { BadRequest, Cache, JobQueue, NotFound } from '../../base';
+import { CacheRedis } from '../../base/redis';
 // @Public marks the webhook route as skipping the global cookie AuthGuard (an
 // inbound Telegram webhook has no app session — same non-cookie stance the
 // bridge's /chat/completions route takes, gated by a URL secret instead).
