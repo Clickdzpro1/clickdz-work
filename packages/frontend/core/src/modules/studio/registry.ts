@@ -31,18 +31,24 @@ export type StudioId =
   | 'integrations'
   | 'hermes'
   | 'openclaw'
-  | 'agents';
+  | 'agents'
+  | 'vpic';
 
 export type StudioGroup = 'create' | 'commerce' | 'agents' | 'connect';
 
 /**
  * Capability-flag keys a studio entry may be gated behind. `undefined` (the
- * common case) = always visible. The ONLY flag today is 'agents-multi', mapped
- * to the backend `caps.multi` (env CDZ_AGENTS_MULTI): the unified `/agents`
- * studio is hidden unless it is on. A string-literal union (not `string`) so a
- * typo can't silently mint a never-visible entry.
+ * common case) = always visible. Two flags today, each mapped to a backend caps
+ * bit that rides the SAME `GET /api/v1/agents` caps object (see
+ * {@link visibleStudios}):
+ *   · 'agents-multi' → `caps.multi` (env CDZ_AGENTS_MULTI) gates the unified
+ *     `/agents` studio.
+ *   · 'vpic'         → `caps.vpicEnabled` (env CDZ_VPIC_ENABLED) gates the VPIC
+ *     image-editor studio.
+ * A string-literal union (not `string`) so a typo can't silently mint a
+ * never-visible entry.
  */
-export type StudioFlag = 'agents-multi';
+export type StudioFlag = 'agents-multi' | 'vpic';
 
 export interface StudioDef {
   id: StudioId;
@@ -62,7 +68,8 @@ export interface StudioDef {
    * Optional capability gate. When set, the entry is visible only if the
    * matching `caps` flag is on (see {@link visibleStudios}); absent ⇒ always
    * visible. Entries WITHOUT a flag are unconditional (byte-identical legacy
-   * behavior). Only the unified /agents entry carries 'agents-multi' today.
+   * behavior). The unified /agents entry carries 'agents-multi'; the VPIC entry
+   * carries 'vpic'.
    */
   flag?: StudioFlag;
 }
@@ -73,16 +80,20 @@ export interface StudioDef {
  * re-buckets these by `group`.
  *
  * The first 7 entries are unconditional (the legacy roster, unchanged). The
- * 8th — the unified `agents` entry — carries `flag:'agents-multi'` and is
- * appended LAST so that when the flag is off it is filtered out by
- * {@link visibleStudios} and the rendered set is byte-identical to today. It is
- * placed after openclaw (its group siblings) so that when the flag IS on it
- * reads naturally at the bottom of the agents cluster.
+ * 8th — the unified `agents` entry — carries `flag:'agents-multi'`; the 9th —
+ * the VPIC image-editor entry — carries `flag:'vpic'`. Both flag-gated entries
+ * are appended LAST so that when their flag is off they are filtered out by
+ * {@link visibleStudios} and the rendered set is byte-identical to today. The
+ * agents entry sits after openclaw (its group siblings) so it reads naturally at
+ * the bottom of the agents cluster when on; the vpic entry is appended after it
+ * (a distinct 'create'-group surface, kept last so a flags-off sidebar is
+ * untouched).
  *
  * Icons (boot-safe): vdz→FrameIcon, apps(/chat)→AiIcon, shoperp→BlockLinkIcon,
  * voice→VoiceIcon, integrations→BlockLinkIcon, hermes→ChatWithAiIcon,
- * openclaw→KeyboardIcon, agents→ChatWithAiIcon (reused). beta:
- * integrations/voice/shoperp/hermes/openclaw/agents; vdz and apps are not beta.
+ * openclaw→KeyboardIcon, agents→ChatWithAiIcon (reused), vpic→FrameIcon
+ * (reused). beta: integrations/voice/shoperp/hermes/openclaw/agents/vpic; vdz
+ * and apps are not beta.
  */
 export const STUDIOS: StudioDef[] = [
   {
@@ -159,6 +170,21 @@ export const STUDIOS: StudioDef[] = [
     beta: true,
     flag: 'agents-multi',
   },
+  {
+    // VPIC image-editor studio (R14). flag-gated on caps.vpicEnabled
+    // (CDZ_VPIC_ENABLED): hidden by visibleStudios() until the flag is on, so
+    // flags-off is a no-op (byte-identical sidebar). Reuses FrameIcon (already
+    // boot-safe imported, same glyph as vdz — both 'create'-group canvas
+    // surfaces) — no new icon import (a missing rc icon crashes at boot).
+    id: 'vpic',
+    label: 'Studio Image',
+    route: '/vpic',
+    icon: () => createElement(FrameIcon),
+    group: 'create',
+    testId: 'slider-bar-vpic-studio-button',
+    beta: true,
+    flag: 'vpic',
+  },
 ];
 
 /**
@@ -166,18 +192,23 @@ export const STUDIOS: StudioDef[] = [
  * section + switcher) given the caller's capabilities. Flag-less entries are
  * always kept; a flag-gated entry is kept only when its flag is on in `caps`.
  *
- * Today the sole gate is `flag:'agents-multi'` ⇒ requires `caps.multi`. When
- * `caps` is undefined (the common pre-load / feature-dark / 404 case) or
- * `caps.multi` is false, the agents entry is dropped and the result is
- * REFERENTIALLY the legacy roster minus that one entry — i.e. byte-identical
- * to what the sidebar rendered before R7. The order of surviving entries is
- * preserved (a plain filter).
+ * Two gates today, each reading a bit off the SAME caps object the sidebar
+ * already passes (from `useAgents()` — the `GET /api/v1/agents` caps payload):
+ *   · `flag:'agents-multi'` ⇒ requires `caps.multi`.
+ *   · `flag:'vpic'`         ⇒ requires `caps.vpicEnabled`.
+ * When `caps` is undefined (the common pre-load / feature-dark / 404 case) or a
+ * gated bit is false/absent, the matching entry is dropped and the result is
+ * REFERENTIALLY the legacy roster minus that entry — i.e. byte-identical to what
+ * the sidebar rendered before the feature. The order of surviving entries is
+ * preserved (a plain filter). `caps.vpicEnabled` is optional in the param type
+ * because the FE `AgentCaps` doesn't declare it (the backend adds it to the caps
+ * wire object — R14), so an absent bit reads `undefined` ⇒ falsy ⇒ hidden.
  *
  * Pure and side-effect-free: safe to call every render. Routing is NOT affected
- * by this — the /agents route stays registered unconditionally in
- * workbench-router.ts, and {@link studioForPath} still resolves it — only nav
- * VISIBILITY is gated here. That keeps a bookmarked/deep-linked /agents URL
- * working even before the sidebar entry appears.
+ * by this — the /agents + /vpic routes stay registered unconditionally in
+ * workbench-router.ts, and {@link studioForPath} still resolves them — only nav
+ * VISIBILITY is gated here. That keeps a bookmarked/deep-linked /agents or /vpic
+ * URL working even before the sidebar entry appears.
  *
  * DECISION (documented per contract): the legacy standalone hermes + openclaw
  * entries are KEPT ALWAYS (the safer default). Turning on `caps.multi` ADDS the
@@ -186,10 +217,16 @@ export const STUDIOS: StudioDef[] = [
  * memory breaks. (A future round may collapse them behind a preference — until
  * then, additive-only.)
  */
-export function visibleStudios(caps?: { multi?: boolean }): StudioDef[] {
+export function visibleStudios(caps?: {
+  multi?: boolean;
+  vpicEnabled?: boolean;
+}): StudioDef[] {
   return STUDIOS.filter(studio => {
     if (studio.flag === 'agents-multi') {
       return !!caps?.multi;
+    }
+    if (studio.flag === 'vpic') {
+      return !!caps?.vpicEnabled;
     }
     return true;
   });
