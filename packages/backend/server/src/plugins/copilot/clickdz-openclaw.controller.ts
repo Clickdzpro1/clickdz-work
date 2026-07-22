@@ -92,6 +92,7 @@ import {
   runCommand,
   runCommandBackground,
   runCommandStreaming,
+  sandboxHealthProbe,
   sandboxCapability,
   sessionStatus,
   stopSession,
@@ -559,6 +560,26 @@ export class ClickDzOpenclawController {
       streaming: true,
       provisioned: config.provisioned,
     });
+  }
+
+  /**
+   * GET sandbox/health — R9 SONDE LIVE diagnostic. Runs a real
+   * create → echo('ok') → teardown against Vercel under a 60s budget and
+   * returns {ok, stage:'create'|'exec'|'teardown'|'done', ms, error?} with the
+   * VERBATIM upstream error string, so the REAL prod failure is visible from
+   * this one endpoint. Gated CDZ_AGENTS_ENABLED (typed 404 when off, so the
+   * probe surface is invisible unless agents are on). Auth via @CurrentUser.
+   * Thin by design — the whole lifecycle lives in SANDBOX2.sandboxHealthProbe
+   * (dep-free; it reads VERCEL_TOKEN/VERCEL_TEAM_ID itself like the rest of the
+   * module). Never leaks a microVM: the probe always tears down.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/openclaw/sandbox/health')
+  async sandboxHealth(@CurrentUser() _user: CurrentUser) {
+    if (!CDZ_AGENTS_ENABLED) {
+      throw new NotFound('Sandbox health probe is not enabled');
+    }
+    return sandboxHealthProbe();
   }
 
   // -------------------------------------------------------------------------

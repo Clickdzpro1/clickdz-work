@@ -119,15 +119,62 @@ export type SandboxErrorCode =
   | 'api_error'
   | 'timeout';
 
+// R9 SONDE — the lifecycle STAGE a failure occurred at. Attached to every
+// SandboxError so callers (and the /sandbox/health probe) can report WHERE the
+// sandbox broke instead of a generic message. Purely additive metadata.
+export type SandboxStage =
+  | 'project'
+  | 'probe'
+  | 'create'
+  | 'exec'
+  | 'poll'
+  | 'logs'
+  | 'extend'
+  | 'status'
+  | 'stop'
+  | 'write';
+
 export class SandboxError extends Error {
   readonly code: SandboxErrorCode;
   readonly status?: number;
+  // R9 SONDE — structured, LOUD failure context (never token material). `stage`
+  // says which REST leg failed; `bodyPreview` is a short slice of the VERBATIM
+  // upstream body so a prod failure is diagnosable from the surfaced error alone
+  // (the whole point of the health probe). Both optional → byte-compatible with
+  // existing throw sites that don't pass them.
+  readonly stage?: SandboxStage;
+  readonly bodyPreview?: string;
 
-  constructor(code: SandboxErrorCode, message: string, status?: number) {
+  constructor(
+    code: SandboxErrorCode,
+    message: string,
+    status?: number,
+    stage?: SandboxStage,
+    bodyPreview?: string
+  ) {
     super(message);
     this.name = 'SandboxError';
     this.code = code;
     this.status = status;
+    this.stage = stage;
+    this.bodyPreview = bodyPreview;
+  }
+
+  /** Structured {code,stage,status,body} view — for LOUD logging / probe payloads. */
+  toStructured(): {
+    code: SandboxErrorCode;
+    stage?: SandboxStage;
+    status?: number;
+    message: string;
+    bodyPreview?: string;
+  } {
+    return {
+      code: this.code,
+      ...(this.stage ? { stage: this.stage } : {}),
+      ...(typeof this.status === 'number' ? { status: this.status } : {}),
+      message: this.message,
+      ...(this.bodyPreview ? { bodyPreview: this.bodyPreview } : {}),
+    };
   }
 }
 
@@ -183,6 +230,40 @@ async function readJson(res: globalThis.Response): Promise<any> {
   return await res.json().catch(() => null);
 }
 
+/**
+ * R9 SONDE — read an error response body EXACTLY ONCE and return BOTH the parsed
+ * JSON (or null) AND a short raw text preview. Root cause of "errors get eaten":
+ * the old path did `res.json().catch(()=>null)` and, when Vercel returned a
+ * NON-JSON body (an HTML edge error page, a plain-text 4xx/5xx, or an empty
+ * body), `data` was null → `upstreamMessage` returned '' → the surfaced error
+ * was a bare "HTTP <status>" with nothing diagnostic. Reading the text first and
+ * keeping a bounded preview means the VERBATIM upstream bytes always survive to
+ * the caller (and the health probe) regardless of content-type. A body can only
+ * be consumed once, so callers MUST use this instead of readJson on error paths.
+ * NEVER contains token material (it's the response body, not our request).
+ */
+async function readErrorBody(
+  res: globalThis.Response
+): Promise<{ data: any; bodyPreview: string }> {
+  let text = '';
+  try {
+    text = await res.text();
+  } catch {
+    text = '';
+  }
+  let data: any = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null; // non-JSON (HTML/plain) — the raw preview still carries it.
+    }
+  }
+  // Collapse whitespace so an HTML page preview stays compact + readable.
+  const bodyPreview = text.replace(/\s+/g, ' ').trim().slice(0, UPSTREAM_MSG_CAP);
+  return { data, bodyPreview };
+}
+
 /** Extract a short human upstream error message (never token material). */
 function upstreamMessage(data: any): string {
   const msg =
@@ -204,32 +285,56 @@ function upstreamMessage(data: any): string {
  *     dashboard / upgrade the plan).
  * Both codes still degrade OpenClaw to plan-only, but the surfaced `reason`
  * now tells the operator which knob to turn. NEVER logs/echoes token material.
+ *
+ * R9 SONDE — now takes the lifecycle `stage` + a raw `bodyPreview` and threads
+ * BOTH onto the error (see SandboxError.stage/bodyPreview). The message also
+ * appends the raw preview when the parsed body had no structured message, so a
+ * non-JSON upstream error (the classic silently-eaten case) is LOUD. Accepts a
+ * `data`-or-preview pair; pass `readErrorBody(res)`'s result at every call site.
  */
 function statusToError(
   status: number,
-  data: any,
-  context: string
+  bodyOrData: { data: any; bodyPreview: string } | any,
+  context: string,
+  stage: SandboxStage
 ): SandboxError {
+  // Back-compat: accept either the {data,bodyPreview} pair (preferred) or a bare
+  // parsed body (legacy) — the latter simply has no raw preview.
+  const pair =
+    bodyOrData && typeof bodyOrData === 'object' && 'bodyPreview' in bodyOrData
+      ? (bodyOrData as { data: any; bodyPreview: string })
+      : { data: bodyOrData, bodyPreview: '' };
+  const data = pair.data;
+  const bodyPreview = pair.bodyPreview || '';
   const detail = upstreamMessage(data);
-  const suffix = detail ? `: ${detail}` : '';
+  // Prefer the structured message; else fall back to the raw body preview so the
+  // caller ALWAYS sees the upstream bytes (never a bare "HTTP <status>").
+  const shown = detail || bodyPreview;
+  const suffix = shown ? `: ${shown}` : '';
   if (status === 401) {
     return new SandboxError(
       'not_configured',
       `Vercel rejected the configured token (HTTP 401) — check VERCEL_TOKEN (wrong, expired, or scoped to a different team)${suffix}`,
-      status
+      status,
+      stage,
+      bodyPreview
     );
   }
   if (status === 402 || status === 403) {
     return new SandboxError(
       'not_enabled',
       `Vercel Sandbox is not enabled for this account (HTTP ${status}) — enable it in the Vercel dashboard${suffix}`,
-      status
+      status,
+      stage,
+      bodyPreview
     );
   }
   return new SandboxError(
     'api_error',
     `Vercel ${context} failed (HTTP ${status})${suffix}`,
-    status
+    status,
+    stage,
+    bodyPreview
   );
 }
 
@@ -326,11 +431,18 @@ async function lookupOrCreateProject(): Promise<string> {
     if (id) return id;
     throw new SandboxError(
       'api_error',
-      'Vercel project lookup succeeded but returned no project id'
+      'Vercel project lookup succeeded but returned no project id',
+      getRes.status,
+      'project'
     );
   }
   if (getRes.status !== 404) {
-    throw statusToError(getRes.status, await readJson(getRes), 'project lookup');
+    throw statusToError(
+      getRes.status,
+      await readErrorBody(getRes),
+      'project lookup',
+      'project'
+    );
   }
   // 2) 404 → POST /v10/projects to create it.
   const createRes = await vFetch(`${PROJECTS_API_BASE}/v10/projects`, {
@@ -338,13 +450,15 @@ async function lookupOrCreateProject(): Promise<string> {
     headers: authHeaders(true),
     body: JSON.stringify({ name: SANDBOX_PROJECT_NAME }),
   }, CONTROL_TIMEOUT_MS);
-  const created = await readJson(createRes);
   if (createRes.ok) {
+    const created = await readJson(createRes);
     const id = typeof created?.id === 'string' ? created.id : '';
     if (id) return id;
     throw new SandboxError(
       'api_error',
-      'Vercel project create succeeded but returned no project id'
+      'Vercel project create succeeded but returned no project id',
+      createRes.status,
+      'project'
     );
   }
   if (createRes.status === 409) {
@@ -354,12 +468,31 @@ async function lookupOrCreateProject(): Promise<string> {
       { headers: authHeaders() },
       CONTROL_TIMEOUT_MS
     );
-    const retried = await readJson(retryRes);
-    const id = typeof retried?.id === 'string' ? retried.id : '';
-    if (retryRes.ok && id) return id;
-    throw statusToError(retryRes.status, retried, 'project lookup (after 409)');
+    if (retryRes.ok) {
+      const retried = await readJson(retryRes);
+      const id = typeof retried?.id === 'string' ? retried.id : '';
+      if (id) return id;
+      // 200 but no id — succeeded-yet-empty; the body is already consumed.
+      throw new SandboxError(
+        'api_error',
+        'Vercel project lookup (after 409) returned no project id',
+        retryRes.status,
+        'project'
+      );
+    }
+    throw statusToError(
+      retryRes.status,
+      await readErrorBody(retryRes),
+      'project lookup (after 409)',
+      'project'
+    );
   }
-  throw statusToError(createRes.status, created, 'project create');
+  throw statusToError(
+    createRes.status,
+    await readErrorBody(createRes),
+    'project create',
+    'project'
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -412,7 +545,12 @@ async function probeCapability(): Promise<{
       CONTROL_TIMEOUT_MS
     );
     if (res.ok) return { sandbox: true };
-    throw statusToError(res.status, await readJson(res), 'sandbox probe');
+    throw statusToError(
+      res.status,
+      await readErrorBody(res),
+      'sandbox probe',
+      'probe'
+    );
   } catch (err) {
     const reason =
       err instanceof SandboxError
@@ -448,15 +586,27 @@ export async function createSession(opts?: {
     headers: authHeaders(true),
     body: JSON.stringify({ projectId, runtime, timeout }),
   }, CREATE_SANDBOX_TIMEOUT_MS);
-  const data = await readJson(res);
   if (!res.ok) {
-    throw statusToError(res.status, data, 'sandbox create');
+    // Read the body ONCE on the error branch so a non-JSON upstream error still
+    // surfaces its verbatim bytes (see readErrorBody).
+    throw statusToError(
+      res.status,
+      await readErrorBody(res),
+      'sandbox create',
+      'create'
+    );
   }
+  const data = await readJson(res);
+  // Contract: POST /v2/sandboxes wraps the created sandbox under `session`
+  // (v2 endpoints return "session" as the wrapper key), and `session.id` is the
+  // handle passed as {sessionId} to every subsequent cmd/stop call.
   const sessionId = typeof data?.session?.id === 'string' ? data.session.id : '';
   if (!sessionId) {
     throw new SandboxError(
       'api_error',
-      'Vercel sandbox create succeeded but returned no session id'
+      'Vercel sandbox create succeeded but returned no session id',
+      res.status,
+      'create'
     );
   }
   const actualRuntime =
@@ -485,31 +635,43 @@ export async function createSessionWithPorts(opts?: {
     MIN_SESSION_TIMEOUT_MS,
     MAX_SESSION_TIMEOUT_MS
   );
-  // De-dupe + keep only sane port numbers; cap at 4 (upstream limit). Default
-  // to [3000] so OPENCLAW always has a preview route without extra plumbing.
+  // De-dupe + keep only sane port numbers; cap at 4 (well under the upstream
+  // max of 15). R9 SONDE FIX — Vercel requires exposed ports in [1024, 65535];
+  // the old floor of `> 0` let a sub-1024 port (e.g. 80/443) through and the
+  // create call 400s. Clamp the floor to 1024. Default to [3000] so OPENCLAW
+  // always has a preview route; if the caller's ports all filter out, fall back
+  // to [3000] rather than sending an empty list (which would expose no preview).
   const requested =
     Array.isArray(opts?.ports) && opts!.ports!.length ? opts!.ports! : [3000];
-  const ports = Array.from(
+  const filtered = Array.from(
     new Set(
       requested.filter(
-        p => Number.isInteger(p) && p > 0 && p < 65536
+        p => Number.isInteger(p) && p >= 1024 && p <= 65535
       )
     )
   ).slice(0, 4);
+  const ports = filtered.length ? filtered : [3000];
   const res = await vFetch(`${SANDBOX_API_BASE}/v2/sandboxes`, {
     method: 'POST',
     headers: authHeaders(true),
     body: JSON.stringify({ projectId, runtime, timeout, ports }),
   }, CREATE_SANDBOX_TIMEOUT_MS);
-  const data = await readJson(res);
   if (!res.ok) {
-    throw statusToError(res.status, data, 'sandbox create (ports)');
+    throw statusToError(
+      res.status,
+      await readErrorBody(res),
+      'sandbox create (ports)',
+      'create'
+    );
   }
+  const data = await readJson(res);
   const sessionId = typeof data?.session?.id === 'string' ? data.session.id : '';
   if (!sessionId) {
     throw new SandboxError(
       'api_error',
-      'Vercel sandbox create succeeded but returned no session id'
+      'Vercel sandbox create succeeded but returned no session id',
+      res.status,
+      'create'
     );
   }
   const actualRuntime =
@@ -572,7 +734,12 @@ export async function extendSession(
     EXTEND_TIMEOUT_MS
   );
   if (!res.ok) {
-    throw statusToError(res.status, await readJson(res), 'session extend');
+    throw statusToError(
+      res.status,
+      await readErrorBody(res),
+      'session extend',
+      'extend'
+    );
   }
 }
 
@@ -671,16 +838,23 @@ export async function runCommand(
     headers: authHeaders(true),
     body: JSON.stringify({ command, args, cwd: opts?.cwd, timeout: timeoutMs }),
   }, CONTROL_TIMEOUT_MS);
-  const started = await readJson(startRes);
   if (!startRes.ok) {
-    throw statusToError(startRes.status, started, `command start (${command})`);
+    throw statusToError(
+      startRes.status,
+      await readErrorBody(startRes),
+      `command start (${command})`,
+      'exec'
+    );
   }
+  const started = await readJson(startRes);
   const cmdId =
     typeof started?.command?.id === 'string' ? started.command.id : '';
   if (!cmdId) {
     throw new SandboxError(
       'api_error',
-      'Sandbox command start succeeded but returned no command id'
+      'Sandbox command start succeeded but returned no command id',
+      startRes.status,
+      'exec'
     );
   }
   let exitCode: number | null =
@@ -693,7 +867,9 @@ export async function runCommand(
     if (Date.now() >= deadline) {
       throw new SandboxError(
         'timeout',
-        `Sandbox command "${command}" did not finish within ${timeoutMs}ms`
+        `Sandbox command "${command}" did not finish within ${timeoutMs}ms`,
+        undefined,
+        'poll'
       );
     }
     await sleep(POLL_INTERVAL_MS);
@@ -702,10 +878,15 @@ export async function runCommand(
       { headers: authHeaders() },
       CONTROL_TIMEOUT_MS
     );
-    const polled = await readJson(pollRes);
     if (!pollRes.ok) {
-      throw statusToError(pollRes.status, polled, 'command poll');
+      throw statusToError(
+        pollRes.status,
+        await readErrorBody(pollRes),
+        'command poll',
+        'poll'
+      );
     }
+    const polled = await readJson(pollRes);
     if (typeof polled?.command?.exitCode === 'number') {
       exitCode = polled.command.exitCode;
     }
@@ -752,20 +933,23 @@ export async function runCommandBackground(
       cwd: opts?.cwd,
     }),
   }, CONTROL_TIMEOUT_MS);
-  const started = await readJson(startRes);
   if (!startRes.ok) {
     throw statusToError(
       startRes.status,
-      started,
-      `background command start (${command})`
+      await readErrorBody(startRes),
+      `background command start (${command})`,
+      'exec'
     );
   }
+  const started = await readJson(startRes);
   const cmdId =
     typeof started?.command?.id === 'string' ? started.command.id : '';
   if (!cmdId) {
     throw new SandboxError(
       'api_error',
-      'Sandbox background command start succeeded but returned no command id'
+      'Sandbox background command start succeeded but returned no command id',
+      startRes.status,
+      'exec'
     );
   }
   return { cmdId };
@@ -823,20 +1007,23 @@ export async function runCommandStreaming(
       timeout: timeoutMs,
     }),
   }, CONTROL_TIMEOUT_MS);
-  const started = await readJson(startRes);
   if (!startRes.ok) {
     throw statusToError(
       startRes.status,
-      started,
-      `streaming command start (${command})`
+      await readErrorBody(startRes),
+      `streaming command start (${command})`,
+      'exec'
     );
   }
+  const started = await readJson(startRes);
   const cmdId =
     typeof started?.command?.id === 'string' ? started.command.id : '';
   if (!cmdId) {
     throw new SandboxError(
       'api_error',
-      'Sandbox streaming command start succeeded but returned no command id'
+      'Sandbox streaming command start succeeded but returned no command id',
+      startRes.status,
+      'exec'
     );
   }
   let exitCode: number | null =
@@ -867,7 +1054,9 @@ export async function runCommandStreaming(
       await emitNew().catch(() => {});
       throw new SandboxError(
         'timeout',
-        `Sandbox command "${command}" did not finish within ${timeoutMs}ms`
+        `Sandbox command "${command}" did not finish within ${timeoutMs}ms`,
+        undefined,
+        'poll'
       );
     }
     await emitNew().catch(() => {});
@@ -877,10 +1066,15 @@ export async function runCommandStreaming(
       { headers: authHeaders() },
       CONTROL_TIMEOUT_MS
     );
-    const polled = await readJson(pollRes);
     if (!pollRes.ok) {
-      throw statusToError(pollRes.status, polled, 'streaming command poll');
+      throw statusToError(
+        pollRes.status,
+        await readErrorBody(pollRes),
+        'streaming command poll',
+        'poll'
+      );
     }
+    const polled = await readJson(pollRes);
     if (typeof polled?.command?.exitCode === 'number') {
       exitCode = polled.command.exitCode;
     }
@@ -1108,7 +1302,10 @@ export async function writeFile(
     if (result.exitCode !== 0) {
       throw new SandboxError(
         'api_error',
-        `Sandbox writeFile failed for ${path} (exit ${result.exitCode}): ${result.stderr.slice(0, UPSTREAM_MSG_CAP)}`
+        `Sandbox writeFile failed for ${path} (exit ${result.exitCode}): ${result.stderr.slice(0, UPSTREAM_MSG_CAP)}`,
+        undefined,
+        'write',
+        result.stderr.slice(0, UPSTREAM_MSG_CAP)
       );
     }
   }
@@ -1128,4 +1325,231 @@ export async function writeFiles(
     if (!f || typeof f.path !== 'string') continue;
     await writeFile(sessionId, f.path, typeof f.content === 'string' ? f.content : '');
   }
+}
+
+// ---------------------------------------------------------------------------
+// R9 SONDE — LIVE health probe. This is the diagnostic Fateh needs: it exercises
+// the FULL lifecycle (create → echo 'ok' → teardown) against the real Vercel API
+// under a hard 60s budget and reports EXACTLY where it broke, with the VERBATIM
+// upstream error. Consumed by the thin controller route
+// GET /api/v1/openclaw/sandbox/health (see clickdz-openclaw.controller.ts). It
+// deliberately bypasses the capability CACHE (every call hits live) and NEVER
+// throws — a failure is returned as { ok:false, stage, ms, error, detail } so
+// the route can 200 the diagnostic even when the sandbox itself is broken. Token
+// material is never included (createSession/runCommand/stopSession never echo it,
+// and SandboxError.bodyPreview is the RESPONSE body, not our request headers).
+// ---------------------------------------------------------------------------
+
+/** Overall wall-clock budget for the health probe (contract: 60s). */
+const HEALTH_PROBE_BUDGET_MS = 60_000;
+/** The health sandbox is short-lived; keep it well above the probe budget so it
+ * can only ever be freed by our explicit teardown (never linger). */
+const HEALTH_SESSION_TIMEOUT_MS = 120_000;
+/** The echo command's own budget (bounded by remaining wall clock at call time). */
+const HEALTH_EXEC_TIMEOUT_MS = 20_000;
+/** Teardown budget (also bounded by remaining wall clock). */
+const HEALTH_TEARDOWN_TIMEOUT_MS = 8_000;
+/** The sentinel the echo must print for a green result. */
+const HEALTH_ECHO_TOKEN = 'ok';
+
+/** The lifecycle stage the health probe reached (contract-mandated set). */
+export type SandboxHealthStage = 'create' | 'exec' | 'teardown' | 'done';
+
+export interface SandboxHealthResult {
+  ok: boolean;
+  stage: SandboxHealthStage;
+  ms: number;
+  // VERBATIM upstream error string (empty/omitted on success). This is the field
+  // that lets us read the REAL prod failure through the health route.
+  error?: string;
+  // Structured breakdown when the failure was a typed SandboxError.
+  detail?: {
+    code: SandboxErrorCode;
+    stage?: SandboxStage;
+    status?: number;
+    bodyPreview?: string;
+  };
+  // Runtime the create leg actually provisioned (diagnostic only).
+  runtime?: string;
+}
+
+/**
+ * Pull the most VERBATIM upstream string available off an error: for a
+ * SandboxError prefer the raw upstream body (bodyPreview) — that is the literal
+ * text Vercel returned — falling back to the composed message; for anything else
+ * the raw message/String(). Never token material.
+ */
+function verbatimError(err: unknown): string {
+  if (err instanceof SandboxError) {
+    return err.bodyPreview || err.message || 'sandbox_error';
+  }
+  const m = (err as Error)?.message;
+  return (typeof m === 'string' && m) || String(err) || 'unknown_error';
+}
+
+/**
+ * Run a minimal create → echo('ok') → teardown against the LIVE Vercel Sandbox
+ * API and report the outcome. Optional `opts.runtime` overrides the runtime
+ * (defaults to node24). Never throws. On any failure the returned `stage` is the
+ * leg that broke ('create' | 'exec' | 'teardown') and `error` is the verbatim
+ * upstream string; a fully green run returns { ok:true, stage:'done' }.
+ */
+export async function sandboxHealthProbe(opts?: {
+  runtime?: string;
+}): Promise<SandboxHealthResult> {
+  const startedAt = Date.now();
+  const deadline = startedAt + HEALTH_PROBE_BUDGET_MS;
+  const remaining = () => deadline - Date.now();
+  const elapsed = () => Date.now() - startedAt;
+
+  // Fail fast (still structured) when the token isn't even configured — no point
+  // provisioning. Mirrors the not_configured contract used elsewhere.
+  if (!VERCEL_TOKEN) {
+    return {
+      ok: false,
+      stage: 'create',
+      ms: elapsed(),
+      error:
+        'VERCEL_TOKEN is not configured on the server — add a Vercel access token to enable sandbox execution',
+      detail: { code: 'not_configured', stage: 'create' },
+    };
+  }
+
+  let sessionId = '';
+  let runtime: string | undefined;
+
+  // ---- 1) CREATE ----------------------------------------------------------
+  try {
+    const session = await createSession({
+      runtime: opts?.runtime,
+      timeoutMs: HEALTH_SESSION_TIMEOUT_MS,
+    });
+    sessionId = session.sessionId;
+    runtime = session.runtime;
+  } catch (err) {
+    const detail =
+      err instanceof SandboxError ? err.toStructured() : undefined;
+    return {
+      ok: false,
+      stage: 'create',
+      ms: elapsed(),
+      error: verbatimError(err),
+      ...(detail
+        ? {
+            detail: {
+              code: detail.code,
+              ...(detail.stage ? { stage: detail.stage } : {}),
+              ...(typeof detail.status === 'number'
+                ? { status: detail.status }
+                : {}),
+              ...(detail.bodyPreview ? { bodyPreview: detail.bodyPreview } : {}),
+            },
+          }
+        : {}),
+    };
+  }
+
+  // From here on a session EXISTS. We compute the exec outcome into `execFailure`
+  // (null = green) WITHOUT early-returning, so the teardown below ALWAYS runs and
+  // the health VM can never leak — exactly the teardown-leak failure mode we're
+  // hunting. Only after teardown do we shape the final result.
+  let execFailure: SandboxHealthResult | null = null;
+
+  // ---- 2) EXEC echo 'ok' --------------------------------------------------
+  if (remaining() <= 0) {
+    execFailure = {
+      ok: false,
+      stage: 'exec',
+      ms: elapsed(),
+      error: `health probe exceeded its ${HEALTH_PROBE_BUDGET_MS}ms budget before exec`,
+      runtime,
+    };
+  } else {
+    const execBudget = Math.max(
+      MIN_COMMAND_TIMEOUT_MS,
+      Math.min(HEALTH_EXEC_TIMEOUT_MS, remaining())
+    );
+    try {
+      const out = await runCommand(sessionId, 'echo', [HEALTH_ECHO_TOKEN], {
+        timeoutMs: execBudget,
+      });
+      // The command ran — did it actually succeed + echo our sentinel?
+      if (out.exitCode !== 0 || out.stdout.trim() !== HEALTH_ECHO_TOKEN) {
+        execFailure = {
+          ok: false,
+          stage: 'exec',
+          ms: elapsed(),
+          error: `echo '${HEALTH_ECHO_TOKEN}' returned exit=${out.exitCode} stdout=${JSON.stringify(
+            out.stdout.slice(0, 120)
+          )} stderr=${JSON.stringify(out.stderr.slice(0, 120))}`,
+          runtime,
+        };
+      }
+    } catch (err) {
+      const d = err instanceof SandboxError ? err.toStructured() : undefined;
+      execFailure = {
+        ok: false,
+        stage: 'exec',
+        ms: elapsed(),
+        error: verbatimError(err),
+        runtime,
+        ...(d
+          ? {
+              detail: {
+                code: d.code,
+                ...(d.stage ? { stage: d.stage } : {}),
+                ...(typeof d.status === 'number' ? { status: d.status } : {}),
+                ...(d.bodyPreview ? { bodyPreview: d.bodyPreview } : {}),
+              },
+            }
+          : {}),
+      };
+    }
+  }
+
+  // ---- 3) TEARDOWN (ALWAYS runs; its failure is REPORTED) -----------------
+  // stopSession swallows errors by contract, so to SURFACE a teardown fault we
+  // issue the stop directly with a bounded timeout and inspect the response. A
+  // failure here still leaves the VM to auto-expire at its create-time timeout.
+  let teardownError = '';
+  let teardownDetail: SandboxHealthResult['detail'];
+  try {
+    const stopBudget = Math.max(
+      1,
+      Math.min(HEALTH_TEARDOWN_TIMEOUT_MS, remaining())
+    );
+    const res = await vFetch(
+      `${SANDBOX_API_BASE}/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/stop`,
+      { method: 'POST', headers: authHeaders() },
+      stopBudget
+    );
+    if (!res.ok) {
+      const body = await readErrorBody(res);
+      const e = statusToError(res.status, body, 'session stop', 'stop');
+      teardownError = e.bodyPreview || e.message;
+      teardownDetail = {
+        code: e.code,
+        ...(e.stage ? { stage: e.stage } : {}),
+        ...(typeof e.status === 'number' ? { status: e.status } : {}),
+        ...(e.bodyPreview ? { bodyPreview: e.bodyPreview } : {}),
+      };
+    }
+  } catch (err) {
+    teardownError = verbatimError(err);
+  }
+
+  // ---- shape the final result: exec failure takes precedence (it happened
+  // first + is the more actionable signal), then teardown failure, else green.
+  if (execFailure) return execFailure;
+  if (teardownError) {
+    return {
+      ok: false,
+      stage: 'teardown',
+      ms: elapsed(),
+      error: teardownError,
+      runtime,
+      ...(teardownDetail ? { detail: teardownDetail } : {}),
+    };
+  }
+  return { ok: true, stage: 'done', ms: elapsed(), runtime };
 }

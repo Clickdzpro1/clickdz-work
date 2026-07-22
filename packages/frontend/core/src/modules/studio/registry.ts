@@ -112,7 +112,7 @@ export const STUDIOS: StudioDef[] = [
   },
   {
     id: 'shoperp',
-    label: '🛍️ Shop ERP',
+    label: '⚡ DzOS',
     route: '/shoperp',
     icon: () => createElement(BlockLinkIcon),
     group: 'commerce',

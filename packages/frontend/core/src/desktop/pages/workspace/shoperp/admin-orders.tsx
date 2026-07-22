@@ -1,3 +1,4 @@
+import { PagedList } from '@affine/core/clickdz/paged-list';
 import {
   type CSSProperties,
   useCallback,
@@ -26,8 +27,6 @@ import {
   STATUS_COLORS,
   StatusBadge,
   statusTargets,
-  tdStyle,
-  thStyle,
 } from './shoperp-shared';
 
 // ---------------------------------------------------------------------------
@@ -216,6 +215,13 @@ export const OrdersAdmin = ({
       ) : null}
 
       <Panel title={`Orders · ${visible.length}`}>
+        {/* Paginated order list (pageSize 10, column mode). The `key={filter}`
+            remounts PagedList whenever the active status filter changes, which
+            resets it to page 1 (a filtered view always starts at the top).
+            Column headers ride above the list on a shared grid template so the
+            row cards stay aligned; on narrow screens the row grid reflows and
+            the header hides (see ORDERS_LIST_CSS). No internal scroll — the
+            list is as tall as one page of rows, then the pager takes over. */}
         {visible.length === 0 ? (
           <EmptyNote>
             {orders.length === 0
@@ -223,138 +229,227 @@ export const OrdersAdmin = ({
               : 'No orders match this filter.'}
           </EmptyNote>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table
-              style={{
-                width: '100%',
-                borderCollapse: 'collapse',
-                fontSize: 12.5,
-              }}
+          <div className="cdz-orders-list">
+            <style>{ORDERS_LIST_CSS}</style>
+            {/* Column header row (same grid template as each row card). */}
+            <div
+              className="cdz-orders-head"
+              style={{ ...orderRowGrid, ...orderHeadStyle }}
+              aria-hidden
             >
-              <thead>
-                <tr>
-                  {[
-                    'Ref',
-                    'Date',
-                    'Customer',
-                    'Wilaya',
-                    'Items',
-                    'Total',
-                    'Status',
-                    'Advance',
-                  ].map(h => (
-                    <th key={h} style={thStyle}>
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {visible.map(o => {
-                  const targets = statusTargets(o.status);
-                  const next = NEXT_STATUS[o.status as OrderStatus];
-                  const itemCount = Array.isArray(o.items)
-                    ? o.items.reduce(
-                        (s, it) => s + (it.qty != null ? Number(it.qty) || 0 : 1),
-                        0
-                      )
-                    : 0;
-                  return (
-                    <tr key={String(o.ref || o.id)}>
-                      <td
-                        style={{
-                          ...tdStyle,
-                          fontFamily:
-                            'var(--affine-font-code-family, monospace)',
-                          fontWeight: 700,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {o.ref || '—'}
-                      </td>
-                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                        {orderDate(o) || '—'}
-                      </td>
-                      <td style={tdStyle}>
-                        <div style={{ fontWeight: 600 }}>
-                          {o.customer || '—'}
-                        </div>
-                        {o.phone ? (
-                          <div style={{ fontSize: 11, color: C.muted }}>
-                            {o.phone}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td style={tdStyle}>{o.wilaya || '—'}</td>
-                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                        {itemCount || '—'}
-                      </td>
-                      <td
-                        style={{
-                          ...tdStyle,
-                          fontWeight: 700,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {fmtDZD(orderTotal(o), currency)}
-                      </td>
-                      <td style={tdStyle}>
-                        <StatusBadge status={o.status} />
-                      </td>
-                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                        {busyRef === o.ref ? (
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 6,
-                              color: C.muted,
-                              fontSize: 11.5,
-                            }}
-                          >
-                            <Spinner /> Saving…
-                          </span>
-                        ) : readOnly ? (
-                          <span style={{ fontSize: 11.5, color: C.muted }}>
-                            read-only
-                          </span>
-                        ) : targets.length === 0 ? (
-                          <span style={{ fontSize: 11.5, color: C.muted }}>
-                            final
-                          </span>
-                        ) : (
-                          <div style={{ display: 'inline-flex', gap: 6 }}>
-                            {next ? (
-                              <button
-                                style={miniBtnStyle('primary', anyBusy)}
-                                disabled={anyBusy}
-                                onClick={() => void advance(o, next)}
-                                title={`Advance to ${next}`}
-                              >
-                                → {next}
-                              </button>
-                            ) : null}
-                            {targets.includes('Retournée') ? (
-                              <button
-                                style={miniBtnStyle('secondary', anyBusy)}
-                                disabled={anyBusy}
-                                onClick={() => void advance(o, 'Retournée')}
-                                title="Mark as returned"
-                              >
-                                ↩ Retournée
-                              </button>
-                            ) : null}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+              {[
+                'Ref',
+                'Date',
+                'Customer',
+                'Wilaya',
+                'Items',
+                'Total',
+                'Status',
+                'Advance',
+              ].map(h => (
+                <div key={h} style={orderHeadCellStyle}>
+                  {h}
+                </div>
+              ))}
+            </div>
+            <PagedList<ErpOrder>
+              key={filter}
+              items={visible}
+              pageSize={10}
+              renderItem={o => (
+                <OrderRow
+                  key={String(o.ref || o.id)}
+                  order={o}
+                  currency={currency}
+                  readOnly={readOnly}
+                  busyRef={busyRef}
+                  anyBusy={anyBusy}
+                  onAdvance={advance}
+                />
+              )}
+            />
           </div>
         )}
       </Panel>
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// A single order row card. Same fields, values, actions and behaviour as the
+// pre-R9 table row — Ref / Date / Customer(+phone) / Wilaya / Items / Total /
+// Status badge / Advance controls — laid out on the shared `orderRowGrid`
+// template so the columns line up under the header. Status-advance buttons
+// (→ next, ↩ Retournée) call the exact same `advance` handler; busy / readOnly
+// / final states are preserved verbatim.
+// ---------------------------------------------------------------------------
+const OrderRow = ({
+  order: o,
+  currency,
+  readOnly,
+  busyRef,
+  anyBusy,
+  onAdvance,
+}: {
+  order: ErpOrder;
+  currency: string;
+  readOnly: boolean;
+  busyRef: string | null;
+  anyBusy: boolean;
+  onAdvance: (order: ErpOrder, to: OrderStatus) => void;
+}) => {
+  const targets = statusTargets(o.status);
+  const next = NEXT_STATUS[o.status as OrderStatus];
+  const itemCount = Array.isArray(o.items)
+    ? o.items.reduce(
+        (s, it) => s + (it.qty != null ? Number(it.qty) || 0 : 1),
+        0
+      )
+    : 0;
+  return (
+    <div className="cdz-order-row" style={{ ...orderRowGrid, ...orderRowStyle }}>
+      <div
+        data-col="Ref"
+        style={{
+          ...orderCellStyle,
+          fontFamily: 'var(--affine-font-code-family, monospace)',
+          fontWeight: 700,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {o.ref || '—'}
+      </div>
+      <div data-col="Date" style={{ ...orderCellStyle, whiteSpace: 'nowrap' }}>
+        {orderDate(o) || '—'}
+      </div>
+      <div data-col="Customer" style={orderCellStyle}>
+        <div style={{ fontWeight: 600 }}>{o.customer || '—'}</div>
+        {o.phone ? (
+          <div style={{ fontSize: 11, color: C.muted }}>{o.phone}</div>
+        ) : null}
+      </div>
+      <div data-col="Wilaya" style={orderCellStyle}>
+        {o.wilaya || '—'}
+      </div>
+      <div data-col="Items" style={{ ...orderCellStyle, whiteSpace: 'nowrap' }}>
+        {itemCount || '—'}
+      </div>
+      <div
+        data-col="Total"
+        style={{ ...orderCellStyle, fontWeight: 700, whiteSpace: 'nowrap' }}
+      >
+        {fmtDZD(orderTotal(o), currency)}
+      </div>
+      <div data-col="Status" style={orderCellStyle}>
+        <StatusBadge status={o.status} />
+      </div>
+      <div
+        data-col="Advance"
+        style={{ ...orderCellStyle, whiteSpace: 'nowrap' }}
+      >
+        {busyRef === o.ref ? (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              color: C.muted,
+              fontSize: 11.5,
+            }}
+          >
+            <Spinner /> Saving…
+          </span>
+        ) : readOnly ? (
+          <span style={{ fontSize: 11.5, color: C.muted }}>read-only</span>
+        ) : targets.length === 0 ? (
+          <span style={{ fontSize: 11.5, color: C.muted }}>final</span>
+        ) : (
+          <div style={{ display: 'inline-flex', gap: 6 }}>
+            {next ? (
+              <button
+                style={miniBtnStyle('primary', anyBusy)}
+                disabled={anyBusy}
+                onClick={() => void onAdvance(o, next)}
+                title={`Advance to ${next}`}
+              >
+                → {next}
+              </button>
+            ) : null}
+            {targets.includes('Retournée') ? (
+              <button
+                style={miniBtnStyle('secondary', anyBusy)}
+                disabled={anyBusy}
+                onClick={() => void onAdvance(o, 'Retournée')}
+                title="Mark as returned"
+              >
+                ↩ Retournée
+              </button>
+            ) : null}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Shared column template for the header row + every order row card (keeps them
+// aligned). Mirrors the pre-R9 table's 8 columns; the Customer column flexes.
+const orderRowGrid: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns:
+    'minmax(64px,auto) minmax(72px,auto) minmax(120px,1.4fr) minmax(72px,auto) 56px minmax(84px,auto) minmax(96px,auto) minmax(120px,auto)',
+  gap: 10,
+  alignItems: 'center',
+};
+
+const orderHeadStyle: CSSProperties = {
+  padding: '0 10px 8px',
+  borderBottom: `1px solid ${C.border}`,
+  marginBottom: 4,
+};
+
+const orderHeadCellStyle: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  color: C.muted,
+};
+
+const orderRowStyle: CSSProperties = {
+  padding: '10px',
+  borderRadius: 10,
+  border: `1px solid ${C.border}`,
+  background: C.panel,
+  fontSize: 12.5,
+};
+
+const orderCellStyle: CSSProperties = {
+  minWidth: 0,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
+// On narrow screens the 8-col grid can't fit; hide the header and let each row
+// card reflow to a single column with inline "label: value" cells (the
+// data-col attribute feeds the pseudo-label). Keeps the list readable on phones
+// without any horizontal scroll.
+const ORDERS_LIST_CSS = `
+.cdz-orders-list{display:flex;flex-direction:column;gap:8px;}
+@media (max-width: 720px){
+  .cdz-orders-head{display:none !important;}
+  .cdz-order-row{grid-template-columns:1fr !important;gap:4px !important;}
+  .cdz-order-row > [data-col]::before{
+    content:attr(data-col);
+    display:inline-block;
+    min-width:74px;
+    margin-inline-end:8px;
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:0.04em;
+    text-transform:uppercase;
+    color:var(--affine-text-secondary-color, #9aa0a6);
+  }
+  .cdz-order-row > [data-col="Advance"]::before{content:none;}
+}
+`;

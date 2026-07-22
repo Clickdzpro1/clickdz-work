@@ -1,3 +1,5 @@
+import { PagedList } from '@affine/core/clickdz/paged-list';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
@@ -11,21 +13,30 @@ import {
 } from './shoperp-shared';
 
 // ---------------------------------------------------------------------------
-// ShopERP wizard — the template gallery step (WS4-5). A PURE ADDITIVE step:
-// it fetches the vertical catalog from GET /api/v1/apps/templates and lets the
-// user pick a starting template (accent + look + darja hero + seed pack, all
-// resolved server-side at mint via templateId). When the catalog endpoint is
-// absent/empty (flag CDZ_TEMPLATE_CATALOG OFF → 404, or an older server) the
-// step is NEVER inserted into the wizard flow and the wizard behaves EXACTLY as
-// today — byte-identical mint with no templateId.
+// DzOS wizard — the "Modèles de business" step (WS4-5, reframed R9). A PURE
+// ADDITIVE step: it fetches the vertical catalog from GET /api/v1/apps/templates
+// and lets the user pick a starting BUSINESS template (accent + look + darja
+// hero + seed pack, all resolved server-side at mint via templateId). When the
+// catalog endpoint is absent/empty (flag CDZ_TEMPLATE_CATALOG OFF → 404, or an
+// older server) the step is NEVER inserted into the wizard flow and the wizard
+// behaves EXACTLY as today — byte-identical mint with no templateId.
 //
-// Reuses the vdz/template-gallery pattern (category chips derived from the data,
-// gradient/accent thumb cards, a default card shown first) but inline-styled to
-// match the shoperp pages — no .css.ts, no portal, no new deps. It renders as a
-// step body inside the wizard's existing Card/StepShell chrome.
+// R9 reframe (Fateh: "they aren't shops, they are business"): the gallery is
+// "Modèles de business". Header/catalog copy talks about a *type of business*
+// (pharmacie, restaurant, cabinet, mode…), not a "boutique". The word
+// "boutique" only survives inside an individual card seed where it means the
+// storefront itself (e.g. the "Sans modèle" generic seed).
 //
-// The "Sans modèle" card (templateId = null) is FIRST and selected by default,
-// so a user who clicks straight through gets today's generic shop unchanged.
+// Business-type tabs are DERIVED from the catalog data (each template's raw
+// `vertical`), mapped DEFENSIVELY into seven fixed business buckets — Santé /
+// Restauration & Café / Mode & Beauté / Commerce / Maison & Auto / Services /
+// Autres. Anything we can't recognise falls into "Autres" so no template ever
+// disappears. "Tous" shows everything. The grid is a PagedList (pageSize 8,
+// grid mode) — no scroll container; the wizard card grows to fit one page.
+//
+// The "Sans modèle" card (templateId = null) is FIRST on page 1 of "Tous" and
+// selected by default, so a user who clicks straight through gets today's
+// generic shop unchanged.
 //
 // Flow control lives in `useShopTemplates()`: the wizard calls the hook, and
 // only inserts the `template` step when the hook reports `ready` with ≥1
@@ -34,31 +45,97 @@ import {
 // ---------------------------------------------------------------------------
 
 const ALL = 'Tous';
+const OTHER = 'Autres';
 
-// A human FR label for the common vertical buckets. The tab set is still
-// DERIVED from the data (first-seen order); this only prettifies the chip text
-// when a known bucket keyword is present, otherwise the raw vertical is shown.
-// Kept intentionally forgiving — an unknown vertical surfaces its own chip.
-const VERTICAL_LABELS: Array<{ match: RegExp; label: string }> = [
-  { match: /pharma|sant[ée]|dentaire|m[ée]dic/i, label: 'Santé' },
-  { match: /resto|food|fast|p[âa]tiss|caf[ée]|bakery|boulanger/i, label: 'Food' },
-  { match: /mode|fashion|femme|homme|sneaker|cosm|beaut|bijou/i, label: 'Mode' },
-  { match: /[ée]lectro|phone|t[ée]l|tech|informat/i, label: 'Tech' },
+// Fixed business-type buckets, in the order Fateh grouped them. "Tous" is the
+// implicit first tab (prepended); "Autres" is the guaranteed catch-all so an
+// unmapped vertical is never lost. Kept in this order for the tab row.
+const BUCKET_ORDER = [
+  'Santé',
+  'Restauration & Café',
+  'Mode & Beauté',
+  'Commerce',
+  'Maison & Auto',
+  'Services',
+  OTHER,
+] as const;
+
+type Bucket = (typeof BUCKET_ORDER)[number];
+
+// Primary map: the catalog's stable template `id` → business bucket. Ids are the
+// canonical TemplateDef ids (clickdz-shop-catalog.ts) and are the most reliable
+// key. Any id not listed here falls through to the vertical-keyword pass, then
+// to "Autres". This is the source of the category→vertical grouping in NOTES.
+const ID_BUCKET: Record<string, Bucket> = {
+  // Santé
+  pharmacie: 'Santé',
+  dentaire: 'Santé',
+  // Restauration & Café
+  'resto-fastfood': 'Restauration & Café',
+  patisserie: 'Restauration & Café',
+  cafe: 'Restauration & Café',
+  // Mode & Beauté
+  'mode-femme': 'Mode & Beauté',
+  'mode-homme': 'Mode & Beauté',
+  cosmetiques: 'Mode & Beauté',
+  bijouterie: 'Mode & Beauté',
+  // Commerce
+  superette: 'Commerce',
+  librairie: 'Commerce',
+  electronique: 'Commerce',
+  'accessoires-tel': 'Commerce',
+  bebe: 'Commerce',
+  sport: 'Commerce',
+  // Maison & Auto
+  'meubles-deco': 'Maison & Auto',
+  'pieces-auto': 'Maison & Auto',
+  droguerie: 'Maison & Auto',
+  // Services
+  'salon-booking': 'Services',
+  // Tous/Autres — the generic polyvalent template lives in Autres.
+  polyvalent: OTHER,
+};
+
+// Secondary pass for verticals we don't recognise by id (older/newer server,
+// renamed ids). Keyword → bucket, first match wins. Deliberately forgiving; the
+// final fallback is always "Autres" so nothing disappears.
+const VERTICAL_RULES: Array<{ match: RegExp; bucket: Bucket }> = [
+  { match: /pharma|sant[ée]|dentaire|m[ée]dic|parapharm/i, bucket: 'Santé' },
   {
-    match: /meuble|d[ée]co|maison|droguerie|quincaill|superette|[ée]picerie/i,
-    label: 'Maison',
+    match: /resto|restaurant|food|fast|p[âa]tiss|bakery|boulanger|caf[ée]|traiteur/i,
+    bucket: 'Restauration & Café',
   },
-  { match: /salon|coiffure|service|booking|r[ée]serv/i, label: 'Services' },
+  {
+    match: /mode|fashion|femme|homme|sneaker|cosm[ée]?tiq|beaut[ée]|bijou|parfum/i,
+    bucket: 'Mode & Beauté',
+  },
+  {
+    match:
+      /superette|[ée]picerie|librairie|papeter|[ée]lectro|phone|t[ée]l[ée]?phone|informat|b[ée]b[ée]|pu[ée]ricult|sport|fitness|jouet/i,
+    bucket: 'Commerce',
+  },
+  {
+    match: /meuble|d[ée]co|maison|droguerie|quincaill|auto|pi[èe]ce|bricol/i,
+    bucket: 'Maison & Auto',
+  },
+  { match: /salon|coiffure|service|booking|r[ée]serv|rendez/i, bucket: 'Services' },
 ];
 
-/** Map a raw `vertical` to a coarse category bucket for the tab row. */
-function bucketOf(vertical: string): string {
-  const v = String(vertical || '').trim();
-  if (!v) return 'Général';
-  for (const { match, label } of VERTICAL_LABELS) {
-    if (match.test(v)) return label;
+/**
+ * Map one template to its business bucket — DEFENSIVELY. Tries the stable id
+ * first, then vertical keywords, then lands on "Autres". Never returns
+ * undefined, so every template is always reachable from some tab.
+ */
+function bucketOf(t: ShopTemplateMeta): Bucket {
+  const id = String(t.id || '').trim();
+  if (id && ID_BUCKET[id]) return ID_BUCKET[id];
+  const v = String(t.vertical || '').trim();
+  if (v) {
+    for (const { match, bucket } of VERTICAL_RULES) {
+      if (match.test(v)) return bucket;
+    }
   }
-  return v;
+  return OTHER;
 }
 
 export type TemplatesState =
@@ -67,7 +144,7 @@ export type TemplatesState =
   | { kind: 'unavailable' };
 
 /**
- * Fetch the shop-template catalog ONCE. Returns a discriminated state the
+ * Fetch the business-template catalog ONCE. Returns a discriminated state the
  * wizard uses to decide whether to insert the picker step:
  *   - loading      → don't insert yet (welcome shows first, as today)
  *   - unavailable  → never insert (404/empty/error → exact pre-catalog flow)
@@ -94,6 +171,13 @@ export function useShopTemplates(): TemplatesState {
   return state;
 }
 
+// A picker row item: either the "Sans modèle" sentinel or a catalog template.
+// PagedList paginates this flat array; the sentinel is prepended only on the
+// "Tous" tab so it stays FIRST on page 1 (byte-identical default mint path).
+type PickerItem =
+  | { kind: 'none' }
+  | { kind: 'tpl'; tpl: ShopTemplateMeta };
+
 export const TemplatePicker = ({
   templates,
   selectedTemplateId,
@@ -108,35 +192,107 @@ export const TemplatePicker = ({
 }) => {
   const [category, setCategory] = useState<string>(ALL);
 
-  // Category chips derived from the data, first-seen order, ALL first.
+  // Business-type tabs: ALL first, then only the fixed buckets that actually
+  // contain ≥1 template, in BUCKET_ORDER. "Autres" only appears when something
+  // maps to it. Derived from the catalog data via bucketOf().
   const categories = useMemo(() => {
-    const seen: string[] = [];
-    for (const t of templates) {
-      const b = bucketOf(t.vertical);
-      if (!seen.includes(b)) seen.push(b);
-    }
-    return [ALL, ...seen];
+    const present = new Set<Bucket>();
+    for (const t of templates) present.add(bucketOf(t));
+    const tabs: string[] = [ALL];
+    for (const b of BUCKET_ORDER) if (present.has(b)) tabs.push(b);
+    return tabs;
   }, [templates]);
 
-  const visible = useMemo(
+  // If the active tab vanishes (shouldn't happen — catalog is static per load),
+  // snap back to "Tous" so the grid is never empty by accident.
+  useEffect(() => {
+    if (!categories.includes(category)) setCategory(ALL);
+  }, [categories, category]);
+
+  // Templates for the active tab, catalog order preserved.
+  const visibleTemplates = useMemo(
     () =>
       category === ALL
         ? templates
-        : templates.filter(t => bucketOf(t.vertical) === category),
+        : templates.filter(t => bucketOf(t) === category),
     [templates, category]
   );
+
+  // Flat item list for PagedList. "Sans modèle" is prepended ONLY on "Tous" so
+  // it is the very first card on page 1; on a specific business tab the grid is
+  // just that bucket's templates.
+  const items = useMemo<PickerItem[]>(() => {
+    const tpls: PickerItem[] = visibleTemplates.map(tpl => ({
+      kind: 'tpl',
+      tpl,
+    }));
+    return category === ALL ? [{ kind: 'none' }, ...tpls] : tpls;
+  }, [visibleTemplates, category]);
 
   const pick = useCallback(
     (id: string | null) => () => onSelect(id),
     [onSelect]
   );
 
+  // Render one PagedList item as a TemplateCard. Kept stable across pages so
+  // selection highlighting and clicks behave identically to the old grid.
+  const renderItem = useCallback(
+    (item: PickerItem): ReactNode => {
+      if (item.kind === 'none') {
+        return (
+          <TemplateCard
+            selected={selectedTemplateId == null}
+            onClick={pick(null)}
+            accent={C.muted}
+            gradient={[C.panel2, C.panel]}
+            glyph="✚"
+            name="Sans modèle"
+            darja="متعدد"
+            vertical="Générique"
+            hero="Boutique polyvalente — repartez de zéro, tout est modifiable."
+            dashed
+          />
+        );
+      }
+      const t = item.tpl;
+      return (
+        <TemplateCard
+          selected={selectedTemplateId === t.id}
+          onClick={pick(t.id)}
+          accent={t.accent || C.accent}
+          gradient={
+            t.gradient && t.gradient.length === 2
+              ? t.gradient
+              : [t.accent || C.accent, t.accent || C.accent]
+          }
+          glyph={t.emoji || '🛍️'}
+          name={t.name}
+          darja={t.nameDarja}
+          vertical={t.vertical}
+          hero={t.heroLine}
+        />
+      );
+    },
+    [selectedTemplateId, pick]
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* Category tabs — derived from the data (vertical buckets). */}
+      {/* Header / intro copy — business-type framing, not boutique-centric. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
+          Modèles de business
+        </span>
+        <span style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.45 }}>
+          Pharmacie, restaurant, cabinet, mode… choisissez votre type de
+          business.
+        </span>
+      </div>
+
+      {/* Business-type tabs — derived from the catalog data (mapped verticals). */}
       <div
         role="tablist"
-        aria-label="Filtrer les modèles par catégorie"
+        aria-label="Filtrer les modèles par type de business"
         style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
       >
         {categories.map(cat => {
@@ -169,57 +325,27 @@ export const TemplatePicker = ({
         })}
       </div>
 
-      {/* Card grid — 2 columns, collapsing to 1 on narrow viewports. auto-fill
-          + minmax(150px) fills 2 columns at the wizard's card width and drops
-          to 1 column on phones. */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
-          gap: 10,
-        }}
-      >
-        {/* "Sans modèle" default card — FIRST, in every category. Selecting it
-            clears the templateId → today's generic shop (byte-identical mint). */}
-        {category === ALL ? (
-          <TemplateCard
-            selected={selectedTemplateId == null}
-            onClick={pick(null)}
-            accent={C.muted}
-            gradient={[C.panel2, C.panel]}
-            glyph="✚"
-            name="Sans modèle"
-            darja="متعدد"
-            vertical="Générique"
-            hero="Boutique polyvalente — repartez de zéro, tout est modifiable."
-            dashed
-          />
-        ) : null}
-
-        {visible.map(t => (
-          <TemplateCard
-            key={t.id}
-            selected={selectedTemplateId === t.id}
-            onClick={pick(t.id)}
-            accent={t.accent || C.accent}
-            gradient={
-              t.gradient && t.gradient.length === 2
-                ? t.gradient
-                : [t.accent || C.accent, t.accent || C.accent]
-            }
-            glyph={t.emoji || '🛍️'}
-            name={t.name}
-            darja={t.nameDarja}
-            vertical={t.vertical}
-            hero={t.heroLine}
-          />
-        ))}
-      </div>
+      {/* Paginated card grid via PagedList (pageSize 8, grid mode). No scroll
+          container — the card grows to fit one page; the pager sits below. The
+          grid drops 2→1 column on phones (PagedList's grid minmax handles it).
+          "Sans modèle" is item 0 on page 1 of "Tous" (see items memo). */}
+      <PagedList<PickerItem>
+        items={items}
+        pageSize={8}
+        grid
+        minItemWidth={230}
+        renderItem={renderItem}
+        emptyState={
+          <div style={{ ...hintStyle, padding: '20px 8px', textAlign: 'center' }}>
+            Aucun modèle dans cette catégorie.
+          </div>
+        }
+      />
 
       <Banner tone="info">
-        Un modèle pré-remplit le look, les catégories et des produits d’exemple —
-        vous personnalisez tout ensuite. « Sans modèle » démarre une boutique
-        générique.
+        Un modèle pré-remplit le look, les catégories et des produits d’exemple
+        pour votre type de business — vous personnalisez tout ensuite. « Sans
+        modèle » démarre un business générique, vierge.
       </Banner>
     </div>
   );
@@ -239,7 +365,7 @@ export const TemplatePickerLoading = () => (
     }}
   >
     <Spinner />
-    <div style={hintStyle}>Chargement des modèles…</div>
+    <div style={hintStyle}>Chargement des modèles de business…</div>
   </div>
 );
 
@@ -289,6 +415,8 @@ const TemplateCard = ({
       transition:
         'border-color 150ms ease, background 150ms ease, box-shadow 150ms ease',
       minWidth: 0,
+      width: '100%',
+      height: '100%',
     }}
   >
     {/* Accent color swatch header (gradient thumb + emoji glyph). */}
@@ -400,7 +528,7 @@ const TemplateCard = ({
     <span
       style={{
         ...btnStyle(selected ? 'primary' : 'secondary'),
-        marginTop: 2,
+        marginTop: 'auto',
         width: '100%',
         padding: '6px 10px',
         fontSize: 12,
