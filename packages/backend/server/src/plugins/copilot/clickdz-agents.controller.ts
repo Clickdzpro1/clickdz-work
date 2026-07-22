@@ -281,6 +281,9 @@ interface AgentCaps {
   // flow on the /agents home). Default OFF ⇒ unset env == the create UI hidden +
   // the roster carries built-ins only (byte-identical legacy behaviour).
   customEnabled: boolean;
+  // R14: whether the VPIC image-editor studio tab is available. Default OFF ⇒
+  // unset env == the tab hidden (the FE studio registry gates on this flag).
+  vpicEnabled: boolean;
 }
 
 /**
@@ -315,6 +318,9 @@ function buildCaps(): AgentCaps {
     // R12: custom-agents gate (same inline idiom; default OFF). The FE gates the
     // "Créer un agent" flow on this flag.
     customEnabled: CDZ_AGENT_CUSTOM_ENABLED === '1',
+    // R14: VPIC image-editor studio gate (same inline process.env idiom; default
+    // OFF). The FE studio registry gates the VPIC tab's visibility on this flag.
+    vpicEnabled: process.env.CDZ_VPIC_ENABLED === '1',
   };
 }
 
