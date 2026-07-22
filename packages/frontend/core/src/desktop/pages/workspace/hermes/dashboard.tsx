@@ -1,13 +1,31 @@
 import { AgentApiError, getCapabilities, listThreads } from '@affine/core/modules/agents/api';
 import {
+  approveAgentRun,
+  type AgentTrigger,
+  getAgentPulse,
   getAgentRun,
   listAgentRuns,
+  listTriggers,
   startBackgroundRun,
+  toggleTrigger,
 } from '@affine/core/modules/agents/api';
-import { StepList } from '@affine/core/modules/agents/components';
-import { MarkdownLite } from '@affine/core/modules/agents/components';
+import {
+  accentFor,
+  AgentPresence,
+  ApprovalInbox,
+  type ApprovalInboxItem,
+  CodDesk,
+  type CodOrder,
+  MarkdownLite,
+  MissionsCard,
+  PulseCard,
+  type AgentPulse,
+  StepList,
+} from '@affine/core/modules/agents/components';
 import type { AgentStep, AgentThreadSummary } from '@affine/core/modules/agents/types';
+import { useAgentLang } from '@affine/core/modules/agents/i18n';
 import { useAgentRunStream } from '@affine/core/modules/agents/use-agent-stream';
+import { WorkbenchLink } from '@affine/core/modules/workbench';
 import { ChatWithAiIcon } from '@blocksuite/icons/rc';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -32,22 +50,30 @@ import {
 } from './hermes-shared';
 
 // ---------------------------------------------------------------------------
-// Hermes dashboard — the per-user home once the agent is provisioned. Mirrors
-// the ShopERP ErpDashboard role: a wide, panelled overview built from REAL
-// endpoints (GET /api/v1/hermes/threads + /capabilities) plus the saved config.
-// Sections:
-//   • Quick stats — run count, last run, tools ready, saved workflows.
-//   • A prominent "New run" entry into the streaming console.
-//   • Exécutions — background agent runs (R6): a start-in-background composer +
-//     a live list of durable runs with state chips; clicking a run opens an
-//     inline live view that re-attaches to its stream and renders the SAME step
-//     timeline the console uses + a final answer card. Gated: if the runs API
-//     404s (CDZ_AGENTS_ENABLED off) this whole section stays hidden and the
-//     dashboard behaves byte-identically to before.
-//   • Recent runs — from the threads list; click → open that thread in console.
-//   • Saved workflows — from config; click → open console prefilled with goal.
-//   • Tools & connections — reuses the shipping HermesConnectionsPanel
-//     (available vs needs-setup), driven by the live capabilities.
+// Hermes dashboard — "Le Bureau" (R11, WS11-7). Hermès is not a chatbox: it is
+// an operations EMPLOYEE that already started working before you opened the tab.
+// The dashboard is recomposed as a single ≤720px center desk column (persona
+// doc "Le bureau"), scannable in 5s:
+//   1. Greeting bar — a darja "Sbah el-khir, {name}" + a reporting-state presence
+//      lamp + last-sweep time; the chat is DEMOTED to a compact "Parler à {name}"
+//      button, no longer the centerpiece.
+//   2. <PulseCard> — the business pulse hero (commandes/à confirmer/CA/retours/
+//      stock), fed by GET /api/v1/agents/pulse via Pouls's `getAgentPulse`. Fail-
+//      soft: any failure / no shop ⇒ pulse=null ⇒ PulseCard's own warm new-hire
+//      empty state (never an error).
+//   3. <ApprovalInbox> — actions Hermès wants a go-ahead on, built from the
+//      waiting_approval background runs (listAgentRuns filtered + approveAgentRun).
+//   4. <CodDesk> — pending cash-on-delivery orders (Algeria's #1 daily job) from
+//      the pulse read's optional `orders` sample. Best-effort: no orders ⇒ hidden.
+//   5. <MissionsCard> — scheduled jobs from listTriggers('hermes') (R8); "Ouvrir"
+//      navigates to the full /agents/triggers page.
+// EVERYTHING R6-R10 SURVIVES verbatim below the desks: the Exécutions panel
+// (background runs composer + list + live view), Recent runs, Saved workflows,
+// Tools & connections, and the default-mode footer. Every export (HermesDashboard
+// + default), every prop, and every behavior is preserved. When the new agent
+// endpoints 404 (CDZ_AGENTS_ENABLED off) or all data is absent, the new desks
+// render their own empty/hidden states and the dashboard behaves as before.
+//
 // The console itself lives in index.tsx; the dashboard reaches it via the
 // onOpenConsole / onNewRun callbacks (prefill = a goal string, threadId = open
 // an existing run). Everything degrades: threads/caps failures show a retry,
@@ -108,6 +134,117 @@ function normalizeRun(raw: unknown): AgentRunRow | null {
   };
 }
 
+// ---------------------------------------------------------------------------
+// "Le Bureau" data normalisers — pulse / approvals / COD orders. All coerce a
+// loosely-typed payload into the EXACT shape the Trame R11 components require
+// (PulseCard `AgentPulse`, ApprovalInbox `ApprovalInboxItem`, CodDesk `CodOrder`)
+// and fail soft (null / [] / hidden) so a partial or absent payload never
+// crashes the desk. The FE codes to Pouls's route contract (GET
+// /api/v1/agents/pulse) via the `getAgentPulse` api wrapper.
+// ---------------------------------------------------------------------------
+
+/** Coerce a loose numeric field to a clean count ≥ 0 (never NaN/negative). */
+function toCount(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/**
+ * Normalise the pulse payload into the PulseCard `AgentPulse` shape. Returns
+ * null when the payload is absent, malformed, or explicitly `{connected:false}`
+ * (no shop connected yet) — PulseCard renders its own warm new-hire empty state
+ * for null, so the dashboard never surfaces a raw error for a not-yet-connected
+ * merchant.
+ */
+function normalizePulse(raw: unknown): AgentPulse | null {
+  const r = (raw && typeof raw === 'object' ? raw : null) as Record<
+    string,
+    unknown
+  > | null;
+  if (!r) return null;
+  // The backend returns `{connected:false}` (+ zeros) when the user has no shop.
+  if (r.connected === false) return null;
+  return {
+    ordersToday: toCount(r.ordersToday),
+    toConfirm: toCount(r.toConfirm),
+    revenueTodayDzd: toCount(r.revenueTodayDzd),
+    returns: toCount(r.returns),
+    lowStock: toCount(r.lowStock),
+  };
+}
+
+/**
+ * Best-effort extraction of a COD orders sample from the pulse payload. The
+ * pulse route MAY expose a small `orders` array (contract: "if pulse exposes a
+ * sample"); when it does not, this returns [] and the desk is hidden. Each row
+ * is coerced to the CodDesk `CodOrder` shape defensively.
+ */
+function normalizeOrders(raw: unknown): CodOrder[] {
+  const r = (raw && typeof raw === 'object' ? raw : null) as Record<
+    string,
+    unknown
+  > | null;
+  if (!r) return [];
+  const rows = Array.isArray(r.orders) ? r.orders : [];
+  return rows
+    .filter((o): o is Record<string, unknown> => !!o && typeof o === 'object')
+    .map(o => ({
+      ref: typeof o.ref === 'string' ? o.ref : '',
+      customer: typeof o.customer === 'string' ? o.customer : '',
+      phone: typeof o.phone === 'string' ? o.phone : '',
+      wilaya: typeof o.wilaya === 'string' ? o.wilaya : '',
+      totalDzd: toCount(o.totalDzd),
+      status: typeof o.status === 'string' ? o.status : '',
+    }))
+    .filter(o => o.ref.length > 0);
+}
+
+/**
+ * Read the pending approval descriptor out of a full run record (getAgentRun).
+ * The approval id (= the `approval_request` frame's id, used as the stepId that
+ * approveAgentRun echoes back) is NOT a typed field on AgentRunRecord, so we
+ * scan the raw payload defensively for the common shapes the backend may use
+ * (`pendingApproval` / `approval` object, or a trailing approval-like step).
+ * Returns `{ id, title?, detail? }` or null. Fail-soft: a missing descriptor
+ * still yields an inbox row (the caller falls back to the run prompt + runId).
+ */
+function readPendingApproval(
+  raw: unknown
+): { id: string; title?: string; detail?: string } | null {
+  const r = (raw && typeof raw === 'object' ? raw : null) as Record<
+    string,
+    unknown
+  > | null;
+  if (!r) return null;
+  const cand =
+    (r.pendingApproval && typeof r.pendingApproval === 'object'
+      ? (r.pendingApproval as Record<string, unknown>)
+      : null) ??
+    (r.approval && typeof r.approval === 'object'
+      ? (r.approval as Record<string, unknown>)
+      : null);
+  if (cand) {
+    const id =
+      typeof cand.id === 'string'
+        ? cand.id
+        : typeof cand.stepId === 'string'
+          ? cand.stepId
+          : '';
+    if (id) {
+      return {
+        id,
+        title: typeof cand.title === 'string' ? cand.title : undefined,
+        detail:
+          typeof cand.summary === 'string'
+            ? cand.summary
+            : typeof cand.detail === 'string'
+              ? cand.detail
+              : undefined,
+      };
+    }
+  }
+  return null;
+}
+
 export const HermesDashboard = ({
   config,
   onOpenConsole,
@@ -123,6 +260,9 @@ export const HermesDashboard = ({
   // Re-open the wizard / settings to edit the config.
   onReconfigure: () => void;
 }) => {
+  const { t } = useAgentLang();
+  const acc = accentFor(AGENT);
+
   const [threadsState, setThreadsState] = useState<LoadState>('loading');
   const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
   const [caps, setCaps] = useState<HermesCaps | null>(null);
@@ -137,6 +277,27 @@ export const HermesDashboard = ({
   const [runs, setRuns] = useState<AgentRunRow[]>([]);
   // The run currently open in the inline live view, or null.
   const [openRunId, setOpenRunId] = useState<string | null>(null);
+
+  // ---- R11 "Le Bureau" desks ----------------------------------------------
+  // Business pulse (PulseCard). `pulse === null` ⇒ new-hire empty state; the
+  // load is fail-soft (any error also yields null) so a not-yet-connected shop
+  // sees the warm empty state, never an error banner.
+  const [pulse, setPulse] = useState<AgentPulse | null>(null);
+  const [pulseLoading, setPulseLoading] = useState(true);
+  // COD orders sample (CodDesk). Best-effort from the pulse read; when empty the
+  // desk is hidden entirely.
+  const [codOrders, setCodOrders] = useState<CodOrder[]>([]);
+  // Approval inbox items, derived from waiting_approval runs (see loadApprovals).
+  const [approvals, setApprovals] = useState<ApprovalInboxItem[]>([]);
+  const [approvalsLoading, setApprovalsLoading] = useState(true);
+  // Scheduled missions (MissionsCard) from listTriggers('hermes'). `missionsOn`
+  // gates the card the same way runsEnabled gates Exécutions: a 404 (triggers
+  // feature off) hides it silently.
+  const [triggers, setTriggers] = useState<AgentTrigger[]>([]);
+  const [missionsOn, setMissionsOn] = useState<boolean | null>(null);
+  const [missionsLoading, setMissionsLoading] = useState(true);
+  // Timestamp of the last successful pulse sweep (for the greeting bar).
+  const [lastSweep, setLastSweep] = useState<number | undefined>(undefined);
 
   const loadThreads = useCallback(async () => {
     setThreadsState('loading');
@@ -194,30 +355,165 @@ export const HermesDashboard = ({
     }
   }, []);
 
+  // ---- R11: business pulse (PulseCard) + COD orders sample (CodDesk) -------
+  // Fail-soft in the extreme: ANY failure (404 flag-off, network, malformed)
+  // resolves to a null pulse + empty orders, so the desk shows PulseCard's warm
+  // new-hire empty state and hides CodDesk — never an error. The FE calls
+  // Pouls's GET /api/v1/agents/pulse via the `getAgentPulse` wrapper.
+  const loadPulse = useCallback(async () => {
+    setPulseLoading(true);
+    try {
+      const raw = await getAgentPulse(AGENT);
+      setPulse(normalizePulse(raw));
+      setCodOrders(normalizeOrders(raw));
+      setLastSweep(Date.now());
+    } catch {
+      setPulse(null);
+      setCodOrders([]);
+    } finally {
+      setPulseLoading(false);
+    }
+  }, []);
+
+  // ---- R11: approval inbox (ApprovalInbox) --------------------------------
+  // Built from the waiting_approval background runs: list runs, filter to
+  // state === 'waiting_approval', then best-effort fetch each run's full record
+  // to pull the pending approval's id/title/detail. Fail-soft throughout — a
+  // 404 (feature off) or any error yields an empty inbox (the card shows its own
+  // calm "rien à approuver" state). The inbox `id` is the approval stepId (falls
+  // back to the runId) so onApprove → approveAgentRun(agent, runId, id, approved).
+  const loadApprovals = useCallback(async () => {
+    setApprovalsLoading(true);
+    try {
+      const raw = await listAgentRuns(AGENT);
+      const waiting = (Array.isArray(raw) ? raw : [])
+        .map(normalizeRun)
+        .filter((r): r is AgentRunRow => !!r && r.state === 'waiting_approval');
+      // Best-effort enrich each waiting run with its pending approval descriptor.
+      const items = await Promise.all(
+        waiting.map(async (run): Promise<ApprovalInboxItem> => {
+          let pending: { id: string; title?: string; detail?: string } | null =
+            null;
+          try {
+            const rec = await getAgentRun(AGENT, run.runId);
+            pending = readPendingApproval(rec);
+          } catch {
+            // ignore — fall back to the run prompt + runId below
+          }
+          const fallbackTitle =
+            (run.prompt ?? '').trim() || t('bureau.approvals.fallbackTitle');
+          return {
+            id: pending?.id || run.runId,
+            runId: run.runId,
+            title: pending?.title || fallbackTitle,
+            detail: pending?.detail,
+            at: run.startedAt ?? run.endedAt ?? Date.now(),
+          };
+        })
+      );
+      setApprovals(items);
+    } catch {
+      // 404 (feature off) or any error ⇒ empty inbox (calm empty state).
+      setApprovals([]);
+    } finally {
+      setApprovalsLoading(false);
+    }
+  }, [t]);
+
+  // Resolve one approval: bridge the inbox `(id, approved)` to the runs API
+  // `approveAgentRun(agent, runId, stepId, approved)`. The runId is looked up
+  // from the item's id (which the inbox echoes back). Refreshes the inbox + the
+  // runs list on success so the resolved row disappears.
+  const onApprove = useCallback(
+    (id: string, approved: boolean) => {
+      const item = approvals.find(a => a.id === id);
+      if (!item) return;
+      void (async () => {
+        try {
+          await approveAgentRun(AGENT, item.runId, id, approved);
+        } catch {
+          // Best-effort: a failed decision leaves the row for a retry.
+        } finally {
+          void loadApprovals();
+          void loadRuns();
+        }
+      })();
+    },
+    [approvals, loadApprovals, loadRuns]
+  );
+
+  // ---- R11: scheduled missions (MissionsCard) -----------------------------
+  // From listTriggers('hermes') (R8). A 404 (triggers feature off) hides the
+  // card silently (missionsOn=false); any other failure also degrades to an
+  // empty, dark card rather than an error.
+  const loadMissions = useCallback(async () => {
+    setMissionsLoading(true);
+    try {
+      const rows = await listTriggers(AGENT);
+      setTriggers(Array.isArray(rows) ? rows : []);
+      setMissionsOn(true);
+    } catch (err) {
+      if (err instanceof AgentApiError && err.status === 404) {
+        setMissionsOn(false);
+        setTriggers([]);
+        return;
+      }
+      setMissionsOn(prev => (prev === true ? true : prev));
+      setTriggers([]);
+    } finally {
+      setMissionsLoading(false);
+    }
+  }, []);
+
+  // Toggle a mission active/paused (optimistic-free: re-load on completion).
+  const onToggleMission = useCallback(
+    (id: string) => {
+      void (async () => {
+        try {
+          await toggleTrigger(AGENT, id);
+        } catch {
+          // Best-effort — re-load reflects the true state either way.
+        } finally {
+          void loadMissions();
+        }
+      })();
+    },
+    [loadMissions]
+  );
+
   useEffect(() => {
     void loadThreads();
     void loadCaps();
     void loadRuns();
-  }, [loadThreads, loadCaps, loadRuns]);
+    void loadPulse();
+    void loadApprovals();
+    void loadMissions();
+  }, [
+    loadThreads,
+    loadCaps,
+    loadRuns,
+    loadPulse,
+    loadApprovals,
+    loadMissions,
+  ]);
 
-  // ---- derived stats ------------------------------------------------------
-  const stats = useMemo(() => {
-    const runCount = threads.length;
-    const lastRun = threads.length > 0 ? threads[0].updatedAt : undefined;
-    const totalTurns = threads.reduce(
-      (s, t) => s + (Number.isFinite(t.messageCount) ? t.messageCount : 0),
-      0
-    );
-    const toolsReady = caps?.tools.filter(t => t.available).length ?? 0;
-    const toolsTotal = caps?.tools.length ?? 0;
-    return { runCount, lastRun, totalTurns, toolsReady, toolsTotal };
-  }, [threads, caps]);
-
+  // The Quick-stats grid the base rendered (Runs / Last run / Tools ready /
+  // Saved workflows) is intentionally REPLACED by the business-pulse hero
+  // (<PulseCard>) per the persona doc ("replaces the stat-grid-first
+  // dashboard" — Hermès greets you with your business, not its own plumbing).
+  // The threads / caps loads survive (Recent runs + Tools & connections still
+  // consume them); only the derived stat tiles are gone.
   const savedWorkflows: SavedWorkflow[] = config.savedWorkflows ?? [];
   const plannerReady = !!caps?.plannerReady;
   const agentName = config.agentName || 'Hermes';
   // The section is only rendered once the probe confirms the feature is on.
   const showExecutions = runsEnabled === true;
+  // The missions card renders once triggers are confirmed on (like Exécutions).
+  const showMissions = missionsOn === true;
+  // The COD desk only shows when the pulse read surfaced an orders sample.
+  const showCodDesk = codOrders.length > 0;
+  // A calm reporting-state lamp while pulse settles, then idle.
+  const presencePhase = pulseLoading ? 'planning' : 'done';
 
   // Start a background run and immediately open its live view. Returns the new
   // runId (or null on failure). Re-loads the list so the row appears at once.
@@ -246,8 +542,24 @@ export const HermesDashboard = ({
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-      {/* ---- Header row: identity + reconfigure + New run ------------------ */}
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 18,
+        // Le Bureau reads as a single, scannable desk column (persona doc:
+        // ≤720px center column). The retained R6-R10 panels sit below it.
+        maxWidth: 720,
+        marginLeft: 'auto',
+        marginRight: 'auto',
+        width: '100%',
+      }}
+    >
+      {/* ---- Greeting bar: the employee reports where things stand ---------
+          Replaces the stat-grid-first header. A darja greeting + a reporting-
+          state presence lamp + last-sweep time; the chat is demoted to a
+          compact "Parler à {name}" button (talking is one affordance, not the
+          product). Settings stays as a quiet secondary. */}
       <div
         style={{
           display: 'flex',
@@ -261,30 +573,51 @@ export const HermesDashboard = ({
             <span
               aria-hidden
               style={{
+                position: 'relative',
                 width: 40,
                 height: 40,
-                borderRadius: 10,
+                borderRadius: 12,
                 flexShrink: 0,
                 display: 'grid',
                 placeItems: 'center',
-                background: C.accentSoft,
-                border: `1px solid ${C.accentBorder}`,
-                color: C.accent,
+                background: acc.accentSoft,
+                border: `1px solid ${acc.accentSoft}`,
+                color: acc.accent,
               }}
             >
               <ChatWithAiIcon style={{ fontSize: 22 }} />
+              {/* The stateful presence lamp — idles / reports (persona doc). */}
+              <span
+                style={{
+                  position: 'absolute',
+                  right: -2,
+                  bottom: -2,
+                  display: 'grid',
+                  placeItems: 'center',
+                  background: C.bg,
+                  borderRadius: '50%',
+                  padding: 2,
+                }}
+              >
+                <AgentPresence
+                  agent={AGENT}
+                  phase={presencePhase}
+                  running={pulseLoading}
+                  size={8}
+                />
+              </span>
             </span>
             <div style={{ minWidth: 0 }}>
               <h1
                 style={{
                   margin: 0,
-                  fontSize: 22,
+                  fontSize: 21,
                   fontWeight: 800,
                   color: C.text,
-                  lineHeight: 1.2,
+                  lineHeight: 1.25,
                 }}
               >
-                {agentName}
+                {t('bureau.greeting', { name: agentName })}
               </h1>
               <p
                 style={{
@@ -293,7 +626,9 @@ export const HermesDashboard = ({
                   color: C.muted,
                 }}
               >
-                Your operations agent · dashboard
+                {lastSweep
+                  ? t('bureau.lastSweep', { when: timeAgo(lastSweep) })
+                  : t('bureau.subtitle')}
               </p>
             </div>
           </div>
@@ -313,10 +648,12 @@ export const HermesDashboard = ({
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
           <button style={btnStyle('secondary')} onClick={onReconfigure}>
-            ⚙ Settings
+            ⚙ {t('bureau.settings')}
           </button>
+          {/* Demoted chat: "Parler à {name}" → the existing console nav. */}
           <button style={btnStyle('primary')} onClick={() => onOpenConsole()}>
-            <ChatWithAiIcon style={{ fontSize: 15 }} /> New run
+            <ChatWithAiIcon style={{ fontSize: 15 }} />{' '}
+            {t('bureau.talkTo', { name: agentName })}
           </button>
         </div>
       </div>
@@ -330,35 +667,51 @@ export const HermesDashboard = ({
         </Banner>
       ) : null}
 
-      {/* ---- Quick stats -------------------------------------------------- */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-          gap: 12,
-        }}
-      >
-        <StatCard label="Runs" value={String(stats.runCount)} emoji="🗂️" />
-        <StatCard
-          label="Last run"
-          value={stats.lastRun ? timeAgo(stats.lastRun) : '—'}
-          emoji="🕑"
+      {/* ---- 1. Business pulse hero (PulseCard) ---------------------------
+          Fed by GET /api/v1/agents/pulse via getAgentPulse. Fail-soft: a null
+          pulse renders PulseCard's own warm new-hire empty state, so a not-yet-
+          connected merchant is greeted, not error'd. */}
+      <PulseCard
+        agent={AGENT}
+        pulse={pulse}
+        loading={pulseLoading}
+        onRefresh={() => void loadPulse()}
+      />
+
+      {/* ---- 2. À valider (ApprovalInbox) --------------------------------
+          The employee asks permission for consequential acts. Built from the
+          waiting_approval background runs; onApprove bridges to approveAgentRun.
+          The card renders its own calm empty state when nothing is pending. */}
+      <ApprovalInbox
+        items={approvals}
+        onApprove={onApprove}
+        loading={approvalsLoading}
+      />
+
+      {/* ---- 3. La file COD (CodDesk) ------------------------------------
+          Algeria's #1 daily job as first-class UI. Best-effort from the pulse
+          read's orders sample — hidden entirely when no orders data is present
+          (keeps the desk honest rather than showing an empty shell). */}
+      {showCodDesk ? (
+        <CodDesk
+          orders={codOrders}
+          onConfirm={() => void loadPulse()}
+          onAdvance={() => void loadPulse()}
+          loading={pulseLoading}
         />
-        <StatCard
-          label="Tools ready"
-          value={
-            capsState === 'loading'
-              ? '…'
-              : `${stats.toolsReady}/${stats.toolsTotal}`
-          }
-          emoji="🔌"
+      ) : null}
+
+      {/* ---- 4. Missions programmées (MissionsCard) ---------------------
+          Scheduled jobs from listTriggers('hermes') (R8). "Ouvrir" navigates to
+          the full /agents/triggers page. Gated like Exécutions: hidden when the
+          triggers feature is off (a 404 on the list). */}
+      {showMissions ? (
+        <MissionsCardNav
+          triggers={triggers}
+          onToggle={onToggleMission}
+          loading={missionsLoading}
         />
-        <StatCard
-          label="Saved workflows"
-          value={String(savedWorkflows.length)}
-          emoji="⚡"
-        />
-      </div>
+      ) : null}
 
       {/* ---- Exécutions (R6 background runs) — hidden unless the feature is on */}
       {showExecutions ? (
@@ -586,6 +939,8 @@ export const HermesDashboard = ({
             setOpenRunId(null);
             // Refresh the list so the closed run's final state is reflected.
             void loadRuns();
+            // A closed run may have resolved an approval — refresh the inbox.
+            void loadApprovals();
           }}
         />
       ) : null}
@@ -595,71 +950,57 @@ export const HermesDashboard = ({
 
 // ---- sub-components --------------------------------------------------------
 
-const StatCard = ({
-  label,
-  value,
-  emoji,
+// MissionsCard nav wrapper — the Trame <MissionsCard> is pure/presentational and
+// takes an `onOpen` handler; the persona doc + brief route "Ouvrir" to the full
+// /agents/triggers page. In-workbench navigation uses <WorkbenchLink> (the
+// pattern connections.tsx uses), so we render a hidden link and click it from
+// onOpen — keeping MissionsCard decoupled from routing while honouring the
+// in-workbench nav rule (no target=_blank).
+const MissionsCardNav = ({
+  triggers,
+  onToggle,
+  loading,
 }: {
-  label: string;
-  value: string;
-  emoji: string;
-}) => (
-  <div
-    style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 12,
-      padding: 14,
-      borderRadius: 12,
-      background: C.panel,
-      border: `1px solid ${C.border}`,
-      minWidth: 0,
-    }}
-  >
-    <span
-      aria-hidden
-      style={{
-        width: 36,
-        height: 36,
-        flexShrink: 0,
-        borderRadius: 9,
-        display: 'grid',
-        placeItems: 'center',
-        fontSize: 18,
-        background: C.bg,
-        border: `1px solid ${C.border}`,
-      }}
-    >
-      {emoji}
-    </span>
-    <div style={{ minWidth: 0 }}>
-      <div
-        style={{
-          fontSize: 19,
-          fontWeight: 800,
-          color: C.text,
-          lineHeight: 1.1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {value}
-      </div>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 700,
-          letterSpacing: '0.04em',
-          textTransform: 'uppercase',
-          color: C.muted,
-        }}
-      >
-        {label}
-      </div>
-    </div>
-  </div>
-);
+  triggers: AgentTrigger[];
+  onToggle: (id: string) => void;
+  loading?: boolean;
+}) => {
+  const linkRef = useRef<HTMLAnchorElement | null>(null);
+  // Map the api AgentTrigger[] to the MissionsCard trigger shape (R8 shape:
+  // {id, preset, prompt, active, nextFireAt?}). Defensive: only rows with an id.
+  const missionTriggers = useMemo(
+    () =>
+      (Array.isArray(triggers) ? triggers : [])
+        .filter(tr => tr && typeof tr.id === 'string' && tr.id.length > 0)
+        .map(tr => ({
+          id: tr.id,
+          preset: tr.preset,
+          prompt: tr.prompt,
+          active: !!tr.active,
+          nextFireAt: tr.nextFireAt,
+        })),
+    [triggers]
+  );
+  return (
+    <>
+      <MissionsCard
+        triggers={missionTriggers}
+        onToggle={onToggle}
+        onOpen={() => linkRef.current?.click()}
+        loading={loading}
+      />
+      {/* Hidden in-workbench nav target for MissionsCard's onOpen. */}
+      <WorkbenchLink
+        ref={linkRef}
+        to="/agents/triggers"
+        draggable={false}
+        aria-hidden
+        tabIndex={-1}
+        style={{ display: 'none' }}
+      />
+    </>
+  );
+};
 
 const RunRow = ({
   thread,

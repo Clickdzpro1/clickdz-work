@@ -523,6 +523,154 @@ async function fireRunDone(rec: AgentRunRecord): Promise<void> {
 }
 
 // ===========================================================================
+// R11 (WS11-11, BUDGET) — RUN COST ACCOUNTING. When a run reaches a terminal
+// state, onAgentRunDone fires with the final record; we estimate the tokens it
+// burned from budget.toolCalls and accrue tokens + DZD into a per-user, per-UTC-
+// month accumulator so the /agents/budget route (Pouls) + the home <BudgetBar>
+// can show a soft month-to-date spend. This is DISPLAY-ONLY telemetry: it never
+// gates, never blocks, and NEVER throws out of the run (Redis is a cache, and a
+// spend row is best-effort history). Off ⇒ pricing 0 ⇒ dzd stays 0 (usage only).
+//
+// Token model: the run record carries NO real token count (see spend-meter.tsx),
+// only budget.toolCalls. We approximate tokens the SAME way the FE SpendMeter
+// does — tool-calls × a nominal per-call figure — and keep the constant BELOW in
+// exact sync with `NOMINAL_TOKENS_PER_TOOL_CALL` in
+// modules/agents/components/spend-meter.tsx (1500). It is inlined (not imported)
+// because that source is a frontend .tsx in another package; the value is the
+// contract, not the import. DZD = tokens/1000 × Number(CDZ_DZD_PER_1K||0) — the
+// SAME price signal the agents controller exposes as caps.dzdPer1k.
+//
+// Storage is a single JSON blob per (user, month) at
+//   clickdz:agentspend:{userId}:{YYYYMM}   (YYYYMM = UTC, no dash — mirrors utcDay)
+// read-modify-written under one GET+SET (the contract sanctions "hincrby OR a
+// JSON read-modify-write"; the JSON blob keeps readMonthSpend a single cheap GET
+// and avoids widening the RunRedis surface). Concurrent completions for the SAME
+// user in the SAME month can race and under-count slightly — acceptable for a
+// soft, best-effort spend estimate. TTL re-armed to ~70d on every write.
+// ===========================================================================
+
+/**
+ * Nominal tokens attributed to one tool-call round-trip. MUST equal
+ * `NOMINAL_TOKENS_PER_TOOL_CALL` in modules/agents/components/spend-meter.tsx —
+ * the FE estimate and this backend accrual have to agree or the home BudgetBar
+ * would disagree with the per-run SpendMeter. Inlined (frontend .tsx can't be
+ * imported into the backend); keep the two in lock-step if either changes.
+ */
+const NOMINAL_TOKENS_PER_TOOL_CALL = 1500;
+
+/** ~70 days — the spend accumulator TTL, re-armed on every write. */
+const SPEND_TTL_SEC = 70 * 24 * 60 * 60;
+
+/** UTC YYYYMM used by the monthly spend accumulator key (no dash, like utcDay). */
+export function utcMonth(ts: number = Date.now()): string {
+  return new Date(ts).toISOString().slice(0, 7).replace(/-/g, '');
+}
+
+/** Per-user, per-month spend accumulator key (R11 — EXACT namespace; Pouls's
+ * /agents/budget route reads the SAME key). */
+const spendKey = (userId: string, month: string) =>
+  `clickdz:agentspend:${userId}:${month}`;
+
+/** DZD price per 1k tokens (Number(CDZ_DZD_PER_1K||0)); 0/unset ⇒ usage-only. */
+function dzdPer1k(): number {
+  const n = Number(process.env.CDZ_DZD_PER_1K || '0');
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** The month's accumulated spend. `readMonthSpend` resolves to this shape. */
+export interface MonthSpend {
+  tokens: number;
+  dzd: number;
+}
+
+/** Coerce a persisted-blob numeric field to a clean, finite, ≥0 number. */
+function spendNum(v: unknown): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Read a user's month-to-date spend accumulator (current UTC month). Returns
+ * `{tokens:0, dzd:0}` when absent/corrupt/on any Redis error. Pouls's
+ * `GET /api/v1/agents/budget` consumes this EXACT function (name + shape).
+ */
+export async function readMonthSpend(
+  redis: RunRedis,
+  userId: string,
+  now: number = Date.now()
+): Promise<MonthSpend> {
+  if (!userId) return { tokens: 0, dzd: 0 };
+  try {
+    const raw = await redis.get(spendKey(userId, utcMonth(now)));
+    const obj = safeParse<Partial<MonthSpend>>(raw);
+    if (!obj || typeof obj !== 'object') return { tokens: 0, dzd: 0 };
+    return { tokens: spendNum(obj.tokens), dzd: spendNum(obj.dzd) };
+  } catch {
+    return { tokens: 0, dzd: 0 };
+  }
+}
+
+/**
+ * Accrue ONE completed run's estimated spend into the current-month accumulator.
+ * tokens = budget.toolCalls × NOMINAL; dzd = tokens/1000 × price. JSON read-
+ * modify-write under a single GET+SET, TTL re-armed to 70d. Fires for ANY
+ * terminal state that burned tool calls (a failed/stopped run still cost money).
+ * No-op when nothing was charged. Fail-soft — NEVER throws (called from the
+ * onAgentRunDone hook, which must never fail a job).
+ */
+export async function accrueRunSpend(
+  redis: RunRedis,
+  rec: AgentRunRecord | null | undefined
+): Promise<void> {
+  try {
+    if (!rec || !rec.userId) return;
+    const toolCalls = spendNum(rec.budget?.toolCalls);
+    if (toolCalls <= 0) return; // nothing burned ⇒ nothing to accrue
+    const addTokens = toolCalls * NOMINAL_TOKENS_PER_TOOL_CALL;
+    const addDzd = (addTokens / 1000) * dzdPer1k();
+    const key = spendKey(rec.userId, utcMonth());
+    const prev = await readMonthSpend(redis, rec.userId);
+    const next: MonthSpend = {
+      tokens: prev.tokens + addTokens,
+      dzd: prev.dzd + addDzd,
+    };
+    let line: string;
+    try {
+      line = JSON.stringify(next);
+    } catch {
+      return; // non-serializable ⇒ skip rather than crash
+    }
+    await redis.set(key, line, 'EX', SPEND_TTL_SEC);
+  } catch {
+    /* fail-soft: spend accounting is best-effort telemetry, never a run blocker */
+  }
+}
+
+/**
+ * Wire run-cost accounting to the completion hook. Registers ONCE (idempotent)
+ * an onAgentRunDone callback that accrues each finished run's spend via the
+ * captured raw redis handle (the RunDoneCallback only receives the record, so —
+ * exactly like Telegramme's registerTelegramRunDone({cache}) — the handle is
+ * captured here at registration). Called from ClickDzAgentRunJob's constructor
+ * (below), which already injects CacheRedis, so no orchestrator merge is needed;
+ * a self-contained module wiring. Fail-soft: a missing/partial engine can never
+ * crash boot, and the callback itself never throws.
+ */
+let spendAccountingRegistered = false;
+export function registerSpendAccounting(redis: RunRedis): void {
+  if (spendAccountingRegistered) return;
+  try {
+    if (typeof onAgentRunDone !== 'function' || !redis) return;
+    onAgentRunDone((rec: AgentRunRecord) => {
+      void accrueRunSpend(redis, rec);
+    });
+    spendAccountingRegistered = true;
+  } catch {
+    // onAgentRunDone unavailable / threw on register: leave unregistered.
+  }
+}
+
+// ===========================================================================
 // Small pure helpers.
 // ===========================================================================
 
@@ -1089,7 +1237,16 @@ export class ClickDzAgentRunJob {
   constructor(
     private readonly queue: JobQueue,
     private readonly redis: CacheRedis
-  ) {}
+  ) {
+    // R11 (WS11-11, BUDGET): wire run-cost accounting to the completion hook so a
+    // finished run's estimated spend (tool-calls × NOMINAL → tokens + DZD) is
+    // accrued into the per-user monthly accumulator the /agents/budget route +
+    // home BudgetBar read. Uses the injected raw redis handle; idempotent +
+    // fail-soft inside, so re-instantiation never double-registers and it can
+    // never crash boot. Mirrors Telegramme's constructor-time registerTelegram-
+    // RunDone({cache}) wiring pattern.
+    registerSpendAccounting(this.redis as unknown as RunRedis);
+  }
 
   @OnJob('copilot.agent.run')
   async runAgent({ userId, runId, agent }: Jobs['copilot.agent.run']) {

@@ -66,3 +66,23 @@ export { ArtifactsPanel } from './artifacts-panel';
 
 // ---- presence (per-agent status lamp) ----
 export { AgentPresence, type AgentPresenceProps } from './agent-presence';
+
+// ---- Le Bureau + budgets + tool-perms (R11 shared kit — Trame) ----
+export { PulseCard, type PulseCardProps, type AgentPulse } from './pulse-card';
+export {
+  ApprovalInbox,
+  type ApprovalInboxProps,
+  type ApprovalInboxItem,
+} from './approval-inbox';
+export { CodDesk, type CodDeskProps, type CodOrder } from './cod-desk';
+export {
+  MissionsCard,
+  type MissionsCardProps,
+  type MissionTrigger,
+} from './missions-card';
+export { BudgetBar, type BudgetBarProps, type AgentBudget } from './budget-bar';
+export {
+  ToolPermissions,
+  type ToolPermissionsProps,
+  type ToolPermissionItem,
+} from './tool-permissions';

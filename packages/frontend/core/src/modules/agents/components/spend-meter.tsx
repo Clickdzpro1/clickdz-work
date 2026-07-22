@@ -173,6 +173,76 @@ export function estimateSpend(props: SpendMeterProps): SpendEstimate {
 }
 
 // ---------------------------------------------------------------------------
+// R11 (WS11-11, BUDGET) — BudgetBar math helpers. ADDITIVE ONLY: everything
+// above (SpendMeter's props/exports + the estimate math) is byte-identical. The
+// shared <BudgetBar budget/> (Trame) shows a soft month-to-date spend bar that
+// warns at ≥80% and NEVER blocks; when `monthDzd === 0` there is no limit, so it
+// shows usage only. These pure helpers give that component (and any caller/test)
+// ONE source of truth for the ratio + warn/over levels, so the home BudgetBar
+// and the per-run SpendMeter stay visually consistent (both use `formatDzd` /
+// `formatTokens` above for their figures). No React, no fetch — pure math.
+// ---------------------------------------------------------------------------
+
+/** The soft spend threshold (fraction of the monthly limit) at which the bar
+ * turns to a warning tint. Matches the R11 BudgetBar contract ("warns ≥80%"). */
+export const BUDGET_WARN_RATIO = 0.8;
+
+/** Spend level for the soft budget bar: no configured limit, normal usage,
+ * approaching the limit (≥80%), or over it (≥100%). Never a hard block. */
+export type BudgetLevel = 'unlimited' | 'ok' | 'warn' | 'over';
+
+/**
+ * Fraction of the monthly DZD limit already spent, clamped to [0, 1] for bar
+ * width. Returns `null` when there is NO limit (`monthDzd <= 0`) — the caller
+ * then renders usage only (no bar/percentage). Defensive against NaN/negative.
+ */
+export function budgetRatio(
+  spentDzd: number | null | undefined,
+  monthDzd: number | null | undefined
+): number | null {
+  const limit = count(monthDzd);
+  if (limit <= 0) return null; // usage-only mode (no configured budget)
+  const spent = count(spentDzd);
+  const r = spent / limit;
+  if (!Number.isFinite(r) || r < 0) return 0;
+  return r > 1 ? 1 : r;
+}
+
+/**
+ * Classify the month's spend into a {@link BudgetLevel}. `'unlimited'` when no
+ * limit is set (`monthDzd <= 0`); otherwise `'ok'` / `'warn'` (≥80%) / `'over'`
+ * (≥100%). Purely presentational — the bar is ALWAYS soft and never gates.
+ */
+export function budgetLevel(
+  spentDzd: number | null | undefined,
+  monthDzd: number | null | undefined
+): BudgetLevel {
+  const limit = count(monthDzd);
+  if (limit <= 0) return 'unlimited';
+  const spent = count(spentDzd);
+  const r = limit > 0 ? spent / limit : 0;
+  if (r >= 1) return 'over';
+  if (r >= BUDGET_WARN_RATIO) return 'warn';
+  return 'ok';
+}
+
+/**
+ * Format the spend as an integer percentage of the monthly limit (e.g. `84%`),
+ * or `null` when there is no limit. Uncapped (can exceed 100% so the label can
+ * read e.g. "120%"), unlike {@link budgetRatio} which clamps the BAR width.
+ */
+export function budgetPercentLabel(
+  spentDzd: number | null | undefined,
+  monthDzd: number | null | undefined
+): string | null {
+  const limit = count(monthDzd);
+  if (limit <= 0) return null;
+  const spent = count(spentDzd);
+  const pct = Math.round((spent / limit) * 100);
+  return `${Number.isFinite(pct) && pct >= 0 ? pct : 0}%`;
+}
+
+// ---------------------------------------------------------------------------
 // SpendMeter — chip (compact) or card (full).
 // ---------------------------------------------------------------------------
 export function SpendMeter(props: SpendMeterProps) {

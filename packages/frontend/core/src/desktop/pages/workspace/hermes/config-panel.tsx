@@ -1,5 +1,7 @@
 import { getCapabilities } from '@affine/core/modules/agents/api';
+import { ToolPermissions } from '@affine/core/modules/agents/components';
 import { useAgents } from '@affine/core/modules/agents/use-agents';
+import { useTelegramChannel } from '@affine/core/modules/agents/use-channels';
 import { WorkbenchLink } from '@affine/core/modules/workbench';
 import { TelegramChannelCard } from '../agents/channel-card';
 import {
@@ -18,7 +20,6 @@ import {
   Field,
   type HermesCaps,
   type HermesConfig,
-  type HermesTool,
   inputStyle,
   MODE_LABEL,
   miniBtnStyle,
@@ -41,8 +42,13 @@ import {
 // failure still lets the user edit name/persona/mode/workflows.
 // ---------------------------------------------------------------------------
 
+// Tool grouping — Hermes tools carry no explicit group/consequential flags in
+// the caps catalog (HermesTool = {slug,label,available}), so we derive both from
+// the slug prefix here and feed them to Trame's <ToolPermissions> grouped grid:
+//   • internal  → shops & data reads (safe, non-consequential)
+//   • composio  → connected third-party apps (act on the outside world)
+//   • make      → Make.com automations (act on the outside world)
 type Kind = 'internal' | 'composio' | 'make';
-const KIND_ORDER: Kind[] = ['internal', 'composio', 'make'];
 const KIND_TITLE: Record<Kind, string> = {
   internal: '🧾 Internal — shops & data',
   composio: '🔗 Connected apps (Composio)',
@@ -116,14 +122,24 @@ export const HermesConfigPanel = ({
     [workflows]
   );
 
-  const toggleTool = useCallback((slug: string) => {
-    setEnabled(prev => {
-      const nextSet = new Set(prev);
-      if (nextSet.has(slug)) nextSet.delete(slug);
-      else nextSet.add(slug);
-      return nextSet;
-    });
-  }, []);
+  // Map the live capabilities catalog into Trame's <ToolPermissions> contract
+  // ({id,label,group,consequential}[]). `enabled` (a Set<string> of slugs) stays
+  // the source of truth for the save; the grid drives it via onChange.
+  const toolPermTools = useMemo(
+    () =>
+      (caps?.tools ?? []).map(tool => {
+        const kind = classify(tool.slug);
+        return {
+          id: tool.slug,
+          label: tool.label || tool.slug,
+          group: KIND_TITLE[kind],
+          // Internal reads are safe; connected-app + automation actions reach the
+          // outside world, so mark them consequential (the grid can flag them).
+          consequential: kind !== 'internal',
+        };
+      }),
+    [caps]
+  );
 
   const updateWorkflow = useCallback(
     (idx: number, patch: Partial<SavedWorkflow>) => {
@@ -240,11 +256,15 @@ export const HermesConfigPanel = ({
         </div>
       </Panel>
 
-      {/* Tools */}
+      {/* Tools — per-agent permissions via Trame's shared <ToolPermissions>
+          grouped toggle grid (R11). Replaces the bespoke checklist; `enabled`
+          (a Set<string> of tool slugs) remains the source of truth persisted by
+          the existing config PUT. The All/None action + the load / error / empty
+          faces are kept; only the grid body is now the shared component. */}
       <Panel
         title={`Tools (${enabled.size} enabled)`}
         action={
-          caps ? (
+          caps && caps.tools.length > 0 ? (
             <span style={{ display: 'flex', gap: 8 }}>
               <button
                 style={miniBtnStyle('secondary')}
@@ -290,27 +310,11 @@ export const HermesConfigPanel = ({
             actions.
           </Banner>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {KIND_ORDER.map(kind => {
-              const list = caps.tools.filter(t => classify(t.slug) === kind);
-              if (list.length === 0) return null;
-              return (
-                <div key={kind} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: C.muted }}>
-                    {KIND_TITLE[kind]}
-                  </span>
-                  {list.map(tool => (
-                    <ToolToggle
-                      key={tool.slug}
-                      tool={tool}
-                      checked={enabled.has(tool.slug)}
-                      onToggle={() => toggleTool(tool.slug)}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
+          <ToolPermissions
+            tools={toolPermTools}
+            value={enabled}
+            onChange={next => setEnabled(next)}
+          />
         )}
       </Panel>
 
@@ -463,11 +467,127 @@ const CanauxPanel = () => {
           explainWhenOn
         />
       </div>
+      {/* R11 — a clearer "connecté à @bot" summary + a safe (confirm-gated)
+          unpair, sitting above the R10 BYOT card. The R10 channel status shape
+          ({connected,botUsername,connectedAt}) carries no bound-chat / last-
+          inbound, so we surface the bot identity plainly rather than inventing
+          fields. */}
+      <TelegramBoundLine agent="hermes" />
       {/* R10 BYOT — connect your OWN Telegram bot to Hermes, right here. */}
       <div style={{ marginTop: 12 }}>
         <TelegramChannelCard agent="hermes" />
       </div>
     </Panel>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// TelegramBoundLine — a compact "connecté à @bot" strip shown ONLY when the
+// user has a bot bound to this agent. Reads Passe's `useTelegramChannel(agent)`
+// hook (the same hook the embedded card uses; safe to consume twice — each
+// instance owns its own state and both read the same GET). Adds a confirm-gated
+// "Dissocier" (unpair) affordance the raw card lacks. Fail-soft: any not-
+// connected / dark / loading state renders nothing so the card owns those faces
+// and this never double-renders an empty row.
+//   CONSUMED CONTRACT — useTelegramChannel(agent) → { status:{connected,
+//   botUsername?,connectedAt?}, disconnect(), loading }. Read defensively.
+// ---------------------------------------------------------------------------
+const TelegramBoundLine = ({ agent }: { agent: 'hermes' }) => {
+  const channel = useTelegramChannel(agent) as
+    | {
+        status?: {
+          connected?: boolean;
+          botUsername?: string | null;
+          connectedAt?: number | string;
+        };
+        disconnect?: () => Promise<void>;
+        loading?: boolean;
+      }
+    | undefined;
+
+  const status = channel?.status ?? {};
+  const connected = !!status.connected;
+  const botUsername = status.botUsername ?? undefined;
+
+  const [confirming, setConfirming] = useState(false);
+  const [unpairing, setUnpairing] = useState(false);
+
+  const doUnpair = useCallback(() => {
+    if (unpairing || !channel?.disconnect) return;
+    setUnpairing(true);
+    void (async () => {
+      try {
+        await channel.disconnect!();
+      } catch {
+        // Best-effort — the hook re-probes; a failed unpair leaves the
+        // connected face up, which is honest.
+      } finally {
+        setUnpairing(false);
+        setConfirming(false);
+      }
+    })();
+  }, [unpairing, channel]);
+
+  // Only render when a bot is actually bound; otherwise the card owns the UI.
+  if (!connected) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 10,
+        padding: '10px 12px',
+        borderRadius: 9,
+        background: C.okSoft,
+        border: `1px solid ${C.okBorder}`,
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 15, flexShrink: 0 }}>
+        ✈
+      </span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: C.text }}>
+        Connecté à{' '}
+        <span
+          dir="ltr"
+          style={{
+            fontWeight: 700,
+            fontFamily: 'var(--affine-font-code-family, monospace)',
+          }}
+        >
+          @{botUsername || 'votre bot'}
+        </span>
+      </span>
+      {confirming ? (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.muted }}>Dissocier ?</span>
+          <button
+            style={miniBtnStyle('danger')}
+            disabled={unpairing}
+            onClick={() => void doUnpair()}
+          >
+            {unpairing ? 'Dissociation…' : 'Confirmer'}
+          </button>
+          <button
+            style={miniBtnStyle('secondary')}
+            disabled={unpairing}
+            onClick={() => setConfirming(false)}
+          >
+            Annuler
+          </button>
+        </span>
+      ) : (
+        <button
+          style={miniBtnStyle('secondary')}
+          onClick={() => setConfirming(true)}
+          title="Dissocier ce bot de Hermès"
+        >
+          Dissocier
+        </button>
+      )}
+    </div>
   );
 };
 
@@ -565,88 +685,6 @@ const ChannelChip = ({
     />
     {children}
   </span>
-);
-
-const ToolToggle = ({
-  tool,
-  checked,
-  onToggle,
-}: {
-  tool: HermesTool;
-  checked: boolean;
-  onToggle: () => void;
-}) => (
-  <button
-    type="button"
-    onClick={onToggle}
-    style={{
-      appearance: 'none',
-      textAlign: 'left',
-      cursor: 'pointer',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      padding: '8px 10px',
-      borderRadius: 8,
-      background: checked ? C.accentSoft : C.panel,
-      border: `1px solid ${checked ? C.accentBorder : C.border}`,
-      color: C.text,
-    }}
-  >
-    <span
-      aria-hidden
-      style={{
-        width: 16,
-        height: 16,
-        flexShrink: 0,
-        borderRadius: 5,
-        display: 'grid',
-        placeItems: 'center',
-        fontSize: 11,
-        color: '#fff',
-        border: `2px solid ${checked ? C.accent : C.border}`,
-        background: checked ? C.accent : 'transparent',
-      }}
-    >
-      {checked ? '✓' : ''}
-    </span>
-    <span style={{ flex: 1, minWidth: 0 }}>
-      <span
-        style={{
-          display: 'block',
-          fontSize: 12.5,
-          fontWeight: 600,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {tool.label || tool.slug}
-      </span>
-      <span
-        style={{
-          display: 'block',
-          fontSize: 10.5,
-          color: C.muted,
-          fontFamily: 'var(--affine-font-code-family, monospace)',
-        }}
-      >
-        {tool.slug}
-      </span>
-    </span>
-    <span
-      style={{
-        flexShrink: 0,
-        fontSize: 10,
-        fontWeight: 700,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        color: tool.available ? C.okText : C.muted,
-      }}
-    >
-      {tool.available ? 'Ready' : 'Needs setup'}
-    </span>
-  </button>
 );
 
 export default HermesConfigPanel;

@@ -177,6 +177,58 @@ const OPENCLAW_RUNTIMES = ['node24', 'python3.13'];
 const OPENCLAW_DEFAULT_RUNTIME = 'node24';
 const AGENT_NAME = 'openclaw' as const;
 
+// --- R11 / WS11-11: per-user TOOL PERMISSIONS (Hermes parity). OpenClaw is NOT
+// a registry agent — its plan→act loop dispatches exactly TWO sandbox actions
+// (`write` a file, `run` a command) directly through SANDBOX2, plus the internal
+// `final` turn (not a tool). So the toggleable catalog is those two sandbox
+// capabilities. `run` is consequential (it EXECUTES code in the microVM); `write`
+// only mutates the ephemeral sandbox FS (not consequential). We MIRROR Hermes'
+// enabledTools model EXACTLY: normalize + validate + persist + surface an
+// `enabled` flag per tool in /capabilities so the FE ToolPermissions grid renders
+// and round-trips. Like Hermes, the persisted set is a stored PREFERENCE surfaced
+// to the UI; dispatch itself is unchanged (see the note at the loop) so flags-off
+// / config-absent behavior is byte-identical. ---
+const OPENCLAW_ENABLED_TOOLS_MAX = 50;
+
+// One advertised OpenClaw tool: id/slug + human label + UI group + `consequential`
+// (true when it WRITES/RUNS in a way a human might want to gate — `run` executes).
+interface OpenclawTool {
+  slug: string;
+  label: string;
+  group: string;
+  consequential: boolean;
+}
+
+/** The REAL, whole OpenClaw tool catalog (the two sandbox actions the loop can
+ * dispatch). Static — no env gating (the sandbox availability is reported
+ * separately by probeSandbox). This is the allowlist a persisted `enabledTools`
+ * is intersected against, and the source the /capabilities `tools[]` is built
+ * from. Shape consumed by the FE ToolPermissions grid as {id,label,group,
+ * consequential} (id = slug). */
+function buildOpenclawToolCatalog(): OpenclawTool[] {
+  return [
+    {
+      slug: 'write',
+      label: 'Write files',
+      group: 'sandbox',
+      consequential: false,
+    },
+    {
+      slug: 'run',
+      label: 'Run commands',
+      group: 'sandbox',
+      consequential: true,
+    },
+  ];
+}
+
+/** The set of REAL OpenClaw tool slugs — the allowlist a persisted `enabledTools`
+ * is intersected against so a stored config can never reference an invented slug.
+ * Mirrors Hermes' allToolSlugs(). */
+function allOpenclawToolSlugs(): Set<string> {
+  return new Set(buildOpenclawToolCatalog().map(t => t.slug));
+}
+
 // --- WS14 / C5: per-user agent CONFIG (onboarding persistence). A per-user
 // singleton (the "1 openclaw" = one config each) persisted through the JSON
 // Cache under `clickdz:agent:config:<userId>:openclaw`, ~90d TTL refreshed on
@@ -193,6 +245,10 @@ interface OpenclawConfig {
   provisioned: boolean;
   defaultRuntime?: (typeof OPENCLAW_RUNTIMES)[number];
   previewAutoOpen?: boolean;
+  // R11/WS11-11: per-user tool allowlist (Hermes parity). Omitted when the user
+  // has not customized it ⇒ the console runs the full catalog (see /capabilities
+  // default-true). Always ⊆ allOpenclawToolSlugs() after normalize.
+  enabledTools?: string[];
   updatedAt?: number;
 }
 
@@ -214,6 +270,19 @@ function normalizeOpenclawConfig(raw: unknown): OpenclawConfig {
   }
   if (typeof o.previewAutoOpen === 'boolean') {
     out.previewAutoOpen = o.previewAutoOpen;
+  }
+  // R11/WS11-11: intersect a persisted enabledTools against the real catalog so a
+  // stored config can never carry an invented slug (mirrors Hermes normalize).
+  if (Array.isArray(o.enabledTools)) {
+    const known = allOpenclawToolSlugs();
+    const tools = o.enabledTools
+      .filter((s): s is string => typeof s === 'string')
+      .map(s => s.trim())
+      .filter(s => known.has(s));
+    out.enabledTools = Array.from(new Set(tools)).slice(
+      0,
+      OPENCLAW_ENABLED_TOOLS_MAX
+    );
   }
   if (typeof o.updatedAt === 'number' && Number.isFinite(o.updatedAt)) {
     out.updatedAt = o.updatedAt;
@@ -551,6 +620,27 @@ export class ClickDzOpenclawController {
       this.probeSandbox(),
       this.readOpenclawConfig(user.id),
     ]);
+    // R11/WS11-11: per-tool `enabled` flags for the FE ToolPermissions grid
+    // (Hermes parity). When the user has an explicit enabledTools set, honor it;
+    // otherwise every tool is enabled by default (no customization = full catalog
+    // available — the console works out of the box). The catalog carries `group`
+    // so the FE maps each entry to {id:slug, label, group, consequential} +
+    // `enabled` with no OpenClaw-specific classify logic.
+    const enabledSet =
+      config.enabledTools && config.enabledTools.length
+        ? new Set(config.enabledTools)
+        : null;
+    const tools = buildOpenclawToolCatalog().map(t => ({
+      slug: t.slug,
+      label: t.label,
+      group: t.group,
+      // Sandbox actions are always "available" when the sandbox itself is up;
+      // the honest live-execution flag stays the top-level `sandbox` field, so
+      // per-tool availability tracks it (both actions need the microVM).
+      available: capability.sandbox,
+      consequential: t.consequential,
+      enabled: enabledSet ? enabledSet.has(t.slug) : true,
+    }));
     res.status(200).json({
       sandbox: capability.sandbox,
       ...(capability.reason ? { reason: capability.reason } : {}),
@@ -558,6 +648,8 @@ export class ClickDzOpenclawController {
       runtimes: OPENCLAW_RUNTIMES,
       // WS12: this controller now speaks SSE at /api/v1/openclaw/stream.
       streaming: true,
+      // R11/WS11-11: additive — the two toggleable sandbox tools + enabled state.
+      tools,
       provisioned: config.provisioned,
     });
   }
@@ -645,6 +737,48 @@ export class ClickDzOpenclawController {
         return { ok: false, error: 'invalid_previewAutoOpen' };
       }
       next.previewAutoOpen = body.previewAutoOpen;
+    }
+
+    // R11/WS11-11: validate enabledTools exactly like Hermes' putConfig — array,
+    // length cap, string entries, each ⊆ the real catalog. Typed 400 via @Res
+    // passthrough (never a raw HttpException).
+    if (body.enabledTools !== undefined) {
+      if (!Array.isArray(body.enabledTools)) {
+        res
+          .status(400)
+          .json({ ok: false, error: '"enabledTools" must be an array' });
+        return { ok: false, error: 'invalid_enabledTools' };
+      }
+      if (body.enabledTools.length > OPENCLAW_ENABLED_TOOLS_MAX) {
+        res.status(400).json({
+          ok: false,
+          error: `"enabledTools" must have <= ${OPENCLAW_ENABLED_TOOLS_MAX} entries`,
+        });
+        return { ok: false, error: 'invalid_enabledTools' };
+      }
+      const known = allOpenclawToolSlugs();
+      const cleaned: string[] = [];
+      for (const raw of body.enabledTools) {
+        if (typeof raw !== 'string') {
+          res.status(400).json({
+            ok: false,
+            error: '"enabledTools" entries must be strings',
+          });
+          return { ok: false, error: 'invalid_enabledTools' };
+        }
+        const slug = raw.trim();
+        if (!known.has(slug)) {
+          res.status(400).json({
+            ok: false,
+            error: `unknown tool slug "${slug}" — must be one of: ${Array.from(
+              known
+            ).join(', ')}`,
+          });
+          return { ok: false, error: 'unknown_tool' };
+        }
+        cleaned.push(slug);
+      }
+      next.enabledTools = Array.from(new Set(cleaned));
     }
 
     next.updatedAt = Date.now();

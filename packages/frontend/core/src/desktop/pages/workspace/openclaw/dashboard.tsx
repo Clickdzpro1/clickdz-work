@@ -21,13 +21,19 @@ import {
   AgentPresence,
   EmptyState,
   type StatusPhase,
+  ToolPermissions,
 } from '@affine/core/modules/agents/components';
 import type {
   AgentThread,
   AgentThreadSummary,
 } from '@affine/core/modules/agents/types';
 import { useAgents } from '@affine/core/modules/agents/use-agents';
+import { useTelegramChannel } from '@affine/core/modules/agents/use-channels';
 import { WorkbenchLink } from '@affine/core/modules/workbench';
+// R10 BYOT Telegram card — embedded in CanauxPanel below. (The import was
+// dropped during R10 integration though the embed shipped; restored here so the
+// file is boot-safe — an unimported identifier crashes the bundle.)
+import { TelegramChannelCard } from '../agents/channel-card';
 import {
   type CSSProperties,
   type ReactNode,
@@ -401,6 +407,13 @@ export const OpenClawDashboard = ({
         </Panel>
       </div>
 
+      {/* Tool permissions (R11) — per-agent toggles via Trame's shared
+          <ToolPermissions> grid, fed by Cadenas's OpenClaw tool catalog +
+          config.enabledTools. Self-contained (fetches the catalog + saves via
+          Cadenas's api wrappers) so the dashboard's prop signature is unchanged.
+          Seeded from the config prop the parent already loaded. */}
+      <OpenClawToolsCard config={config} />
+
       {/* Canaux — how the agent reaches the outside world (Telegram / WhatsApp
           / web). Read-only status from the account-level roster caps; setup
           lives on the global connections studio. Fail-soft on a dark roster. */}
@@ -556,6 +569,184 @@ export const OpenClawDashboard = ({
 // ---- sub-components --------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// OpenClawToolsCard (R11) — per-agent Tool permissions via Trame's shared
+// <ToolPermissions> grid. Self-contained so the dashboard's prop signature is
+// untouched: it loads Cadenas's OpenClaw tool catalog from the openclaw
+// capabilities (GET /api/v1/openclaw/capabilities, read loosely as {tools:[…]}
+// — mirrors how Hermes reads its catalog), seeds the enabled set from the
+// `config` prop the parent already fetched, and PERSISTS changes via Cadenas's
+// api wrappers (`saveOpenclawConfig`), merging enabledTools onto the existing
+// runtime/preview so nothing else is dropped.
+//
+// OpenClaw's tools may be INTERNAL sandbox ops (nothing user-toggleable). When
+// the catalog is empty we render a read-only note (per Cadenas) instead of an
+// empty grid. Fail-soft throughout: a catalog load / save failure surfaces a
+// quiet banner, never a crash.
+//
+// CONSUMED CONTRACTS:
+//   • Cadenas — `agentApi.getOpenclawConfig()`, `agentApi.saveOpenclawConfig(body)`
+//     (agents api.ts wrappers, R11) + `OpenClawConfig.enabledTools?: string[]`.
+//   • Cadenas — OpenClaw tool catalog on the openclaw capabilities payload.
+//   • Trame — `<ToolPermissions tools value onChange disabled/>`.
+// ---------------------------------------------------------------------------
+interface OpenClawToolItem {
+  id: string;
+  label: string;
+  group: string;
+  consequential: boolean;
+}
+
+// Normalise a loosely-typed catalog entry (Cadenas's shape may carry id/slug +
+// optional group/consequential) into the ToolPermissions contract shape.
+function normalizeOpenClawTool(raw: unknown): OpenClawToolItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const id =
+    typeof r.id === 'string' && r.id
+      ? r.id
+      : typeof r.slug === 'string' && r.slug
+        ? r.slug
+        : '';
+  if (!id) return null;
+  return {
+    id,
+    label:
+      typeof r.label === 'string' && r.label ? r.label : id,
+    group:
+      typeof r.group === 'string' && r.group ? r.group : '🛠 Outils',
+    consequential: !!r.consequential,
+  };
+}
+
+const OpenClawToolsCard = ({ config }: { config: OpenClawConfig }) => {
+  // enabledTools isn't in the base OpenClawConfig type until Cadenas's SNIPPET
+  // lands — read it defensively so this stays byte-safe pre-merge.
+  const seededEnabled = (config as { enabledTools?: string[] }).enabledTools;
+
+  const [tools, setTools] = useState<OpenClawToolItem[]>([]);
+  const [enabled, setEnabled] = useState<Set<string>>(
+    () => new Set(Array.isArray(seededEnabled) ? seededEnabled : [])
+  );
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  const loadCatalog = useCallback(async () => {
+    setState('loading');
+    try {
+      const raw = (await agentApi.getCapabilities('openclaw')) as Record<
+        string,
+        unknown
+      >;
+      const rawTools = Array.isArray(raw?.tools) ? raw.tools : [];
+      const list = rawTools
+        .map(normalizeOpenClawTool)
+        .filter((t): t is OpenClawToolItem => t !== null);
+      setTools(list);
+      setState('ready');
+    } catch {
+      setTools([]);
+      setState('error');
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCatalog();
+  }, [loadCatalog]);
+
+  const persist = useCallback(
+    async (next: Set<string>) => {
+      setSaving(true);
+      setSaveMsg(null);
+      try {
+        // Merge onto the existing config so runtime/preview aren't dropped. Coded
+        // against Cadenas's wrapper (mirrors Hermes's saveConfig contract).
+        await agentApi.saveOpenclawConfig({
+          defaultRuntime: config.defaultRuntime,
+          previewAutoOpen: config.previewAutoOpen,
+          enabledTools: Array.from(next),
+        });
+        setSaveMsg('✓ Enregistré');
+      } catch {
+        setSaveMsg('Échec de l’enregistrement — réessayez.');
+      } finally {
+        setSaving(false);
+      }
+    },
+    [config.defaultRuntime, config.previewAutoOpen]
+  );
+
+  const onChange = useCallback(
+    (next: Set<string>) => {
+      setEnabled(next);
+      void persist(next);
+    },
+    [persist]
+  );
+
+  return (
+    <Panel
+      title={`Outils (${enabled.size} activé${enabled.size === 1 ? '' : 's'})`}
+      action={
+        saving ? (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12,
+              color: C.muted,
+            }}
+          >
+            <Spinner /> Enregistrement…
+          </span>
+        ) : saveMsg ? (
+          <span style={{ fontSize: 12, color: C.muted }}>{saveMsg}</span>
+        ) : undefined
+      }
+    >
+      {state === 'loading' ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            color: C.muted,
+            padding: '8px 2px',
+          }}
+        >
+          <Spinner /> Chargement des outils…
+        </div>
+      ) : state === 'error' ? (
+        <Banner tone="error">
+          Impossible de charger le catalogue d’outils.{' '}
+          <button
+            style={{ ...btnStyle('secondary'), padding: '2px 8px', fontSize: 12 }}
+            onClick={() => void loadCatalog()}
+          >
+            Réessayer
+          </button>
+        </Banner>
+      ) : tools.length === 0 ? (
+        // Read-only face (per Cadenas): OpenClaw's tools are internal sandbox ops
+        // — nothing user-toggleable, so we explain rather than show an empty grid.
+        <EmptyNote>
+          Les outils d’OpenClaw sont internes au sandbox (fichiers, exécution,
+          aperçu) — il n’y a rien à activer ou désactiver ici.
+        </EmptyNote>
+      ) : (
+        <ToolPermissions
+          tools={tools}
+          value={enabled}
+          onChange={onChange}
+          disabled={saving}
+        />
+      )}
+    </Panel>
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Canaux — account-level channel status, read from the R7 roster caps via
 // useAgents() (GET /api/v1/agents → telegramEnabled / whatsappEnabled /
 // webEnabled). Read-only here; pairing / setup happens on the global
@@ -617,11 +808,126 @@ const CanauxPanel = () => {
           explainWhenOn
         />
       </div>
+      {/* R11 — a clearer "connecté à @bot" summary + a safe (confirm-gated)
+          unpair, above the R10 BYOT card. The R10 status shape carries no
+          bound-chat / last-inbound, so we surface the bot identity plainly
+          rather than inventing fields. */}
+      <TelegramBoundLine agent="openclaw" />
       {/* R10 BYOT — connect your OWN Telegram bot to OpenClaw, right here. */}
       <div style={{ marginTop: 12 }}>
         <TelegramChannelCard agent="openclaw" />
       </div>
     </Panel>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// TelegramBoundLine — a compact "connecté à @bot" strip shown ONLY when a bot
+// is bound to this agent. Reads Passe's `useTelegramChannel(agent)` (the same
+// hook the embedded card uses; safe to consume twice — independent state, same
+// GET). Adds a confirm-gated "Dissocier" (unpair) affordance the raw card
+// lacks. Fail-soft: not-connected / dark / loading renders nothing so the card
+// owns those faces. Styled to the OpenClaw idiom (mono chip, shared C palette).
+//   CONSUMED CONTRACT — useTelegramChannel(agent) → { status:{connected,
+//   botUsername?,connectedAt?}, disconnect(), loading }. Read defensively.
+// ---------------------------------------------------------------------------
+const TelegramBoundLine = ({ agent }: { agent: 'openclaw' }) => {
+  const channel = useTelegramChannel(agent) as
+    | {
+        status?: {
+          connected?: boolean;
+          botUsername?: string | null;
+          connectedAt?: number | string;
+        };
+        disconnect?: () => Promise<void>;
+        loading?: boolean;
+      }
+    | undefined;
+
+  const status = channel?.status ?? {};
+  const connected = !!status.connected;
+  const botUsername = status.botUsername ?? undefined;
+
+  const [confirming, setConfirming] = useState(false);
+  const [unpairing, setUnpairing] = useState(false);
+
+  const doUnpair = useCallback(() => {
+    if (unpairing || !channel?.disconnect) return;
+    setUnpairing(true);
+    void (async () => {
+      try {
+        await channel.disconnect!();
+      } catch {
+        // Best-effort — the hook re-probes; a failed unpair leaves the
+        // connected face up, which is honest.
+      } finally {
+        setUnpairing(false);
+        setConfirming(false);
+      }
+    })();
+  }, [unpairing, channel]);
+
+  if (!connected) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 10,
+        padding: '10px 12px',
+        borderRadius: 10,
+        background: C.okBg,
+        border: `1px solid ${C.okBorder}`,
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 15, flexShrink: 0 }}>
+        ✈
+      </span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: C.text }}>
+        Connecté à{' '}
+        <span dir="ltr" style={{ fontWeight: 700, fontFamily: monoFamily }}>
+          @{botUsername || 'votre bot'}
+        </span>
+      </span>
+      {confirming ? (
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: C.muted }}>Dissocier ?</span>
+          <button
+            style={{
+              ...btnStyle('danger'),
+              padding: '4px 10px',
+              fontSize: 12,
+            }}
+            disabled={unpairing}
+            onClick={() => void doUnpair()}
+          >
+            {unpairing ? 'Dissociation…' : 'Confirmer'}
+          </button>
+          <button
+            style={{
+              ...btnStyle('secondary'),
+              padding: '4px 10px',
+              fontSize: 12,
+            }}
+            disabled={unpairing}
+            onClick={() => setConfirming(false)}
+          >
+            Annuler
+          </button>
+        </span>
+      ) : (
+        <button
+          style={{ ...btnStyle('secondary'), padding: '4px 10px', fontSize: 12 }}
+          onClick={() => setConfirming(true)}
+          title="Dissocier ce bot d’OpenClaw"
+        >
+          Dissocier
+        </button>
+      )}
+    </div>
   );
 };
 
