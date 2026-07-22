@@ -754,7 +754,11 @@ export class ClickDzAgentTriggersController {
   // -------------------------------------------------------------------------
   // GET /api/v1/agents/:agent/triggers → AgentTriggerRecord[] (newest first).
   // -------------------------------------------------------------------------
-  @Throttle('default')
+  // R13 (429 fix): own per-route bucket via the custom override (';custom'
+  // key, see base/throttler generateKey) — the bare 'default' tier shares ONE
+  // 120/60s bucket per session across all default-tier routes, and the
+  // dashboard's missions loader was competing in it (429 storm).
+  @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/agents/:agent/triggers')
   async list(
     @CurrentUser() user: CurrentUser,

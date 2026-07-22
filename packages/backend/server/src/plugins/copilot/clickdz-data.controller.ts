@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 
 // Typed AFFiNE errors so the global exception filter emits proper 4xx
 // (a raw @nestjs/common HttpException is turned into a generic 500 here).
-import { AuthenticationRequired, BadRequest } from '../../base';
+import { AuthenticationRequired, BadRequest, Throttle } from '../../base';
 import { CacheRedis } from '../../base/redis';
 import { Public } from '../../core/auth';
 import { verifyDataToken } from './cdz-data-token';
@@ -126,6 +126,17 @@ export class ClickDzDataController {
     res.status(204).end();
   }
 
+  // R13 (429 fix): a deployed storefront polls its collections (products +
+  // orders) from the shopper's browser UNAUTHENTICATED, so these reads land in
+  // the per-IP default bucket (120/60s) shared with every other default-tier
+  // route from that IP — prod http logs showed ~30 apps-data 429s alongside
+  // the Hermes storm. The custom override (';custom' key, see base/throttler
+  // generateKey) isolates list-reads into their OWN generous per-IP bucket.
+  // NOTE (deliberate behavior change): adding a decorator also throttles
+  // AUTHENTICATED callers, which previously bypassed unprotected routes
+  // entirely — 600/60s is far above any legitimate studio/storefront rate
+  // while still capping abuse at ~10 req/s per IP per route.
+  @Throttle('default', { limit: 600, ttl: 60_000 })
   @Get([
     '/api/apps-data/:slug/:collection',
     '/api/v2/apps-data/:slug/:collection',
