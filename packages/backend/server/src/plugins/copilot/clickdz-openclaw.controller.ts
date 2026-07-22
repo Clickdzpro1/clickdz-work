@@ -249,6 +249,9 @@ interface OpenclawConfig {
   // has not customized it ⇒ the console runs the full catalog (see /capabilities
   // default-true). Always ⊆ allOpenclawToolSlugs() after normalize.
   enabledTools?: string[];
+  // R12: true once the user has explicitly written enabledTools (even []),
+  // so an empty set (all-off) is distinguishable from 'never customized'.
+  toolsCustomized?: boolean;
   updatedAt?: number;
 }
 
@@ -283,6 +286,10 @@ function normalizeOpenclawConfig(raw: unknown): OpenclawConfig {
       0,
       OPENCLAW_ENABLED_TOOLS_MAX
     );
+    out.toolsCustomized = true;
+  }
+  if (o.toolsCustomized === true) {
+    out.toolsCustomized = true;
   }
   if (typeof o.updatedAt === 'number' && Number.isFinite(o.updatedAt)) {
     out.updatedAt = o.updatedAt;
@@ -562,6 +569,7 @@ export class ClickDzOpenclawController {
             emit: ctx.emit as any,
             signal: ctx.signal,
             budget: rec.budget as any,
+            persona: ctx.persona, // R12: thread custom-agent persona (undefined for built-in)
           });
           if (r.state === 'failed') {
             throw new Error(r.error || 'openclaw_failed');
@@ -626,10 +634,9 @@ export class ClickDzOpenclawController {
     // available — the console works out of the box). The catalog carries `group`
     // so the FE maps each entry to {id:slug, label, group, consequential} +
     // `enabled` with no OpenClaw-specific classify logic.
-    const enabledSet =
-      config.enabledTools && config.enabledTools.length
-        ? new Set(config.enabledTools)
-        : null;
+    const enabledSet = config.toolsCustomized
+      ? new Set(config.enabledTools ?? [])
+      : null;
     const tools = buildOpenclawToolCatalog().map(t => ({
       slug: t.slug,
       label: t.label,
@@ -779,6 +786,7 @@ export class ClickDzOpenclawController {
         cleaned.push(slug);
       }
       next.enabledTools = Array.from(new Set(cleaned));
+      next.toolsCustomized = true;
     }
 
     next.updatedAt = Date.now();
@@ -1071,6 +1079,7 @@ export class ClickDzOpenclawController {
     sessionId: string;
     routes: { url: string; port: number }[];
     writer: AgentSseWriterLike;
+    persona?: string; // R12: custom-agent persona; undefined on live /stream ⇒ byte-identical
   }): Promise<void> {
     const { userId, thread, message, runtime, sessionId, writer } = ctx;
     let routes = ctx.routes;
@@ -1078,7 +1087,9 @@ export class ClickDzOpenclawController {
     const messages: Array<{ role: string; content: string }> = [
       {
         role: 'system',
-        content: this.buildStreamSystemPrompt(runtime, ctx.message),
+        content:
+          (ctx.persona ? `Tu es un agent personnalisé. ${ctx.persona}\n\n` : '') +
+          this.buildStreamSystemPrompt(runtime, ctx.message),
       },
       ...this.priorTurns(thread),
       { role: 'user', content: message },
@@ -1642,7 +1653,8 @@ export class ClickDzOpenclawController {
     task: string,
     runtime: string,
     reason: string,
-    writer: AgentSseWriterLike
+    writer: AgentSseWriterLike,
+    persona?: string // R12: custom-agent persona; live callers omit ⇒ byte-identical
   ): Promise<void> {
     writer.emit({
       type: 'status',
@@ -1651,7 +1663,12 @@ export class ClickDzOpenclawController {
     });
 
     const messages: Array<{ role: string; content: string }> = [
-      { role: 'system', content: this.buildPlanOnlySystemPrompt(runtime) },
+      {
+        role: 'system',
+        content:
+          (persona ? `Tu es un agent personnalisé. ${persona}\n\n` : '') +
+          this.buildPlanOnlySystemPrompt(runtime),
+      },
       ...this.priorTurns(thread),
       { role: 'user', content: task },
     ];
@@ -2813,7 +2830,8 @@ export class ClickDzOpenclawController {
           runtime,
           capability.reason ??
             'Vercel Sandbox is not available for this deployment',
-          writer
+          writer,
+          args.persona // R12
         );
       } else {
         const ready = await this.ensurePersistentSandbox(
@@ -2829,7 +2847,8 @@ export class ClickDzOpenclawController {
             prompt,
             runtime,
             'the sandbox session could not be created for this run',
-            writer
+            writer,
+            args.persona // R12
           );
         } else {
           await this.streamAgentLoop({
@@ -2840,6 +2859,7 @@ export class ClickDzOpenclawController {
             sessionId: thread.sandbox!.sessionId,
             routes: thread.sandbox!.routes ?? [],
             writer,
+            persona: args.persona, // R12
           });
         }
       }
@@ -2976,6 +2996,10 @@ interface OpenclawLoopArgs {
   signal?: AbortSignal;
   budget?: OpenclawRunBudget;
   agent?: 'openclaw';
+  /** R12: optional persona for a CUSTOM openclaw-archetype agent (prepended to
+   * the loop's system prompt). Absent for the built-in + live /stream ⇒
+   * byte-identical. */
+  persona?: string;
 }
 
 /**

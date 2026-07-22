@@ -259,8 +259,28 @@ export interface AgentRunRecord extends AgentRunSummary {
  * startedAt).
  */
 export interface AgentSummary {
-  /** Stable agent id (also the run/console API path segment). */
-  id: AgentName;
+  /**
+   * Stable agent id (also the run/console API path segment). For the two
+   * built-ins this is an {@link AgentName} literal (`'hermes'`/`'openclaw'`);
+   * R12 custom agents carry an opaque backend id (a `cz_`-prefixed string), so
+   * the type widens to `AgentName | string`. The union stays assignable from
+   * the existing literals ⇒ every pre-R12 consumer stays type-valid; the
+   * literal arm is kept for readable narrowing / discrimination at call sites.
+   */
+  id: AgentName | string;
+  /**
+   * R12: the built-in archetype a custom agent CLONES (`'hermes'`/`'openclaw'`).
+   * Absent on the two built-in roster rows and on any pre-R12 payload — so a
+   * row with no `archetype` is a built-in, one with it set is user-created.
+   */
+  archetype?: 'hermes' | 'openclaw';
+  /**
+   * R12: the user-chosen display name for a custom agent. When present it is
+   * what the UI shows; built-ins fall back to {@link AgentSummary.label}.
+   */
+  name?: string;
+  /** R12: optional user-chosen emoji glyph for a custom agent's avatar. */
+  emoji?: string;
   /** Product-facing display name (e.g. "Hermes"). */
   label: string;
   /** True while the agent is flagged beta in the roster. */
@@ -294,6 +314,15 @@ export interface AgentCaps {
   telegramEnabled: boolean;
   /** Whether agent web access is enabled server-side. */
   webEnabled: boolean;
+  /**
+   * R12 master switch for the custom-agent creator (backend
+   * `CDZ_AGENT_CUSTOM_ENABLED`). When false/absent the "Créer un agent"
+   * affordance stays hidden and `/agents/new` shows a quiet "bientôt" panel
+   * rather than a dead form. Optional so a pre-R12 payload (no flag) reads
+   * `undefined` ⇒ falsy ⇒ feature dark, byte-identical to the built-ins-only
+   * build. `DEFAULT_AGENT_CAPS` seeds it explicit `false`.
+   */
+  customEnabled?: boolean;
 }
 
 /** Envelope returned by GET /api/v1/agents: the roster plus capability flags. */

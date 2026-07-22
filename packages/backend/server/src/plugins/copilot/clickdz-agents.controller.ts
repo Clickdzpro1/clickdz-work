@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 
 // Typed AFFiNE errors (a raw HttpException is coerced to a generic 500 by
 // base/nestjs/exception.ts): NotFound = the gated-OFF "feature disabled" 404,
@@ -44,6 +53,23 @@ import {
 // is safe on the caps hot path (no I/O). The orchestrator merges R8 files, so
 // this static import resolves at boot; flags-off it just returns false.
 import { waCapsEnabled } from './clickdz-wa-client';
+// R12 (custom agents — owner: Fonderie, clickdz-agent-registry.ts). The registry
+// is FRAMEWORK-LIGHT (plain functions taking the raw redis handle first — the
+// SAME RunRedis-ish slice this controller already injects as CacheRedis), so the
+// CRUD routes + the roster extension call these directly, fail-soft. The CRITICAL
+// export is resolveArchetype: a custom id resolves ONLY under its owner's
+// user.id, so a non-owned id ⇒ null ⇒ 404 (the multi-tenant gate). listAgentDefs
+// composes the roster's custom rows; create/rename/delete back the CRUD routes;
+// AgentDef is the wire shape. All VALUE imports (called at runtime) except the
+// type. The orchestrator lands the registry next to this file, so the static
+// import resolves at boot; every call is guarded fail-soft below.
+import {
+  type AgentDef,
+  createAgentDef,
+  deleteAgentDef,
+  listAgentDefs,
+  renameAgentDef,
+} from './clickdz-agent-registry';
 
 // ---------------------------------------------------------------------------
 // CDZ AGENTS — STATUS + STATE (WSU-8, R6 §"Agents status backend").
@@ -67,6 +93,11 @@ import { waCapsEnabled } from './clickdz-wa-client';
 
 // Config (read once at module load, same idiom as the sibling controllers).
 const CDZ_AGENTS_ENABLED = process.env.CDZ_AGENTS_ENABLED || '';
+// R12 — the custom-agents master gate. OFF (default) ⇒ the /agents/custom CRUD
+// routes return a typed 404 AND the roster omits custom agents ⇒ byte-identical
+// built-ins-only behaviour. Flip to '1' at deploy. Read once, same idiom as the
+// gate above (a per-request read is unnecessary — env is fixed for the process).
+const CDZ_AGENT_CUSTOM_ENABLED = process.env.CDZ_AGENT_CUSTOM_ENABLED || '';
 
 // The fixed agent roster (order = display order). `beta` flags both while the
 // R6/R7 runtime stabilises; labels are the product-facing names.
@@ -208,10 +239,21 @@ interface AgentLastRun {
   at: number;
 }
 
-// One roster row on the wire.
+// One roster row on the wire. R12 widens `id` from the built-in union to any
+// string (a custom agent's `cz_` runtime id is opaque) and adds `archetype`
+// (the built-in loop it reuses — a built-in's archetype IS its own id) plus the
+// optional `name`/`emoji` a custom agent carries. Built-in rows keep their exact
+// prior fields (archetype === id, no emoji, name omitted) so an existing FE
+// consumer reading id/label/beta/lastRun/channels is byte-unaffected.
 interface AgentStatus {
-  id: AgentName;
+  id: string;
+  /** Which built-in loop/tools this agent uses ('hermes'|'openclaw'). */
+  archetype: AgentName;
   label: string;
+  /** Custom agent's display name (built-ins omit it — `label` is their name). */
+  name?: string;
+  /** Custom agent's emoji, when set. */
+  emoji?: string;
   beta: boolean;
   lastRun?: AgentLastRun;
   channels: { telegram: boolean };
@@ -235,6 +277,10 @@ interface AgentCaps {
   whatsappEnabled: boolean;
   memoryEnabled: boolean;
   triggersEnabled: boolean;
+  // R12: whether users can create their OWN named agents (the "Créer un agent"
+  // flow on the /agents home). Default OFF ⇒ unset env == the create UI hidden +
+  // the roster carries built-ins only (byte-identical legacy behaviour).
+  customEnabled: boolean;
 }
 
 /**
@@ -266,6 +312,9 @@ function buildCaps(): AgentCaps {
     // R8: memory + triggers gates, same inline process.env idiom; default OFF.
     memoryEnabled: process.env.CDZ_AGENT_MEMORY_ENABLED === '1',
     triggersEnabled: process.env.CDZ_AGENT_TRIGGERS_ENABLED === '1',
+    // R12: custom-agents gate (same inline idiom; default OFF). The FE gates the
+    // "Créer un agent" flow on this flag.
+    customEnabled: CDZ_AGENT_CUSTOM_ENABLED === '1',
   };
 }
 
@@ -290,15 +339,36 @@ export class ClickDzAgentsController {
     }
   }
 
-  /** Caller's newest run for one agent → lastRun projection (fail-soft → undefined). */
+  /** Caller's newest run for one built-in agent → lastRun projection (fail-soft → undefined). */
   private async lastRunFor(
     userId: string,
     agent: AgentName
   ): Promise<AgentLastRun | undefined> {
+    return this.lastRunForId(userId, agent);
+  }
+
+  /**
+   * Caller's newest run for an OPAQUE agent id → lastRun projection (fail-soft →
+   * undefined). R12: the run engine keys its per-user+agent zset by the agent
+   * STRING (opaque — already works for a custom `cz_` id), so this powers both
+   * the built-in rows (via {@link lastRunFor}) and the custom rows. `userId` is
+   * always @CurrentUser().id, so a caller only ever sees THEIR own runs.
+   */
+  private async lastRunForId(
+    userId: string,
+    agentId: string
+  ): Promise<AgentLastRun | undefined> {
     try {
       // listAgentRuns takes the RAW redis first (RunRedis slice); newest entry
       // from the per-user+agent zset (newest-first). Prefer endedAt then startedAt.
-      const runs = await listAgentRuns(this.redis as any, userId, agent, 1);
+      // The `agent` param is opaque to the engine (a Redis key segment), so a
+      // custom id is passed through as-is (cast to the AgentName param type).
+      const runs = await listAgentRuns(
+        this.redis as any,
+        userId,
+        agentId as AgentName,
+        1
+      );
       const rec = runs && runs.length ? runs[0] : null;
       if (!rec || typeof rec.runId !== 'string') return undefined;
       return {
@@ -466,11 +536,44 @@ export class ClickDzAgentsController {
       const lastRun = await this.lastRunFor(user.id, descriptor.id);
       agents.push({
         id: descriptor.id,
+        // A built-in's archetype IS its own id — keeps the row shape uniform
+        // with custom rows without changing any existing field.
+        archetype: descriptor.id,
         label: descriptor.label,
         beta: descriptor.beta,
         ...(lastRun ? { lastRun } : {}),
         channels: { telegram },
       });
+    }
+    // R12: append the caller's CUSTOM agents (owner-scoped — listAgentDefs reads
+    // clickdz:agentdefs:{user.id}, so ONLY this user's agents appear; a custom id
+    // is intrinsically owner-bound). Gated by CDZ_AGENT_CUSTOM_ENABLED: OFF ⇒
+    // this block is skipped ⇒ the roster is byte-identical built-ins-only. Each
+    // row carries its archetype (loop it reuses), name/emoji, a beta flag, and
+    // its newest run keyed by the OPAQUE custom id (listAgentRuns keys by the
+    // agent string, which already works for a cz_ id). Fail-soft: a registry
+    // read failure degrades to "no custom agents", never a 500.
+    if (CDZ_AGENT_CUSTOM_ENABLED === '1') {
+      try {
+        const defs = await listAgentDefs(this.redis as any, user.id);
+        for (const def of defs) {
+          const lastRun = await this.lastRunForId(user.id, def.id);
+          agents.push({
+            id: def.id,
+            archetype: def.archetype,
+            // `label` mirrors the display name so an FE reading only `label`
+            // (like it does for built-ins) still shows the custom agent's name.
+            label: def.name,
+            name: def.name,
+            ...(def.emoji ? { emoji: def.emoji } : {}),
+            beta: true,
+            ...(lastRun ? { lastRun } : {}),
+            channels: { telegram },
+          });
+        }
+      } catch {
+        /* fail-soft: a registry read failure is "no custom agents" */
+      }
     }
     // Top-level capability flags for the R7 unified /agents UI. Env-derived,
     // gated by the same CDZ_AGENTS_ENABLED master switch as the whole endpoint
@@ -654,5 +757,136 @@ export class ClickDzAgentsController {
       ok = false;
     }
     return { ok, enabled };
+  }
+
+  // =========================================================================
+  // R12 — CUSTOM AGENTS CRUD. Users create their OWN named agents (each cloning
+  // a built-in archetype) beyond Hermes/OpenClaw. ALL routes are @CurrentUser
+  // (ownership intrinsic — every registry read/write is keyed by user.id, so a
+  // caller can only ever touch THEIR OWN agents; a non-owned/unknown id resolves
+  // to "not found" ⇒ 404, never leaking another user's agent). Gated by
+  // CDZ_AGENT_CUSTOM_ENABLED: OFF ⇒ a typed 404 (indistinguishable from the
+  // routes not existing), byte-identical to the feature not shipping. The
+  // registry is fail-soft; we map its typed error codes to typed AFFiNE errors
+  // (BadRequest / NotFound) so the exception filter emits the right status.
+  // =========================================================================
+
+  /**
+   * Typed 404 when EITHER master gate is off. The custom routes require BOTH the
+   * agents surface (CDZ_AGENTS_ENABLED) AND the custom-agents flag
+   * (CDZ_AGENT_CUSTOM_ENABLED); off ⇒ a NotFound that never reveals the route.
+   */
+  private assertCustomEnabled() {
+    if (CDZ_AGENTS_ENABLED !== '1' || CDZ_AGENT_CUSTOM_ENABLED !== '1') {
+      throw new NotFound('Custom agents are not enabled');
+    }
+  }
+
+  // POST /api/v1/agents/custom — create a custom agent. @CurrentUser, owner-
+  // scoped. Body {archetype:'hermes'|'openclaw', name, emoji?, persona?}. The
+  // registry validates + enforces the 20/user cap; a bad body ⇒ BadRequest, the
+  // cap ⇒ BadRequest ('custom_agent_limit_reached'), a store failure ⇒
+  // BadRequest. Returns the created def.
+  @Post('/api/v1/agents/custom')
+  async createCustomAgent(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: unknown
+  ): Promise<AgentDef> {
+    this.assertCustomEnabled();
+    const payload = (body ?? {}) as Record<string, unknown>;
+    // createAgentDef is fail-soft (never throws) — it returns a typed error we
+    // translate. It reads/writes clickdz:agentdef:{user.id}:{id} + the per-user
+    // index, so the agent is created UNDER THIS user and only resolvable by them.
+    const result = await createAgentDef(this.redis as any, user.id, {
+      archetype: String(payload.archetype ?? ''),
+      name: String(payload.name ?? ''),
+      emoji: typeof payload.emoji === 'string' ? payload.emoji : undefined,
+      persona: typeof payload.persona === 'string' ? payload.persona : undefined,
+    });
+    if (result.def) return result.def;
+    if (result.error === 'cap') {
+      throw new BadRequest('custom_agent_limit_reached');
+    }
+    if (result.error === 'store') {
+      throw new BadRequest('could not save the agent, please retry');
+    }
+    // 'invalid' (or any other) — bad archetype/name/persona/emoji.
+    throw new BadRequest(
+      'invalid agent: archetype must be hermes|openclaw, name 1..40 chars, persona ≤2000, emoji ≤8'
+    );
+  }
+
+  // GET /api/v1/agents/custom — list the caller's custom agents (newest first).
+  // @CurrentUser, owner-scoped (listAgentDefs reads clickdz:agentdefs:{user.id}
+  // ONLY). Fail-soft → []. Gated by CDZ_AGENT_CUSTOM_ENABLED (typed 404 when off).
+  @Get('/api/v1/agents/custom')
+  async listCustomAgents(
+    @CurrentUser() user: CurrentUser
+  ): Promise<{ agents: AgentDef[] }> {
+    this.assertCustomEnabled();
+    try {
+      const agents = await listAgentDefs(this.redis as any, user.id);
+      return { agents: Array.isArray(agents) ? agents : [] };
+    } catch {
+      return { agents: [] }; // fail-soft: a read failure is "no custom agents"
+    }
+  }
+
+  // PATCH /api/v1/agents/custom/:id — edit a custom agent's name/emoji/persona.
+  // @CurrentUser, owner-scoped: renameAgentDef only resolves a def under
+  // user.id, so a non-owned/unknown id ⇒ 'not_found' ⇒ typed 404 (the isolation
+  // gate — a custom id from another user is invisible here). A bad field ⇒
+  // BadRequest. Gated by CDZ_AGENT_CUSTOM_ENABLED (typed 404 when off).
+  @Patch('/api/v1/agents/custom/:id')
+  async updateCustomAgent(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() body: unknown
+  ): Promise<AgentDef> {
+    this.assertCustomEnabled();
+    const payload = (body ?? {}) as Record<string, unknown>;
+    const patch: {
+      name?: string;
+      emoji?: string;
+      persona?: string;
+    } = {};
+    // Only forward fields the caller actually sent (so an omitted field is left
+    // as-is by the registry; an explicit '' clears emoji/persona there).
+    if ('name' in payload) patch.name = String(payload.name ?? '');
+    if ('emoji' in payload) patch.emoji = String(payload.emoji ?? '');
+    if ('persona' in payload) patch.persona = String(payload.persona ?? '');
+    const result = await renameAgentDef(this.redis as any, user.id, id, patch);
+    if (result.def) return result.def;
+    if (result.error === 'invalid') {
+      throw new BadRequest(
+        'invalid update: name 1..40 chars, persona ≤2000, emoji ≤8'
+      );
+    }
+    if (result.error === 'store') {
+      throw new BadRequest('could not save the agent, please retry');
+    }
+    // 'not_found' — unknown id OR not owned by this caller (isolation ⇒ 404).
+    throw new NotFound(`unknown agent "${id}"`);
+  }
+
+  // DELETE /api/v1/agents/custom/:id — delete a custom agent. @CurrentUser,
+  // owner-scoped: deleteAgentDef only removes a def under user.id (a non-owned
+  // id is a no-op). Idempotent — deleting a missing/unknown/not-owned id returns
+  // {deleted:false} rather than an error (a delete need not distinguish "was not
+  // there" from "not yours"; both leave the caller with nothing). Gated by
+  // CDZ_AGENT_CUSTOM_ENABLED (typed 404 when off).
+  @Delete('/api/v1/agents/custom/:id')
+  async deleteCustomAgent(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string
+  ): Promise<{ deleted: boolean }> {
+    this.assertCustomEnabled();
+    let deleted = false;
+    try {
+      deleted = await deleteAgentDef(this.redis as any, user.id, id);
+    } catch {
+      deleted = false; // fail-soft: a delete failure is reported, never a 500
+    }
+    return { deleted };
   }
 }

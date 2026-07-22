@@ -41,6 +41,20 @@ import {
   readRunEvents,
   registerRunForwarder,
 } from './clickdz-agent-runs';
+// R12 (custom agents): a run's :agent may be an OWNED custom id (`cz_`+8hex), not
+// just a built-in. AgentId is the opaque runtime-id type (built-in name OR custom
+// id) — every per-agent Redis key already treats the segment as opaque. Fonderie's
+// registry owns the multi-tenant gate: resolveArchetype(redis,userId,agentId) →
+// the archetype for a built-in / an OWNED custom id, or null (unknown/not owned ⇒
+// 404). resolveAgentDef returns the full def (built-ins → a synthetic def) so the
+// RUN-CREATE path can thread the custom persona into the loop. Both are pure,
+// framework-light, fail-soft (never throw), and resolve a custom id ONLY under its
+// owner's userId — so a custom id from user Y under user X's session resolves null.
+import type { AgentId } from './clickdz-agent-runs';
+import {
+  resolveAgentDef,
+  resolveArchetype,
+} from './clickdz-agent-registry';
 
 // ===========================================================================
 // clickdz-agent-runs.controller.ts — BACKGROUND RUN REST + SSE (R6 §"Run
@@ -88,13 +102,66 @@ export class ClickDzAgentRunsController {
     if (!AGENTS_ENABLED()) throw new NotFound('agent runs are not enabled');
   }
 
-  private agentOf(agent: string): AgentName {
-    if (agent === 'hermes' || agent === 'openclaw') return agent;
+  // R12 multi-tenant gate. Custom-agent resolution is behind
+  // CDZ_AGENT_CUSTOM_ENABLED: OFF ⇒ ONLY the two built-ins resolve, byte-identical
+  // to the old sync agentOf (an arbitrary id 404s, exactly as before). ON ⇒ an
+  // OWNED custom id (a def exists at clickdz:agentdef:{userId}:{id}) also resolves.
+  private customAgentsEnabled(): boolean {
+    return process.env.CDZ_AGENT_CUSTOM_ENABLED === '1';
+  }
+
+  /**
+   * Resolve + AUTHORIZE the :agent path segment to the run's RUNTIME ID under this
+   * user, or throw a typed NotFound. Replaces the old sync `agentOf`. Returns the
+   * runtime id (the built-in name, or the owned custom `cz_` id) — the SAME value
+   * downstream code already used to key runs / match ownership (for a built-in the
+   * id IS its archetype, so this is byte-identical). resolveArchetype resolves a
+   * built-in with NO Redis touch and returns null for an unknown OR NOT-OWNED id
+   * (a def only exists under its owner's userId), so a custom id minted by user Y
+   * 404s under user X's session — the isolation invariant. When custom agents are
+   * disabled we resolve built-ins ONLY (never touch the registry) so behaviour is
+   * unchanged. The caller MUST pass @CurrentUser().id — NEVER a request-supplied id.
+   */
+  private async resolveAgentOr404(
+    userId: string,
+    agent: string
+  ): Promise<AgentId> {
+    const id = typeof agent === 'string' ? agent : '';
+    if (id === 'hermes' || id === 'openclaw') return id;
+    if (this.customAgentsEnabled()) {
+      const archetype = await resolveArchetype(this.redis as any, userId, id);
+      if (archetype) return id; // owned custom id — key everything by the id itself
+    }
     throw new NotFound(`unknown agent "${agent}"`);
   }
 
-  /** Load a run owned by this user under this agent, or throw NotFound. */
-  private async ownedRun(userId: string, agent: AgentName, id: string) {
+  /**
+   * Resolve the archetype + persona for the RUN-CREATE path (only `create` needs
+   * these). Returns the built-in loop the run reuses + the def's optional persona
+   * (undefined for a built-in ⇒ byte-identical prompt). Assumes the id was already
+   * authorized by {@link resolveAgentOr404}; resolveAgentDef returns null only on a
+   * lost race (def deleted between the two reads) ⇒ we 404 rather than run untyped.
+   */
+  private async resolveArchetypeAndPersona(
+    userId: string,
+    agent: string
+  ): Promise<{ archetype: AgentName; persona?: string }> {
+    if (agent === 'hermes' || agent === 'openclaw') {
+      return { archetype: agent };
+    }
+    const def = await resolveAgentDef(this.redis as any, userId, agent);
+    if (!def) throw new NotFound(`unknown agent "${agent}"`);
+    return { archetype: def.archetype, persona: def.persona };
+  }
+
+  /**
+   * Load a run owned by this user under this agent, or throw NotFound. R12: `agent`
+   * is now the RUNTIME ID (AgentId — a built-in name OR an owned custom `cz_` id),
+   * already authorized by resolveAgentOr404. rec.agent === the run's runtime id, so
+   * the match still stops a run being reached through the wrong agent's path (and a
+   * custom agent's runs only match their own id).
+   */
+  private async ownedRun(userId: string, agent: AgentId, id: string) {
     const rec = await readAgentRun(
       this.redis as any,
       userId,
@@ -121,7 +188,14 @@ export class ClickDzAgentRunsController {
     @Res({ passthrough: true }) res: Response
   ): Promise<{ runId: string } | { ok: false; error: string }> {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    // R12: authorize the id under THIS user (404 if unknown/not-owned), then
+    // resolve the archetype (loop dispatch) + persona (custom-agent prompt). For a
+    // built-in agentParam this is byte-identical: agent === archetype, no persona.
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
+    const { archetype, persona } = await this.resolveArchetypeAndPersona(
+      user.id,
+      agent
+    );
 
     const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
     if (prompt.length < PROMPT_MIN || prompt.length > PROMPT_MAX) {
@@ -149,7 +223,13 @@ export class ClickDzAgentRunsController {
 
     const rec = await createAgentRun(this.redis as any, {
       userId: user.id,
-      agent,
+      // R12: key the run by the RUNTIME ID (agentId — a built-in name OR the owned
+      // custom `cz_` id) and dispatch its loop by the resolved ARCHETYPE; thread the
+      // def's persona (undefined for a built-in ⇒ byte-identical prompt). agent is
+      // kept as the back-compat alias the engine derives from agentId.
+      agentId: agent,
+      archetype,
+      persona,
       prompt,
       channel: 'web',
       threadId,
@@ -169,7 +249,7 @@ export class ClickDzAgentRunsController {
     @Query('limit') limitRaw: string | undefined
   ) {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     const limit = limitRaw ? Number.parseInt(String(limitRaw), 10) : 30;
     return listAgentRuns(this.redis as any, user.id, agent, limit);
   }
@@ -185,7 +265,7 @@ export class ClickDzAgentRunsController {
     @Param('id') id: string
   ) {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     return this.ownedRun(user.id, agent, id);
   }
 
@@ -209,7 +289,7 @@ export class ClickDzAgentRunsController {
     @Res() res: Response
   ): Promise<void> {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     // Throws NotFound (pre-headers) if the run is missing / not owned.
     const rec = await this.ownedRun(user.id, agent, id);
     const runId = rec.runId;
@@ -354,7 +434,7 @@ export class ClickDzAgentRunsController {
     @Param('id') id: string
   ): Promise<{ ok: boolean }> {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     const rec = await this.ownedRun(user.id, agent, id);
     // The detached loop's ctx.isStopped() calls runtime.isStopRequested(threadId)
     // — set the SAME flag the runtime owns so the run winds down cooperatively.
@@ -379,7 +459,7 @@ export class ClickDzAgentRunsController {
     @Res({ passthrough: true }) res: Response
   ): Promise<{ ok: boolean } | { ok: false; error: string }> {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     const rec = await this.ownedRun(user.id, agent, id);
 
     const stepId = typeof body?.stepId === 'string' ? body.stepId.trim() : '';

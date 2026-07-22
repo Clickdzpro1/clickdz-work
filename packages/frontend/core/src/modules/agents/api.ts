@@ -527,6 +527,138 @@ export function listAgents(): Promise<AgentsListResponse> {
   return requestJson<AgentsListResponse>(`/api/v1/agents`);
 }
 
+// ── R12 custom agents (user-created agents cloning a built-in archetype) ───────
+//
+// A CUSTOM agent is a light def the user creates from the /agents home ("Créer un
+// agent"): pick an archetype (which built-in loop/tools it reuses — Opérateur =
+// hermes, Ingénieur = openclaw), a name, an emoji, and an optional persona. It
+// gets an opaque runtime id `cz_` + 8 hex; every unified surface (run view,
+// channels, triggers) already keys by that id, so a custom agent reuses them all.
+// These wrap the Fonderie CRUD routes on the agents controller (the SAME plural
+// `agents` segment + `CDZ_AGENTS_ENABLED` master gate as {@link listAgents}), and
+// are ADDITIONALLY gated by `CDZ_AGENT_CUSTOM_ENABLED` on the backend — dark ⇒ the
+// routes 404, so (like the other helpers here) each doubles as a capability probe
+// the caller flag-detects via `.status === 404`. Backend routes (asserted against
+// ClickDzAgentsController's @Post/@Get/@Patch/@Delete — FE-called path == route):
+//   GET    /api/v1/agents/custom        → { agents: AgentDef[] }
+//   POST   /api/v1/agents/custom        {archetype,name,emoji?,persona?} → AgentDef
+//   PATCH  /api/v1/agents/custom/:id    {name?,emoji?,persona?} → AgentDef
+//   DELETE /api/v1/agents/custom/:id    → { deleted: boolean }
+// Ownership is intrinsic on the backend (every route is @CurrentUser, keyed by the
+// caller's user id), so these carry NO user id — a caller only ever sees/edits
+// THEIR OWN agents; an unknown/not-owned id 404s.
+
+/**
+ * A user-created custom agent (the backend registry def). `id` is the opaque
+ * `cz_`-prefixed runtime id used everywhere the unified surfaces key by agent;
+ * `archetype` is the built-in whose loop/tools it clones. `emoji`/`persona` are
+ * optional. Mirrors the backend `AgentDef` shape returned by the CRUD routes.
+ */
+export interface AgentDef {
+  /** Opaque runtime id: `cz_` + 8 hex (the `?agent=` value for the run view). */
+  id: string;
+  /** Which built-in loop/tools this agent reuses. */
+  archetype: AgentName;
+  /** Display name (1..40 chars). */
+  name: string;
+  /** Optional emoji (≤8 chars), when set. */
+  emoji?: string;
+  /** Optional persona prepended to the archetype's system prompt (≤2000 chars). */
+  persona?: string;
+  /** ms since epoch the agent was created. */
+  createdAt: number;
+}
+
+/** Fields accepted when creating a custom agent (POST body). */
+export interface CreateCustomAgentInput {
+  /** The built-in to clone: `hermes` (Opérateur) or `openclaw` (Ingénieur). */
+  archetype: AgentName;
+  /** Display name (1..40 chars, validated server-side). */
+  name: string;
+  /** Optional emoji (≤8 chars). */
+  emoji?: string;
+  /** Optional persona (≤2000 chars). */
+  persona?: string;
+}
+
+/** Fields accepted when editing a custom agent (PATCH body — all optional). */
+export interface UpdateCustomAgentInput {
+  /** New display name (1..40 chars). */
+  name?: string;
+  /** New emoji (≤8 chars); pass `''` to clear it. */
+  emoji?: string;
+  /** New persona (≤2000 chars); pass `''` to clear it. */
+  persona?: string;
+}
+
+/**
+ * List the signed-in user's custom agents (newest first). Throws {@link
+ * AgentApiError} — a `.status === 404` means custom agents are off (feature
+ * dark), so the caller flag-detects and hides the create UI. Returns `[]` on a
+ * non-array `agents` body. Backend: `GET /api/v1/agents/custom`.
+ */
+export async function listCustomAgents(): Promise<AgentDef[]> {
+  const res = await requestJson<{ agents: AgentDef[] }>(
+    `/api/v1/agents/custom`
+  );
+  return res && Array.isArray(res.agents) ? res.agents : [];
+}
+
+/**
+ * Create a custom agent for the signed-in user. Returns the created {@link
+ * AgentDef}. Throws {@link AgentApiError} — notably `.status === 404` when the
+ * feature is dark and `.status === 400` on an invalid body (bad archetype, name
+ * out of range, over-long persona/emoji) or the per-user cap
+ * (`custom_agent_limit_reached`). Backend: `POST /api/v1/agents/custom`.
+ */
+export function createCustomAgent(
+  body: CreateCustomAgentInput
+): Promise<AgentDef> {
+  return requestJson<AgentDef>(`/api/v1/agents/custom`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Edit a custom agent's name / emoji / persona. Only the provided fields change;
+ * pass `emoji: ''` or `persona: ''` to clear those. Returns the updated {@link
+ * AgentDef}. Throws {@link AgentApiError} — `.status === 404` when the agent is
+ * unknown / not owned by the caller (or the feature is dark), `.status === 400`
+ * on an invalid field. Backend: `PATCH /api/v1/agents/custom/:id`.
+ */
+export function updateCustomAgent(
+  id: string,
+  body: UpdateCustomAgentInput
+): Promise<AgentDef> {
+  return requestJson<AgentDef>(
+    `/api/v1/agents/custom/${encodeURIComponent(id)}`,
+    {
+      method: 'PATCH',
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    }
+  );
+}
+
+/**
+ * Delete a custom agent by id. Idempotent server-side (deleting a missing / not-
+ * owned id resolves `{ deleted: false }` rather than throwing). Returns whether a
+ * def was removed. Throws {@link AgentApiError} only on a transport/HTTP failure
+ * (e.g. `.status === 404` when the feature is dark). Backend:
+ * `DELETE /api/v1/agents/custom/:id`.
+ */
+export async function deleteCustomAgent(
+  id: string
+): Promise<{ deleted: boolean }> {
+  const res = await requestJson<{ deleted?: boolean }>(
+    `/api/v1/agents/custom/${encodeURIComponent(id)}`,
+    { method: 'DELETE' }
+  );
+  return { deleted: !!(res && res.deleted) };
+}
+
 // ── R11 shop pulse + DZD budget (WS11-9, Pouls) ───────────────────────────────
 //
 // Two owner-scoped, read-only reads the Hermes "Bureau" hero + the agents-home

@@ -300,6 +300,98 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
     ar: 'ما كاش عمليات أخيرة. حل وكيل و أعطيه خدمة.',
   },
 
+  // ── /agents/new · CREATE CUSTOM AGENT (create-agent.tsx — R12, Atelier) ────
+  // The custom-agent creator: pick an archetype (clone Hermès/OpenClaw), give it
+  // a name + emoji + persona, review, POST. FR default + short DZ darja (same
+  // commerce voice as the shop pages). `{n}` = chars remaining; `{archetype}` =
+  // the chosen archetype's title.
+  'create.tabTitle': { fr: 'Créer un agent', ar: 'زيد وكيل' },
+  'create.title': { fr: 'Créer un agent', ar: 'زيد وكيل' },
+  'create.subtitle': {
+    fr: 'Créez votre propre employé IA — partez d’un modèle, donnez-lui un nom et une mission.',
+    ar: 'اصنع الموظّف تاعك بالذكاء الاصطناعي — ابدا من نموذج، سمّيه و أعطيه مهمة.',
+  },
+  'create.loading': { fr: 'Chargement…', ar: 'كي نحمّلو…' },
+  'create.soon.title': {
+    fr: 'La création d’agents arrive bientôt',
+    ar: 'صناعة الوكلاء جاية قريب',
+  },
+  'create.soon.body': {
+    fr: 'Cette fonctionnalité n’est pas encore activée sur ce serveur. Bientôt, vous pourrez créer vos propres agents à partir de nos modèles.',
+    ar: 'هاد الخاصية لسه ماشي مفعّلة على هاد السيرفور. قريب تقدر تصنع الوكلاء تاعك من النماذج تاعنا.',
+  },
+
+  // step labels (3-dot stepper)
+  'create.step.archetype': { fr: 'Modèle', ar: 'النموذج' },
+  'create.step.identity': { fr: 'Identité', ar: 'الهوية' },
+  'create.step.review': { fr: 'Récap', ar: 'المراجعة' },
+
+  // step 1 — archetype
+  'create.archetype.heading': { fr: 'Choisissez un modèle', ar: 'اختار نموذج' },
+  'create.archetype.operator.title': { fr: 'Opérateur', ar: 'مشغّل' },
+  'create.archetype.operator.desc': {
+    fr: 'Comme Hermès — commandes, clients, messages. Idéal pour les opérations de votre boutique.',
+    ar: 'كيما Hermès — الكوموندات، الكليان، الرسائل. مليح للعمليات تاع المحل.',
+  },
+  'create.archetype.engineer.title': { fr: 'Ingénieur', ar: 'مهندس' },
+  'create.archetype.engineer.desc': {
+    fr: 'Comme OpenClaw — écrit et exécute du code dans un sandbox. Pour les outils et automatisations.',
+    ar: 'كيما OpenClaw — يكتب و يشغّل الكود ف سandbox. للأدوات و الأتمتة.',
+  },
+
+  // step 2 — identity
+  'create.identity.heading': { fr: 'Son identité', ar: 'هويتو' },
+  'create.identity.name.label': { fr: 'Nom de l’agent', ar: 'اسم الوكيل' },
+  'create.identity.name.placeholder': {
+    fr: 'Ex. Assistant commandes',
+    ar: 'مثلا: مساعد الكوموندات',
+  },
+  'create.identity.name.hint': {
+    fr: '{n} caractères restants — c’est le nom affiché.',
+    ar: 'باقي {n} حرف — هذا الاسم اللي يبان.',
+  },
+  'create.identity.emoji.label': { fr: 'Emoji (optionnel)', ar: 'إيموجي (اختياري)' },
+  'create.identity.emoji.hint': {
+    fr: 'Choisissez-en un, ou collez le vôtre.',
+    ar: 'اختار واحد، ولا الصق تاعك.',
+  },
+  'create.identity.emoji.placeholder': { fr: 'Emoji', ar: 'إيموجي' },
+  'create.identity.persona.label': { fr: 'Mission / persona (optionnel)', ar: 'المهمة / الشخصية (اختياري)' },
+  'create.identity.persona.hint': {
+    fr: 'Une phrase ou deux sur son rôle. Modifiable plus tard.',
+    ar: 'جملة ولا زوج على دورو. تقدر تبدّلها من بعد.',
+  },
+  'create.identity.persona.placeholder': {
+    fr: 'Ex. Tu confirmes les commandes COD et tu réponds aux clients avec politesse.',
+    ar: 'مثلا: تأكّد كوموندات الدفع عند الاستلام و تجاوب الكليان بأدب.',
+  },
+
+  // step 3 — review
+  'create.review.heading': { fr: 'Vérifiez avant de créer', ar: 'راجع قبل ما تصنع' },
+  'create.review.hint': {
+    fr: 'كلش مليح ؟ اضغط « Créer » و نصنعوه.',
+    ar: 'كلش مليح ؟ اضغط « Créer » و نصنعوه.',
+  },
+  'create.review.noPersona': { fr: 'Aucune mission précisée.', ar: 'ما كاش مهمة محدّدة.' },
+  'create.review.unnamed': { fr: 'Agent sans nom', ar: 'وكيل بلا اسم' },
+  'create.review.archetypeLine': { fr: 'Basé sur : {archetype}', ar: 'مبني على : {archetype}' },
+
+  // submit + errors
+  'create.submit': { fr: '✨ Créer l’agent', ar: '✨ اصنع الوكيل' },
+  'create.submitting': { fr: 'Création…', ar: 'كي نصنعو…' },
+  'create.err.404': {
+    fr: 'La création d’agents n’est pas activée sur ce serveur.',
+    ar: 'صناعة الوكلاء ماشي مفعّلة على هاد السيرفور.',
+  },
+  'create.err.limit': {
+    fr: 'Vous avez atteint le nombre maximum d’agents. Supprimez-en un pour en créer un nouveau.',
+    ar: 'وصلت العدد الأقصى تاع الوكلاء. امسح واحد باش تصنع جديد.',
+  },
+  'create.err.generic': {
+    fr: 'Impossible de créer l’agent. Réessayez.',
+    ar: 'ما قدرناش نصنعو الوكيل. عاود.',
+  },
+
   // ── AGENT CARD (agent-card.tsx) ───────────────────────────────────────────
   'card.hermes.blurb': {
     fr: 'Agent des opérations — commandes, clients, messages.',
@@ -864,6 +956,8 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
   // MissionsCard). Business-operations register (commandes COD, wilaya, DZD),
   // FR default + short DZ darja — same commerce voice as the shop pages.
   'bureau.pulse.title': { fr: 'Le pouls du jour', ar: 'نبض اليوم' },
+  'card.custom.blurb': { fr: 'Agent personnalisé', ar: 'وكيل مخصّص' },
+  'card.custom.delete': { fr: 'Supprimer', ar: 'حذف' },
   'bureau.greeting': { fr: 'Bonjour 👋', ar: 'صباح الخير 👋' },
   'bureau.subtitle': { fr: 'Votre employé des opérations', ar: 'موظّف العمليات تاعك' },
   'bureau.lastSweep': { fr: 'Dernier passage', ar: 'آخر مرّة' },

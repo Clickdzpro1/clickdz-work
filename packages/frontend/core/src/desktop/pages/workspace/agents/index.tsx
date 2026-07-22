@@ -16,18 +16,42 @@
 //
 // Data comes from Annuaire's `useAgents()` (GET /api/v1/agents → { agents, caps,
 // loading, error, disabled, reload }). The page shows a header, a "Créer un
-// agent" CTA that opens the goal-first wizard (Atelier owns it at /agents/new),
-// the agent cards grid (Hermes + OpenClaw), and a compact recent-runs strip.
-// Navigation stays inside the workbench via WorkbenchService.open().
+// agent" CTA that opens the R12 custom-agent creator (Atelier owns create-agent
+// .tsx at /agents/new), the agent cards grid (Hermes + OpenClaw + the caller's
+// custom agents), and a compact recent-runs strip. Navigation stays inside the
+// workbench via WorkbenchService.open().
+//
+// R12 (custom agents): when `caps.customEnabled` is on, the roster ALSO carries
+// the caller's user-created agents (rows with an `archetype`/`name`/`emoji` and a
+// `cz_`-prefixed `id`). Those render as <CustomAgentCard> tiles (emoji · name ·
+// archetype badge · last-run · open · delete) alongside the two built-ins; the
+// create CTA is gated on `caps.customEnabled` (off ⇒ hidden, no create flow).
+// Opening a custom agent (or its last-run row) goes to the unified run surface
+// (/agents/runs?agent=<id>) — the same route the built-ins' "Exécutions" uses,
+// which already keys by the opaque agent id. Deleting one calls
+// `deleteCustomAgent(id)` then `reload()`.
 //
 // House rules honored: no new deps, boot-safe, reuse AgentPalette + the shared
 // Spinner/Chip primitives, mobile single-column (auto-fill grid collapses).
 
-import { AgentPalette, BudgetBar, Chip, Spinner } from '@affine/core/modules/agents/components';
+import {
+  accentFor,
+  AgentPalette,
+  BudgetBar,
+  Chip,
+  IconButton,
+  Spinner,
+} from '@affine/core/modules/agents/components';
 // R11 (WS11-11, BUDGET): the home embeds the soft month-to-date <BudgetBar>; it
 // fetches GET /api/v1/agents/budget via Pouls's api wrapper. On 404 (feature
 // dark: CDZ_AGENTS_ENABLED off) the bar hides — byte-identical legacy home.
-import { AgentApiError, getAgentBudget } from '@affine/core/modules/agents/api';
+// R12 (custom agents): `deleteCustomAgent` removes a user-created agent (DELETE
+// /api/v1/agents/custom/:id) from its card; the roster is then reloaded.
+import {
+  AgentApiError,
+  deleteCustomAgent,
+  getAgentBudget,
+} from '@affine/core/modules/agents/api';
 import {
   AGENT_LANG_LABELS,
   type AgentLang,
@@ -51,23 +75,42 @@ import { AgentCard } from './agent-card';
 
 const C = AgentPalette.color;
 
-// Route the goal-first wizard lives at (Atelier owns wizard.tsx; Nav registers
-// this route). Kept as a single const so the CTA and any future entry agree.
+// Route the "Créer un agent" flow lives at (Atelier owns create-agent.tsx;
+// Nav/Aiguille registers this route → the R12 custom-agent creator). Kept as a
+// single const so the CTA and any future entry agree.
 const WIZARD_ROUTE = '/agents/new';
 
-// Legacy per-agent studio routes — the "Ouvrir" / "Configurer" targets. These
-// ALWAYS exist (they stay forever as aliases per the R7 contract), so opening
-// an agent never dead-ends even before the new run surfaces are wired.
+// Legacy per-agent studio routes — the built-ins' "Ouvrir" / "Configurer"
+// targets. These ALWAYS exist (they stay forever as aliases per the R7
+// contract), so opening a BUILT-IN agent never dead-ends. Custom agents have no
+// studio page (by design) — they use the unified run/connections/triggers
+// surfaces, so their card opens {@link runsRoute} instead.
 const STUDIO_ROUTE: Record<AgentName, string> = {
   hermes: '/hermes',
   openclaw: '/openclaw',
 };
 
-// The unified run-history route (Scene owns runs.tsx under this dir; Nav
-// registers `/agents/runs?agent=`).
-function runsRoute(agent: AgentName): string {
-  return `/agents/runs?agent=${agent}`;
+// The two built-in agent ids. A roster row whose id is NOT one of these is a
+// user-created custom agent (opaque `cz_`-prefixed id) — it renders as a
+// <CustomAgentCard> and opens the unified run surface. Defensive against an
+// evolving roster; never trusts a request id (the backend already scoped it).
+const BUILTIN_IDS: ReadonlySet<string> = new Set<string>(['hermes', 'openclaw']);
+function isBuiltinId(id: string): boolean {
+  return BUILTIN_IDS.has(id);
 }
+
+// The unified run-history route (Scene owns runs.tsx under this dir; Nav
+// registers `/agents/runs?agent=`). Accepts any agent id (a built-in name OR a
+// custom `cz_`-prefixed id) — the surface keys by the opaque id.
+function runsRoute(agent: string): string {
+  return `/agents/runs?agent=${encodeURIComponent(agent)}`;
+}
+
+// i18n key for a custom agent's archetype badge (Opérateur / Ingénieur).
+const ARCHETYPE_LABEL_KEY: Record<string, string> = {
+  hermes: 'create.archetype.operator.title',
+  openclaw: 'create.archetype.engineer.title',
+};
 
 // Run-state → chip tint (labels come from the i18n catalogue at render, via
 // `states.<state>`). Mirrors the card's map; kept local so the two surfaces
@@ -221,6 +264,183 @@ const HomeBudgetBar = () => {
 };
 
 // ---------------------------------------------------------------------------
+// CustomAgentCard (R12) — a roster tile for a user-created agent. Unlike the
+// built-in <AgentCard> (fixed icon glyph + fixed studio route), a custom card
+// shows the user's EMOJI + name + an archetype badge (which built-in it clones)
+// + a compact last-run summary, opens the unified run surface (custom agents
+// have no studio page), and carries a delete affordance. Presentational: it
+// takes the summary + handlers via props and never fetches. It reuses the
+// per-archetype accent (accentFor) so an Opérateur reads teal-ish and an
+// Ingénieur phosphor-green, matching the run view's identity.
+// ---------------------------------------------------------------------------
+const ACTIVE_RUN_STATES = new Set(['queued', 'running', 'waiting_approval']);
+
+function CustomAgentCard({
+  agent,
+  t,
+  onOpen,
+  onDelete,
+  deleting,
+}: {
+  agent: AgentSummary;
+  t: TFunc;
+  onOpen: () => void;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
+  const archetype = agent.archetype ?? 'hermes';
+  const accent = accentFor(archetype);
+  const emoji = (agent.emoji && agent.emoji.trim()) || '🤖';
+  const displayName = agent.name || agent.label || t('create.review.unnamed');
+  const lastRun = agent.lastRun;
+  const runTint = lastRun
+    ? RUN_STATE_TINT[lastRun.state] ?? {
+        color: C.muted,
+        bg: 'transparent',
+        border: C.border,
+      }
+    : null;
+  const runLabel = lastRun
+    ? RUN_STATE_TINT[lastRun.state]
+      ? t(`states.${lastRun.state}`)
+      : lastRun.state || t('states.unknown')
+    : '';
+  const activeRun = !!lastRun && ACTIVE_RUN_STATES.has(lastRun.state);
+  const archetypeKey = ARCHETYPE_LABEL_KEY[archetype];
+
+  return (
+    <div
+      className="cdz-agent-fade"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14,
+        padding: 18,
+        borderRadius: AgentPalette.radius.lg,
+        border: `1px solid ${C.border}`,
+        background: C.panel,
+        minWidth: 0,
+      }}
+    >
+      {/* Identity row: emoji avatar + name + archetype badge, delete pinned end. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <div
+          aria-hidden
+          style={{
+            display: 'grid',
+            placeItems: 'center',
+            width: 42,
+            height: 42,
+            flex: '0 0 auto',
+            fontSize: 24,
+            borderRadius: AgentPalette.radius.md,
+            color: accent.accent,
+            background: accent.accentSoft,
+            border: `1px solid ${accent.accent}`,
+          }}
+        >
+          {emoji}
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span
+              style={{
+                fontSize: 16,
+                fontWeight: 700,
+                color: C.text,
+                lineHeight: 1.2,
+                wordBreak: 'break-word',
+              }}
+            >
+              {displayName}
+            </span>
+            {archetypeKey ? (
+              <Chip color={accent.accent} bg={accent.accentSoft} border={accent.accent}>
+                {t(archetypeKey)}
+              </Chip>
+            ) : null}
+          </div>
+          <p
+            style={{
+              margin: '4px 0 0',
+              fontSize: 12.5,
+              color: C.muted,
+              lineHeight: 1.45,
+            }}
+          >
+            {t('card.custom.blurb')}
+          </p>
+        </div>
+        <IconButton
+          label={t('card.custom.delete')}
+          danger
+          disabled={deleting}
+          onClick={onDelete}
+        >
+          {deleting ? '…' : '🗑'}
+        </IconButton>
+      </div>
+
+      {/* Last-run summary. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 12,
+          color: C.muted,
+          minHeight: 20,
+          flexWrap: 'wrap',
+        }}
+      >
+        <span style={{ fontWeight: 600 }}>{t('card.lastRun')}</span>
+        {runTint ? (
+          <>
+            <Chip color={runTint.color} bg={runTint.bg} border={runTint.border}>
+              {activeRun ? (
+                <span
+                  className="cdz-agent-motion"
+                  aria-hidden
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: runTint.color,
+                    animation: 'cdz-agent-pulse 1.4s ease-in-out infinite',
+                  }}
+                />
+              ) : null}
+              {runLabel}
+            </Chip>
+            {relativeTime(t, lastRun?.at) ? (
+              <span style={{ color: C.muted }}>{relativeTime(t, lastRun?.at)}</span>
+            ) : null}
+          </>
+        ) : (
+          <span style={{ color: C.muted, fontStyle: 'italic' }}>
+            {t('card.lastRun.none')}
+          </span>
+        )}
+      </div>
+
+      {/* Actions: primary Ouvrir → unified run surface. */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 }}>
+        <button type="button" onClick={onOpen} style={cardOpenBtn}>
+          {t('card.action.open')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The page body (inside the ViewBody canvas). Owns the state machine on the
 // useAgents() lifecycle.
 // ---------------------------------------------------------------------------
@@ -237,6 +457,43 @@ const AgentsHome = () => {
   );
 
   const openWizard = useCallback(() => go(WIZARD_ROUTE), [go]);
+
+  // R12: id of the custom agent whose delete is in flight (disables its trash
+  // button + shows a spinner glyph). Null when nothing is being deleted.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // R12: delete a custom agent then refresh the roster. Idempotent server-side
+  // (a missing/not-owned id resolves deleted:false); fail-soft — on error we
+  // just clear the in-flight flag (the card stays; the user can retry).
+  const handleDeleteCustom = useCallback(
+    async (id: string) => {
+      if (!id || deletingId) return;
+      setDeletingId(id);
+      try {
+        await deleteCustomAgent(id);
+      } catch {
+        // Swallow — a failed delete leaves the card in place; reload() below
+        // still reconciles with the server's truth.
+      } finally {
+        setDeletingId(null);
+        reload();
+      }
+    },
+    [deletingId, reload]
+  );
+
+  // R12: split the roster into the two built-ins (rendered with <AgentCard>) and
+  // the caller's custom agents (rendered with <CustomAgentCard>). A row is custom
+  // when its id is not a built-in name (an opaque `cz_`-prefixed id). Built-ins
+  // keep their backend display order first, then custom agents follow.
+  const builtinAgents = useMemo(
+    () => agents.filter(a => isBuiltinId(a.id)),
+    [agents]
+  );
+  const customAgents = useMemo(
+    () => agents.filter(a => !isBuiltinId(a.id)),
+    [agents]
+  );
 
   // Build the recent-runs strip: every agent that has a lastRun, newest first.
   const recentRuns = useMemo(() => {
@@ -369,41 +626,48 @@ const AgentsHome = () => {
           home stays byte-identical when the feature is off. Never blocks. */}
       <HomeBudgetBar />
 
-      {/* "Créer un agent" CTA — opens the goal-first wizard. */}
-      <div
-        className="cdz-agents-home-cta"
-        style={{
-          borderRadius: AgentPalette.radius.lg,
-          border: `1px solid ${C.border}`,
-          background: `linear-gradient(135deg, ${C.accentSoft}, transparent)`,
-          padding: '20px 20px',
-          display: 'flex',
-          gap: 18,
-          alignItems: 'center',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ flex: '1 1 300px', minWidth: 0 }}>
-          <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>
-            {t('home.cta.title')}
-          </div>
-          <p style={{ margin: '6px 0 0', fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
-            {t('home.cta.body')}
-          </p>
-          <div dir="rtl" style={{ marginTop: 6, fontSize: 12.5, color: C.muted }}>
-            {t('home.cta.hint')}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={openWizard}
-          style={{ ...primaryBtn, fontSize: 14.5, padding: '11px 20px' }}
+      {/* "Créer un agent" CTA — opens the R12 custom-agent creator. Gated on
+          caps.customEnabled: when custom agents are dark the create affordance
+          is hidden entirely (no dead-end flow), and the home shows only the two
+          built-ins. */}
+      {caps.customEnabled ? (
+        <div
+          className="cdz-agents-home-cta"
+          style={{
+            borderRadius: AgentPalette.radius.lg,
+            border: `1px solid ${C.border}`,
+            background: `linear-gradient(135deg, ${C.accentSoft}, transparent)`,
+            padding: '20px 20px',
+            display: 'flex',
+            gap: 18,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
         >
-          {t('home.cta.button')}
-        </button>
-      </div>
+          <div style={{ flex: '1 1 300px', minWidth: 0 }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>
+              {t('home.cta.title')}
+            </div>
+            <p style={{ margin: '6px 0 0', fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
+              {t('home.cta.body')}
+            </p>
+            <div dir="rtl" style={{ marginTop: 6, fontSize: 12.5, color: C.muted }}>
+              {t('home.cta.hint')}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={openWizard}
+            style={{ ...primaryBtn, fontSize: 14.5, padding: '11px 20px' }}
+          >
+            {t('home.cta.button')}
+          </button>
+        </div>
+      ) : null}
 
-      {/* Agent cards grid — auto-fill collapses to a single column on mobile. */}
+      {/* Agent cards grid — auto-fill collapses to a single column on mobile.
+          Built-ins render with <AgentCard> (fixed studio routes); the caller's
+          custom agents (R12) render with <CustomAgentCard> in the same grid. */}
       {agents.length > 0 ? (
         <div
           className="cdz-agents-grid"
@@ -413,13 +677,26 @@ const AgentsHome = () => {
             gap: 16,
           }}
         >
-          {agents.map(agent => (
-            <AgentCard
+          {builtinAgents.map(agent => {
+            const studio = STUDIO_ROUTE[agent.id as AgentName] ?? `/agents/${agent.id}`;
+            return (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                onOpen={() => go(studio)}
+                onOpenRuns={() => go(runsRoute(agent.id))}
+                onConfigure={() => go(studio)}
+              />
+            );
+          })}
+          {customAgents.map(agent => (
+            <CustomAgentCard
               key={agent.id}
               agent={agent}
-              onOpen={() => go(STUDIO_ROUTE[agent.id] ?? `/agents/${agent.id}`)}
-              onOpenRuns={() => go(runsRoute(agent.id))}
-              onConfigure={() => go(STUDIO_ROUTE[agent.id] ?? `/agents/${agent.id}`)}
+              t={t}
+              onOpen={() => go(runsRoute(agent.id))}
+              onDelete={() => handleDeleteCustom(agent.id)}
+              deleting={deletingId === agent.id}
             />
           ))}
         </div>
@@ -489,7 +766,8 @@ const AgentsHome = () => {
                       minWidth: 84,
                     }}
                   >
-                    {AGENT_LABEL[a.id] ?? a.label}
+                    {a.emoji && !isBuiltinId(a.id) ? `${a.emoji} ` : ''}
+                    {AGENT_LABEL[a.id as AgentName] ?? a.name ?? a.label}
                   </span>
                   <Chip color={tint.color} bg={tint.bg} border={tint.border}>
                     {stateLabel}
@@ -635,6 +913,27 @@ const primaryBtn: CSSProperties = {
   background: C.accent,
   border: `1px solid ${C.accent}`,
   whiteSpace: 'nowrap',
+};
+
+// Custom-agent card's primary "Ouvrir" button (matches the built-in AgentCard's
+// primary action sizing so the two card kinds read identically in the grid).
+const cardOpenBtn: CSSProperties = {
+  appearance: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 6,
+  padding: '7px 14px',
+  borderRadius: AgentPalette.radius.sm,
+  fontSize: 12.5,
+  fontWeight: 600,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+  color: C.onAccent,
+  background: C.accent,
+  border: `1px solid ${C.accent}`,
 };
 
 // Router lazy target: the route loader renders `Component` (same convention as

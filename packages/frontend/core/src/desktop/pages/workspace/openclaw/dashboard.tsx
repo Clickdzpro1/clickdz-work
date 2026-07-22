@@ -594,10 +594,16 @@ interface OpenClawToolItem {
   label: string;
   group: string;
   consequential: boolean;
+  // R12 (Limier fix #1): the catalog's OWN per-tool enabled flag, as computed by
+  // GET /api/v1/openclaw/capabilities (all-on when the user hasn't customized;
+  // membership when they have). Default ON when the field is absent so a legacy /
+  // partial payload never renders a tool spuriously OFF. This flag — NOT the
+  // (absent-for-provisioned-users) config.enabledTools — seeds the grid's Set.
+  enabled: boolean;
 }
 
 // Normalise a loosely-typed catalog entry (Cadenas's shape may carry id/slug +
-// optional group/consequential) into the ToolPermissions contract shape.
+// optional group/consequential/enabled) into the ToolPermissions contract shape.
 function normalizeOpenClawTool(raw: unknown): OpenClawToolItem | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
@@ -615,21 +621,37 @@ function normalizeOpenClawTool(raw: unknown): OpenClawToolItem | null {
     group:
       typeof r.group === 'string' && r.group ? r.group : '🛠 Outils',
     consequential: !!r.consequential,
+    // Default-ON: only an EXPLICIT `enabled:false` turns a tool off. Absent ⇒ on,
+    // matching the backend mental model "absent config = all-on".
+    enabled: r.enabled !== false,
   };
 }
 
 const OpenClawToolsCard = ({ config }: { config: OpenClawConfig }) => {
   // enabledTools isn't in the base OpenClawConfig type until Cadenas's SNIPPET
-  // lands — read it defensively so this stays byte-safe pre-merge.
-  const seededEnabled = (config as { enabledTools?: string[] }).enabledTools;
+  // lands — read it defensively so this stays byte-safe pre-merge. (We seed the
+  // grid from the catalog's per-tool flags, not this field; it's only a legacy
+  // fallback for a payload that omits the flags.)
+  const cfgExtra = config as { enabledTools?: string[] };
 
   const [tools, setTools] = useState<OpenClawToolItem[]>([]);
-  const [enabled, setEnabled] = useState<Set<string>>(
-    () => new Set(Array.isArray(seededEnabled) ? seededEnabled : [])
-  );
+  // The enabled Set is SEEDED FROM THE CATALOG (loadCatalog below), not from the
+  // initial state value: config.enabledTools is absent for every user who simply
+  // provisioned (never opened this grid), which previously produced an empty Set
+  // → every tool rendered OFF while the backend treats absent as ALL-ON (Limier
+  // bug). The catalog's per-tool `enabled` flags are the backend's authoritative
+  // view (all-on when never-customized, membership when customized, all-off for an
+  // explicit []), so the grid mirrors exactly what the console will do. This
+  // initial value is a harmless placeholder — the grid only renders once
+  // state==='ready', which is set AFTER we seed from the catalog.
+  const [enabled, setEnabled] = useState<Set<string>>(() => new Set());
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // Guard: seed the enabled Set from the catalog exactly ONCE, so a later
+  // reload / recheck (or a StrictMode double-invoke) never clobbers a selection
+  // the user has since toggled locally in this session.
+  const seededFromCatalog = useRef(false);
 
   const loadCatalog = useCallback(async () => {
     setState('loading');
@@ -643,12 +665,40 @@ const OpenClawToolsCard = ({ config }: { config: OpenClawConfig }) => {
         .map(normalizeOpenClawTool)
         .filter((t): t is OpenClawToolItem => t !== null);
       setTools(list);
+      // Seed the enabled Set from the CATALOG'S OWN per-tool `enabled` flags
+      // (default-ON) — the fix for the "all tools OFF after provisioning" bug.
+      // Absent config ⇒ backend flags every tool enabled ⇒ all-on; a customized
+      // config ⇒ the flags carry the exact stored subset (incl. an explicit []
+      // that shows as all-off, once Cadenas fix #2 makes that stick). We fall
+      // back to any explicit config.enabledTools only if the payload somehow
+      // omits the flags, so the grid is never spuriously empty.
+      if (!seededFromCatalog.current) {
+        seededFromCatalog.current = true;
+        const fromCatalog = list
+          .filter(t => t.enabled !== false)
+          .map(t => t.id);
+        const hasEnabledField = rawTools.some(
+          t =>
+            t &&
+            typeof t === 'object' &&
+            'enabled' in (t as Record<string, unknown>)
+        );
+        if (hasEnabledField) {
+          setEnabled(new Set(fromCatalog));
+        } else if (Array.isArray(cfgExtra.enabledTools)) {
+          // Legacy payload without per-tool flags — honor an explicit config set.
+          setEnabled(new Set(cfgExtra.enabledTools));
+        } else {
+          // No flags AND no explicit config = never customized ⇒ all-on.
+          setEnabled(new Set(list.map(t => t.id)));
+        }
+      }
       setState('ready');
     } catch {
       setTools([]);
       setState('error');
     }
-  }, []);
+  }, [cfgExtra.enabledTools]);
 
   useEffect(() => {
     void loadCatalog();
