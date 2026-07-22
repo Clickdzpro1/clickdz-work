@@ -59,6 +59,14 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/vdz'),
   },
   {
+    // VPIC on mobile mirrors the Vdz stance: the image editor is desktop-only,
+    // so this route only needs to resolve a deep-link/bookmark gracefully.
+    // MUST sit before the '/:pageId' catch route or "vpic" would be swallowed
+    // as a page id.
+    path: '/vpic',
+    lazy: () => import('./pages/workspace/vpic'),
+  },
+  {
     path: '/:pageId',
     lazy: () => import('./pages/workspace/detail/mobile-detail-page'),
   },
