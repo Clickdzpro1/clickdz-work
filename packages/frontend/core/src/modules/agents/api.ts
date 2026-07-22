@@ -179,6 +179,52 @@ export function getCapabilities(
   return requestJson<Record<string, unknown>>(`${base(agent)}/capabilities`);
 }
 
+// ── OpenClaw per-user config (tool permissions live here) ─────────────────────
+
+/**
+ * The per-user OpenClaw config as returned by GET/PUT /api/v1/openclaw/config.
+ * `enabledTools` (R11) is the caller's tool allowlist — omitted when the user has
+ * not customized it (⇒ the console runs the full catalog; the /capabilities
+ * `tools[].enabled` flags default true). The backend validates every slug ⊆ its
+ * real catalog and echoes the normalized config on save. Loosely typed beyond the
+ * known fields so callers read forward-compatible extras defensively.
+ */
+export interface OpenclawConfig {
+  provisioned: boolean;
+  defaultRuntime?: string;
+  previewAutoOpen?: boolean;
+  enabledTools?: string[];
+  updatedAt?: number;
+  [k: string]: unknown;
+}
+
+/**
+ * GET the signed-in user's OpenClaw config (`GET /api/v1/openclaw/config`).
+ * Returns the server's normalized shape; a missing config resolves to the
+ * unprovisioned default `{provisioned:false}` on the backend. Mirrors the Hermes
+ * config wrapper style (config lives on the per-agent `/config` route).
+ */
+export function getOpenclawConfig(): Promise<OpenclawConfig> {
+  return requestJson<OpenclawConfig>(`${base('openclaw')}/config`);
+}
+
+/**
+ * Upsert the signed-in user's OpenClaw config (`PUT /api/v1/openclaw/config`).
+ * Partial upsert — only the provided fields change; the server merges over the
+ * stored config, sets `provisioned:true`, validates (`enabledTools ⊆` the real
+ * catalog, runtime enum, boolean flag) and echoes the normalized config. Pass
+ * `{enabledTools}` to persist the tool-permission grid selection.
+ */
+export function saveOpenclawConfig(
+  cfg: Partial<Omit<OpenclawConfig, 'provisioned' | 'updatedAt'>>
+): Promise<OpenclawConfig> {
+  return requestJson<OpenclawConfig>(`${base('openclaw')}/config`, {
+    method: 'PUT',
+    headers: jsonHeaders,
+    body: JSON.stringify(cfg),
+  });
+}
+
 // ── Telegram channel pairing ──────────────────────────────────────────────────
 
 /** Envelope returned by {@link pairTelegram}. */
@@ -479,6 +525,82 @@ export async function listAgentRuns(
  */
 export function listAgents(): Promise<AgentsListResponse> {
   return requestJson<AgentsListResponse>(`/api/v1/agents`);
+}
+
+// ── R11 shop pulse + DZD budget (WS11-9, Pouls) ───────────────────────────────
+//
+// Two owner-scoped, read-only reads the Hermes "Bureau" hero + the agents-home
+// BudgetBar consume. Both live under the plural `agents` segment (the SAME
+// controller as {@link listAgents} — gated by `CDZ_AGENTS_ENABLED`), so, like
+// the other helpers here, each doubles as a capability probe: a `.status === 404`
+// means the feature is dark and the caller shows a quiet fallback. Backend routes
+// (asserted against the controller's @Get):
+//   GET /api/v1/agents/pulse    → {@link AgentPulse}
+//   GET /api/v1/agents/budget   → {@link AgentBudget}
+
+/**
+ * The connected shop's live counters (`GET /api/v1/agents/pulse`). Mirrors the
+ * `<PulseCard>` `pulse` shape plus `connected` (false ⇒ no shop published yet;
+ * the counters are all zero in that case). All numbers are non-negative; DZD is
+ * an integer.
+ */
+export interface AgentPulse {
+  /** Whether the caller has a shop/erp app published (false ⇒ zeros). */
+  connected: boolean;
+  /** Orders whose business date is today (UTC). */
+  ordersToday: number;
+  /** Orders awaiting confirmation (status `Nouvelle`). */
+  toConfirm: number;
+  /** Σ delivered-order totals for today, in DZD. */
+  revenueTodayDzd: number;
+  /** Orders in the `Retournée` state (all-time). */
+  returns: number;
+  /** Products at/below their reorder threshold. */
+  lowStock: number;
+}
+
+/**
+ * The month's agent spend + today's run count vs the daily cap
+ * (`GET /api/v1/agents/budget`). Mirrors the `<BudgetBar>` `budget` shape.
+ * `monthDzd === 0` ⇒ usage-only (no hard limit); the bar warns at ≥80% but never
+ * blocks.
+ */
+export interface AgentBudget {
+  /** Soft monthly budget in DZD (0 ⇒ usage-only, no limit). */
+  monthDzd: number;
+  /** DZD spent this calendar month. */
+  spentDzd: number;
+  /** Runs started today (UTC). */
+  runsToday: number;
+  /** The per-user daily run cap the backend enforces. */
+  runsCap: number;
+  /** Tokens consumed this calendar month. */
+  tokens: number;
+}
+
+/**
+ * Fetch the caller's connected-shop pulse (`GET /api/v1/agents/pulse`). The
+ * pulse is per-USER (the caller's first published shop/erp app), so the optional
+ * `agent` argument is accepted only for call-site symmetry with the other
+ * per-agent helpers (the Bureau passes the agent it renders) — the backend route
+ * is agent-agnostic and ignores it. Throws {@link AgentApiError} — a
+ * `.status === 404` means `CDZ_AGENTS_ENABLED` is off (feature dark), so the
+ * caller hides the hero; the backend is otherwise fail-soft (a data-API problem
+ * returns `connected:false` + zeros, never an error).
+ */
+export function getAgentPulse(agent?: AgentName): Promise<AgentPulse> {
+  void agent; // route is per-user, agent kept for call-site symmetry only
+  return requestJson<AgentPulse>(`/api/v1/agents/pulse`);
+}
+
+/**
+ * Fetch the caller's month spend + run-count budget
+ * (`GET /api/v1/agents/budget`). Throws {@link AgentApiError} — a
+ * `.status === 404` means the feature is dark (hide the bar); the backend is
+ * otherwise fail-soft (missing accumulators read as zeros).
+ */
+export function getAgentBudget(): Promise<AgentBudget> {
+  return requestJson<AgentBudget>(`/api/v1/agents/budget`);
 }
 
 // ── Agent triggers (R8: scheduled + webhook) ──────────────────────────────────

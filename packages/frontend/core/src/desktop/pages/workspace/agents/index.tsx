@@ -23,7 +23,11 @@
 // House rules honored: no new deps, boot-safe, reuse AgentPalette + the shared
 // Spinner/Chip primitives, mobile single-column (auto-fill grid collapses).
 
-import { AgentPalette, Chip, Spinner } from '@affine/core/modules/agents/components';
+import { AgentPalette, BudgetBar, Chip, Spinner } from '@affine/core/modules/agents/components';
+// R11 (WS11-11, BUDGET): the home embeds the soft month-to-date <BudgetBar>; it
+// fetches GET /api/v1/agents/budget via Pouls's api wrapper. On 404 (feature
+// dark: CDZ_AGENTS_ENABLED off) the bar hides — byte-identical legacy home.
+import { AgentApiError, getAgentBudget } from '@affine/core/modules/agents/api';
 import {
   AGENT_LANG_LABELS,
   type AgentLang,
@@ -41,7 +45,7 @@ import {
 } from '@affine/core/modules/workbench';
 import { AiIcon } from '@blocksuite/icons/rc';
 import { useService } from '@toeverything/infra';
-import { type CSSProperties, useCallback, useMemo } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { AgentCard } from './agent-card';
 
@@ -162,6 +166,59 @@ function LangToggle({
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// R11 (WS11-11, BUDGET) — the home's soft month-to-date budget bar. Fetches
+// GET /api/v1/agents/budget (Pouls's getAgentBudget wrapper) once on mount and
+// renders the shared presentational <BudgetBar budget/> (Trame). The bar is
+// SOFT: it warns at ≥80% and NEVER blocks; when the backend reports monthDzd===0
+// (env CDZ_AGENT_MONTHLY_DZD unset — the default) it shows usage only (tokens +
+// runs today), no limit. Fail-soft: a 404 (feature dark: CDZ_AGENTS_ENABLED off)
+// OR any other error hides the bar entirely, so the home is byte-identical to the
+// pre-R11 build when the route is absent. No dependency on useAgents() — a single
+// self-contained fetch keyed to nothing (runs once), matching the triggers.tsx
+// load() idiom (AgentApiError → status 404 ⇒ quiet hide).
+// ---------------------------------------------------------------------------
+type HomeBudget = Awaited<ReturnType<typeof getAgentBudget>>;
+
+const HomeBudgetBar = () => {
+  const [budget, setBudget] = useState<HomeBudget | null>(null);
+  const [loading, setLoading] = useState(true);
+  // `hidden` latches on when the route is dark (404) or errors — the whole bar
+  // then renders nothing (byte-identical legacy home).
+  const [hidden, setHidden] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const b = await getAgentBudget();
+        if (!alive) return;
+        setBudget(b ?? null);
+        setLoading(false);
+      } catch (err) {
+        if (!alive) return;
+        // 404 ⇒ feature off; any other failure ⇒ also hide (soft, non-blocking).
+        if (err instanceof AgentApiError && err.status === 404) {
+          setHidden(true);
+        } else {
+          setHidden(true);
+        }
+        setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (hidden) return null;
+  // While the first fetch is in flight, render nothing (no layout jump); the bar
+  // appears once data lands. BudgetBar itself renders a `loading` skeleton when
+  // asked, but on the home we prefer a silent first paint.
+  if (loading || !budget) return null;
+  return <BudgetBar budget={budget} />;
+};
 
 // ---------------------------------------------------------------------------
 // The page body (inside the ViewBody canvas). Owns the state machine on the
@@ -306,6 +363,11 @@ const AgentsHome = () => {
         </div>
         <LangToggle lang={lang} setLang={setLang} t={t} />
       </header>
+
+      {/* R11 (WS11-11, BUDGET): soft month-to-date spend + runs-today bar. Hides
+          itself when the /agents/budget route is dark (404) or errors, so the
+          home stays byte-identical when the feature is off. Never blocks. */}
+      <HomeBudgetBar />
 
       {/* "Créer un agent" CTA — opens the goal-first wizard. */}
       <div

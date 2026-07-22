@@ -9,7 +9,8 @@ import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { BadRequest, Cache, NotFound } from '../../base';
 // CacheRedis = the @Global raw ioredis provider — the SAME handle Hermes/bridge/
 // the run engine inject. Moteur's listAgentRuns() needs the RAW client (zset
-// ops), which CacheRedis satisfies structurally (its RunRedis slice).
+// ops), which CacheRedis satisfies structurally (its RunRedis slice). The
+// budget route also reads the R6 daily-run counter (a plain GET) off it.
 import { CacheRedis } from '../../base/redis';
 // CurrentUser decorates (param) + types the cookie-session user, from core/auth
 // like every peer. Ownership is by user.id (all keys per-user); AuthGuard gates.
@@ -22,11 +23,19 @@ import { CurrentUser } from '../../core/auth';
 // per-user artifacts library list (clickdz:agentart:{userId}) newest-first,
 // optionally filtered by agent. Called fail-soft below; gated by the same
 // CDZ_AGENTS_ENABLED master switch as the rest of this controller.
+// R11 (WS11-9, Pouls): the budget route reads the month's spend accumulator via
+// readMonthSpend (Budget writes it on run completion — key
+// clickdz:agentspend:{userId}:{YYYYMM} = {tokens,dzd}) and the run cap /
+// UTC-day helpers (maxRunsPerDay, utcDay) so the daily-counter key + cap match
+// the run engine EXACTLY. All called fail-soft; static import resolves at boot.
 import {
   type AgentArtifactRecord,
   type AgentName,
   listAgentArtifacts,
   listAgentRuns,
+  maxRunsPerDay,
+  readMonthSpend,
+  utcDay,
 } from './clickdz-agent-runs';
 // Wassila's WhatsApp stub (clickdz-wa-client.ts). waCapsEnabled() is an env-ONLY,
 // fetch-free predicate (CDZ_WA_URL && CDZ_WA_TOKEN && CDZ_AGENT_WHATSAPP_ENABLED
@@ -43,6 +52,13 @@ import { waCapsEnabled } from './clickdz-wa-client';
 //                                        (lastRun) + Telegram-binding flag.
 //   · POST /api/v1/agents/:agent/state — persist an informational enabled flag
 //                                        (clickdz:agentstate:{userId}:{agent}).
+// R11 (WS11-9, Pouls) adds two owner-scoped, read-only, fail-soft reads the
+// Hermes "Bureau" hero (PulseCard) and the agents-home BudgetBar consume:
+//   · GET  /api/v1/agents/pulse        — the caller's connected shop aggregated
+//                                        into the PulseCard shape (or zeros +
+//                                        {connected:false} when no shop).
+//   · GET  /api/v1/agents/budget       — the month's DZD/token spend + today's
+//                                        run count vs the daily cap (BudgetBar).
 // Both gated by CDZ_AGENTS_ENABLED (R6 master gate): OFF ⇒ typed 404, byte-
 // identical to the feature not existing. Fail-soft everywhere (Redis is a
 // cache): a failed read degrades to "no data", never a 500. No SSE; typed
@@ -73,10 +89,117 @@ const userTgBindKey = (userId: string) => `clickdz:tg:user:${userId}`;
 // the R7 UI; the runtime itself does NOT gate on it (runs are gated by env).
 const agentStateKey = (userId: string, agent: AgentName) =>
   `clickdz:agentstate:${userId}:${agent}`;
+// R11 — the R6 per-user daily run counter. The run engine INCRs this on every
+// start (checkDailyRunCap) but keeps the key helper module-private, so the
+// budget route REPLICATES the exact string here (clickdz:agentruns:count:
+// {userId}:{YYYYMMDD}) and reads it with a plain GET. utcDay() is the run
+// engine's OWN exported UTC-day formatter, so the day segment matches byte-for-
+// byte (never a drifted "today"). Read-only — this route never writes it.
+const dailyRunCountKey = (userId: string, day: string) =>
+  `clickdz:agentruns:count:${userId}:${day}`;
 
 // State-flag TTL (Cache API takes MS). 90d, re-armed on write — matches the
 // tg-binding lifetime so a settings toggle sticks.
 const STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// R11 — SHOP PULSE (WS11-9, Pouls). The PulseCard hero on the Bureau reads the
+// caller's FIRST connected shop/erp app and shows five live business counters.
+// We do NOT import the bridge (a controller must not depend on another
+// controller): instead we REPLICATE its read exactly. The bridge's erpList
+// (clickdz-bridge.controller.ts) does NOT touch Redis for ERP data — it does a
+// server-side HTTP GET against the per-slug Data API the deployed shop/ERP also
+// hit: `${AFFINE_SERVER_EXTERNAL_URL||'https://work.clickdz.ai'}/api/v2/apps-
+// data/{dataSlug}/{collection}?limit=500`, Accept: application/json, 15s abort,
+// → array | null. That URL (NOT a bare Redis key) IS the ERP data source, so we
+// mirror it 1:1. The publish set IS a Redis key (clickdz:apps:published:
+// {userId}) whose members are JSON {slug,url,createdAt,kind?,storeSlug?}; the
+// data slug for a record is `storeSlug || slug` (the bridge's own pairing rule,
+// see erpDataBase callers / staleness renderTemplate). The KPI math mirrors the
+// bridge's /erp/summary metrics() verbatim (delivered = 'Livrée', pending-to-
+// confirm = 'Nouvelle', returns = 'Retournée', lowStock stock<=reorderAt).
+// FAIL-SOFT: ANY read error (publish set, data API, malformed JSON) degrades to
+// zeros — a pulse read must NEVER 500 (it decorates a hero, it is not a source
+// of truth). No shop at all ⇒ {connected:false} + zeros.
+// ---------------------------------------------------------------------------
+
+// Same env + trailing-slash strip the bridge's erpDataBase uses, so the in-app
+// pulse and the deployed shop hit one shared datastore.
+const CDZ_ERP_EXTERNAL_BASE = (
+  process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+).replace(/\/+$/, '');
+// The bridge's ERP_DATA_TIMEOUT_MS (15s) — a slow data API must not stall the
+// hero; on timeout the fetch rejects and we fall through to zeros.
+const PULSE_DATA_TIMEOUT_MS = 15_000;
+// The five French pipeline states (bridge ERP_ORDER_STATUSES). Only the two we
+// key off are named here (the rest are irrelevant to the pulse counters).
+const PULSE_STATUS_DELIVERED = 'Livrée';
+const PULSE_STATUS_TO_CONFIRM = 'Nouvelle';
+const PULSE_STATUS_RETURNED = 'Retournée';
+
+/** One data-API record (schemaless JSON + server-managed id/createdAt). */
+type PulseRecord = Record<string, unknown>;
+
+/** A published-app record as stored in the Redis publish set (bridge shape). */
+interface PulsePublishedApp {
+  slug: string;
+  kind?: 'shop' | 'erp' | 'app';
+  storeSlug?: string;
+}
+
+/**
+ * The PulseCard payload (contract shape). `connected` is Pouls-local metadata
+ * (the card treats `pulse === null` as "no shop"; we send explicit zeros +
+ * connected:false so the Bureau can render a "connect a shop" nudge without a
+ * second request). All five counters are non-negative integers/DZD numbers.
+ */
+interface AgentPulse {
+  connected: boolean;
+  ordersToday: number;
+  toConfirm: number;
+  revenueTodayDzd: number;
+  returns: number;
+  lowStock: number;
+}
+
+// Bridge math helpers, REPLICATED (they are module-private in the bridge; a
+// controller cannot import another controller's internals). Byte-identical
+// semantics so the pulse counters agree with /erp/summary.
+
+/** Template `num()`: Number(v), non-finite → 0. */
+function pulseNum(v: unknown): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Loose string read for schemaless records: null/undefined → ''. */
+function pulseStr(v: unknown): string {
+  return typeof v === 'string' ? v : v == null ? '' : String(v);
+}
+
+/** UTC calendar day (the templates + bridge use the same slice). */
+function pulseTodayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Template parseDate(): business date — orderedAt || date || createdAt. */
+function pulseParseDate(r: PulseRecord): string {
+  const raw =
+    pulseStr(r.orderedAt) || pulseStr(r.date) || pulseStr(r.createdAt);
+  return raw.slice(0, 10) || pulseTodayISO();
+}
+
+/** Template orderTotal(): stored total, else Σ item price×qty (qty ?? 1). */
+function pulseOrderTotal(o: PulseRecord): number {
+  if (o.total != null && Number.isFinite(Number(o.total))) {
+    return pulseNum(o.total);
+  }
+  const items = Array.isArray(o.items) ? (o.items as unknown[]) : [];
+  return items.reduce<number>((sum, raw) => {
+    const it = (raw ?? {}) as PulseRecord;
+    return sum + pulseNum(it.price) * pulseNum(it.qty != null ? it.qty : 1);
+  }, 0);
+}
 
 // The lastRun projection the FE needs off a run record (thin, stable slice).
 interface AgentLastRun {
@@ -112,6 +235,20 @@ interface AgentCaps {
   whatsappEnabled: boolean;
   memoryEnabled: boolean;
   triggersEnabled: boolean;
+}
+
+/**
+ * The BudgetBar payload (contract shape). `monthDzd === 0` ⇒ the bar shows
+ * usage-only (no hard limit) — that is the default (env unset). `spentDzd` +
+ * `tokens` come from the month accumulator Budget writes; `runsToday` /
+ * `runsCap` come from the R6 daily counter + the run engine's own cap.
+ */
+interface AgentBudget {
+  monthDzd: number;
+  spentDzd: number;
+  runsToday: number;
+  runsCap: number;
+  tokens: number;
 }
 
 // Build the caps object from the environment. Pure; no I/O. Kept a tiny helper
@@ -191,6 +328,129 @@ export class ClickDzAgentsController {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // R11 pulse helpers — a faithful, self-contained REPLICA of the bridge's
+  // publish-set read + ERP data read (see the header block above). Everything
+  // here is fail-soft; no method throws.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Read the caller's published-app records from the Redis publish set
+   * (clickdz:apps:published:{userId}) — the SAME set + member shape the bridge's
+   * readPublishedApps parses. Fail-soft → [] (a read/JSON failure is "no apps").
+   * Only the three fields the pulse needs (slug/kind/storeSlug) are projected.
+   */
+  private async readPublishedAppsForPulse(
+    userId: string
+  ): Promise<PulsePublishedApp[]> {
+    try {
+      const raw = await (this.redis as any).smembers(
+        `clickdz:apps:published:${userId}`
+      );
+      if (!Array.isArray(raw)) return [];
+      const out: PulsePublishedApp[] = [];
+      for (const entry of raw) {
+        try {
+          const rec = JSON.parse(entry) as PulsePublishedApp;
+          if (rec && typeof rec.slug === 'string') {
+            const kind =
+              rec.kind === 'shop' || rec.kind === 'erp' || rec.kind === 'app'
+                ? rec.kind
+                : undefined;
+            const storeSlug =
+              typeof rec.storeSlug === 'string' && rec.storeSlug
+                ? rec.storeSlug
+                : undefined;
+            out.push({
+              slug: rec.slug,
+              ...(kind ? { kind } : {}),
+              ...(storeSlug ? { storeSlug } : {}),
+            });
+          }
+        } catch {
+          // ignore a corrupt member (the bridge prunes it on the next write)
+        }
+      }
+      return out;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * GET a whole ERP collection server-side, EXACTLY like the bridge's erpList:
+   * `${externalBase}/api/v2/apps-data/{dataSlug}/{collection}?limit=500`,
+   * Accept: application/json, 15s abort. Returns [] on any failure (unreachable
+   * data API, non-2xx, malformed JSON) — the pulse never distinguishes "empty"
+   * from "unavailable"; both degrade to zero counters.
+   */
+  private async pulseErpList(
+    dataSlug: string,
+    collection: string
+  ): Promise<PulseRecord[]> {
+    try {
+      const res = await fetch(
+        `${CDZ_ERP_EXTERNAL_BASE}/api/v2/apps-data/${dataSlug}/${collection}?limit=500`,
+        {
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(PULSE_DATA_TIMEOUT_MS),
+        }
+      ).catch(() => null);
+      if (!res || !res.ok) return [];
+      const data = (await res.json().catch(() => null)) as unknown;
+      return Array.isArray(data) ? (data as PulseRecord[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Aggregate one shop's `orders` + `products` collections into the PulseCard
+   * counters. Pure (given the two arrays). Mirrors /erp/summary math:
+   *   ordersToday       count of orders whose business date == today (UTC)
+   *   toConfirm         count of 'Nouvelle' orders (awaiting confirmation)
+   *   revenueTodayDzd   Σ orderTotal of 'Livrée' orders dated today
+   *   returns           count of 'Retournée' orders (all-time)
+   *   lowStock          products where reorderAt != null && stock <= reorderAt
+   */
+  private aggregatePulse(
+    orders: PulseRecord[],
+    products: PulseRecord[]
+  ): Omit<AgentPulse, 'connected'> {
+    const today = pulseTodayISO();
+    let ordersToday = 0;
+    let toConfirm = 0;
+    let revenueTodayDzd = 0;
+    let returns = 0;
+    for (const o of orders) {
+      const status = pulseStr(o.status);
+      const day = pulseParseDate(o);
+      if (day === today) ordersToday += 1;
+      if (status === PULSE_STATUS_TO_CONFIRM) toConfirm += 1;
+      if (status === PULSE_STATUS_RETURNED) returns += 1;
+      if (status === PULSE_STATUS_DELIVERED && day === today) {
+        revenueTodayDzd += pulseOrderTotal(o);
+      }
+    }
+    // lowStock uses the `stock` roll-up predicate (byte-identical to the bridge's
+    // pre-C4 fallback). We deliberately do NOT fan out the multi-warehouse
+    // inventory ledger here — the pulse is a cheap hero read, and the roll-up is
+    // kept in sync by the ERP's own upsert path, so this never over/under-counts
+    // for a normally-operated shop.
+    let lowStock = 0;
+    for (const p of products) {
+      if (p.reorderAt == null) continue;
+      if (pulseNum(p.stock) <= pulseNum(p.reorderAt)) lowStock += 1;
+    }
+    return {
+      ordersToday,
+      toConfirm,
+      revenueTodayDzd: Math.round(revenueTodayDzd),
+      returns,
+      lowStock,
+    };
+  }
+
   // GET /api/v1/agents — the roster. @CurrentUser, owner-scoped (keyed by
   // user.id): one row per agent with its newest run + Telegram-binding flag.
   // Read-only, fail-soft, never SSE.
@@ -218,6 +478,108 @@ export class ClickDzAgentsController {
     // feature is on; each flag defaults OFF so an unset env == legacy behavior.
     const caps = buildCaps();
     return { agents, caps };
+  }
+
+  // GET /api/v1/agents/pulse — the caller's connected shop aggregated into the
+  // PulseCard shape (R11, WS11-9). @CurrentUser, owner-scoped. Reads the publish
+  // set, picks the FIRST shop/erp app, reads its orders+products the SAME way
+  // the bridge does (server-side Data API GET), and returns the five counters.
+  // No shop ⇒ {connected:false} + zeros. Gated by CDZ_AGENTS_ENABLED (typed 404
+  // when off). FAIL-SOFT: any read error → zeros, never a 500.
+  @Get('/api/v1/agents/pulse')
+  async getPulse(@CurrentUser() user: CurrentUser): Promise<AgentPulse> {
+    this.assertEnabled();
+    const zero: AgentPulse = {
+      connected: false,
+      ordersToday: 0,
+      toConfirm: 0,
+      revenueTodayDzd: 0,
+      returns: 0,
+      lowStock: 0,
+    };
+    try {
+      const apps = await this.readPublishedAppsForPulse(user.id);
+      // The FIRST shop/erp app (the bridge labels 'app' as a non-ERP build, so
+      // only shop/erp carry ERP collections). The DATA slug is storeSlug||slug
+      // (the bridge's pairing rule — an ERP app points at its paired shop's
+      // datastore via storeSlug).
+      const shop = apps.find(a => a.kind === 'shop' || a.kind === 'erp');
+      if (!shop) return zero;
+      const dataSlug = shop.storeSlug || shop.slug;
+      // Two collections in parallel (mirrors the bridge's loadAll fan-out); each
+      // resolves to [] on any failure, so a partial data API degrades to zeros.
+      const [orders, products] = await Promise.all([
+        this.pulseErpList(dataSlug, 'orders'),
+        this.pulseErpList(dataSlug, 'products'),
+      ]);
+      return { connected: true, ...this.aggregatePulse(orders, products) };
+    } catch {
+      // A pulse read must NEVER 500 — degrade to "connected:false" + zeros.
+      return zero;
+    }
+  }
+
+  // GET /api/v1/agents/budget — the month's spend + today's run count vs the
+  // daily cap (R11, WS11-9, BudgetBar). @CurrentUser, owner-scoped. spentDzd +
+  // tokens from Budget's month accumulator (readMonthSpend, fail-soft
+  // {tokens:0,dzd:0}); runsToday from the R6 daily counter (plain GET, fail-soft
+  // 0); monthDzd/runsCap from env (defaults: 0 = usage-only, 50). Gated by
+  // CDZ_AGENTS_ENABLED (typed 404 when off). FAIL-SOFT everywhere.
+  @Get('/api/v1/agents/budget')
+  async getBudget(@CurrentUser() user: CurrentUser): Promise<AgentBudget> {
+    this.assertEnabled();
+    // Month spend (Budget owns the writer; we read fail-soft). readMonthSpend
+    // takes the RAW redis first (RunRedis slice), then the owner id, and returns
+    // {tokens,dzd} — a missing key / read failure yields zeros inside it, but we
+    // guard here too so a throw can never escape.
+    let spend: { tokens: number; dzd: number } = { tokens: 0, dzd: 0 };
+    try {
+      const s = await readMonthSpend(this.redis as any, user.id);
+      if (s && typeof s === 'object') {
+        spend = {
+          tokens:
+            typeof s.tokens === 'number' && Number.isFinite(s.tokens)
+              ? s.tokens
+              : 0,
+          dzd:
+            typeof s.dzd === 'number' && Number.isFinite(s.dzd) ? s.dzd : 0,
+        };
+      }
+    } catch {
+      spend = { tokens: 0, dzd: 0 };
+    }
+    // Today's run count — the R6 per-user daily counter (INCR'd by the run
+    // engine). Read-only GET; a missing key or read failure is 0 runs.
+    let runsToday = 0;
+    try {
+      const raw = await (this.redis as any).get(
+        dailyRunCountKey(user.id, utcDay())
+      );
+      const n = Number.parseInt(pulseStr(raw), 10);
+      runsToday = Number.isFinite(n) && n > 0 ? n : 0;
+    } catch {
+      runsToday = 0;
+    }
+    // runsCap = the run engine's OWN cap resolver (maxRunsPerDay: env
+    // CDZ_AGENT_MAX_RUNS_PER_DAY, default 50) so the bar's denominator matches
+    // the value the engine actually enforces (never a drifted second read).
+    let runsCap = 50;
+    try {
+      const cap = maxRunsPerDay();
+      runsCap = Number.isFinite(cap) && cap > 0 ? cap : 50;
+    } catch {
+      runsCap = 50;
+    }
+    // monthDzd = the soft monthly budget (env, default 0 = usage-only). The bar
+    // shows usage without a limit when this is 0 (contract).
+    const monthDzd = Number(process.env.CDZ_AGENT_MONTHLY_DZD || 0);
+    return {
+      monthDzd: Number.isFinite(monthDzd) && monthDzd > 0 ? monthDzd : 0,
+      spentDzd: spend.dzd,
+      runsToday,
+      runsCap,
+      tokens: spend.tokens,
+    };
   }
 
   // GET /api/v1/agents/artifacts?agent=&limit= — the caller's "Livrables"

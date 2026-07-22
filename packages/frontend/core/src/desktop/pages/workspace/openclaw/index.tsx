@@ -16,6 +16,7 @@ import {
   AgentPalette,
   AgentPresence,
   ApprovalPrompt,
+  ArtifactsPanel,
   Composer,
   ConversationThread,
   EmptyState,
@@ -44,6 +45,10 @@ import {
 // isolated single-file esbuild check they won't resolve — expected.
 import { CodeViewer } from './code-viewer';
 import { OpenClawDashboard } from './dashboard';
+// R11 (INVERSION): the code-review diff moment — mounted in the workspace hero
+// when the agent rewrites an EXISTING file (red/green unified diff + Appliquer/
+// Rejeter). Pure presentational; see ./diff-view.
+import { DiffView } from './diff-view';
 import { FileTree } from './file-tree';
 import {
   Banner as StudioBanner,
@@ -443,6 +448,7 @@ const OpenClawConsole = ({
     terminal,
     files: streamFiles,
     preview,
+    artifacts,
     pendingApproval,
     send,
     stop,
@@ -464,6 +470,34 @@ const OpenClawConsole = ({
     status: 'starting' | 'ready';
   } | null>(null);
   const hydratedThreadRef = useRef<string | null>(null);
+
+  // ---- R11 (INVERSION) presentational state -------------------------------
+  // The layout is inverted: the workspace is the CENTER hero; the chat is a
+  // COLLAPSIBLE right copilot rail; the sidebar can collapse too. These flags
+  // are pure UI — they change nothing about the run, the hooks, or the data.
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Code-review diff moment. `fileSnapshots` caches the last-seen CONTENT of
+  // files we've already read from the sandbox (populated on open + on a diff
+  // review). When a run writes to a path we already have a snapshot for (i.e.
+  // an EXISTING file), we fetch the new content and stage a <DiffView> in the
+  // hero before adopting it. This taps the SAME api the viewer uses — no hook
+  // or stream logic changes; it only surfaces the write the tree already shows.
+  const fileSnapshots = useRef<Map<string, string>>(new Map());
+  const [diff, setDiff] = useState<{
+    path: string;
+    old: string;
+    next: string;
+  } | null>(null);
+  // Guard so a diff is staged at most once per distinct write signature (a
+  // review the user dismissed doesn't immediately re-open on the next render).
+  const diffSeenRef = useRef<Set<string>>(new Set());
+
+  // Ship card — a "Livré ✓" summary shown in the rail when a run finishes with
+  // artifacts. `shipped` latches the artifacts captured at the done frame; it's
+  // reset when a new run starts or the thread changes. Reuses <ArtifactsPanel>.
+  const [shipped, setShipped] = useState<typeof artifacts | null>(null);
 
   // Keep the selected runtime valid once real capabilities arrive.
   useEffect(() => {
@@ -534,9 +568,12 @@ const OpenClawConsole = ({
       }
       try {
         const file = await agentApi.readFile(threadId, path);
+        const content = typeof file.content === 'string' ? file.content : '';
+        // Cache the content so a later write to this path can be diff-reviewed.
+        fileSnapshots.current.set(file.path ?? path, content);
         setOpenFile({
           path: file.path ?? path,
-          content: typeof file.content === 'string' ? file.content : '',
+          content,
           language: file.language ?? known?.language,
           loading: false,
         });
@@ -561,6 +598,11 @@ const OpenClawConsole = ({
     setOpenFile(null);
     setRestoredPreview(null);
     setTab('files');
+    // R11: switching threads clears the diff-review + ship card + snapshots.
+    setDiff(null);
+    setShipped(null);
+    fileSnapshots.current.clear();
+    diffSeenRef.current.clear();
     if (!activeId) return;
 
     let alive = true;
@@ -612,6 +654,85 @@ const OpenClawConsole = ({
     }
     prevPreviewReadyRef.current = ready;
   }, [preview, previewAutoOpen]);
+
+  // ---- R11 (INVERSION): live-build affordance ------------------------------
+  // "building…" reads as active whenever a run is streaming file writes — the
+  // hero's subtle signal that the tree below is filling in real time. Derived
+  // only; it drives a chip, nothing else.
+  const building = running && (streamFiles?.length ?? 0) > 0;
+
+  // ---- R11: code-review diff moment ---------------------------------------
+  // Watch the stream's file deltas. When a write/update targets a path we have
+  // a cached snapshot for (an EXISTING file) and we haven't already staged that
+  // exact write, fetch the fresh content and open a <DiffView> in the hero. The
+  // read uses the SAME api the viewer uses; we never mutate the run.
+  useEffect(() => {
+    const deltas = streamFiles ?? [];
+    if (deltas.length === 0) return;
+    const threadId = activeId;
+    if (!threadId) return;
+    // Only the most recent delta can be "new"; scan from the end for the first
+    // write/update whose path we can diff and haven't shown yet.
+    for (let i = deltas.length - 1; i >= 0; i--) {
+      const d = deltas[i] as {
+        op?: 'write' | 'update' | 'delete';
+        path?: string;
+      };
+      if (!d || typeof d.path !== 'string') continue;
+      if (d.op === 'delete') continue;
+      const sig = `${i}:${d.path}`;
+      if (diffSeenRef.current.has(sig)) continue;
+      const old = fileSnapshots.current.get(d.path);
+      if (typeof old !== 'string') continue; // not an existing (known) file
+      diffSeenRef.current.add(sig);
+      const path = d.path;
+      void (async () => {
+        try {
+          const file = await agentApi.readFile(threadId, path);
+          const next = typeof file.content === 'string' ? file.content : '';
+          if (next === old) return; // no textual change → skip the review
+          setDiff({ path, old, next });
+        } catch {
+          // Read failed (no sandbox / gone) — silently skip; the write still
+          // shows in the tree exactly as before.
+        }
+      })();
+      break;
+    }
+  }, [streamFiles, activeId]);
+
+  // ---- R11: adopt / discard a staged diff --------------------------------
+  const applyDiff = useCallback(() => {
+    setDiff(cur => {
+      if (cur) {
+        // Adopt: the new content becomes the snapshot + the open file.
+        fileSnapshots.current.set(cur.path, cur.next);
+        setOpenFile({ path: cur.path, content: cur.next, loading: false });
+        setTab('files');
+      }
+      return null;
+    });
+  }, []);
+  const rejectDiff = useCallback(() => {
+    // Discard the review; keep the previously-known version as the snapshot.
+    setDiff(null);
+  }, []);
+
+  // ---- R11: ship card ----------------------------------------------------
+  // Latch the artifacts a run produced when it stops (running → false). Reset
+  // the card the moment a new run starts so each run gets its own "Livré ✓".
+  const prevRunningRef = useRef(running);
+  useEffect(() => {
+    const was = prevRunningRef.current;
+    prevRunningRef.current = running;
+    if (running && !was) {
+      setShipped(null); // new run started
+      return;
+    }
+    if (!running && was && (artifacts?.length ?? 0) > 0) {
+      setShipped(artifacts);
+    }
+  }, [running, artifacts]);
 
   // --------------------------------------------------------------- derived
   const sandboxOn = capsState === 'ready' && !!caps?.sandbox;
@@ -688,122 +809,94 @@ const OpenClawConsole = ({
 
   return (
     <div style={rootStyle}>
-      {/* ---- LEFT: thread sidebar (SHELL) ---- */}
-      <div style={sidebarWrapStyle}>
-        <ThreadSidebar
-          threads={threads}
-          activeId={activeId}
-          onSelect={setActiveId}
-          onNew={() => {
-            void newThread();
-          }}
-          onRename={(id, title) => {
-            void renameThread(id, title);
-          }}
-          onDelete={id => {
-            void removeThread(id);
-          }}
-          loading={loadingThreads}
-          title="Sessions"
-        />
-      </div>
+      {/* =====================================================================
+          R11 INVERSION — the WORKSPACE is the hero. Column order:
+            LEFT  : project/thread sidebar (collapsible)
+            CENTER: workspace hero (Files / Terminal / Preview) — WIDEST
+            RIGHT : copilot rail (chat + composer + ship card) — collapsible
+          Same components, same props, same data flows as before; only the
+          arrangement + widths change. The chat rail carries the composer.
+         ===================================================================== */}
 
-      {/* ---- MIDDLE: conversation + composer ---- */}
-      <div style={centerColStyle}>
-        {/* status bar (phase chip + label + running) */}
-        <div style={{ flexShrink: 0 }}>
-          <StatusBar
-            phase={phase ?? 'planning'}
-            label={status ?? ''}
-            running={running}
-          />
+      {/* ---- LEFT: thread sidebar (SHELL) — collapsible ---- */}
+      {sidebarCollapsed ? (
+        <div style={sidebarStripStyle}>
+          <button
+            type="button"
+            style={stripBtnStyle}
+            onClick={() => setSidebarCollapsed(false)}
+            title="Show projects"
+            aria-label="Show projects"
+          >
+            <span style={{ fontFamily: monoFamily }}>☰</span>
+          </button>
         </div>
-
-        {/* capabilities / planner banners */}
-        {capsState === 'loading' ? (
-          <Banner tone="info">Checking sandbox availability…</Banner>
-        ) : capsState === 'error' ? (
-          <Banner tone="error">
-            Couldn&apos;t load OpenClaw capabilities.{' '}
-            <button style={linkBtnStyle} onClick={onReloadCaps}>
-              Retry
+      ) : (
+        <div style={sidebarWrapStyle}>
+          <div style={railHeadStyle}>
+            <span style={railHeadLabelStyle}>Projects</span>
+            <button
+              type="button"
+              style={railToggleBtnStyle}
+              onClick={() => setSidebarCollapsed(true)}
+              title="Collapse projects"
+              aria-label="Collapse projects"
+            >
+              ⟨
             </button>
-          </Banner>
-        ) : !sandboxOn ? (
-          <Banner tone="warn">
-            <strong>Generate-only — sandbox off.</strong> Code gets written and
-            explained, but nothing runs. No exec, no ports, no preview.
-            {caps?.reason ? (
-              <div style={{ marginTop: 4, color: C.muted, fontSize: 12 }}>
-                Reason: {caps.reason}
-              </div>
-            ) : null}
-          </Banner>
-        ) : null}
-        {plannerDown ? (
-          <Banner tone="warn">
-            The AI planner isn&apos;t configured — ask the owner to set{' '}
-            <code style={codeChipStyle}>CDZ_AI_KEY</code>. Running is disabled
-            until then.
-          </Banner>
-        ) : null}
+          </div>
+          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <ThreadSidebar
+              threads={threads}
+              activeId={activeId}
+              onSelect={setActiveId}
+              onNew={() => {
+                void newThread();
+              }}
+              onRename={(id, title) => {
+                void renameThread(id, title);
+              }}
+              onDelete={id => {
+                void removeThread(id);
+              }}
+              loading={loadingThreads}
+              title="Sessions"
+            />
+          </div>
+        </div>
+      )}
 
-        {/* conversation OR empty state */}
-        <div style={conversationScrollStyle}>
-          {hasThread || messages.length > 0 || streamingMessage ? (
-            <ConversationThread
-              messages={messages}
-              streamingMessage={streamingMessage}
-              style={conversationInnerStyle}
-              renderExtras={
-                pendingApproval ? (
-                  <div style={{ marginTop: 12 }}>
-                    <ApprovalPrompt
-                      request={pendingApproval}
-                      onDecide={(id, decision) => void approve(id, decision)}
-                      disabled={!running}
-                    />
-                  </div>
-                ) : undefined
-              }
-            />
-          ) : (
-            <EmptyState
-              icon="🐾"
-              title="Build something and watch it run"
-              subtitle={
-                sandboxOn
-                  ? 'Describe a coding task. OpenClaw writes the files, runs them in an isolated sandbox, streams the output, and (for web apps) shows a live preview.'
-                  : 'Describe a coding task. OpenClaw writes and explains the code. Live execution is off on this server, so nothing is run.'
-              }
-              examples={EXAMPLES}
-              onPickExample={pickExample}
-            />
-          )}
+      {/* ---- CENTER (HERO): workspace — Files / Terminal / Preview ---- */}
+      <div style={heroColStyle}>
+        {/* hero header — mono chrome: tabs live below; this strip carries the
+            live-build affordance + the rail toggle when the rail is hidden. */}
+        <div style={heroHeadStyle}>
+          <span style={heroTitleStyle}>{'>_'} Workspace</span>
+          {building ? (
+            <span style={buildingChipStyle} title="Files are streaming in">
+              <AgentPresence
+                agent="openclaw"
+                phase="writing"
+                running
+                size={7}
+              />
+              building…
+            </span>
+          ) : null}
+          <span style={{ flex: 1 }} />
+          {railCollapsed ? (
+            <button
+              type="button"
+              style={heroRailBtnStyle}
+              onClick={() => setRailCollapsed(false)}
+              title="Show copilot"
+              aria-label="Show copilot"
+            >
+              Copilot ⟩
+            </button>
+          ) : null}
         </div>
 
-        {/* composer — runtime picker in the leftSlot */}
-        <div style={{ flexShrink: 0 }}>
-          <Composer
-            value={input}
-            onChange={setInput}
-            onSend={handleSend}
-            onStop={() => void stop()}
-            running={running}
-            disabled={plannerDown}
-            autoFocus
-            placeholder={
-              sandboxOn
-                ? 'Describe a coding task — e.g. build an Express API with a /health route and show it running'
-                : 'Describe a coding task — code will be generated but not executed'
-            }
-            leftSlot={runtimePicker}
-          />
-        </div>
-      </div>
-
-      {/* ---- RIGHT: workspace panel (Files / Terminal / Preview) ---- */}
-      <div style={workspaceColStyle}>
         <WorkspaceTabs
           tab={tab}
           onTab={setTab}
@@ -813,7 +906,19 @@ const OpenClawConsole = ({
           running={running}
         />
         <div style={workspaceBodyStyle}>
-          {tab === 'files' ? (
+          {diff ? (
+            // Code-review diff moment — a rewrite of an existing file waits for
+            // review here, in the hero, before it's adopted.
+            <div style={diffLayoutStyle}>
+              <DiffView
+                old={diff.old}
+                new={diff.next}
+                path={diff.path}
+                onApply={applyDiff}
+                onReject={rejectDiff}
+              />
+            </div>
+          ) : tab === 'files' ? (
             <div style={filesLayoutStyle}>
               <div style={fileTreeWrapStyle}>
                 <FileTree
@@ -859,6 +964,142 @@ const OpenClawConsole = ({
           )}
         </div>
       </div>
+
+      {/* ---- RIGHT: copilot rail (conversation + composer) — collapsible ---- */}
+      {railCollapsed ? (
+        <div style={railStripStyle}>
+          <button
+            type="button"
+            style={stripBtnStyle}
+            onClick={() => setRailCollapsed(false)}
+            title="Show copilot"
+            aria-label="Show copilot"
+          >
+            <span style={{ fontFamily: monoFamily }}>💬</span>
+          </button>
+        </div>
+      ) : (
+        <div style={copilotColStyle}>
+          <div style={railHeadStyle}>
+            <button
+              type="button"
+              style={railToggleBtnStyle}
+              onClick={() => setRailCollapsed(true)}
+              title="Collapse copilot"
+              aria-label="Collapse copilot"
+            >
+              ⟩
+            </button>
+            <span style={railHeadLabelStyle}>Copilot</span>
+          </div>
+
+          {/* status bar (phase chip + label + running) */}
+          <div style={{ flexShrink: 0 }}>
+            <StatusBar
+              phase={phase ?? 'planning'}
+              label={status ?? ''}
+              running={running}
+            />
+          </div>
+
+          {/* capabilities / planner banners */}
+          {capsState === 'loading' ? (
+            <Banner tone="info">Checking sandbox availability…</Banner>
+          ) : capsState === 'error' ? (
+            <Banner tone="error">
+              Couldn&apos;t load OpenClaw capabilities.{' '}
+              <button style={linkBtnStyle} onClick={onReloadCaps}>
+                Retry
+              </button>
+            </Banner>
+          ) : !sandboxOn ? (
+            <Banner tone="warn">
+              <strong>Generate-only — sandbox off.</strong> Code gets written
+              and explained, but nothing runs. No exec, no ports, no preview.
+              {caps?.reason ? (
+                <div style={{ marginTop: 4, color: C.muted, fontSize: 12 }}>
+                  Reason: {caps.reason}
+                </div>
+              ) : null}
+            </Banner>
+          ) : null}
+          {plannerDown ? (
+            <Banner tone="warn">
+              The AI planner isn&apos;t configured — ask the owner to set{' '}
+              <code style={codeChipStyle}>CDZ_AI_KEY</code>. Running is disabled
+              until then.
+            </Banner>
+          ) : null}
+
+          {/* conversation OR empty state */}
+          <div style={conversationScrollStyle}>
+            {shipped && shipped.length > 0 ? (
+              // Ship card — "Livré ✓" summary of what the run produced. Reuses
+              // the shared ArtifactsPanel to render the artifacts.
+              <div style={shipCardStyle}>
+                <div style={shipHeadStyle}>
+                  <span style={{ color: OC.accent, fontWeight: 800 }}>✓</span>
+                  <span>Livré</span>
+                  <span style={{ color: C.muted, fontWeight: 600 }}>
+                    · {shipped.length}{' '}
+                    {shipped.length === 1 ? 'artefact' : 'artefacts'}
+                  </span>
+                </div>
+                <ArtifactsPanel artifacts={shipped} />
+              </div>
+            ) : null}
+            {hasThread || messages.length > 0 || streamingMessage ? (
+              <ConversationThread
+                messages={messages}
+                streamingMessage={streamingMessage}
+                style={conversationInnerStyle}
+                renderExtras={
+                  pendingApproval ? (
+                    <div style={{ marginTop: 12 }}>
+                      <ApprovalPrompt
+                        request={pendingApproval}
+                        onDecide={(id, decision) => void approve(id, decision)}
+                        disabled={!running}
+                      />
+                    </div>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <EmptyState
+                icon="🐾"
+                title="Build something and watch it run"
+                subtitle={
+                  sandboxOn
+                    ? 'Describe a coding task. OpenClaw writes the files, runs them in an isolated sandbox, streams the output, and (for web apps) shows a live preview.'
+                    : 'Describe a coding task. OpenClaw writes and explains the code. Live execution is off on this server, so nothing is run.'
+                }
+                examples={EXAMPLES}
+                onPickExample={pickExample}
+              />
+            )}
+          </div>
+
+          {/* composer — runtime picker in the leftSlot */}
+          <div style={{ flexShrink: 0 }}>
+            <Composer
+              value={input}
+              onChange={setInput}
+              onSend={handleSend}
+              onStop={() => void stop()}
+              running={running}
+              disabled={plannerDown}
+              autoFocus
+              placeholder={
+                sandboxOn
+                  ? 'Describe a coding task — e.g. build an Express API with a /health route and show it running'
+                  : 'Describe a coding task — code will be generated but not executed'
+              }
+              leftSlot={runtimePicker}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Page-scoped keyframes + prefers-reduced-motion guards. */}
       <style>
@@ -1144,11 +1385,13 @@ const rootStyle: CSSProperties = {
   flexWrap: 'wrap',
 };
 
+// LEFT sidebar — the project/thread column. Kept narrow (it is not the star);
+// it can collapse to a thin strip. A header strip hosts the collapse toggle.
 const sidebarWrapStyle: CSSProperties = {
-  flex: '0 0 250px',
-  width: 250,
-  minWidth: 200,
-  maxWidth: 300,
+  flex: '0 0 230px',
+  width: 230,
+  minWidth: 190,
+  maxWidth: 280,
   borderRight: `1px solid ${C.border}`,
   background: C.panel,
   overflow: 'hidden',
@@ -1157,15 +1400,158 @@ const sidebarWrapStyle: CSSProperties = {
   minHeight: 0,
 };
 
-const centerColStyle: CSSProperties = {
-  flex: '1 1 460px',
-  minWidth: 360,
+// Collapsed-sidebar strip — a thin rail with the expand button.
+const sidebarStripStyle: CSSProperties = {
+  flex: '0 0 40px',
+  width: 40,
+  borderRight: `1px solid ${C.border}`,
+  background: C.panel,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  paddingTop: 8,
+  minHeight: 0,
+};
+
+// CENTER (HERO) — the workspace. This is the dominant column: it grows to eat
+// the frame (`flex: 1 1 auto`, the biggest basis) so Files/Terminal/Preview is
+// where the eye lands. No side borders — it is flanked by bordered rails.
+const heroColStyle: CSSProperties = {
+  flex: '1 1 auto',
+  minWidth: 420,
+  display: 'flex',
+  flexDirection: 'column',
+  background: C.bg,
+  minHeight: 0,
+  overflow: 'hidden',
+};
+
+// Hero header strip — mono title + the live-build affordance + (when the rail
+// is collapsed) a button to bring the copilot back.
+const heroHeadStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flexShrink: 0,
+  height: 34,
+  padding: '0 12px',
+  borderBottom: `1px solid ${C.border}`,
+  background: C.panel,
+};
+const heroTitleStyle: CSSProperties = {
+  fontFamily: monoFamily,
+  fontSize: 12,
+  fontWeight: 700,
+  color: OC.accent,
+  letterSpacing: '0.02em',
+};
+const buildingChipStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 7,
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
+  padding: '2px 9px 2px 8px',
+  borderRadius: 999,
+  fontFamily: monoFamily,
+  color: OC.accentText,
+  background: OC.accentSoft,
+  border: `1px solid ${C.border}`,
+};
+const heroRailBtnStyle: CSSProperties = {
+  appearance: 'none',
+  cursor: 'pointer',
+  padding: '3px 12px',
+  borderRadius: AgentPalette.radius.md,
+  fontSize: 11.5,
+  fontWeight: 600,
+  fontFamily: monoFamily,
+  color: C.text,
+  background: 'transparent',
+  border: `1px solid ${C.border}`,
+  flexShrink: 0,
+};
+
+// RIGHT copilot rail — the chat + composer, demoted to a NARROW collapsible
+// column with a left border. It is peripheral by design; the workspace leads.
+const copilotColStyle: CSSProperties = {
+  flex: '0 0 380px',
+  width: 380,
+  minWidth: 320,
+  maxWidth: 460,
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
-  padding: '10px 14px',
+  padding: '8px 12px',
+  borderLeft: `1px solid ${C.border}`,
+  background: C.panel,
   minHeight: 0,
   overflow: 'hidden',
+};
+
+// Collapsed-rail strip — a thin rail with the expand button.
+const railStripStyle: CSSProperties = {
+  flex: '0 0 40px',
+  width: 40,
+  borderLeft: `1px solid ${C.border}`,
+  background: C.panel,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  paddingTop: 8,
+  minHeight: 0,
+};
+
+// A small header row shared by the two side rails (label + collapse toggle).
+const railHeadStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexShrink: 0,
+  height: 30,
+  padding: '0 6px 0 10px',
+};
+const railHeadLabelStyle: CSSProperties = {
+  flex: 1,
+  fontFamily: monoFamily,
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: C.muted,
+};
+const railToggleBtnStyle: CSSProperties = {
+  appearance: 'none',
+  cursor: 'pointer',
+  width: 22,
+  height: 22,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: AgentPalette.radius.sm,
+  fontSize: 12,
+  color: C.muted,
+  background: 'transparent',
+  border: `1px solid ${C.border}`,
+  flexShrink: 0,
+};
+
+// The thin-strip expand button (used by both collapsed rails).
+const stripBtnStyle: CSSProperties = {
+  appearance: 'none',
+  cursor: 'pointer',
+  width: 28,
+  height: 28,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: AgentPalette.radius.sm,
+  fontSize: 13,
+  color: C.text,
+  background: 'transparent',
+  border: `1px solid ${C.border}`,
 };
 
 const conversationScrollStyle: CSSProperties = {
@@ -1179,15 +1565,23 @@ const conversationInnerStyle: CSSProperties = {
   minHeight: '100%',
 };
 
-const workspaceColStyle: CSSProperties = {
-  flex: '1 1 420px',
-  minWidth: 340,
+// Ship card — a compact "Livré ✓" wrapper around the shared ArtifactsPanel.
+const shipCardStyle: CSSProperties = {
+  marginBottom: 12,
+  padding: 10,
+  borderRadius: AgentPalette.radius.md,
+  border: `1px solid ${OC.accentSoft}`,
+  background: OC.accentSoft,
+};
+const shipHeadStyle: CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
-  borderLeft: `1px solid ${C.border}`,
-  background: C.panel,
-  minHeight: 0,
-  overflow: 'hidden',
+  alignItems: 'center',
+  gap: 7,
+  marginBottom: 8,
+  fontFamily: monoFamily,
+  fontSize: 12.5,
+  fontWeight: 700,
+  color: C.text,
 };
 
 const tabsBarStyle: CSSProperties = {
@@ -1206,6 +1600,16 @@ const workspaceBodyStyle: CSSProperties = {
   overflow: 'hidden',
   display: 'flex',
   flexDirection: 'column',
+};
+
+// Diff-review wrapper — pads the DiffView within the hero body.
+const diffLayoutStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflow: 'hidden',
+  display: 'flex',
+  flexDirection: 'column',
+  padding: 10,
 };
 
 const filesLayoutStyle: CSSProperties = {

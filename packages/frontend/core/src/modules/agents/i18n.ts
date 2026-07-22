@@ -858,6 +858,73 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
   },
   'triggers.webhook.copy': { fr: 'Copier l’URL', ar: 'إنسخ الرابط' },
   'triggers.webhook.copied': { fr: 'Copié', ar: 'تنسخ' },
+
+  // ── LE BUREAU · Hermès business-pulse hero + desks (R11, WS11-7 — Trame) ──
+  // Trame owns this `bureau.*` group (PulseCard / ApprovalInbox / CodDesk /
+  // MissionsCard). Business-operations register (commandes COD, wilaya, DZD),
+  // FR default + short DZ darja — same commerce voice as the shop pages.
+  'bureau.pulse.title': { fr: 'Le pouls du jour', ar: 'نبض اليوم' },
+  'bureau.greeting': { fr: 'Bonjour 👋', ar: 'صباح الخير 👋' },
+  'bureau.subtitle': { fr: 'Votre employé des opérations', ar: 'موظّف العمليات تاعك' },
+  'bureau.lastSweep': { fr: 'Dernier passage', ar: 'آخر مرّة' },
+  'bureau.settings': { fr: 'Réglages', ar: 'الإعدادات' },
+  'bureau.talkTo': { fr: 'Parler à Hermès', ar: 'هدر مع Hermès' },
+  'bureau.approvals.fallbackTitle': { fr: 'Action à approuver', ar: 'إجراء يحتاج موافقة' },
+  'bureau.pulse.ordersToday': { fr: 'Commandes', ar: 'كوموندات' },
+  'bureau.pulse.toConfirm': { fr: 'À confirmer', ar: 'باش تأكّد' },
+  'bureau.pulse.revenueToday': { fr: 'Chiffre du jour', ar: 'مدخول اليوم' },
+  'bureau.pulse.returns': { fr: 'Retours', ar: 'مرجوع' },
+  'bureau.pulse.lowStock': { fr: 'Stock bas', ar: 'ستوك ناقص' },
+  'bureau.pulse.empty.title': {
+    fr: 'Aucune boutique connectée',
+    ar: 'ما كاش محل مربوط',
+  },
+  'bureau.pulse.empty.body': {
+    fr: 'Reliez votre boutique et Hermès vous montrera ici les commandes, le chiffre du jour et ce qui demande votre attention.',
+    ar: 'اربط المحل تاعك و Hermès يوريك هنا الكوموندات، مدخول اليوم و واش يستاهل انتباهك.',
+  },
+  'bureau.approve.title': { fr: 'À approuver', ar: 'باش تصادق' },
+  'bureau.approve.empty': { fr: 'Rien à approuver', ar: 'ما كاش واش تصادق' },
+  'bureau.approve.approve': { fr: 'Approuver', ar: 'صادق' },
+  'bureau.approve.deny': { fr: 'Refuser', ar: 'رفض' },
+  'bureau.approve.fallbackTitle': { fr: 'Action à valider', ar: 'عملية باش تصادق' },
+  'bureau.cod.title': { fr: 'Commandes COD', ar: 'كوموندات الدفع عند الاستلام' },
+  'bureau.cod.empty': { fr: 'Aucune commande COD', ar: 'ما كاش كوموندات' },
+  'bureau.cod.confirm': { fr: 'Confirmer', ar: 'أكّد' },
+  'bureau.cod.advance': { fr: 'Avancer', ar: 'قدّم' },
+  'bureau.cod.whatsapp': { fr: 'Écrire sur WhatsApp', ar: 'أكتب على واتساب' },
+  'bureau.cod.noName': { fr: 'Client', ar: 'كليان' },
+  'bureau.missions.title': { fr: 'Missions programmées', ar: 'مهام مبرمجة' },
+  'bureau.missions.manage': { fr: 'Gérer', ar: 'دبّر' },
+  'bureau.missions.manual': { fr: 'Manuel', ar: 'يدوي' },
+  'bureau.missions.next': { fr: 'dans {when}', ar: 'بعد {when}' },
+  'bureau.missions.noPrompt': { fr: 'Sans consigne', ar: 'بلا توصية' },
+  'bureau.missions.empty': {
+    fr: 'Aucune mission programmée. Planifiez une tâche récurrente et Hermès la fera tout seul.',
+    ar: 'ما كاش مهام مبرمجة. برمج خدمة تتعاود و Hermès يديرها وحدو.',
+  },
+
+  // ── BUDGET · soft monthly-spend read-out (R11, WS11-11 — Trame) ───────────
+  // Trame owns this `budget.*` group (BudgetBar). SOFT wording only — it informs,
+  // never blocks (mirrors spend-meter's "non facturé" tone).
+  'budget.title': { fr: 'Budget du mois', ar: 'ميزانية الشهر' },
+  'budget.noLimit': { fr: 'Sans limite', ar: 'بلا حدّ' },
+  'budget.runsToday': { fr: "exéc. aujourd'hui", ar: 'عمليات اليوم' },
+  'budget.tokensMonth': { fr: 'tokens ce mois', ar: 'توكن هاد الشهر' },
+  'budget.used': { fr: '{pct}% utilisé', ar: 'تستعمل {pct}%' },
+  'budget.warn': { fr: '{pct}% — surveillez', ar: '{pct}% — ردّ بالك' },
+  'budget.over': { fr: '{pct}% — dépassé', ar: '{pct}% — فات الحدّ' },
+
+  // ── TOOL PERMISSIONS · grouped toggle grid (R11, WS11-10 — Trame) ─────────
+  // Trame owns this `toolperms.*` group (ToolPermissions). Consumed by Réglages.
+  'toolperms.empty': {
+    fr: 'Aucun outil disponible pour cet agent.',
+    ar: 'ما كاش أدوات متوفّرة لهاد الوكيل.',
+  },
+  'toolperms.consequential': {
+    fr: 'Action sensible — agit à l’extérieur (envoi, dépense).',
+    ar: 'عملية حسّاسة — تدير برّا (إرسال، صرف).',
+  },
 };
 
 // Default export: the pure translator factory (most common consumer import
