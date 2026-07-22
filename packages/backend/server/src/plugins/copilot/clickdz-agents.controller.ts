@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 
 // Typed AFFiNE errors (a raw HttpException is coerced to a generic 500 by
 // base/nestjs/exception.ts): NotFound = the gated-OFF "feature disabled" 404,
@@ -18,7 +18,16 @@ import { CurrentUser } from '../../core/auth';
 // 'openclaw' union; listAgentRuns reads the per-user+agent zset newest-first.
 // Called fail-soft below so a missing/partial engine never crashes this read.
 // The orchestrator merges all R6 files, so this static import resolves at boot.
-import { type AgentName, listAgentRuns } from './clickdz-agent-runs';
+// listAgentArtifacts + AgentArtifactRecord (R10, WS11-6, Musée): reads the
+// per-user artifacts library list (clickdz:agentart:{userId}) newest-first,
+// optionally filtered by agent. Called fail-soft below; gated by the same
+// CDZ_AGENTS_ENABLED master switch as the rest of this controller.
+import {
+  type AgentArtifactRecord,
+  type AgentName,
+  listAgentArtifacts,
+  listAgentRuns,
+} from './clickdz-agent-runs';
 // Wassila's WhatsApp stub (clickdz-wa-client.ts). waCapsEnabled() is an env-ONLY,
 // fetch-free predicate (CDZ_WA_URL && CDZ_WA_TOKEN && CDZ_AGENT_WHATSAPP_ENABLED
 // === '1'); today all unset ⇒ false. VALUE import — it is CALLED at runtime by
@@ -209,6 +218,43 @@ export class ClickDzAgentsController {
     // feature is on; each flag defaults OFF so an unset env == legacy behavior.
     const caps = buildCaps();
     return { agents, caps };
+  }
+
+  // GET /api/v1/agents/artifacts?agent=&limit= — the caller's "Livrables"
+  // library (R10, WS11-6, Musée): every deliverable (file / output / link) a
+  // run produced, persisted across runs by the run engine's appendRunEvent
+  // (clickdz:agentart:{userId}). @CurrentUser, owner-scoped. Optional `agent`
+  // filters the list; optional `limit` caps the row count (server default 60).
+  // Gated by the same CDZ_AGENTS_ENABLED master switch (assertEnabled 404s when
+  // off). Read-only, fail-soft (a read failure degrades to an empty list).
+  @Get('/api/v1/agents/artifacts')
+  async listArtifacts(
+    @CurrentUser() user: CurrentUser,
+    @Query('agent') agentParam?: string,
+    @Query('limit') limitParam?: string
+  ): Promise<{ artifacts: AgentArtifactRecord[] }> {
+    this.assertEnabled();
+    // An unknown/absent `agent` query means "all agents" (undefined filter);
+    // only a valid known agent narrows the list. Never 400s on a bad filter.
+    const agent = normalizeAgent(agentParam) ?? undefined;
+    const parsed =
+      typeof limitParam === 'string' && limitParam.trim() !== ''
+        ? Number.parseInt(limitParam, 10)
+        : NaN;
+    const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+    try {
+      // listAgentArtifacts takes the RAW redis first (RunRedis slice), then the
+      // owner id, the optional agent filter, and the limit. Fail-soft -> [].
+      const artifacts = await listAgentArtifacts(
+        this.redis as any,
+        user.id,
+        agent,
+        limit
+      );
+      return { artifacts: Array.isArray(artifacts) ? artifacts : [] };
+    } catch {
+      return { artifacts: [] }; // fail-soft: a read failure is "no artifacts"
+    }
   }
 
   // POST /api/v1/agents/:agent/state — persist an informational enabled flag

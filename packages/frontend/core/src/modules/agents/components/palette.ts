@@ -139,3 +139,66 @@ export function ensureAgentKeyframes(): void {
     // DOM unavailable — components still render; only decorative motion is lost.
   }
 }
+
+// ---------------------------------------------------------------------------
+// Per-agent accent (R10 identity — WS11-1). ADDITIVE: nothing above is removed
+// or renamed. `AgentPalette.color.accent` (the shared `#1e96eb`) stays the
+// default; the R7/R8 shared components keep reading it verbatim. This layer only
+// gives Hermes/OpenClaw a *branded* accent family to opt into (Herald, Griffe
+// and AgentPresence consume `accentFor`). Same `--affine-*` var + hard-hex
+// fallback discipline as the base palette, so the UI is correct before any
+// theme var resolves; the soft/glow tints are `color-mix` on the accent using
+// the exact 14%/22% ratios the base palette + StatusBar dot already use, so an
+// agent accent sits coherently alongside the shared ok/warn/err tints.
+export type AgentAccentKey = 'hermes' | 'openclaw';
+
+export interface AgentAccent {
+  // Primary brand hue — presence lamp, primary buttons, active nav, spines.
+  accent: string;
+  // ~14% wash of `accent` — soft fills / hover beds (matches color.accentSoft).
+  accentSoft: string;
+  // The paired emphasis colour: Hermes payday-gold for money/COD figures,
+  // OpenClaw cyan for links/filenames. NOT the on-accent text colour (that is
+  // AgentPalette.color.onAccent, unchanged) — it is the agent's second ink.
+  accentText: string;
+  // A soft ring/halo of `accent` — the working-state glow on lamps/avatars
+  // (matches the StatusBar dot's `0 0 0 3px …22%` idiom, reused here).
+  glow: string;
+}
+
+// Brand hexes are the hard fallbacks; each is exposed behind a per-agent
+// `--affine-cdz-*` custom property so a future theme *could* override, while the
+// fallback is always the exact brand value the identity doc specifies.
+export const AGENT_ACCENT: Record<AgentAccentKey, AgentAccent> = {
+  // Hermes — warm operational green-teal (#14a37f) + payday gold (#e0a83d).
+  hermes: {
+    accent: 'var(--affine-cdz-hermes-accent, #14a37f)',
+    accentSoft:
+      'color-mix(in srgb, var(--affine-cdz-hermes-accent, #14a37f) 14%, transparent)',
+    accentText: 'var(--affine-cdz-hermes-gold, #e0a83d)',
+    glow: 'color-mix(in srgb, var(--affine-cdz-hermes-accent, #14a37f) 22%, transparent)',
+  },
+  // OpenClaw — terminal/phosphor green (#6bd968) + cyan (#56b6ff).
+  openclaw: {
+    accent: 'var(--affine-cdz-openclaw-accent, #6bd968)',
+    accentSoft:
+      'color-mix(in srgb, var(--affine-cdz-openclaw-accent, #6bd968) 14%, transparent)',
+    accentText: 'var(--affine-cdz-openclaw-cyan, #56b6ff)',
+    glow: 'color-mix(in srgb, var(--affine-cdz-openclaw-accent, #6bd968) 22%, transparent)',
+  },
+};
+
+// Resolve the accent family for an agent. Unknown/missing agent falls back to a
+// shared-accent family derived from AgentPalette.color, so callers never crash
+// on a bad prop and a generic surface still reads correctly.
+export function accentFor(agent: AgentAccentKey | string | undefined): AgentAccent {
+  if (agent && (agent === 'hermes' || agent === 'openclaw')) {
+    return AGENT_ACCENT[agent];
+  }
+  return {
+    accent: AgentPalette.color.accent,
+    accentSoft: AgentPalette.color.accentSoft,
+    accentText: AgentPalette.color.text,
+    glow: 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 22%, transparent)',
+  };
+}

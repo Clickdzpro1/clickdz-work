@@ -1,6 +1,7 @@
 import { getCapabilities } from '@affine/core/modules/agents/api';
 import { useAgents } from '@affine/core/modules/agents/use-agents';
 import { WorkbenchLink } from '@affine/core/modules/workbench';
+import { TelegramChannelCard } from '../agents/channel-card';
 import {
   type ReactNode,
   useCallback,
@@ -461,6 +462,10 @@ const CanauxPanel = () => {
           explain="Vos agents peuvent chercher sur le web."
           explainWhenOn
         />
+      </div>
+      {/* R10 BYOT — connect your OWN Telegram bot to Hermes, right here. */}
+      <div style={{ marginTop: 12 }}>
+        <TelegramChannelCard agent="hermes" />
       </div>
     </Panel>
   );

@@ -12,12 +12,15 @@ import { useAgentThreads } from '@affine/core/modules/agents/use-agent-threads';
 // state down as props; SHELL never fetches. `AgentPalette` is the one shared
 // token object both consoles reuse.
 import {
+  accentFor,
   AgentPalette,
+  AgentPresence,
   ApprovalPrompt,
   Composer,
   ConversationThread,
   EmptyState,
   StatusBar,
+  type StatusPhase,
   ThreadSidebar,
 } from '@affine/core/modules/agents/components';
 import {
@@ -80,6 +83,12 @@ import { OpenClawWizard } from './wizard';
 
 const C = AgentPalette.color;
 const monoFamily = AgentPalette.font.mono;
+// OpenClaw identity accent (R10 / WS11-3): phosphor-green #6bd968 + cyan
+// #56b6ff for filenames/links. Layered on the shared AgentPalette — `C` keeps
+// the shared surface/status tints (ok/warn/err verbatim); only the accent
+// family reads as OpenClaw's terminal green, giving the mono-forward chrome its
+// live/run signal. Nothing here changes behavior, routes, exports or testIds.
+const OC = accentFor('openclaw');
 
 const DEFAULT_RUNTIMES = ['node24', 'python3.13'];
 const RUNTIME_LABELS: Record<string, string> = {
@@ -216,24 +225,46 @@ const OpenClawPage = () => {
   }, []);
 
   // ------------------------------------------------------------------ header
-  const headerChip =
-    capsState === 'ready' ? (
-      <span
-        style={{
-          ...capChipStyle,
-          color: caps?.sandbox ? C.okText : C.amber,
-          background: caps?.sandbox ? C.okBg : C.warnBg,
-          border: `1px solid ${caps?.sandbox ? C.okBorder : C.warnBorder}`,
-        }}
-        title={
-          caps?.sandbox
-            ? 'Vercel Sandbox is enabled — tasks run live.'
-            : caps?.reason ?? 'Sandbox off — code is generated, not run.'
-        }
-      >
-        {caps?.sandbox ? 'live' : 'generate-only'}
-      </span>
-    ) : null;
+  // Sandbox status lamp — an honest instrument, not a flat chip. Maps the
+  // capabilities the page already tracks onto the shared <AgentPresence> lamp
+  // via StatusPhase: sandbox live → green (done), generate-only → amber
+  // (waiting_approval), still loading → grey (stopped), caps load failed →
+  // red (error). The terse mono label rides alongside the dot.
+  const headerLampPhase: StatusPhase =
+    capsState === 'loading'
+      ? 'stopped'
+      : capsState === 'error'
+        ? 'error'
+        : caps?.sandbox
+          ? 'done'
+          : 'waiting_approval';
+  const headerLampLabel =
+    capsState === 'loading'
+      ? 'boot…'
+      : capsState === 'error'
+        ? 'sandbox down'
+        : caps?.sandbox
+          ? 'live'
+          : 'generate-only';
+  const headerLampTitle =
+    capsState === 'loading'
+      ? 'Probing sandbox…'
+      : capsState === 'error'
+        ? 'Sandbox capabilities failed to load.'
+        : caps?.sandbox
+          ? 'Vercel Sandbox is enabled — tasks run live.'
+          : caps?.reason ?? 'Sandbox off — code is generated, not run.';
+  const headerChip = (
+    <span style={capChipStyle} title={headerLampTitle}>
+      <AgentPresence
+        agent="openclaw"
+        phase={headerLampPhase}
+        size={7}
+        title={headerLampTitle}
+      />
+      {headerLampLabel}
+    </span>
+  );
 
   return (
     <>
@@ -275,7 +306,10 @@ const OpenClawPage = () => {
             <div style={studioInnerStyle}>
               {bootState === 'loading' ? (
                 <div style={studioLoadingStyle}>
-                  <StudioSpinner /> Loading OpenClaw…
+                  <span style={{ fontFamily: monoFamily, color: OC.accent }}>
+                    {'>_'}
+                  </span>
+                  <StudioSpinner /> Boot OpenClaw…
                 </div>
               ) : bootState === 'error' ? (
                 <StudioBanner tone="error">
@@ -636,9 +670,9 @@ const OpenClawConsole = ({
               fontSize: 11.5,
               fontWeight: 600,
               fontFamily: monoFamily,
-              color: on ? C.onAccent : C.text,
-              background: on ? C.accent : 'transparent',
-              border: `1px solid ${on ? C.accent : C.border}`,
+              color: on ? C.consoleBg : C.text,
+              background: on ? OC.accent : 'transparent',
+              border: `1px solid ${on ? OC.accent : C.border}`,
               opacity: running ? 0.6 : 1,
               transition: `background ${AgentPalette.motion.fast} ease`,
             }}
@@ -697,8 +731,8 @@ const OpenClawConsole = ({
           </Banner>
         ) : !sandboxOn ? (
           <Banner tone="warn">
-            <strong>Generated (not executed).</strong> Live execution is off, so
-            OpenClaw will write &amp; explain code but won&apos;t run it.
+            <strong>Generate-only — sandbox off.</strong> Code gets written and
+            explained, but nothing runs. No exec, no ports, no preview.
             {caps?.reason ? (
               <div style={{ marginTop: 4, color: C.muted, fontSize: 12 }}>
                 Reason: {caps.reason}
@@ -902,7 +936,7 @@ const WorkspaceTabs = ({
               color: on ? C.text : C.muted,
               background: 'transparent',
               border: 'none',
-              borderBottom: `2px solid ${on ? C.accent : 'transparent'}`,
+              borderBottom: `2px solid ${on ? OC.accent : 'transparent'}`,
               transition: `color ${AgentPalette.motion.fast} ease`,
             }}
           >
@@ -915,7 +949,7 @@ const WorkspaceTabs = ({
                   padding: '0 6px',
                   borderRadius: 999,
                   color: C.muted,
-                  background: C.accentSoft,
+                  background: OC.accentSoft,
                 }}
               >
                 {t.badge}
@@ -927,7 +961,7 @@ const WorkspaceTabs = ({
                   width: 6,
                   height: 6,
                   borderRadius: '50%',
-                  background: C.accent,
+                  background: OC.accent,
                   flexShrink: 0,
                 }}
               />
@@ -971,7 +1005,7 @@ const Banner = ({
   children: ReactNode;
 }) => {
   const map = {
-    info: { bg: C.accentSoft, border: C.border, color: C.text },
+    info: { bg: OC.accentSoft, border: C.border, color: C.text },
     ok: { bg: C.okBg, border: C.okBorder, color: C.text },
     warn: { bg: C.warnBg, border: C.warnBorder, color: C.text },
     error: { bg: C.errBg, border: C.errBorder, color: C.text },
@@ -1001,7 +1035,7 @@ const linkBtnStyle: CSSProperties = {
   padding: 0,
   font: 'inherit',
   cursor: 'pointer',
-  color: C.accent,
+  color: OC.accentText,
   textDecoration: 'underline',
 };
 
@@ -1010,8 +1044,8 @@ const codeChipStyle: CSSProperties = {
   fontSize: 12,
   padding: '1px 5px',
   borderRadius: 4,
-  background: C.accentSoft,
-  color: C.text,
+  background: OC.accentSoft,
+  color: OC.accentText,
 };
 
 // ---- layout style objects -------------------------------------------------
@@ -1029,7 +1063,7 @@ const headerGlyphStyle: CSSProperties = {
   fontFamily: monoFamily,
   fontWeight: 700,
   fontSize: 13,
-  color: C.accent,
+  color: OC.accent,
 };
 const betaBadgeStyle: CSSProperties = {
   fontSize: 10,
@@ -1055,13 +1089,18 @@ const headerBackBtnStyle: CSSProperties = {
   border: `1px solid ${C.border}`,
 };
 const capChipStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 7,
   fontSize: 10,
   fontWeight: 700,
   letterSpacing: '0.04em',
   textTransform: 'uppercase',
-  padding: '1px 8px',
+  padding: '2px 9px 2px 8px',
   borderRadius: 999,
   fontFamily: monoFamily,
+  color: C.muted,
+  border: `1px solid ${C.border}`,
 };
 
 // ---- studio (wizard/dashboard) canvas ----

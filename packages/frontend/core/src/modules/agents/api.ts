@@ -209,6 +209,122 @@ export function pairTelegram(): Promise<TelegramPairResult> {
   return requestJson<TelegramPairResult>('/api/v1/agents/telegram/pair');
 }
 
+// ── Telegram channel (R10 BYOT: per-user bot ↔ agent) ─────────────────────────
+//
+// A CHANNEL is different from the R7 pairing above: instead of pairing a chat to
+// ONE global platform bot, each user connects their OWN Telegram bot (created in
+// BotFather) to a SPECIFIC agent. The token is validated + sealed at rest on the
+// backend; inbound messages from that bot route to this user + agent. These wrap
+// Trousseau's R10 channel routes under {@link base} (note: `/api/v1/<agent>/…`,
+// the FIXED-console controller, NOT the plural `agents` runs/triggers segment):
+//   POST   /api/v1/<agent>/channels/telegram/connect      {token}
+//   GET    /api/v1/<agent>/channels/telegram
+//   POST   /api/v1/<agent>/channels/telegram/disconnect
+//   POST   /api/v1/<agent>/channels/telegram/test
+// gated by `CDZ_AGENT_TELEGRAM_ENABLED` (+ a configured secret box) — dark ⇒ the
+// routes 404. A status read NEVER carries the token (the backend strips it).
+
+/**
+ * The Telegram channel status for one agent (`GET .../channels/telegram`). The
+ * token is NEVER included — only whether a bot is connected and, if so, its
+ * @username and when it was connected. Optional fields tolerate a partial /
+ * evolving payload so the UI never crashes on an older record.
+ */
+export interface TelegramChannelStatus {
+  /** Whether the user has a bot connected to this agent. */
+  connected: boolean;
+  /** The connected bot's @username (without the leading @), when connected. */
+  botUsername?: string;
+  /** When the bot was connected (backend timestamp), when connected. */
+  connectedAt?: string;
+}
+
+/**
+ * Connect the signed-in user's Telegram bot to `agent`
+ * (`POST /api/v1/<agent>/channels/telegram/connect`). `token` is the BotFather
+ * token; the backend validates it via getMe, sets the webhook, and seals it at
+ * rest. Returns the bot identity so the UI can confirm which bot was linked.
+ * Throws {@link AgentApiError} — notably `.status === 400` (message
+ * `invalid_token`) on a bad token, and `.status === 404` when the channels
+ * feature is dark (so the caller can fall back to a "bientôt" state).
+ */
+export function connectTelegram(
+  agent: AgentName,
+  token: string
+): Promise<{ ok: boolean; botUsername: string; botId: number }> {
+  return requestJson<{ ok: boolean; botUsername: string; botId: number }>(
+    `${base(agent)}/channels/telegram/connect`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ token }),
+    }
+  );
+}
+
+/**
+ * Read the Telegram channel status for `agent`
+ * (`GET /api/v1/<agent>/channels/telegram`). Fail-soft: a `.status === 404`
+ * (feature dark OR no connection) is mapped to a disconnected status
+ * (`{ connected: false }`) rather than thrown — so a channel card renders a
+ * quiet not-connected / "bientôt" state instead of an error. Any OTHER failure
+ * (401 signed-out, network, 5xx) still throws {@link AgentApiError}. Never
+ * returns the token.
+ */
+export async function getTelegramChannel(
+  agent: AgentName
+): Promise<TelegramChannelStatus> {
+  try {
+    const res = await requestJson<TelegramChannelStatus>(
+      `${base(agent)}/channels/telegram`
+    );
+    return res && typeof res === 'object'
+      ? res
+      : { connected: false };
+  } catch (err) {
+    if (err instanceof AgentApiError && err.status === 404) {
+      return { connected: false };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Disconnect the user's Telegram bot from `agent`
+ * (`POST /api/v1/<agent>/channels/telegram/disconnect`). The backend deletes the
+ * webhook and the sealed token. Idempotent server-side. Throws {@link
+ * AgentApiError} only on a transport/HTTP failure.
+ */
+export async function disconnectTelegram(agent: AgentName): Promise<void> {
+  await requestJson<{ ok?: boolean }>(
+    `${base(agent)}/channels/telegram/disconnect`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+    }
+  );
+}
+
+/**
+ * Send a test message to the user's bound chat for `agent`
+ * (`POST /api/v1/<agent>/channels/telegram/test`). `sent` is `false` when the
+ * bot is connected but the user hasn't messaged it yet (no bound chat) — the UI
+ * uses that to tell the user to message the bot first. Throws {@link
+ * AgentApiError} on a transport/HTTP failure.
+ */
+export function testTelegram(
+  agent: AgentName
+): Promise<{ ok: boolean; sent: boolean }> {
+  return requestJson<{ ok: boolean; sent: boolean }>(
+    `${base(agent)}/channels/telegram/test`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+    }
+  );
+}
+
+
 // ── Run control ──────────────────────────────────────────────────────────────
 
 /**

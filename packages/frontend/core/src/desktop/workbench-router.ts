@@ -90,6 +90,10 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/agents/triggers'),
   },
   {
+    path: '/agents/artifacts',
+    lazy: () => import('./pages/workspace/agents/artifacts'),
+  },
+  {
     path: '/settings',
     lazy: () => import('./pages/workspace/settings'),
   },
