@@ -71,7 +71,7 @@ export const workbenchRoutes = [
   },
   {
     path: '/agents/new',
-    lazy: () => import('./pages/workspace/agents/wizard'),
+    lazy: () => import('./pages/workspace/agents/create-agent'),
   },
   {
     path: '/agents/runs',

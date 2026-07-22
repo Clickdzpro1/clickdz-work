@@ -12,6 +12,16 @@ import type { AgentCaps, AgentSummary } from './types';
  * FE data seam every other R7 agents page keys off (home grid, nav gate, spend
  * meter, run views, connections) — they all read `{ agents, caps }` from here.
  *
+ * R12 (custom agents): the same roster now ALSO carries the caller's user-created
+ * custom agents (rows with `archetype`/`name`/`emoji` and a `cz_`-prefixed `id`),
+ * appended by the backend when `CDZ_AGENT_CUSTOM_ENABLED` is on, plus a
+ * `caps.customEnabled` flag the home gates its "Créer un agent" affordance on. No
+ * new fetch is needed — those rows/flag arrive on the SAME `GET /api/v1/agents`
+ * response, so this hook just surfaces them (typing widened in {@link
+ * AgentSummary}/{@link AgentCaps}); a `reload()` lets the home refresh the grid
+ * after a create/delete. When the custom feature is off the extra rows/flag are
+ * simply absent ⇒ byte-identical to the pre-R12 roster.
+ *
  * The whole feature is flag-gated on the backend (`CDZ_AGENTS_ENABLED`): when it
  * is off the controller is absent and the endpoint 404s. This hook treats that
  * 404 as "feature disabled" — it flips {@link UseAgents.disabled} true, keeps a
@@ -34,14 +44,17 @@ import type { AgentCaps, AgentSummary } from './types';
  * feature is dark (404). Every flag is the conservative OFF value so any caller
  * reading `caps` pre-load renders the legacy/hidden path: `multi:false` keeps
  * the unified UI gated off, `dzdPer1k:0` makes the spend meter show no estimate,
- * and the channel flags stay false. Exported so callers can seed local state /
- * fall back to it without re-deriving the shape.
+ * the channel flags stay false, and `customEnabled:false` (R12) hides the "Créer
+ * un agent" affordance so custom agents dark ⇒ built-ins only, byte-identical.
+ * Exported so callers can seed local state / fall back to it without re-deriving
+ * the shape.
  */
 export const DEFAULT_AGENT_CAPS: AgentCaps = {
   multi: false,
   dzdPer1k: 0,
   telegramEnabled: false,
   webEnabled: false,
+  customEnabled: false,
 };
 
 /** What {@link useAgents} exposes to the R7 agents pages. */

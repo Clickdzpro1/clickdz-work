@@ -16,6 +16,25 @@ import { CacheRedis } from '../../base/redis';
 // the loop bodies (Filaire/Passerelle) and the FE speak ONE vocabulary.
 import type { AgentEvent, AgentName } from './clickdz-agent-runtime';
 export type { AgentEvent, AgentName } from './clickdz-agent-runtime';
+// R12 (custom agents): the registry (Fonderie) owns the archetype resolver. We
+// consume its EXACT built-in predicate here so the run engine speaks the SAME
+// vocabulary as the :agent route validation — a built-in agentId IS its own
+// archetype. The import is one-directional (the registry imports NOTHING from
+// this module — only the AgentName type from clickdz-agent-runtime — so there is
+// no cycle). isBuiltinAgent is a pure, framework-light function (no Nest). The
+// AgentDef type is re-exported for callers that thread a resolved def's persona
+// into a run.
+import { isBuiltinAgent } from './clickdz-agent-registry';
+export { isBuiltinAgent } from './clickdz-agent-registry';
+export type { AgentDef } from './clickdz-agent-registry';
+
+// R12: the runtime id of a run's agent is an OPAQUE string — either a built-in
+// name ('hermes' | 'openclaw') or a custom `cz_`+8hex id minted by the registry.
+// All Redis keys already treat the agent segment as an opaque string, so a
+// custom id keys its own config/threads/runs/channels FOR FREE. AgentName stays
+// the built-in union (still the loop-dispatch / archetype vocabulary); AgentId
+// is the wider "any agent id" type the record + create input now carry.
+export type AgentId = string;
 
 // ===========================================================================
 // clickdz-agent-runs.ts — the BACKGROUND RUN ENGINE (R6 §"Run engine").
@@ -59,7 +78,12 @@ declare global {
     'copilot.agent.run': {
       userId: string;
       runId: string;
-      agent: AgentName;
+      // R12: `agent` is the runtime id (opaque string — a built-in name OR a
+      // `cz_` custom id). KEPT for back-compat (legacy enqueues set only this).
+      // The @OnJob handler resolves the loop by ARCHETYPE, re-reading the record
+      // (which carries both) — so a stale/legacy payload with only `agent` still
+      // works: the handler falls back to rec.archetype.
+      agent: AgentId;
     };
   }
 }
@@ -99,7 +123,30 @@ export interface RunBudget {
 export interface AgentRunRecord {
   v: 1;
   runId: string;
-  agent: AgentName;
+  /**
+   * R12: the run's AGENT RUNTIME ID — an opaque string, either a built-in name
+   * ('hermes' | 'openclaw') or a custom `cz_`+8hex id. All per-agent Redis keys
+   * (the index zset, etc.) use this. For a built-in run agentId === archetype.
+   */
+  agentId: AgentId;
+  /**
+   * R12: which built-in loop/tools this run reuses — ALWAYS a built-in union
+   * member. Loop dispatch keys off THIS (a custom agent runs its archetype's
+   * registered loop). For a built-in run archetype === agentId.
+   */
+  archetype: AgentName;
+  /**
+   * BACK-COMPAT ALIAS === agentId. Existing code reads `rec.agent` (job payload,
+   * artifacts, telegram push, index helpers) — it keeps working unchanged. New
+   * code SHOULD read agentId/archetype. Always kept in sync with agentId.
+   */
+  agent: AgentId;
+  /**
+   * R12: optional persona for a CUSTOM agent — prepended to the archetype loop's
+   * system prompt (threaded to AgentLoopContext.persona). Absent for built-ins
+   * ⇒ byte-identical prompt.
+   */
+  persona?: string;
   userId: string;
   threadId?: string;
   prompt: string;
@@ -262,8 +309,12 @@ export async function persistRunArtifact(
   try {
     // Resolve the agent for this run (fail-soft → default 'hermes' union member
     // so a missing record still yields a usable row rather than dropping it).
+    // R12: tag the artifact with the run's ARCHETYPE (always a built-in union
+    // member) — for a built-in run archetype === agent, so this is byte-identical
+    // to the previous `rec.agent` coercion; for a custom agent the deliverable is
+    // grouped under its archetype (the artifacts library filters by AgentName).
     const rec = await readAgentRun(redis, userId, runId);
-    const agent: AgentName = rec?.agent === 'openclaw' ? 'openclaw' : 'hermes';
+    const agent: AgentName = rec?.archetype === 'openclaw' ? 'openclaw' : 'hermes';
     const record = toArtifactRecord(runId, agent, artifact, Date.now());
     if (!record) return;
     let line: string;
@@ -344,7 +395,10 @@ const runKey = (userId: string, runId: string) =>
   `clickdz:agentrun:${userId}:${runId}`;
 const eventsKey = (userId: string, runId: string) =>
   `clickdz:agentrun:${userId}:${runId}:events`;
-const indexKey = (userId: string, agent: AgentName) =>
+// R12: the agent segment is an OPAQUE id (built-in name OR `cz_` custom id), so
+// widen the param to AgentId. The interpolated key is byte-identical for a
+// built-in ('clickdz:agentruns:{userId}:hermes'); a custom id keys its own zset.
+const indexKey = (userId: string, agent: AgentId) =>
   `clickdz:agentruns:${userId}:${agent}`;
 const dailyCountKey = (userId: string, day: string) =>
   `clickdz:agentruns:count:${userId}:${day}`;
@@ -436,6 +490,13 @@ export interface AgentLoopContext {
   isStopped: () => Promise<boolean>;
   /** The (mutable copy of the) run record the loop is executing. */
   record: AgentRunRecord;
+  /**
+   * R12: optional persona for a CUSTOM agent (threaded from rec.persona). When
+   * present the archetype loop (Hermes/OpenClaw) PREPENDS it to its system prompt
+   * ("Tu es un agent personnalisé. {persona}\n\n"). Absent for built-ins ⇒ the
+   * loop's prompt is byte-identical.
+   */
+  persona?: string;
   planner?: unknown;
   registry?: unknown;
   config?: unknown;
@@ -697,7 +758,26 @@ function normalizeRecord(raw: any): AgentRunRecord | null {
   if (!raw || typeof raw !== 'object' || typeof raw.runId !== 'string') {
     return null;
   }
-  const agent: AgentName = raw.agent === 'openclaw' ? 'openclaw' : 'hermes';
+  // R12 back-compat resolution of the agent trio (agentId / archetype / agent):
+  //  · agentId  ← raw.agentId (new records) OR raw.agent (LEGACY records, which
+  //               only carried `agent`) — an opaque string; default 'hermes'.
+  //  · archetype← raw.archetype when it is a valid built-in union member, else
+  //               DEFENSIVE fallback: the id itself if built-in, else 'hermes'
+  //               (a legacy record has no archetype; a built-in resolves to
+  //               itself, so hermes/openclaw records normalize byte-identically).
+  //  · agent    ← agentId (the kept alias existing code reads).
+  const agentId: AgentId =
+    typeof raw.agentId === 'string' && raw.agentId
+      ? raw.agentId
+      : typeof raw.agent === 'string' && raw.agent
+        ? raw.agent
+        : 'hermes';
+  const archetype: AgentName =
+    raw.archetype === 'hermes' || raw.archetype === 'openclaw'
+      ? raw.archetype
+      : isBuiltinAgent(agentId)
+        ? agentId
+        : 'hermes';
   const steps: RunStep[] = Array.isArray(raw.steps)
     ? raw.steps
         .filter((s: any) => s && typeof s === 'object')
@@ -720,7 +800,10 @@ function normalizeRecord(raw: any): AgentRunRecord | null {
   return {
     v: 1,
     runId: raw.runId,
-    agent,
+    agentId,
+    archetype,
+    agent: agentId,
+    persona: typeof raw.persona === 'string' && raw.persona ? raw.persona : undefined,
     userId: String(raw.userId ?? ''),
     threadId: typeof raw.threadId === 'string' ? raw.threadId : undefined,
     prompt: typeof raw.prompt === 'string' ? raw.prompt : '',
@@ -801,7 +884,27 @@ export async function readAgentRun(
 
 export interface CreateAgentRunInput {
   userId: string;
-  agent: AgentName;
+  /**
+   * BACK-COMPAT: legacy built-in call sites pass ONLY `agent: 'hermes'|'openclaw'`.
+   * Still accepted (widened to AgentId so a custom id could also flow here). When
+   * `agentId` is absent it is derived from this. Optional now that a custom caller
+   * may instead pass agentId + archetype.
+   */
+  agent?: AgentId;
+  /**
+   * R12: the run's AGENT RUNTIME ID (opaque string — built-in name OR `cz_` id).
+   * Custom call sites pass this + `archetype`. When absent, agentId = agent.
+   */
+  agentId?: AgentId;
+  /**
+   * R12: which built-in loop the run reuses. REQUIRED for a custom agent (the
+   * caller resolves it via the registry); for a built-in it defaults to the id
+   * itself. When absent it is derived: isBuiltinAgent(agentId) ? agentId : 'hermes'
+   * (the 'hermes' arm is purely defensive — a custom caller MUST pass archetype).
+   */
+  archetype?: AgentName;
+  /** R12: optional persona for a custom agent (prepended to the loop's prompt). */
+  persona?: string;
   prompt: string;
   channel?: RunChannel;
   threadId?: string;
@@ -819,10 +922,31 @@ export async function createAgentRun(
 ): Promise<AgentRunRecord> {
   const now = Date.now();
   const runId = randomUUID();
+  // R12 agent-trio resolution (replaces the old hard `input.agent === 'openclaw'
+  // ? 'openclaw' : 'hermes'` coercion):
+  //  · agentId  ← input.agentId ?? input.agent (legacy call sites set only
+  //               `agent`; a value is always present — default 'hermes' if both
+  //               are somehow absent, keeping the function total).
+  //  · archetype← input.archetype ?? (isBuiltinAgent(agentId) ? agentId :
+  //               'hermes'). A CUSTOM caller MUST pass archetype (resolved from
+  //               the registry); the 'hermes' arm is purely defensive. For a
+  //               built-in call site (agent:'hermes'|'openclaw', no archetype)
+  //               this yields archetype === agentId === agent ⇒ BYTE-IDENTICAL to
+  //               the previous behavior.
+  //  · agent    ← agentId (the kept back-compat alias existing code reads).
+  const agentId: AgentId = input.agentId ?? input.agent ?? 'hermes';
+  const archetype: AgentName =
+    input.archetype ?? (isBuiltinAgent(agentId) ? agentId : 'hermes');
   const rec: AgentRunRecord = {
     v: 1,
     runId,
-    agent: input.agent === 'openclaw' ? 'openclaw' : 'hermes',
+    agentId,
+    archetype,
+    agent: agentId,
+    persona:
+      typeof input.persona === 'string' && input.persona
+        ? input.persona
+        : undefined,
     userId: input.userId,
     threadId: input.threadId,
     prompt: truncate(input.prompt ?? '', 8_000),
@@ -838,6 +962,9 @@ export async function createAgentRun(
   };
   await writeRecord(redis, rec);
   try {
+    // Index keyed by agentId (rec.agent === agentId) — an opaque string, so a
+    // custom agent's runs list under its own zset FOR FREE. For a built-in this
+    // is the SAME key as before ('clickdz:agentruns:{userId}:{hermes|openclaw}').
     await redis.zadd(indexKey(rec.userId, rec.agent), now, runId);
     // The index outlives its records (records self-expire at 30d); refresh its
     // TTL on activity so it doesn't grow unbounded forever.
@@ -851,11 +978,13 @@ export async function createAgentRun(
 /**
  * List run records for a user+agent, newest first, capped at `limit` (default
  * 30, hard max 100). Prunes zset entries whose record expired. Fail-soft → [].
+ * R12: `agent` is an AgentId (opaque) — a custom id lists its own runs zset; a
+ * built-in reads the SAME key as before.
  */
 export async function listAgentRuns(
   redis: RunRedis,
   userId: string,
-  agent: AgentName,
+  agent: AgentId,
   limit = 30
 ): Promise<AgentRunRecord[]> {
   if (!userId) return [];
@@ -1154,6 +1283,10 @@ export async function runDetachedAgentLoop(
     chargeToolCall,
     isStopped,
     record: rec,
+    // R12: thread the run record's persona (a CUSTOM agent's persona; undefined
+    // for built-ins) into the loop context so the archetype loop can prepend it
+    // to its system prompt. Undefined ⇒ the loop's prompt is byte-identical.
+    persona: rec.persona,
     planner: deps.planner,
     registry: deps.registry,
     config: deps.config,
@@ -1263,10 +1396,22 @@ export class ClickDzAgentRunJob {
       return JOB_SIGNAL.Done;
     }
 
-    const factory = loopFactories.get(agent) ?? loopFactories.get(rec.agent);
+    // R12: dispatch the loop by ARCHETYPE, not agentId. loopFactories is keyed by
+    // the built-in archetype names ('hermes'|'openclaw'), which registerAgentLoop
+    // registers. A custom run has agentId='cz_...' (never a factory key) but
+    // archetype='hermes'|'openclaw' → it reuses its archetype's registered loop
+    // FOR FREE. rec.archetype is the authoritative source (the job payload no
+    // longer needs an archetype field — the handler re-reads the full record, so
+    // a legacy queued job carrying only `agent` still resolves here). Defensive
+    // fallback to the payload `agent` ONLY when it is itself a built-in name (a
+    // pre-R12 record where normalization somehow diverged); a custom `agent` id
+    // is never a factory key, so the fallback is a safe no-op for those.
+    const factory =
+      loopFactories.get(rec.archetype) ??
+      (isBuiltinAgent(agent) ? loopFactories.get(agent) : undefined);
     if (!factory) {
       this.logger.warn(
-        `copilot.agent.run: no loop registered for agent '${agent}'; marking failed`
+        `copilot.agent.run: no loop registered for archetype '${rec.archetype}' (agent '${agent}'); marking failed`
       );
       await setRunState(redis, userId, runId, 'failed', {
         endedAt: Date.now(),

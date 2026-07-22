@@ -50,7 +50,19 @@ import {
   enqueueAgentRun,
   onAgentRunDone,
 } from './clickdz-agent-runs';
+// R12 (custom agents): AgentId is the opaque runtime-id type (built-in name OR an
+// owned custom `cz_` id). A per-(user, agent) telegram channel is keyed by this id,
+// so a custom agent gets its own channel FOR FREE. The channel key segment is an
+// opaque string already — widening the type is documentation, not a behaviour change.
+import type { AgentId } from './clickdz-agent-runs';
 import type { AgentName } from './clickdz-agent-runtime';
+// Fonderie's registry owns the multi-tenant gate. resolveArchetype(redis,userId,id)
+// → the archetype for a built-in / OWNED custom id, or null (unknown/not-owned ⇒
+// 404). resolveAgentDef returns the full def (built-ins → synthetic) so the inbound
+// run-create path can thread a custom agent's persona. A custom id resolves ONLY
+// under its owner's userId — a request-supplied id is NEVER trusted without this.
+// Pure, framework-light, fail-soft (never throw).
+import { resolveAgentDef, resolveArchetype } from './clickdz-agent-registry';
 
 // ---------------------------------------------------------------------------
 // CDZ AGENT — TELEGRAM CHANNEL (R10 — BYOT, "Bring Your Own Token").
@@ -113,8 +125,11 @@ const TG_TIMEOUT_MS = 10_000;
 const TG_MAX_TEXT = 3900;
 
 // --- Redis key helpers (EXACTLY the R10 contract namespaces).
-// Per-user per-agent channel record (the sealed token + bot identity + conn).
-const chanKey = (userId: string, agent: AgentName) =>
+// Per-user per-agent channel record (the sealed token + bot identity + conn). R12:
+// `agent` is the RUNTIME ID (AgentId — a built-in name OR an owned custom `cz_`
+// id); the interpolated key is byte-identical for a built-in and a custom agent
+// keys its own channel record FOR FREE (the segment was always an opaque string).
+const chanKey = (userId: string, agent: AgentId) =>
   `clickdz:agentchan:${userId}:${agent}:telegram`;
 // connId → { userId, agent } — the webhook's opaque-URL reverse lookup.
 const connKey = (connId: string) => `clickdz:tg:conn:${connId}`;
@@ -160,10 +175,14 @@ export interface TelegramChannelRecord {
   active: boolean;
 }
 
-/** connId → owner pointer written alongside the record (webhook reverse map). */
+/** connId → owner pointer written alongside the record (webhook reverse map). R12:
+ * `agent` is the RUNTIME ID (AgentId — built-in name OR owned custom `cz_` id). It
+ * is written at connect time under the AUTHENTICATED owner, so the webhook (which
+ * resolves it from the opaque connId + secret-token gate) can trust it as the run's
+ * agent WITHOUT re-validating a path id (there is none on the webhook). */
 export interface TelegramConnRecord {
   userId: string;
-  agent: AgentName;
+  agent: AgentId;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +335,7 @@ export function channelsEnabled(): boolean {
 async function resolveToken(
   cache: Cache,
   userId: string,
-  agent: AgentName
+  agent: AgentId
 ): Promise<{ token: string; rec: TelegramChannelRecord } | null> {
   if (!userId) return null;
   let rec: TelegramChannelRecord | undefined;
@@ -356,9 +375,35 @@ export class ClickDzAgentTelegramController {
     }
   }
 
-  /** Validate + narrow the :agent path segment (fail-closed typed 404). */
-  private agentOf(agent: string): AgentName {
-    if (agent === 'hermes' || agent === 'openclaw') return agent;
+  // R12 multi-tenant gate for the per-agent channel routes. Custom-agent
+  // resolution is behind CDZ_AGENT_CUSTOM_ENABLED: OFF ⇒ ONLY the two built-ins
+  // resolve, byte-identical to the old sync agentOf (an arbitrary id 404s). ON ⇒ an
+  // OWNED custom id (a def exists at clickdz:agentdef:{userId}:{id}) also resolves.
+  private customAgentsEnabled(): boolean {
+    return process.env.CDZ_AGENT_CUSTOM_ENABLED === '1';
+  }
+
+  /**
+   * Resolve + AUTHORIZE the :agent path segment to the channel's RUNTIME ID under
+   * this user, or throw a typed NotFound. Replaces the old sync `agentOf`. Returns
+   * the runtime id (the built-in name, or the owned custom `cz_` id) — the SAME
+   * value that keys the per-(user, agent) channel record (for a built-in the id IS
+   * its archetype ⇒ byte-identical). resolveArchetype resolves a built-in with NO
+   * Redis touch and returns null for an unknown OR NOT-OWNED id (a def only exists
+   * under its owner's userId), so a custom id minted by user Y 404s under user X's
+   * session — the isolation invariant. Custom resolution is skipped entirely when
+   * the flag is off. The caller MUST pass @CurrentUser().id, NEVER a path-supplied id.
+   */
+  private async resolveAgentOr404(
+    userId: string,
+    agent: string
+  ): Promise<AgentId> {
+    const id = typeof agent === 'string' ? agent : '';
+    if (id === 'hermes' || id === 'openclaw') return id;
+    if (this.customAgentsEnabled()) {
+      const archetype = await resolveArchetype(this.redis as any, userId, id);
+      if (archetype) return id; // owned custom id — key the channel by the id itself
+    }
     throw new NotFound(`unknown agent "${agent}"`);
   }
 
@@ -381,7 +426,7 @@ export class ClickDzAgentTelegramController {
     @Body() body: { token?: unknown }
   ): Promise<{ ok: boolean; botUsername: string | null; botId: number | null }> {
     this.assertEnabled();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     const token = typeof body?.token === 'string' ? body.token.trim() : '';
     if (!token) {
       throw new BadRequest('invalid_token');
@@ -469,7 +514,7 @@ export class ClickDzAgentTelegramController {
     connectedAt?: number;
   }> {
     this.assertEnabled();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     let rec: TelegramChannelRecord | undefined;
     try {
       rec = await this.cache.get<TelegramChannelRecord>(chanKey(user.id, agent));
@@ -502,7 +547,7 @@ export class ClickDzAgentTelegramController {
     @Param('agent') agentParam: string
   ): Promise<{ ok: boolean }> {
     this.assertEnabled();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     let rec: TelegramChannelRecord | undefined;
     try {
       rec = await this.cache.get<TelegramChannelRecord>(chanKey(user.id, agent));
@@ -550,7 +595,7 @@ export class ClickDzAgentTelegramController {
     @Param('agent') agentParam: string
   ): Promise<{ ok: boolean; sent: boolean; note?: string }> {
     this.assertEnabled();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     const resolved = await resolveToken(this.cache, user.id, agent);
     if (!resolved) {
       return { ok: false, sent: false, note: 'not_connected' };
@@ -608,7 +653,17 @@ export class ClickDzAgentTelegramController {
       conn = undefined;
     }
     if (!conn || !conn.userId) return {};
-    const agent: AgentName = conn.agent === 'openclaw' ? 'openclaw' : 'hermes';
+    // R12: the connId is opaque and the owner pointer was written under the
+    // AUTHENTICATED user at connect time, so `conn.agent` is the run's RUNTIME ID
+    // (a built-in name OR an owned custom `cz_` id). Route it FAITHFULLY — DON'T
+    // collapse a custom id to a built-in (that would misroute a custom agent's
+    // channel record + run). The webhook's gate is unchanged: it still resolves the
+    // owner purely from the opaque connId + the constant-time secret-token compare
+    // below — there is NO path :agent to validate here. Defensive default to
+    // 'hermes' only for a legacy/corrupt pointer. (Flag OFF ⇒ no `cz_` id is ever
+    // stored ⇒ this is byte-identical to the previous coercion.)
+    const agent: AgentId =
+      typeof conn.agent === 'string' && conn.agent ? conn.agent : 'hermes';
 
     // (2) Load the channel record for the resolved (user, agent).
     let rec: TelegramChannelRecord | undefined;
@@ -701,7 +756,7 @@ export class ClickDzAgentTelegramController {
    */
   private async handleInboundText(
     userId: string,
-    agent: AgentName,
+    agent: AgentId,
     connId: string,
     chatId: number,
     text: string,
@@ -720,9 +775,24 @@ export class ClickDzAgentTelegramController {
         }
         return;
       }
+      // R12: resolve the archetype (loop dispatch) + persona under the OWNER's
+      // userId (the conn pointer was written by the owner ⇒ intrinsic ownership; a
+      // custom def only resolves for its owner). For a built-in agent this is a
+      // no-Redis short-circuit: archetype === agent, no persona ⇒ byte-identical.
+      const def = await resolveAgentDef(this.redis as any, userId, agent);
+      const archetype: AgentName =
+        agent === 'openclaw'
+          ? 'openclaw'
+          : agent === 'hermes'
+            ? 'hermes'
+            : def?.archetype ?? 'hermes';
       const rec = await createAgentRun(this.redis as any, {
         userId,
-        agent,
+        // Key the run by the RUNTIME ID; dispatch its loop by the resolved
+        // ARCHETYPE; thread the custom persona (undefined for a built-in).
+        agentId: agent,
+        archetype,
+        persona: def?.persona,
         prompt: text,
         channel: 'telegram',
       });
@@ -773,7 +843,10 @@ export interface TelegramToolDeps {
 // returned object satisfies it.
 interface TgToolCtx {
   userId: string;
-  agent: 'hermes' | 'openclaw';
+  // R12: the run's RUNTIME agent id (a built-in name OR an owned custom `cz_` id).
+  // Widened from the built-in union so the tool resolves the OUTBOUND token under
+  // the SAME per-(user, agent) channel key the run's agent is stored at.
+  agent: AgentId;
   runId?: string;
   threadId?: string;
   signal?: AbortSignal;
@@ -813,7 +886,11 @@ export function createTelegramSendTool(deps: TelegramToolDeps): TgToolDef {
       if (!channelsEnabled()) {
         return { ok: false, result: { error: 'telegram_not_configured' } };
       }
-      const agent: AgentName = ctx.agent === 'openclaw' ? 'openclaw' : 'hermes';
+      // R12: resolve the token under the run's RUNTIME agent id (pass it through —
+      // don't collapse a custom id to a built-in, or the tool would look up the
+      // wrong channel record). For a built-in this is byte-identical.
+      const agent: AgentId =
+        typeof ctx.agent === 'string' && ctx.agent ? ctx.agent : 'hermes';
       const resolved = await resolveToken(deps.cache, ctx.userId, agent);
       if (!resolved) {
         ctx.log('telegram_send: no telegram connection for this user+agent');
@@ -881,7 +958,12 @@ export function registerTelegramRunDone(deps: TelegramToolDeps): void {
         if (!rec || rec.channel !== 'telegram') return;
         if (!rec.userId) return;
         if (!channelsEnabled()) return;
-        const agent: AgentName = rec.agent === 'openclaw' ? 'openclaw' : 'hermes';
+        // R12: the completed run's `agent` is its RUNTIME id (built-in name OR an
+        // owned custom `cz_` id). Push the final answer over the OWNER's bot for
+        // THAT agent's channel — pass the id through (a custom run's token is stored
+        // under its own id). For a built-in this is byte-identical.
+        const agent: AgentId =
+          typeof rec.agent === 'string' && rec.agent ? rec.agent : 'hermes';
         const resolved = await resolveToken(deps.cache, rec.userId, agent);
         if (!resolved) return;
         const bind = await deps.cache.get<{ chatId?: number | string }>(

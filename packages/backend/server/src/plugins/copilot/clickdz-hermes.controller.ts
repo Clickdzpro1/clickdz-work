@@ -2257,11 +2257,16 @@ export class ClickDzHermesController {
     // R8/WSA-10: prime the prompt with the agent's memory ('' when OFF/empty ⇒
     // byte-identical). Single async read, injected at the one shared assembler.
     const memBlock = await this.hermesMemoryBlock(userId);
-    const systemPrompt = this.buildPlannerSystemPrompt(
-      buildToolBlock(catalog) + web.block,
-      false,
-      memBlock
-    );
+    // R12 (custom agents): prepend the custom agent's persona to the planner
+    // system prompt when this run carries one (ctx.persona is set only for a
+    // custom agent — a built-in run leaves it undefined ⇒ BYTE-IDENTICAL prompt).
+    const systemPrompt =
+      (ctx.persona ? `Tu es un agent personnalisé. ${ctx.persona}\n\n` : '') +
+      this.buildPlannerSystemPrompt(
+        buildToolBlock(catalog) + web.block,
+        false,
+        memBlock
+      );
 
     // Seed context: system + any prior thread turns (multi-turn continuity when
     // the run is bound to a thread) + the run's prompt. Rehydration is best-
