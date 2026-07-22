@@ -749,7 +749,12 @@ export class ClickDzHermesController {
    * FE onboarding gate can key off /capabilities alone if it prefers. The
    * existing {tools, plannerReady, streaming} fields are untouched — additive.
    */
-  @Throttle('default')
+  // R13 (429 fix): own per-route bucket via the custom override (';custom'
+  // key, see base/throttler generateKey) — the bare 'default' tier shares ONE
+  // 120/60s bucket per session across ALL default-tier routes; the dashboard
+  // fires capabilities+threads+runs+approvals+missions on every mount and was
+  // 429-storming itself (prod http logs: ~120 of 150 reqs rejected).
+  @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/hermes/capabilities')
   async capabilities(@CurrentUser() user: CurrentUser, @Res() res: Response) {
     const config = await this.readHermesConfig(user.id);
@@ -1826,7 +1831,9 @@ export class ClickDzHermesController {
   // All auth via @CurrentUser (cookie session). Typed 404/400 for missing
   // threads / bad input via @Res passthrough — NEVER a raw HttpException.
   // -------------------------------------------------------------------------
-  @Throttle('default')
+  // R13 (429 fix): own bucket (see /capabilities above) — threads are also
+  // re-listed on every run-done frame, a second heavy drain on the shared one.
+  @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/hermes/threads')
   async listThreads(
     @CurrentUser() user: CurrentUser
