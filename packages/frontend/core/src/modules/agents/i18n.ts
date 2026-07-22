@@ -637,6 +637,42 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
   },
   'connections.schedule.open': { fr: 'Gérer la planification', ar: 'دبّر البرمجة' },
 
+  // ── CHANNELS · BYOT Telegram (channel-card.tsx — R10, per-agent bot) ───────
+  'channels.byot.title': { fr: 'Telegram — votre bot', ar: 'تيليغرام — البوت تاعك' },
+  'channels.byot.step1': {
+    fr: '1. Ouvre @BotFather sur Telegram',
+    ar: '1. حل @BotFather على تيليغرام',
+  },
+  'channels.byot.step2': {
+    fr: '2. Envoie /newbot et suis les étapes',
+    ar: '2. صيفط /newbot و اتبع الخطوات',
+  },
+  'channels.byot.step3': { fr: '3. Colle le token ici', ar: '3. الصق التوكن هنا' },
+  'channels.byot.tokenPlaceholder': {
+    fr: 'Colle le token de ton bot (123456:ABC-…)',
+    ar: 'الصق توكن البوت تاعك (123456:ABC-…)',
+  },
+  'channels.byot.connect': { fr: 'Connecter', ar: 'اربط' },
+  'channels.byot.connecting': { fr: 'Vérification du bot…', ar: 'كي نتأكّدو من البوت…' },
+  'channels.byot.connected': { fr: 'Connecté', ar: 'مربوط' },
+  'channels.byot.since': { fr: 'Connecté le {when}', ar: 'مربوط من {when}' },
+  'channels.byot.test': { fr: 'Tester', ar: 'جرّب' },
+  'channels.byot.testing': { fr: 'Envoi d’un message test…', ar: 'كي نصيفطو رسالة تجربة…' },
+  'channels.byot.tested': { fr: 'Message de test envoyé ✓', ar: 'رسالة التجربة تصيفطت ✓' },
+  'channels.byot.testEmpty': {
+    fr: 'Envoie d’abord un message à ton bot, puis réessaie.',
+    ar: 'صيفط لوّل رسالة للبوت تاعك، من بعد عاود.',
+  },
+  'channels.byot.disconnect': { fr: 'Déconnecter', ar: 'افصل' },
+  'channels.byot.hint': {
+    fr: 'Ton token reste privé — chiffré, jamais affiché.',
+    ar: 'التوكن تاعك يبقى سرّي — مشفّر، ما يبانش.',
+  },
+  'channels.byot.invalidToken': {
+    fr: 'Token invalide — vérifie et réessaie.',
+    ar: 'التوكن ماشي صحيح — تأكّد و عاود.',
+  },
+
   // ── RUN TIMELINE (run-timeline.tsx) ───────────────────────────────────────
   'timeline.stepsLabel': { fr: 'Étapes du run', ar: 'مراحل العملية' },
   'timeline.loading': { fr: 'Chargement du run…', ar: 'كي نحمّلو العملية…' },
@@ -703,6 +739,38 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
   'artifacts.file.fallback': { fr: 'fichier', ar: 'ملف' },
   'artifacts.output.fallback': { fr: 'Sortie', ar: 'مخرج' },
   'artifacts.link.fallback': { fr: 'Lien', ar: 'رابط' },
+
+  // ── ARTIFACTS LIBRARY page (artifacts.tsx — R10, WS11-6, Musée) ───────────
+  // The full-page "Livrables" library: every deliverable (file/output/link)
+  // across ALL runs, filterable by agent. Reuses the artifacts.* group above
+  // for card fallbacks + open/download affordances; these keys are the PAGE
+  // chrome (tab, header, filter, states) — distinct so the page copy can differ
+  // from the in-run side panel (artifacts-panel.tsx).
+  'artifactslib.tabTitle': { fr: 'Livrables', ar: 'المخرجات' },
+  'artifactslib.title': { fr: 'Livrables', ar: 'المخرجات' },
+  'artifactslib.subtitle': {
+    fr: 'Tous les fichiers, sorties et liens produits par vos agents — koulech f blasa wehda.',
+    ar: 'كل الملفات، المخرجات و الروابط اللي داروهم الوكلاء تاعك — كلش ف بلاصة وحدة.',
+  },
+  'artifactslib.filter.label': { fr: 'Filtrer par agent', ar: 'فلتر حسب الوكيل' },
+  'artifactslib.filter.all': { fr: 'Tous', ar: 'الكل' },
+  'artifactslib.loading': { fr: 'Chargement des livrables…', ar: 'كي نحمّلو المخرجات…' },
+  'artifactslib.error.load': {
+    fr: 'Impossible de charger les livrables.',
+    ar: 'ما قدرناش نحمّلو المخرجات.',
+  },
+  'artifactslib.empty.title': { fr: "Aucun livrable pour l'instant", ar: 'ما كاش مخرجات دروك' },
+  'artifactslib.empty.body': {
+    fr: "Les fichiers, pages et liens produits par vos agents apparaîtront ici — lance un run pour commencer.",
+    ar: 'الملفات، الصفحات و الروابط اللي يديرهم الوكلاء يبانو هنا — أطلق عملية باش تبدا.',
+  },
+  'artifactslib.quiet.title': { fr: 'Agents non activés', ar: 'الوكلاء ماشي مفعّلين' },
+  'artifactslib.quiet.body': {
+    fr: 'Les livrables des agents ne sont pas activés sur ce serveur.',
+    ar: 'مخرجات الوكلاء ماشي مفعّلة على هاد السيرفور.',
+  },
+  'artifactslib.card.fromRun': { fr: 'Exécution {run}', ar: 'عملية {run}' },
+  'artifactslib.card.openRun': { fr: 'Voir l’exécution →', ar: 'شوف العملية →' },
 
   // ── SPEND METER (spend-meter.tsx) ─────────────────────────────────────────
   'spend.title': { fr: 'Coût estimé', ar: 'التكلفة التقديرية' },

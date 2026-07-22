@@ -129,6 +129,191 @@ const FINAL_TEXT_CAP = 20_000; // keep finalText bounded on the record
 const ERROR_CAP = 600;
 
 // ---------------------------------------------------------------------------
+// R10 — ARTIFACTS LIBRARY (WS11-6, Musée). When a run emits an `artifact` SSE
+// event (openclaw writes a file / produces final code / publishes a preview
+// link — see clickdz-openclaw.controller.ts, all routed through this module's
+// makeRunEmit ⇒ appendRunEvent), we ALSO append a compact, durable record to a
+// per-user Redis list so the /agents/artifacts "Livrables" page can list every
+// deliverable across runs — not just the live SSE stream of the current run.
+//
+// Gated by CDZ_AGENT_ARTIFACTS_ENABLED==='1' (fail-soft dark when unset ⇒ the
+// persist path is a no-op and behaviour is byte-identical). Cap 200 newest
+// (LTRIM), TTL 90d re-armed on write. Fail-soft everywhere (Redis is a cache).
+// ---------------------------------------------------------------------------
+
+const AGENTART_CAP = 200; // keep the newest 200 artifacts per user (LTRIM)
+const AGENTART_TTL_SEC = 90 * 24 * 60 * 60; // ~90 days, re-armed on write
+const AGENTART_TITLE_CAP = 300; // derived title char cap
+const AGENTART_TEXT_CAP = 600; // output text preview char cap
+const AGENTART_PATH_CAP = 600; // file path / link url char cap
+
+/** Per-user artifacts list key (R10 — EXACT namespace). */
+const agentArtKey = (userId: string) => `clickdz:agentart:${userId}`;
+
+/** True when the artifacts library is enabled (env-only, fetch-free). */
+export function artifactsEnabled(): boolean {
+  return process.env.CDZ_AGENT_ARTIFACTS_ENABLED === '1';
+}
+
+/**
+ * A compact persisted artifact record (one row in the per-user list). Carries
+ * enough of the source {@link AgentEvent} `artifact` union to rebuild a faithful
+ * card on the FE (icon/title/subtitle/open-download), plus the owning runId +
+ * agent + timestamp. `title` is always derived (basename for a file, label for
+ * output/link, host for a bare link); the raw union fields are kept alongside.
+ */
+export interface AgentArtifactRecord {
+  runId: string;
+  agent: AgentName;
+  kind: 'file' | 'output' | 'link';
+  title: string;
+  /** file kind: the (relative) sandbox path. */
+  path?: string;
+  /** link kind: the target url. */
+  url?: string;
+  /** file kind: language hint. */
+  language?: string;
+  /** file kind: byte size. */
+  bytes?: number;
+  /** output kind: a short text preview (truncated). */
+  text?: string;
+  /** ms since epoch the artifact was emitted. */
+  at: number;
+}
+
+/** Last path segment of a (possibly-empty) path — the derived file title. */
+function artBasename(path: string): string {
+  const clean = String(path || '').replace(/[\\/]+$/, '');
+  const idx = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+  const name = idx >= 0 ? clean.slice(idx + 1) : clean;
+  return name || clean;
+}
+
+/**
+ * Map an `artifact` event payload → a compact {@link AgentArtifactRecord} (or
+ * null when the shape is unusable). Pure + defensive; never throws.
+ */
+function toArtifactRecord(
+  runId: string,
+  agent: AgentName,
+  artifact: any,
+  now: number
+): AgentArtifactRecord | null {
+  if (!artifact || typeof artifact !== 'object') return null;
+  const kind = artifact.kind;
+  if (kind === 'file') {
+    const path = truncate(artifact.path ?? '', AGENTART_PATH_CAP);
+    if (!path) return null;
+    const rec: AgentArtifactRecord = {
+      runId,
+      agent,
+      kind: 'file',
+      title: truncate(artBasename(path) || path, AGENTART_TITLE_CAP),
+      path,
+      at: now,
+    };
+    if (typeof artifact.language === 'string') rec.language = artifact.language;
+    if (typeof artifact.bytes === 'number' && Number.isFinite(artifact.bytes)) {
+      rec.bytes = artifact.bytes;
+    }
+    return rec;
+  }
+  if (kind === 'output') {
+    const label = truncate(artifact.label ?? '', AGENTART_TITLE_CAP);
+    return {
+      runId,
+      agent,
+      kind: 'output',
+      title: label || 'output',
+      text: truncate(artifact.text ?? '', AGENTART_TEXT_CAP),
+      at: now,
+    };
+  }
+  if (kind === 'link') {
+    const url = truncate(artifact.url ?? '', AGENTART_PATH_CAP);
+    if (!url) return null;
+    return {
+      runId,
+      agent,
+      kind: 'link',
+      title: truncate(artifact.label ?? '', AGENTART_TITLE_CAP) || url,
+      url,
+      at: now,
+    };
+  }
+  return null;
+}
+
+/**
+ * Persist ONE artifact for a user (fail-soft). Resolves the owning run's agent
+ * from the run record (one cheap GET — artifacts are rare), builds a compact
+ * record, RPUSHes it, LTRIMs to the newest {@link AGENTART_CAP}, and re-arms the
+ * 90d TTL. No-op when the feature flag is off or the payload is unusable. Never
+ * throws (called fire-and-forget from {@link appendRunEvent}).
+ */
+export async function persistRunArtifact(
+  redis: RunRedis,
+  userId: string,
+  runId: string,
+  artifact: unknown
+): Promise<void> {
+  if (!artifactsEnabled()) return;
+  if (!userId || !runId) return;
+  try {
+    // Resolve the agent for this run (fail-soft → default 'hermes' union member
+    // so a missing record still yields a usable row rather than dropping it).
+    const rec = await readAgentRun(redis, userId, runId);
+    const agent: AgentName = rec?.agent === 'openclaw' ? 'openclaw' : 'hermes';
+    const record = toArtifactRecord(runId, agent, artifact, Date.now());
+    if (!record) return;
+    let line: string;
+    try {
+      line = JSON.stringify(record);
+    } catch {
+      return; // non-serializable → skip rather than crash the run
+    }
+    const key = agentArtKey(userId);
+    await redis.rpush(key, line);
+    await redis.ltrim(key, -AGENTART_CAP, -1);
+    await redis.expire(key, AGENTART_TTL_SEC);
+  } catch {
+    /* fail-soft: Redis is a cache, artifacts are best-effort history */
+  }
+}
+
+/**
+ * List a user's persisted artifacts, newest first, capped at `limit` (default
+ * 60, hard max {@link AGENTART_CAP}). Optionally filtered to one `agent`. Reads
+ * the whole list (bounded to 200) then filters/slices in memory. Fail-soft → [].
+ * The FE `/agents/artifacts` page + {@link ClickDzAgentsController} consume this.
+ */
+export async function listAgentArtifacts(
+  redis: RunRedis,
+  userId: string,
+  agent?: AgentName,
+  limit = 60
+): Promise<AgentArtifactRecord[]> {
+  if (!userId) return [];
+  const n = Math.max(1, Math.min(AGENTART_CAP, Number.isFinite(limit) ? limit : 60));
+  let raw: string[];
+  try {
+    raw = await redis.lrange(agentArtKey(userId), 0, -1);
+  } catch {
+    return [];
+  }
+  const out: AgentArtifactRecord[] = [];
+  // The list is oldest→newest (RPUSH); walk backwards for newest-first.
+  for (let i = (raw?.length ?? 0) - 1; i >= 0; i--) {
+    const rec = safeParse<AgentArtifactRecord>(raw[i]);
+    if (!rec || typeof rec.kind !== 'string') continue;
+    if (agent && rec.agent !== agent) continue;
+    out.push(rec);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Env-derived budget defaults. Read like every other CDZ env in this plugin
 // (`process.env.CDZ_...` with a literal fallback) — recon §env.
 // ---------------------------------------------------------------------------
@@ -592,6 +777,14 @@ export async function appendRunEvent(
   // Never persist heartbeats — they carry no history value and would evict real
   // events under the 500 cap.
   if ((ev as any)?.type === 'ping') return;
+  // R10 (WS11-6, Musée): mirror `artifact` events into the durable per-user
+  // artifacts library so the /agents/artifacts "Livrables" page can list every
+  // deliverable across runs. Fire-and-forget + fail-soft + flag-gated inside
+  // persistRunArtifact (no-op when CDZ_AGENT_ARTIFACTS_ENABLED!=='1'); never
+  // blocks or throws out of the run's emit path.
+  if ((ev as any)?.type === 'artifact') {
+    void persistRunArtifact(redis, userId, runId, (ev as any).artifact);
+  }
   const key = eventsKey(userId, runId);
   let line: string;
   try {

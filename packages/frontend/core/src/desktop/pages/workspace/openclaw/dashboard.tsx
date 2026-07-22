@@ -16,7 +16,12 @@
 // ---------------------------------------------------------------------------
 
 import * as agentApi from '@affine/core/modules/agents/api';
-import { EmptyState } from '@affine/core/modules/agents/components';
+import {
+  accentFor,
+  AgentPresence,
+  EmptyState,
+  type StatusPhase,
+} from '@affine/core/modules/agents/components';
 import type {
   AgentThread,
   AgentThreadSummary,
@@ -53,6 +58,17 @@ import {
   Spinner,
 } from './openclaw-shared';
 import { PreviewPanel } from './preview-panel';
+
+// OpenClaw identity accent (R10 / WS11-3): phosphor-green #6bd968 + cyan
+// #56b6ff. Layered on the shared palette (`C` from openclaw-shared keeps the
+// surface + ok/warn/err tints verbatim); only the accent family reads as
+// OpenClaw's terminal green so the dashboard chrome matches the console. No
+// behavior/route/export/testId change — repaint + tone only.
+const OC = accentFor('openclaw');
+// Phosphor border tint — the OpenClaw analogue of C.accentBorder (which is 45%
+// of the shared accent). Derived from OC.accent at the same 45% ratio so hover
+// rings/active outlines read phosphor and sit coherently with the palette.
+const OC_BORDER = `color-mix(in srgb, ${OC.accent} 45%, transparent)`;
 
 // The example prompts double as quick-start tasks (same set the console uses).
 const QUICK_TASKS: string[] = [
@@ -190,6 +206,28 @@ export const OpenClawDashboard = ({
   const runtimeLabel =
     RUNTIME_LABELS[config.defaultRuntime ?? 'node24'] ?? 'Node.js 24';
 
+  // Honest sandbox lamp — maps the capabilities the dashboard already tracks
+  // onto the shared <AgentPresence> lamp via StatusPhase: live → green (done),
+  // generate-only → amber (waiting_approval), still probing → grey (stopped),
+  // caps load failed → red (error). Surfaced next to the Sandbox panel's title
+  // as a real instrument (the detail row below stays SandboxStatus).
+  const sandboxLampPhase: StatusPhase =
+    capsState === 'loading'
+      ? 'stopped'
+      : capsState === 'error'
+        ? 'error'
+        : caps?.sandbox
+          ? 'done'
+          : 'waiting_approval';
+  const sandboxLampTitle =
+    capsState === 'loading'
+      ? 'Probing sandbox…'
+      : capsState === 'error'
+        ? 'Sandbox capabilities failed to load.'
+        : caps?.sandbox
+          ? 'Vercel Sandbox is live — tasks run.'
+          : caps?.reason ?? 'Sandbox off — code is generated, not run.';
+
   // ------------------------------------------------------------------ render
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -217,7 +255,7 @@ export const OpenClawDashboard = ({
               gap: 8,
             }}
           >
-            <span style={{ fontFamily: monoFamily, color: C.accent }}>
+            <span style={{ fontFamily: monoFamily, color: OC.accent }}>
               {'>_'}
             </span>
             Start a coding task
@@ -260,8 +298,8 @@ export const OpenClawDashboard = ({
               transition: 'background 150ms ease, border-color 150ms ease',
             }}
             onMouseEnter={e => {
-              e.currentTarget.style.background = C.accentSoft;
-              e.currentTarget.style.borderColor = C.accentBorder;
+              e.currentTarget.style.background = OC.accentSoft;
+              e.currentTarget.style.borderColor = OC_BORDER;
             }}
             onMouseLeave={e => {
               e.currentTarget.style.background = C.panel;
@@ -284,21 +322,29 @@ export const OpenClawDashboard = ({
         <Panel
           title="Sandbox"
           action={
-            <button
-              style={{
-                appearance: 'none',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: C.accent,
-                fontSize: 12,
-                fontWeight: 600,
-                padding: 0,
-              }}
-              onClick={onReloadCaps}
-            >
-              ↻ Recheck
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <AgentPresence
+                agent="openclaw"
+                phase={sandboxLampPhase}
+                size={8}
+                title={sandboxLampTitle}
+              />
+              <button
+                style={{
+                  appearance: 'none',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: OC.accentText,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: 0,
+                }}
+                onClick={onReloadCaps}
+              >
+                ↻ Recheck
+              </button>
+            </div>
           }
         >
           {capsState === 'loading' ? (
@@ -328,7 +374,7 @@ export const OpenClawDashboard = ({
                 background: 'none',
                 border: 'none',
                 cursor: 'pointer',
-                color: C.accent,
+                color: OC.accentText,
                 fontSize: 12,
                 fontWeight: 600,
                 padding: 0,
@@ -571,6 +617,10 @@ const CanauxPanel = () => {
           explainWhenOn
         />
       </div>
+      {/* R10 BYOT — connect your OWN Telegram bot to OpenClaw, right here. */}
+      <div style={{ marginTop: 12 }}>
+        <TelegramChannelCard agent="openclaw" />
+      </div>
     </Panel>
   );
 };
@@ -708,7 +758,7 @@ const ThreadRow = ({
         transition: 'border-color 150ms ease, background 150ms ease',
       }}
       onMouseEnter={e => {
-        e.currentTarget.style.borderColor = C.accentBorder;
+        e.currentTarget.style.borderColor = OC_BORDER;
       }}
       onMouseLeave={e => {
         e.currentTarget.style.borderColor = C.border;
@@ -725,8 +775,8 @@ const ThreadRow = ({
           placeItems: 'center',
           fontSize: 14,
           fontFamily: monoFamily,
-          color: C.accent,
-          background: C.accentSoft,
+          color: OC.accent,
+          background: OC.accentSoft,
         }}
       >
         {'>_'}
@@ -821,8 +871,8 @@ const MiniTab = ({
       fontWeight: 600,
       borderRadius: 7,
       color: on ? C.text : C.muted,
-      background: on ? C.accentSoft : 'transparent',
-      border: `1px solid ${on ? C.accentBorder : C.border}`,
+      background: on ? OC.accentSoft : 'transparent',
+      border: `1px solid ${on ? OC_BORDER : C.border}`,
       transition: 'color 150ms ease, background 150ms ease',
     }}
   >
@@ -835,8 +885,8 @@ const codeChip: CSSProperties = {
   fontSize: 12,
   padding: '1px 5px',
   borderRadius: 4,
-  background: C.accentSoft,
-  color: C.text,
+  background: OC.accentSoft,
+  color: OC.accentText,
 };
 
 const fileTreeWrap: CSSProperties = {

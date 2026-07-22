@@ -2,11 +2,9 @@ import {
   AgentPalette,
   Chip,
   ensureAgentKeyframes,
-  IconButton,
   Spinner,
 } from '@affine/core/modules/agents/components';
-import { AgentApiError, pairTelegram } from '@affine/core/modules/agents/api';
-import { type TFunc, useAgentLang } from '@affine/core/modules/agents/i18n';
+import { useAgentLang } from '@affine/core/modules/agents/i18n';
 import { useAgents } from '@affine/core/modules/agents/use-agents';
 import {
   ViewBody,
@@ -15,25 +13,25 @@ import {
   ViewTitle,
   WorkbenchLink,
 } from '@affine/core/modules/workbench';
-import {
-  CommentIcon,
-  LinkIcon,
-  SearchIcon,
-  TelegramIcon,
-} from '@blocksuite/icons/rc';
-import { type CSSProperties, type ReactNode, useCallback, useState } from 'react';
+import { CommentIcon, LinkIcon, SearchIcon } from '@blocksuite/icons/rc';
+import { type CSSProperties, type ReactNode } from 'react';
+
+import { TelegramChannelCard } from './channel-card';
 
 // ---------------------------------------------------------------------------
 // ClickDz Agents — CONNEXIONS (WSU-5; R8 WhatsApp cap + Planification + i18n +
-// mobile). The channels tab of the unified /agents studio: how the user's
-// agents reach the outside world.
+// mobile; R10 BYOT per-agent Telegram). The channels tab of the unified /agents
+// studio: how the user's agents reach the outside world.
 //
-//   1. Telegram   — pair a Telegram chat to the account. GET /api/v1/agents/
-//                   telegram/pair mints a one-shot deep link (t.me/<bot>?start=
-//                   <code>); the user opens it, taps Démarrer, and the backend
-//                   webhook binds the chat. Gated CDZ_AGENT_TELEGRAM_ENABLED on
-//                   the backend → a 404 here means "no bot configured yet", shown
-//                   as a quiet "bientôt disponible" state (never an error).
+//   1. Telegram   — R10 BYOT: TWO per-agent cards (hermes + openclaw), each a
+//                   <TelegramChannelCard agent> (Réglage, owns channel-card.tsx).
+//                   The user pastes THEIR OWN BotFather token; the backend
+//                   validates it (getMe), seals it, and arms a per-user webhook so
+//                   inbound messages to that bot route to that user's that agent.
+//                   NO shared platform bot. Gated CDZ_AGENT_TELEGRAM_ENABLED (+
+//                   CDZ_DATA_SECRET) on the backend → a 404 collapses each card to
+//                   a quiet "bientôt" state (never an error). Per-agent is the
+//                   whole point — a store can wire two independent bots.
 //   2. WhatsApp   — R8: reads `caps.whatsappEnabled` (Fanal). When true the card
 //                   shows a "configuré" state and a note that the agent WhatsApp
 //                   tool is active (send on the store's own number via the ERP
@@ -59,7 +57,7 @@ import { type CSSProperties, type ReactNode, useCallback, useState } from 'react
 // byte-identical to "the feature doesn't exist" when its gate is dark.
 //
 // House rules: inline styles only (no .css.ts), no new deps, the SHARED agent
-// palette + primitives (Chip/Spinner/IconButton), boot-safe rc icons. External
+// palette + primitives (Chip/Spinner), boot-safe rc icons. External
 // links carry target=_blank rel="noopener noreferrer"; the Composio +
 // Planification links are in-workbench <WorkbenchLink>s. Mobile: the card grid
 // collapses to a single column (auto-fill minmax + a media query).
@@ -213,214 +211,6 @@ function ChannelCard({
 }
 
 // ---------------------------------------------------------------------------
-// TelegramCard — the only interactive channel. Pairing is a two-step UX:
-//   · idle  → a "Lier mon Telegram" button that calls GET /pair.
-//   · linked (has deepLink) → the tappable t.me link + a copy button + a short
-//     darja instruction ("Ouvre le lien, appuie sur Démarrer").
-// Fail-soft on 404 (bot dark) → a quiet "bientôt disponible" state, NOT an error.
-// The pair code is short-lived (10 min server-side); we surface the link, not the
-// raw code, since the code lives inside the deep link.
-// ---------------------------------------------------------------------------
-function TelegramCard({
-  t,
-  telegramEnabled,
-}: {
-  t: TFunc;
-  telegramEnabled: boolean;
-}) {
-  const [loading, setLoading] = useState(false);
-  const [deepLink, setDeepLink] = useState<string | null>(null);
-  const [dark, setDark] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const onPair = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    setCopied(false);
-    void (async () => {
-      try {
-        const res = await pairTelegram();
-        // A configured bot returns a non-empty deepLink; an empty one means the
-        // route is enabled but no bot username resolved yet (token half-set) —
-        // treat that as the dark state too so we never show a dead link.
-        if (res && res.deepLink) {
-          setDeepLink(res.deepLink);
-          setDark(false);
-        } else {
-          setDark(true);
-        }
-      } catch (err) {
-        // 404 = CDZ_AGENT_TELEGRAM_ENABLED off (no bot configured): quiet state,
-        // not a failure. Anything else (401/network/5xx) is a real error.
-        if (err instanceof AgentApiError && err.status === 404) {
-          setDark(true);
-        } else {
-          setError(
-            err instanceof Error ? err.message : t('connections.telegram.err')
-          );
-        }
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [t]);
-
-  const onCopy = useCallback(() => {
-    if (!deepLink || typeof navigator === 'undefined' || !navigator.clipboard) {
-      return;
-    }
-    navigator.clipboard
-      .writeText(deepLink)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1600);
-      })
-      .catch(() => {
-        // Clipboard denied — the link stays tappable, that's enough.
-      });
-  }, [deepLink]);
-
-  // Status chip: connecté once we hold a link, en attente while linking, sinon
-  // non-configuré (dark) or non-lié (ready to pair).
-  const status: { label: string; tone: 'ok' | 'warn' | 'muted' } = deepLink
-    ? { label: t('connections.status.connected'), tone: 'warn' }
-    : dark || !telegramEnabled
-      ? { label: t('connections.status.unconfigured'), tone: 'muted' }
-      : loading
-        ? { label: t('connections.status.connected'), tone: 'warn' }
-        : { label: t('connections.status.unlinked'), tone: 'muted' };
-
-  // If we already know the channel is dark (caps say so) AND the user hasn't
-  // forced a probe, show the quiet state up-front. A probe can still confirm it.
-  const showDark = dark || (!telegramEnabled && !deepLink && !loading && !error);
-
-  return (
-    <ChannelCard
-      icon={<TelegramIcon />}
-      title={t('connections.telegram.title')}
-      subtitle={t('connections.telegram.subtitle')}
-      status={status}
-    >
-      {showDark ? (
-        <div
-          style={{
-            fontSize: AgentPalette.font.size.md,
-            color: P.muted,
-            padding: '10px 12px',
-            borderRadius: AgentPalette.radius.sm,
-            background: P.panel,
-            border: `1px dashed ${P.border}`,
-            lineHeight: 1.5,
-          }}
-        >
-          {t('connections.telegram.dark')}
-        </div>
-      ) : deepLink ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '8px 10px',
-              borderRadius: AgentPalette.radius.sm,
-              background: P.consoleBg,
-              border: `1px solid ${P.consoleBorder}`,
-              minWidth: 0,
-            }}
-          >
-            <a
-              href={deepLink}
-              target="_blank"
-              rel="noopener noreferrer"
-              dir="ltr"
-              style={{
-                flex: 1,
-                minWidth: 0,
-                fontFamily: AgentPalette.font.mono,
-                fontSize: AgentPalette.font.size.md,
-                color: P.accent,
-                textDecoration: 'none',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {deepLink}
-            </a>
-            <IconButton
-              label={
-                copied
-                  ? t('connections.telegram.copied')
-                  : t('connections.telegram.copy')
-              }
-              onClick={onCopy}
-            >
-              {copied ? '✓' : '⧉'}
-            </IconButton>
-          </div>
-          <a
-            href={deepLink}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ ...actionBtnStyle, alignSelf: 'flex-start' }}
-          >
-            <TelegramIcon style={{ fontSize: 16 }} /> {t('connections.telegram.open')}
-          </a>
-          <p
-            style={{
-              margin: 0,
-              fontSize: AgentPalette.font.size.md,
-              color: P.muted,
-              lineHeight: 1.5,
-            }}
-          >
-            {t('connections.telegram.instructions')}
-          </p>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <button
-            type="button"
-            onClick={onPair}
-            disabled={loading}
-            className="cdz-agent-motion"
-            style={{
-              ...actionBtnStyle,
-              alignSelf: 'flex-start',
-              opacity: loading ? 0.7 : 1,
-              cursor: loading ? 'default' : 'pointer',
-            }}
-          >
-            {loading ? <Spinner size={14} color={P.onAccent} /> : <LinkIcon style={{ fontSize: 16 }} />}
-            {loading
-              ? t('connections.telegram.linking')
-              : t('connections.telegram.link')}
-          </button>
-          {error ? (
-            <div
-              style={{
-                fontSize: AgentPalette.font.size.md,
-                color: P.errText,
-                background: P.errBg,
-                border: `1px solid ${P.errBorder}`,
-                borderRadius: AgentPalette.radius.sm,
-                padding: '8px 10px',
-                lineHeight: 1.5,
-                wordBreak: 'break-word',
-              }}
-            >
-              {t('connections.telegram.err.retry', { error })}
-            </div>
-          ) : null}
-        </div>
-      )}
-    </ChannelCard>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // The page. Header (workbench chrome) + a centered, scrolling canvas of channel
 // cards. Top-level loading/error/quiet states come from useAgents(); the cards
 // themselves each own their finer states.
@@ -558,7 +348,13 @@ function ConnectionsPage() {
                 card reads caps defensively and shows its own quiet fallback when
                 its gate is dark, so the grid is always useful. */}
             <div className="cdz-conn-grid">
-              <TelegramCard t={t} telegramEnabled={!!caps.telegramEnabled} />
+              {/* Telegram — R10 BYOT: one card PER agent. Each connects the
+                  user's OWN BotFather bot to that specific agent (hermes /
+                  openclaw); the card owns its connect → verify → connected →
+                  test / disconnect lifecycle and falls soft to "bientôt" when
+                  the channel feature is dark. Per-agent is the point. */}
+              <TelegramChannelCard agent="hermes" />
+              <TelegramChannelCard agent="openclaw" />
 
               {/* WhatsApp — R8: reads caps.whatsappEnabled. Configured ⇒ the
                   agent WA send tool is active (store's own number via the ERP

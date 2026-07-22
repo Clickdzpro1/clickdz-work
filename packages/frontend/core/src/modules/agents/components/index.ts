@@ -9,6 +9,10 @@ export {
   type AgentPaletteType,
   agentKeyframes,
   ensureAgentKeyframes,
+  accentFor,
+  AGENT_ACCENT,
+  type AgentAccent,
+  type AgentAccentKey,
 } from './palette';
 
 // ---- small primitives (also useful to pages directly) ----
@@ -59,3 +63,6 @@ export {
 
 // ---- artifacts ----
 export { ArtifactsPanel } from './artifacts-panel';
+
+// ---- presence (per-agent status lamp) ----
+export { AgentPresence, type AgentPresenceProps } from './agent-presence';
