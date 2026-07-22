@@ -25,6 +25,7 @@ import { ClickDzAgentRunsController } from './clickdz-agent-runs.controller';
 import { ClickDzVdzController } from './clickdz-vdz.controller';
 import { ClickDzVdzComposeController } from './clickdz-vdz-compose.controller';
 import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
+import { ClickDzVpicController } from './clickdz-vpic.controller';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import {
@@ -108,6 +109,7 @@ export class CopilotApiModule {}
     ClickDzVdzController,
     ClickDzVdzComposeController,
     ClickDzVdzRenderController,
+    ClickDzVpicController,
     WorkspaceMcpController,
   ],
 })
