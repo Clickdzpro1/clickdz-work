@@ -253,7 +253,7 @@ export function connectTelegram(
   token: string
 ): Promise<{ ok: boolean; botUsername: string; botId: number }> {
   return requestJson<{ ok: boolean; botUsername: string; botId: number }>(
-    `${base(agent)}/channels/telegram/connect`,
+    `/api/v1/agents/${agent}/channels/telegram/connect`,
     {
       method: 'POST',
       headers: jsonHeaders,
@@ -276,7 +276,7 @@ export async function getTelegramChannel(
 ): Promise<TelegramChannelStatus> {
   try {
     const res = await requestJson<TelegramChannelStatus>(
-      `${base(agent)}/channels/telegram`
+      `/api/v1/agents/${agent}/channels/telegram`
     );
     return res && typeof res === 'object'
       ? res
@@ -297,7 +297,7 @@ export async function getTelegramChannel(
  */
 export async function disconnectTelegram(agent: AgentName): Promise<void> {
   await requestJson<{ ok?: boolean }>(
-    `${base(agent)}/channels/telegram/disconnect`,
+    `/api/v1/agents/${agent}/channels/telegram/disconnect`,
     {
       method: 'POST',
       headers: jsonHeaders,
@@ -316,7 +316,7 @@ export function testTelegram(
   agent: AgentName
 ): Promise<{ ok: boolean; sent: boolean }> {
   return requestJson<{ ok: boolean; sent: boolean }>(
-    `${base(agent)}/channels/telegram/test`,
+    `/api/v1/agents/${agent}/channels/telegram/test`,
     {
       method: 'POST',
       headers: jsonHeaders,
