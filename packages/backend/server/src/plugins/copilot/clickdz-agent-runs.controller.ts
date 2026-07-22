@@ -241,7 +241,12 @@ export class ClickDzAgentRunsController {
   // -------------------------------------------------------------------------
   // GET /api/v1/agents/:agent/runs?limit= → AgentRunRecord[] (newest first).
   // -------------------------------------------------------------------------
-  @Throttle('default')
+  // R13 (429 fix): a custom {limit,ttl} override keys this route its OWN
+  // throttle bucket (the guard appends ';custom' + Class.handler — see
+  // base/throttler generateKey). A bare @Throttle('default') collapses EVERY
+  // default-tier route into ONE shared 120/60s bucket per session, which the
+  // Hermes dashboard's mount fan-out blew through — 429-storming the agent UI.
+  @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/agents/:agent/runs')
   async list(
     @CurrentUser() user: CurrentUser,
@@ -257,7 +262,9 @@ export class ClickDzAgentRunsController {
   // -------------------------------------------------------------------------
   // GET /api/v1/agents/:agent/runs/:id → one AgentRunRecord.
   // -------------------------------------------------------------------------
-  @Throttle('default')
+  // R13 (429 fix): own bucket — the approvals loader GETs one run per waiting
+  // run, so this must not drain the shared default bucket (see list above).
+  @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/agents/:agent/runs/:id')
   async one(
     @CurrentUser() user: CurrentUser,
