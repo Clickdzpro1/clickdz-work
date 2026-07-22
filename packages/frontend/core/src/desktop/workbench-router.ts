@@ -46,6 +46,10 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/vdz/index'),
   },
   {
+    path: '/vpic',
+    lazy: () => import('./pages/workspace/vpic/index'),
+  },
+  {
     path: '/voice',
     lazy: () => import('./pages/workspace/voice/index'),
   },
