@@ -4,7 +4,8 @@
 // A framework-light module (NO Nest decorators — the AgentToolDef shape is
 // mirrored locally, type-only) that fronts the Railway whatsapp-gateway for the
 // agents. It exposes:
-//   · waEnabled()            — the master gate (URL + token env + WA flag).
+//   · waEnabled()            — the master gate (URL + token + instance id env,
+//                              + the WA flag).
 //   · waClient               — a tiny bearer HTTP client (sendText/sessionStatus/qr).
 //   · createWhatsappSendTool — the outbound `whatsapp_send` AgentToolDef,
 //                              registered fail-soft into Regis's default registry
@@ -12,37 +13,51 @@
 //   · waCapsEnabled()        — an env-ONLY read (no fetch) for Fanal's GET /agents caps.
 //
 // EVERYTHING is fail-soft DARK today: the gateway env pair (CDZ_WA_URL +
-// CDZ_WA_TOKEN) is deliberately UNSET in prod and CDZ_AGENT_WHATSAPP_ENABLED is
-// off, so every client method resolves `{ok:false, reason:'wa_dark'}` WITHOUT
-// touching the network, the tool advertises available:false, and caps report
-// false. No SDK — plain fetch with a bearer header, the SAME self-contained,
-// env-driven stance as the peer ClickDz proxy controllers (clickdz-vdz-render:
-// CDZ_X_URL/CDZ_X_TOKEN pair, `.replace(/\/+$/,'')`, AbortSignal.timeout) and the
-// telegram client (a class whose methods degrade instead of throwing). Imports
-// nothing from the frontend; never throws.
+// CDZ_WA_TOKEN + CDZ_WA_INSTANCE_ID) is deliberately UNSET in prod and
+// CDZ_AGENT_WHATSAPP_ENABLED is off, so every client method resolves
+// `{ok:false, reason:'wa_dark'}` WITHOUT touching the network, the tool
+// advertises available:false, and caps report false. No SDK — plain fetch with
+// a bearer header, the SAME self-contained, env-driven stance as the peer
+// ClickDz proxy controllers (clickdz-vdz-render: CDZ_X_URL/CDZ_X_TOKEN pair,
+// `.replace(/\/+$/,'')`, AbortSignal.timeout) and the telegram client (a class
+// whose methods degrade instead of throwing). Imports nothing from the
+// frontend; never throws.
 //
-// GATEWAY ENDPOINT PATHS ARE **ASSUMED** — chosen from the R4 plan
-// /agent/workspace/ws10plan/out/05-whatsapp.md §"Target design" (the proxy
-// controller endpoint list, which targets the wweb-gateway whatsapp-web.js
-// stack). They are NOT yet verified against the live gateway (its Railway
-// domain + exact REST surface are Open Q1/Q4 in that plan). When the real
-// gateway is wired these three constants get confirmed/adjusted in ONE place:
-//   · WA_PATH_SEND    'POST /send'    — from POST /api/v1/wa/send   {chatId|phone,text}
-//   · WA_PATH_SESSION 'GET  /session' — from GET  /api/v1/wa/session {state,phone,since}
-//   · WA_PATH_QR      'GET  /qr'      — from GET  /api/v1/wa/qr      (current QR string/data-URL)
-// The monolith-facing routes in that plan are stripped of their `/api/v1/wa`
-// prefix here — this client talks to the GATEWAY directly (its bare REST paths),
-// not to the monolith proxy.
+// GATEWAY ENDPOINT PATHS — VERIFIED (superseding the R8 "ASSUMED" paths from
+// the ws10plan/out/05-whatsapp.md draft, which guessed a flat /send /session
+// /qr surface that the built gateway does NOT expose). The live
+// `whatsapp-gateway` repo (Railway services wweb-gateway + a Baileys sibling,
+// same route code) is TENANT/INSTANCE-scoped, not flat:
+//   · WA_PATH_MESSAGES  'POST /instances/:id/messages/text'  {to, text} → {ok, messageId}
+//   · WA_PATH_STATUS    'GET  /instances/:id'                          → instance object
+//   · WA_PATH_QR        'GET  /instances/:id/qr'                       → {status, qr}
+// `:id` is CDZ_WA_INSTANCE_ID (below) — the gateway has no notion of "the"
+// session, only a specific instance created ahead of time via its admin API
+// (POST /admin/tenants with the gateway's ADMIN_API_KEY, then POST /instances
+// with the returned per-tenant key). CDZ_WA_TOKEN below is that PER-TENANT key
+// — NOT the gateway's ADMIN_API_KEY, which only authorizes /admin/*, never
+// /instances/*. The gateway also requires the destination phone as a JID
+// (`<digits>@s.whatsapp.net`), not bare digits — see `toJid()`.
 // ---------------------------------------------------------------------------
 
 // --- Config (read once at module load, same idiom as the sibling controllers).
 // Trailing slashes trimmed exactly like the render controller's CDZ_RENDER_URL
 // so `${WA_URL}${path}` never doubles a slash.
 const WA_URL = (process.env.CDZ_WA_URL || '').replace(/\/+$/, '');
+// The gateway's PER-TENANT API key (returned once by POST /admin/tenants, then
+// bound to an instance via POST /instances) — see the header note. Sent as a
+// Bearer token; the gateway also accepts `x-api-key`, but Bearer matches this
+// client's existing header idiom and the gateway takes either.
 const WA_TOKEN = process.env.CDZ_WA_TOKEN || '';
-// Master WA-tool gate that sits ON TOP of the URL pair (R8-CONTRACT): the
-// gateway can be provisioned (URL+token set) while the agent-facing send tool
-// stays dark until this '1' flag flips. Read as a string, '1' = on.
+// The gateway instance id (an existing WhatsApp session created ahead of time
+// via the gateway's admin API — see the header note). Every real gateway route
+// is scoped under /instances/:id, so this is required alongside the URL+token
+// pair; absent ⇒ dark, same as an absent URL or token.
+const WA_INSTANCE_ID = process.env.CDZ_WA_INSTANCE_ID || '';
+// Master WA-tool gate that sits ON TOP of the URL/token/instance triple
+// (R8-CONTRACT, extended): the gateway can be fully provisioned while the
+// agent-facing send tool stays dark until this '1' flag flips. Read as a
+// string, '1' = on.
 const CDZ_AGENT_WHATSAPP_ENABLED = process.env.CDZ_AGENT_WHATSAPP_ENABLED || '';
 
 // Bounded timeout for every gateway call — quick control-plane calls (send / a
@@ -53,11 +68,13 @@ const WA_TIMEOUT_MS = 10_000;
 // agent's long message is delivered (truncated) rather than rejected upstream.
 const WA_MAX_TEXT = 1000;
 
-// --- ASSUMED gateway endpoint paths (see the header note). Kept as named
-// constants so the real paths are verified/edited in ONE place when wired.
-const WA_PATH_SEND = '/send';
-const WA_PATH_SESSION = '/session';
-const WA_PATH_QR = '/qr';
+// --- VERIFIED gateway endpoint paths (see the header note). Precomputed once
+// from WA_INSTANCE_ID at module load, same idiom as WA_URL/WA_TOKEN. When
+// WA_INSTANCE_ID is empty these are malformed (`/instances//qr`) but harmless —
+// waEnabled() gates every call before any of these strings are used.
+const WA_PATH_MESSAGES = `/instances/${WA_INSTANCE_ID}/messages/text`;
+const WA_PATH_STATUS = `/instances/${WA_INSTANCE_ID}`;
+const WA_PATH_QR = `/instances/${WA_INSTANCE_ID}/qr`;
 
 // The dark envelope every method returns when the gateway is not wired. A fixed
 // shape (`ok:false, reason:'wa_dark'`) the callers (tool + caps + future proxy)
@@ -72,13 +89,18 @@ export interface WaResult {
 const WA_DARK: WaResult = { ok: false, reason: 'wa_dark' };
 
 /**
- * The master gate. True only when BOTH gateway env vars are present AND the
- * WhatsApp tool flag is '1'. Absent/off ⇒ everything dark (no fetch, tool
- * unavailable, caps false). Pure + synchronous — safe to call from a tool's
- * `available()` predicate and from caps reads.
+ * The master gate. True only when the URL, the per-tenant token, AND the
+ * instance id are all present, AND the WhatsApp tool flag is '1'. Absent/off ⇒
+ * everything dark (no fetch, tool unavailable, caps false). Pure + synchronous
+ * — safe to call from a tool's `available()` predicate and from caps reads.
  */
 export function waEnabled(): boolean {
-  return !!WA_URL && !!WA_TOKEN && CDZ_AGENT_WHATSAPP_ENABLED === '1';
+  return (
+    !!WA_URL &&
+    !!WA_TOKEN &&
+    !!WA_INSTANCE_ID &&
+    CDZ_AGENT_WHATSAPP_ENABLED === '1'
+  );
 }
 
 /**
@@ -113,14 +135,26 @@ export function normalizePhone(raw: unknown): string {
   return s; // some other shape — leave the digits as-is (upstream validates)
 }
 
+/**
+ * The gateway addresses recipients by WhatsApp JID
+ * (`<countrycode+digits>@s.whatsapp.net`), not bare digits. `normalizePhone()`
+ * only produces digits (it is shared with future non-WA consumers), so this is
+ * a separate, WA-gateway-specific step applied right before the request body
+ * is built. Defensive: a value that already carries an `@` (a caller passing a
+ * pre-built JID straight into `sendText`) is passed through unchanged.
+ */
+function toJid(digits: string): string {
+  return digits.includes('@') ? digits : `${digits}@s.whatsapp.net`;
+}
+
 // ---------------------------------------------------------------------------
 // Minimal WhatsApp gateway client (fail-soft). Every method resolves the dark
 // envelope (`{ok:false, reason:'wa_dark'}`) WITHOUT any network traffic when the
 // gateway is not wired (waEnabled() false) — so the whole feature is inert dark
-// until the env pair + flag are provisioned. No throwing: a network / gateway
-// hiccup also resolves a typed `{ok:false, reason:...}` (callers degrade, never
-// 500). Bearer CDZ_WA_TOKEN on CDZ_WA_URL, 10s timeout (AbortSignal.timeout),
-// mirroring the render controller's upstream() idiom.
+// until the env quadruple + flag are provisioned. No throwing: a network /
+// gateway hiccup also resolves a typed `{ok:false, reason:...}` (callers
+// degrade, never 500). Bearer CDZ_WA_TOKEN on CDZ_WA_URL, 10s timeout
+// (AbortSignal.timeout), mirroring the render controller's upstream() idiom.
 // ---------------------------------------------------------------------------
 export class WhatsappClient {
   /** True when the gateway is wired AND the WA tool flag is on. */
@@ -128,7 +162,9 @@ export class WhatsappClient {
     return waEnabled();
   }
 
-  /** Bearer auth header for every gateway call (mirrors remotionHeaders). */
+  /** Bearer auth header for every gateway call (mirrors remotionHeaders). The
+   * gateway's /instances/* routes accept this OR `x-api-key`; Bearer is kept
+   * for continuity with the rest of this client's header idiom. */
   private headers(extra?: Record<string, string>): Record<string, string> {
     return { authorization: `Bearer ${WA_TOKEN}`, ...extra };
   }
@@ -176,34 +212,34 @@ export class WhatsappClient {
   }
 
   /**
-   * Send a text message to a phone (digits, 213-normalized by the caller).
-   * ASSUMED endpoint `POST /send` {to, text} (from the R4 plan's POST
-   * /api/v1/wa/send). Text is trimmed to WA_MAX_TEXT. Dark ⇒ WA_DARK.
+   * Send a text message to a phone (digits, 213-normalized by the caller;
+   * converted to a JID here — see `toJid()`). VERIFIED endpoint
+   * `POST /instances/:id/messages/text` {to, text} → {ok, messageId}. Text is
+   * trimmed to WA_MAX_TEXT. Dark ⇒ WA_DARK.
    */
   async sendText(to: string, text: string): Promise<WaResult> {
     if (!waEnabled()) return { ...WA_DARK };
     const trimmed = String(text ?? '').slice(0, WA_MAX_TEXT);
-    return this.call(WA_PATH_SEND, {
+    return this.call(WA_PATH_MESSAGES, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ to, text: trimmed }),
+      body: JSON.stringify({ to: toJid(to), text: trimmed }),
     });
   }
 
   /**
-   * Current session state. ASSUMED endpoint `GET /session` → the gateway's
-   * {state: disconnected|pairing|connected|banned, phone?, since} (from the R4
-   * plan's GET /api/v1/wa/session). Dark ⇒ WA_DARK.
+   * Current instance status. VERIFIED endpoint `GET /instances/:id` → the
+   * gateway's instance object (id/name/status/…). Dark ⇒ WA_DARK.
    */
   async sessionStatus(): Promise<WaResult> {
     if (!waEnabled()) return { ...WA_DARK };
-    return this.call(WA_PATH_SESSION, { method: 'GET' });
+    return this.call(WA_PATH_STATUS, { method: 'GET' });
   }
 
   /**
-   * Current QR string / data-URL for pairing. ASSUMED endpoint `GET /qr` (from
-   * the R4 plan's GET /api/v1/wa/qr; wweb regenerates it ~every 20s). Dark ⇒
-   * WA_DARK.
+   * Current QR for pairing. VERIFIED endpoint `GET /instances/:id/qr` →
+   * {status, qr}. (The gateway also serves a PNG at `/qr.png` — not used here,
+   * this client only needs the JSON form.) Dark ⇒ WA_DARK.
    */
   async qr(): Promise<WaResult> {
     if (!waEnabled()) return { ...WA_DARK };
@@ -219,7 +255,7 @@ export const waClient = new WhatsappClient();
 // registry via this factory (imported fail-soft in buildDefaultRegistry, mirror
 // of the telegram_send wiring). consequential:true (it messages a human),
 // scope:'all' (both agents may use it). available() = waEnabled() so the tool is
-// simply absent from the catalog/loop until the gateway pair + flag are set.
+// simply absent from the catalog/loop until the gateway triple + flag are set.
 //
 // `deps` mirrors the shape Regis passes its factories (AgentToolRegistryDeps).
 // The WA client is env-driven (no per-user binding to resolve, unlike telegram),
