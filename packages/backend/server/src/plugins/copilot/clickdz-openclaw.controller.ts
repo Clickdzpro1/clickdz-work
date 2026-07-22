@@ -696,7 +696,11 @@ export class ClickDzOpenclawController {
   // upserts. Persisted through the JSON Cache under
   // `clickdz:agent:config:<userId>:openclaw` (~90d TTL, refreshed on write).
   // -------------------------------------------------------------------------
-  @Throttle('default')
+  // R13 (429 fix): own per-route bucket via the custom override (';custom'
+  // key, see base/throttler generateKey) — same shared-default-bucket disease
+  // that 429-stormed the Hermes dashboard; OpenClaw's mount fan-out (config +
+  // threads) drains the identical per-session bucket.
+  @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/openclaw/config')
   async getConfig(@CurrentUser() user: CurrentUser): Promise<OpenclawConfig> {
     return this.readOpenclawConfig(user.id);
@@ -1813,7 +1817,8 @@ export class ClickDzOpenclawController {
   }
 
   /** GET /threads → AgentThreadSummary[] for the current user. */
-  @Throttle('default')
+  // R13 (429 fix): own bucket (see /config above).
+  @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/openclaw/threads')
   async listThreads(@CurrentUser() user: CurrentUser, @Res() res: Response) {
     const threads = await this.runtime.listThreads(user.id, AGENT_NAME);
@@ -1824,7 +1829,9 @@ export class ClickDzOpenclawController {
   }
 
   /** GET /threads/:id → the full AgentThread (messages + sandbox meta). */
-  @Throttle('default')
+  // R13 (429 fix): own bucket (see /config above) — thread detail is fetched
+  // per open + per reattach, another drain on the shared default bucket.
+  @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/openclaw/threads/:id')
   async getThreadById(
     @CurrentUser() user: CurrentUser,
