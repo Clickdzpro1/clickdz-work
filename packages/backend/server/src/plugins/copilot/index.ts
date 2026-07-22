@@ -14,6 +14,7 @@ import { ClickDzBridgeController } from './clickdz-bridge.controller';
 import { ClickDzDataController } from './clickdz-data.controller';
 import { ClickDzAgentTelegramController } from './clickdz-agent-telegram';
 import { ClickDzAgentTriggersController } from './clickdz-agent-triggers';
+import { ClickDzWaWebhookController } from './clickdz-wa-webhook.controller';
 import { ClickDzHermesController } from './clickdz-hermes.controller';
 import { ClickDzIntegrationsController } from './clickdz-integrations.controller';
 import { ClickDzOpenclawController } from './clickdz-openclaw.controller';
@@ -96,6 +97,7 @@ export class CopilotApiModule {}
     ClickDzDataController,
     ClickDzAgentTelegramController,
     ClickDzAgentTriggersController,
+    ClickDzWaWebhookController,
     ClickDzHermesController,
     ClickDzIntegrationsController,
     ClickDzOpenclawController,
