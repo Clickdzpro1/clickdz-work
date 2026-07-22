@@ -879,24 +879,31 @@ export class AIChatInput extends SignalWatcher(
       background: color-mix(in srgb, #10a37f 6%, var(--affine-v2-layer-background-primary));
       box-shadow: 0 4px 18px color-mix(in srgb, #10a37f 10%, transparent);
       animation: clickdz-card-in 0.2s ease-out both;
-      /* Flexible sizing: the composer sets --cdz-plan-budget (viewport-aware)
-         while a plan is open; the card claims that budget minus room for the
-         composer textarea + send row. The card itself never scrolls — its
-         BODY does — so the title stays pinned on top and the Cancel/Approve
-         bar stays pinned at the bottom on every surface and viewport. */
+      /* FIXED FRAME (the "unfixed unresized boxes" fix): the composer sets
+         --cdz-plan-budget (viewport-aware) while a plan is open and the card
+         claims that budget as a STABLE height, not a max-height. The card and
+         its body never resize with content — the header stays pinned on top,
+         the Cancel/Approve bar stays pinned at the bottom, and the middle is a
+         paginated list windowed to a fixed row count, so a page always fits.
+         No inner scroller means nothing clips and the frame never jumps
+         between pages. The 100dvh clamp keeps it safe on mobile browsers. */
       display: flex;
       flex-direction: column;
-      max-height: calc(var(--cdz-plan-budget, 640px) - 96px);
+      height: min(var(--cdz-plan-budget, 640px) - 96px, 720px);
+      max-height: calc(100dvh - 120px);
       overflow: hidden;
     }
     .cdz-plan-body {
       flex: 1 1 auto;
-      /* Never let a tight dock squeeze the body to nothing: the steps list
-         must ALWAYS be meaningfully visible — the card grows instead. */
-      min-height: 180px;
-      overflow-y: auto;
-      overscroll-behavior: contain;
-      /* breathing room so focus rings and the scrollbar don't kiss the edge */
+      /* The body is a fixed column: brief header (goal/question/answer) on top,
+         then the paginated list fills the remaining space. It never scrolls
+         itself — the list is windowed to a fixed row count so a page always
+         fits. min-height:0 lets the flex child shrink correctly inside the
+         fixed frame instead of forcing an overflow. */
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      /* breathing room so focus rings don't kiss the edge */
       margin: 0 -6px;
       padding: 0 6px;
     }
@@ -905,6 +912,9 @@ export class AIChatInput extends SignalWatcher(
       flex-shrink: 0;
     }
     .cdz-plan-review.busy {
+      /* The transient "drafting…" skeleton is content-sized, not the full fixed
+         frame — the frame height only applies once the real plan card renders. */
+      height: auto;
       color: var(--affine-v2-text-secondary);
       font-size: 13px;
     }
@@ -1044,11 +1054,24 @@ export class AIChatInput extends SignalWatcher(
       outline: none;
       border-color: color-mix(in srgb, #10a37f 55%, transparent);
     }
+    /* The brief (goal + question + options + answer) is a pinned, non-scrolling
+       header above the list. It renders identically on every page, so the list
+       region below it — and the whole frame — never shifts as you paginate. */
+    .cdz-plan-brief {
+      flex-shrink: 0;
+    }
     .cdz-plan-steps-head {
+      flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 8px;
       margin-bottom: 6px;
+    }
+    .cdz-plan-steps-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
     .cdz-plan-steps-label {
       font-size: 11px;
@@ -1070,25 +1093,44 @@ export class AIChatInput extends SignalWatcher(
     .cdz-plan-selectall:hover {
       background: color-mix(in srgb, #10a37f 12%, transparent);
     }
+    /* The list fills the body and holds exactly one page of fixed-height rows.
+       flex:1 + min-height:0 make it take the leftover space under the brief
+       header without ever overflowing the fixed frame; it does NOT scroll
+       (pagination handles overflow). The rows themselves carry a stable height
+       so pages never change the frame height. */
     .cdz-plan-steps {
+      flex: 1 1 auto;
+      min-height: 0;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 6px;
       padding: 8px;
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
       border-radius: 10px;
       background: var(--affine-v2-layer-background-primary);
     }
+    /* Each plan item is a CONSISTENT-HEIGHT row (the "unresized boxes" fix):
+       a fixed 56px row, never taller, so every page has identical geometry and
+       there is zero layout jump between pages. The editable text clamps to two
+       lines and scrolls inside its own box rather than growing the row. */
     .cdz-plan-step {
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       gap: 8px;
-      padding: 2px 4px;
+      height: 56px;
+      flex-shrink: 0;
+      padding: 4px 6px;
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
       border-radius: 8px;
-      transition: opacity 0.15s ease;
+      background: var(--affine-v2-input-background);
+      transition:
+        opacity 0.15s ease,
+        border-color 0.15s ease,
+        background-color 0.15s ease;
     }
     .cdz-plan-step:hover {
-      background: color-mix(in srgb, #10a37f 5%, transparent);
+      border-color: color-mix(in srgb, #10a37f 40%, transparent);
+      background: color-mix(in srgb, #10a37f 5%, var(--affine-v2-input-background));
     }
     .cdz-plan-step.unchecked {
       opacity: 0.55;
@@ -1100,7 +1142,6 @@ export class AIChatInput extends SignalWatcher(
       flex-shrink: 0;
       width: 18px;
       height: 18px;
-      margin-top: 5px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1132,7 +1173,6 @@ export class AIChatInput extends SignalWatcher(
       flex-shrink: 0;
       width: 20px;
       height: 20px;
-      margin-top: 4px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1142,22 +1182,30 @@ export class AIChatInput extends SignalWatcher(
       color: #0d8a6c;
       background: color-mix(in srgb, #10a37f 14%, transparent);
     }
+    /* Editable step text with a FIXED footprint: it fills the row height and
+       clamps to two lines. Longer text scrolls inside this box (thin, contained)
+       instead of expanding the row — so the row height, and therefore the whole
+       card, stay constant. No field-sizing (poorly supported and the source of
+       the growing/resizing boxes). */
     .cdz-plan-step-text {
       flex: 1;
       min-width: 0;
-      min-height: 28px;
-      max-height: 96px;
+      height: 44px;
       box-sizing: border-box;
       border: 1px solid transparent;
       border-radius: 6px;
-      padding: 4px 6px;
+      padding: 3px 6px;
       color: var(--affine-v2-text-primary);
       background: transparent;
       font: inherit;
       font-size: 12.5px;
-      line-height: 1.45;
+      line-height: 1.4;
       resize: none;
-      field-sizing: content;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .cdz-plan-step-text::-webkit-scrollbar {
+      width: 6px;
     }
     .cdz-plan-step-text:hover {
       border-color: var(--affine-v2-layer-insideBorder-border);
@@ -1165,13 +1213,12 @@ export class AIChatInput extends SignalWatcher(
     .cdz-plan-step-text:focus {
       outline: none;
       border-color: color-mix(in srgb, #10a37f 55%, transparent);
-      background: var(--affine-v2-input-background);
+      background: var(--affine-v2-layer-background-primary);
     }
     .cdz-plan-step-remove {
       flex-shrink: 0;
       width: 20px;
       height: 20px;
-      margin-top: 4px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -1182,7 +1229,9 @@ export class AIChatInput extends SignalWatcher(
       color: var(--affine-v2-text-secondary);
       background: transparent;
       font-size: 11px;
-      opacity: 0;
+      /* Faintly visible at rest so touch devices (no hover) can still remove a
+         step; full opacity on hover/focus for pointer users. */
+      opacity: 0.5;
       transition:
         opacity 0.15s ease,
         color 0.15s ease,
@@ -1201,15 +1250,14 @@ export class AIChatInput extends SignalWatcher(
       opacity: 0;
     }
     .cdz-plan-add-step {
-      align-self: flex-start;
-      margin-top: 2px;
       border: 1px dashed var(--affine-v2-layer-insideBorder-border);
       border-radius: 999px;
-      padding: 3px 12px;
+      padding: 2px 10px;
       cursor: pointer;
       color: var(--affine-v2-text-secondary);
       background: transparent;
-      font-size: 12px;
+      font-size: 11px;
+      font-weight: 600;
       transition:
         color 0.15s ease,
         border-color 0.15s ease;
@@ -1272,16 +1320,31 @@ export class AIChatInput extends SignalWatcher(
       outline-offset: 1px;
     }
 
-    /* ===== Checklist pager (keeps the card from ever clipping steps) =====
-       A slim, flex-shrink:0 footer row under the steps list. Because the card
-       shell is max-height + overflow:hidden and the header/pager/actions are
-       all pinned, windowing the steps into pages removes the inner clip the
-       screenshot showed (step 6 cut off) entirely. */
+    /* Invisible filler row: pads a short last page up to the full page size so
+       every page occupies the same height. Keeps the frame perfectly still as
+       you move between pages (no collapse on the final page). */
+    .cdz-plan-step.filler {
+      border-color: transparent;
+      background: transparent;
+      pointer-events: none;
+    }
+    .cdz-plan-step.filler:hover {
+      border-color: transparent;
+      background: transparent;
+    }
+
+    /* ===== Checklist pager (‹ Précédent · dots · Suivant ›) =====
+       A slim, flex-shrink:0 footer row pinned under the fixed-height list,
+       mirroring the PagedList visual pattern. Because the list is windowed to a
+       fixed row count and the card frame is a fixed height, this pager (not an
+       inner scroller) carries every step beyond the page — nothing ever clips
+       and the frame never jumps. Buttons are ≥40px wide for mobile taps. */
     .cdz-plan-pager {
       flex-shrink: 0;
       display: flex;
       align-items: center;
-      gap: 10px;
+      justify-content: space-between;
+      gap: 8px;
       margin-top: 8px;
       padding-top: 8px;
       border-top: 1px solid
@@ -1289,19 +1352,21 @@ export class AIChatInput extends SignalWatcher(
     }
     .cdz-plan-pager-btn {
       flex-shrink: 0;
-      width: 24px;
-      height: 24px;
+      min-width: 40px;
+      min-height: 30px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
-      border-radius: 7px;
-      padding: 0;
+      border-radius: 8px;
+      padding: 0 10px;
       cursor: pointer;
       color: var(--affine-v2-text-primary);
       background: var(--affine-v2-layer-background-primary);
-      font-size: 15px;
+      font-size: 12px;
+      font-weight: 600;
       line-height: 1;
+      white-space: nowrap;
       transition:
         color 0.15s ease,
         border-color 0.15s ease,
@@ -1320,32 +1385,43 @@ export class AIChatInput extends SignalWatcher(
       outline: 2px solid color-mix(in srgb, #10a37f 60%, transparent);
       outline-offset: 1px;
     }
-    .cdz-plan-pager-mid {
+    .cdz-plan-pager-dots {
       flex: 1;
       min-width: 0;
       display: flex;
-      flex-direction: column;
-      gap: 5px;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
     }
-    .cdz-plan-pager-label {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--affine-v2-text-secondary);
-      text-align: center;
-      white-space: nowrap;
+    .cdz-plan-pager-dot {
+      flex-shrink: 0;
+      width: 8px;
+      height: 8px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      background: color-mix(in srgb, #10a37f 24%, transparent);
+      transition:
+        background-color 0.15s ease,
+        transform 0.15s ease;
     }
-    .cdz-plan-pager-track {
-      height: 3px;
-      border-radius: 999px;
-      background: color-mix(in srgb, #10a37f 14%, transparent);
-      overflow: hidden;
+    .cdz-plan-pager-dot:hover {
+      background: color-mix(in srgb, #10a37f 50%, transparent);
     }
-    .cdz-plan-pager-fill {
-      display: block;
-      height: 100%;
-      border-radius: 999px;
+    .cdz-plan-pager-dot.active {
       background: #10a37f;
-      transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      transform: scale(1.35);
+    }
+    .cdz-plan-pager-dot:focus-visible {
+      outline: 2px solid color-mix(in srgb, #10a37f 60%, transparent);
+      outline-offset: 2px;
+    }
+    .cdz-plan-pager-ellipsis {
+      color: var(--affine-v2-text-secondary);
+      font-size: 12px;
+      line-height: 1;
+      user-select: none;
     }
 
     /* ===== Two-phase review: badge + read-only final plan panel ===== */
@@ -1437,7 +1513,7 @@ export class AIChatInput extends SignalWatcher(
       word-break: break-word;
     }
     @media (prefers-reduced-motion: reduce) {
-      .cdz-plan-pager-fill {
+      .cdz-plan-pager-dot {
         transition: none;
       }
     }
@@ -2006,9 +2082,10 @@ export class AIChatInput extends SignalWatcher(
   @state()
   accessor _planPhase: 'edit' | 'review' = 'edit';
 
-  // Steps shown per checklist page. Small enough that a page of steps plus the
-  // goal/question/answer header always fits the card budget on a short dock.
-  private static readonly CDZ_PLAN_PAGE_SIZE = 4;
+  // Steps shown per checklist page. Rows are a fixed height and the frame is
+  // fixed, so a full page of six always fits the budget without scrolling; the
+  // pager carries any overflow beyond six steps.
+  private static readonly CDZ_PLAN_PAGE_SIZE = 6;
 
   // Total number of checklist pages for the current plan (>= 1).
   private get _planPageCount() {
@@ -2603,6 +2680,46 @@ export class AIChatInput extends SignalWatcher(
     if (next !== this._planPage) this._planPage = next;
   }
 
+  // Page dots for the checklist pager, mirroring the PagedList visual pattern:
+  // at most 7 slots with an ellipsis when there are more pages, the current
+  // page always shown, and each dot clickable to jump straight to that page.
+  private _renderPlanPagerDots(current: number, pageCount: number) {
+    // Build the compact window of page indices to show as dots.
+    const pages: number[] = [];
+    if (pageCount <= 7) {
+      for (let i = 0; i < pageCount; i++) pages.push(i);
+    } else {
+      const add = (i: number) => {
+        if (i >= 0 && i < pageCount && !pages.includes(i)) pages.push(i);
+      };
+      add(0);
+      for (let i = current - 1; i <= current + 1; i++) add(i);
+      add(pageCount - 1);
+      pages.sort((a, b) => a - b);
+    }
+    // Render dots, inserting an ellipsis marker wherever the page index jumps.
+    const nodes: unknown[] = [];
+    let prev = -1;
+    for (const i of pages) {
+      if (prev >= 0 && i - prev > 1) {
+        nodes.push(
+          html`<span class="cdz-plan-pager-ellipsis" aria-hidden="true">…</span>`
+        );
+      }
+      nodes.push(
+        html`<button
+          class="cdz-plan-pager-dot ${i === current ? 'active' : ''}"
+          title=${`Page ${i + 1} sur ${pageCount}`}
+          aria-label=${`Page ${i + 1} sur ${pageCount}`}
+          aria-current=${i === current ? 'true' : 'false'}
+          @click=${() => this._goToPlanPage(i)}
+        ></button>`
+      );
+      prev = i;
+    }
+    return nodes;
+  }
+
   private readonly _planCardKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -2711,50 +2828,69 @@ export class AIChatInput extends SignalWatcher(
     const pageStart = page * pageSize;
     const pageEnd = Math.min(pageStart + pageSize, total);
     const pageSteps = review.steps.slice(pageStart, pageEnd);
-    const paged = pageCount > 1;
+    // Pad the page to a full pageSize of row-slots so EVERY page has identical
+    // geometry — the last (short) page gets invisible filler rows instead of
+    // collapsing, which is what kept the frame from jumping page-to-page.
+    const fillerCount = Math.max(0, pageSize - pageSteps.length);
     return html`<div class="cdz-plan-body">
-      ${review.goal
-        ? html`<div class="cdz-plan-goal">${review.goal}</div>`
-        : nothing}
-      ${review.question
-        ? html`<div class="cdz-plan-question">${review.question}</div>`
-        : nothing}
-      ${review.options.length
-        ? html`<div class="cdz-plan-options">
-            ${review.options.map(
-              option => html`<button
-                class="cdz-plan-option ${review.answer === option ? 'active' : ''}"
-                @click=${() => {
-                  this.planReview = {
-                    ...review,
-                    answer: review.answer === option ? '' : option,
-                  };
-                }}
-              >
-                ${option}
-              </button>`
-            )}
-          </div>`
-        : nothing}
-      <input
-        class="cdz-plan-answer"
-        placeholder="Add a detail or constraint (optional)…"
-        .value=${review.answer}
-        @input=${(event: Event) => {
-          this.planReview = {
-            ...review,
-            answer: (event.target as HTMLInputElement).value,
-          };
-        }}
-      />
+      <div class="cdz-plan-brief">
+        ${review.goal
+          ? html`<div class="cdz-plan-goal">${review.goal}</div>`
+          : nothing}
+        ${review.question
+          ? html`<div class="cdz-plan-question">${review.question}</div>`
+          : nothing}
+        ${review.options.length
+          ? html`<div class="cdz-plan-options">
+              ${review.options.map(
+                option => html`<button
+                  class="cdz-plan-option ${review.answer === option ? 'active' : ''}"
+                  @click=${() => {
+                    this.planReview = {
+                      ...review,
+                      answer: review.answer === option ? '' : option,
+                    };
+                  }}
+                >
+                  ${option}
+                </button>`
+              )}
+            </div>`
+          : nothing}
+        <input
+          class="cdz-plan-answer"
+          placeholder="Add a detail or constraint (optional)…"
+          .value=${review.answer}
+          @input=${(event: Event) => {
+            this.planReview = {
+              ...review,
+              answer: (event.target as HTMLInputElement).value,
+            };
+          }}
+        />
+      </div>
       <div class="cdz-plan-steps-head">
         <span class="cdz-plan-steps-label">Steps to run</span>
-        <button
-          class="cdz-plan-selectall"
-          @click=${() => this._setAllPlanSteps(!allChecked)}
-        >
-          ${allChecked ? 'Clear all' : 'Select all'}
-        </button>
+        <div class="cdz-plan-steps-head-actions">
+          <button
+            class="cdz-plan-selectall"
+            @click=${() => this._setAllPlanSteps(!allChecked)}
+          >
+            ${allChecked ? 'Clear all' : 'Select all'}
+          </button>
+          <button
+            class="cdz-plan-add-step"
+            title="Add step"
+            aria-label="Add step"
+            ?disabled=${review.steps.length >= 12}
+            @click=${() =>
+              this._insertPlanStepAfter(
+                review.steps[review.steps.length - 1]?.id ?? 0
+              )}
+          >
+            + Add step
+          </button>
+        </div>
       </div>
       <div class="cdz-plan-steps" role="group" aria-label="Editable plan checklist">
         ${repeat(
@@ -2778,7 +2914,7 @@ export class AIChatInput extends SignalWatcher(
               <textarea
                 class="cdz-plan-step-text"
                 data-step-id=${step.id}
-                rows="1"
+                rows="2"
                 placeholder="Describe this step…"
                 aria-label=${`Plan step ${index + 1}`}
                 .value=${step.text}
@@ -2803,64 +2939,44 @@ export class AIChatInput extends SignalWatcher(
             </div>`;
           }
         )}
-        <button
-          class="cdz-plan-add-step"
-          ?disabled=${review.steps.length >= 12}
-          @click=${() =>
-            this._insertPlanStepAfter(
-              review.steps[review.steps.length - 1]?.id ?? 0
-            )}
-        >
-          + Add step
-        </button>
+        ${fillerCount > 0
+          ? repeat(
+              Array.from({ length: fillerCount }, (_, i) => i),
+              i => `filler-${i}`,
+              () => html`<div class="cdz-plan-step filler" aria-hidden="true"></div>`
+            )
+          : nothing}
       </div>
-      </div>
-      ${paged
+      ${pageCount > 1
         ? html`<div
             class="cdz-plan-pager"
             role="navigation"
             aria-label="Plan step pages"
           >
             <button
-              class="cdz-plan-pager-btn"
-              title="Previous steps"
-              aria-label="Previous steps"
+              class="cdz-plan-pager-btn text"
+              title="Étape précédente"
+              aria-label="Précédent"
               ?disabled=${page <= 0}
               @click=${() => this._goToPlanPage(page - 1)}
             >
-              ‹
+              ‹ Précédent
             </button>
-            <div class="cdz-plan-pager-mid">
-              <span class="cdz-plan-pager-label"
-                >${pageStart + 1}–${pageEnd} of ${total}</span
-              >
-              <div
-                class="cdz-plan-pager-track"
-                role="progressbar"
-                aria-valuemin="1"
-                aria-valuemax=${pageCount}
-                aria-valuenow=${page + 1}
-                aria-label=${`Page ${page + 1} of ${pageCount}`}
-              >
-                <span
-                  class="cdz-plan-pager-fill"
-                  style=${styleMap({
-                    width: `${((page + 1) / pageCount) * 100}%`,
-                  })}
-                ></span>
-              </div>
+            <div class="cdz-plan-pager-dots" role="presentation">
+              ${this._renderPlanPagerDots(page, pageCount)}
             </div>
             <button
-              class="cdz-plan-pager-btn"
-              title="More steps"
-              aria-label="More steps"
+              class="cdz-plan-pager-btn text"
+              title="Étape suivante"
+              aria-label="Suivant"
               ?disabled=${page >= pageCount - 1}
               @click=${() => this._goToPlanPage(page + 1)}
             >
-              ›
+              Suivant ›
             </button>
           </div>`
         : nothing}
+      </div>
       <div class="cdz-plan-actions">
         <span class="cdz-plan-selected-count"
           >${checked} of ${total} selected</span

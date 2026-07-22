@@ -1,5 +1,5 @@
 import { artifactStore } from '@affine/core/modules/ai-artifacts/store';
-import { type ReactNode, useCallback, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
 
 import {
   Banner,
@@ -64,6 +64,16 @@ const BASE_FLOW: Step[] = [
   'accent',
   'pin',
   'review',
+];
+
+// The flow WITH the template step spliced in right after `welcome`. Precomputed
+// as a module constant so both variants are stable references we can switch
+// between deterministically (never reshuffled element-by-element under a live
+// cursor).
+const TEMPLATE_FLOW: Step[] = [
+  'welcome',
+  'template',
+  ...BASE_FLOW.slice(1),
 ];
 
 // The create phase after the user confirms on the Review step.
@@ -138,18 +148,41 @@ export const ShopWizard = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(
     null
   );
+
+  // -------------------------------------------------------------------------
+  // FLOW — single source of truth for the step order, captured STABLY.
+  //
+  // The catalog fetch resolves asynchronously. If we recomputed FLOW on every
+  // render and then let it grow (BASE_FLOW→TEMPLATE_FLOW) *after* the user had
+  // already walked past `welcome`, the index of every later step would shift
+  // under the live cursor — jumping the user backwards mid-wizard. And any
+  // navigation closure that captured the *old* length would clamp the cursor
+  // short (the original stuck-at-PIN bug: `next` memoized with [] kept the
+  // BASE_FLOW cap of 5, so advancing from `pin` clamped back to `pin` and
+  // `review` was unreachable while the header still drew 7 dots).
+  //
+  // Fix: freeze the flow SHAPE the moment the user leaves `welcome` (stepIdx>0).
+  // While still on `welcome` we track the live catalog result so the picker
+  // step appears/disappears cleanly; once we advance, the shape is locked for
+  // the rest of the session. Either way FLOW is a stable module reference, and
+  // all navigation reads the CURRENT flow via a ref (never a stale closure).
+  // -------------------------------------------------------------------------
+  const lockedFlowRef = useRef<Step[] | null>(null);
   const FLOW = useMemo<Step[]>(() => {
-    if (templatesState.kind !== 'ready') return BASE_FLOW;
-    // Splice `template` right after `welcome`.
-    return [
-      'welcome',
-      'template',
-      ...BASE_FLOW.slice(1),
-    ] as Step[];
+    // Once locked (user advanced past welcome), never change the shape.
+    if (lockedFlowRef.current) return lockedFlowRef.current;
+    return templatesState.kind === 'ready' ? TEMPLATE_FLOW : BASE_FLOW;
   }, [templatesState.kind]);
 
-  // Clamp the cursor if the flow length changed under us (e.g. the catalog
-  // resolved while the user sat on `welcome`): keep the same logical step.
+  // Keep a live ref to the current FLOW so navigation callbacks always clamp
+  // against the up-to-date length, independent of when they were memoized.
+  const flowRef = useRef<Step[]>(FLOW);
+  flowRef.current = FLOW;
+
+  // Clamp the cursor if the flow length changed under us (defensive — with the
+  // lock above the shape no longer changes after the first advance, but a
+  // welcome→ready transition can still shrink/grow while on step 0): keep the
+  // same logical step and never index out of bounds.
   const step = FLOW[Math.min(stepIdx, FLOW.length - 1)];
 
   // Settings model — seeded with the template defaults so a user who clicks
@@ -161,6 +194,11 @@ export const ShopWizard = ({
   const [pinConfirm, setPinConfirm] = useState('1234');
 
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
+
+  // A transient, human reason shown inline when the user taps Continue while a
+  // gate is unmet (so advancing NEVER silently no-ops — the wizard always says
+  // why). Cleared on any successful advance or field edit that re-enables.
+  const [blockReason, setBlockReason] = useState<string | null>(null);
 
   // Per-field validation (client mirror of the C5 server rules).
   const nameErr = validateStoreName(storeName);
@@ -180,26 +218,76 @@ export const ShopWizard = ({
     [storeName, whatsapp, accent, pin]
   );
 
-  const canAdvance = ((): boolean => {
-    switch (step) {
-      case 'name':
-        return !nameErr;
-      case 'whatsapp':
-        return !waErr;
-      case 'accent':
-        return !accentErr;
-      case 'pin':
-        return !pinErr && !pinMatchErr;
-      default:
-        return true;
-    }
-  })();
+  // The gate for the current step, plus a reason string when it can't pass.
+  // Returning the reason (not just a bool) lets Continue surface exactly what's
+  // wrong even when the per-field error is masked (e.g. an untouched seed).
+  const gateFor = useCallback(
+    (s: Step): string | null => {
+      switch (s) {
+        case 'name':
+          return nameErr;
+        case 'whatsapp':
+          return waErr;
+        case 'accent':
+          return accentErr;
+        case 'pin':
+          return pinErr ?? pinMatchErr;
+        default:
+          return null;
+      }
+    },
+    [nameErr, waErr, accentErr, pinErr, pinMatchErr]
+  );
+
+  const canAdvance = gateFor(step) == null;
 
   const next = useCallback(() => {
-    setStepIdx(i => Math.min(i + 1, FLOW.length - 1));
-  }, []);
+    const flow = flowRef.current;
+    const cur = flow[Math.min(stepIdx, flow.length - 1)];
+    const reason = gateFor(cur);
+    if (reason) {
+      // Blocked by an unmet gate — SHOW why, and log a dev aid. Never no-op.
+      setBlockReason(reason);
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(
+          `[ShopWizard] blocked transition from "${cur}" (idx ${stepIdx}/${flow.length}): ${reason}`
+        );
+      }
+      return;
+    }
+    setBlockReason(null);
+    setStepIdx(i => {
+      const f = flowRef.current;
+      const target = Math.min(i + 1, f.length - 1);
+      if (target === i && process.env.NODE_ENV !== 'production') {
+        // Defensive: we passed the gate but the cursor can't move. This should
+        // only ever happen on the last step (review is handled separately), so
+        // a warning here would surface any future index-drift regression.
+        console.warn(
+          `[ShopWizard] advance produced no movement at idx ${i} (flow len ${f.length}, step "${f[i]}")`
+        );
+      }
+      // Lock the flow shape the instant we leave welcome so a late catalog
+      // resolve can't reshuffle indices under the cursor for the rest of the
+      // session.
+      if (i === 0 && !lockedFlowRef.current) {
+        lockedFlowRef.current = f;
+      }
+      return target;
+    });
+  }, [stepIdx, gateFor]);
+
   const back = useCallback(() => {
+    setBlockReason(null);
     setStepIdx(i => Math.max(i - 1, 0));
+  }, []);
+
+  // Jump straight to a named step (used by the Review "Edit" links). Resolves
+  // the index against the CURRENT flow and clears any stale block reason.
+  const goToStep = useCallback((s: Step) => {
+    setBlockReason(null);
+    const idx = flowRef.current.indexOf(s);
+    if (idx >= 0) setStepIdx(idx);
   }, []);
 
   // ---- The real creation pipeline ----------------------------------------
@@ -417,7 +505,10 @@ export const ShopWizard = ({
               value={storeName}
               maxLength={60}
               placeholder="Ma Boutique"
-              onChange={e => setStoreName(e.target.value)}
+              onChange={e => {
+                setStoreName(e.target.value);
+                setBlockReason(null);
+              }}
               autoFocus
             />
           </Field>
@@ -436,7 +527,10 @@ export const ShopWizard = ({
               value={whatsapp}
               inputMode="numeric"
               placeholder="213600000000"
-              onChange={e => setWhatsapp(e.target.value.replace(/[^0-9]/g, '').slice(0, 15))}
+              onChange={e => {
+                setWhatsapp(e.target.value.replace(/[^0-9]/g, '').slice(0, 15));
+                setBlockReason(null);
+              }}
               autoFocus
             />
           </Field>
@@ -453,7 +547,10 @@ export const ShopWizard = ({
                   <button
                     key={sw}
                     type="button"
-                    onClick={() => setAccent(sw)}
+                    onClick={() => {
+                      setAccent(sw);
+                      setBlockReason(null);
+                    }}
                     aria-label={sw}
                     title={sw}
                     style={{
@@ -492,6 +589,7 @@ export const ShopWizard = ({
                     let v = e.target.value.trim();
                     if (v && !v.startsWith('#')) v = `#${v}`;
                     setAccent(v.slice(0, 7));
+                    setBlockReason(null);
                   }}
                 />
               </div>
@@ -510,7 +608,10 @@ export const ShopWizard = ({
                 inputMode="numeric"
                 type="password"
                 placeholder="4–8 digits"
-                onChange={e => setPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))}
+                onChange={e => {
+                  setPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
+                  setBlockReason(null);
+                }}
                 autoFocus
               />
             </Field>
@@ -521,7 +622,10 @@ export const ShopWizard = ({
                 inputMode="numeric"
                 type="password"
                 placeholder="Re-enter your PIN"
-                onChange={e => setPinConfirm(e.target.value.replace(/[^0-9]/g, '').slice(0, 8))}
+                onChange={e => {
+                  setPinConfirm(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
+                  setBlockReason(null);
+                }}
               />
             </Field>
           </div>
@@ -540,21 +644,29 @@ export const ShopWizard = ({
               border: `1px solid ${C.border}`,
             }}
           >
-            <ReviewRow label="Store name" value={settings.storeName} onEdit={() => setStepIdx(FLOW.indexOf('name'))} />
-            <ReviewRow label="WhatsApp" value={settings.whatsapp} onEdit={() => setStepIdx(FLOW.indexOf('whatsapp'))} />
+            <ReviewRow label="Store name" value={settings.storeName} onEdit={() => goToStep('name')} />
+            <ReviewRow label="WhatsApp" value={settings.whatsapp} onEdit={() => goToStep('whatsapp')} />
             <ReviewRow
               label="Accent"
               value={settings.accentColor}
               swatch={settings.accentColor}
-              onEdit={() => setStepIdx(FLOW.indexOf('accent'))}
+              onEdit={() => goToStep('accent')}
             />
-            <ReviewRow label="Manager PIN" value={'•'.repeat(settings.adminPin.length)} onEdit={() => setStepIdx(FLOW.indexOf('pin'))} />
+            <ReviewRow label="Manager PIN" value={'•'.repeat(settings.adminPin.length)} onEdit={() => goToStep('pin')} />
           </div>
           <Banner tone="info">
             We’ll publish your storefront live and prepare a matching ERP
             dashboard in your Studio.
           </Banner>
         </StepShell>
+      ) : null}
+
+      {/* Inline block reason — Continue never silently no-ops: a blocked tap
+          explains itself here even when the per-field error is masked. */}
+      {blockReason ? (
+        <div style={{ marginTop: 14 }}>
+          <Banner tone="error">{blockReason}</Banner>
+        </div>
       ) : null}
 
       {/* Footer nav */}
@@ -576,9 +688,14 @@ export const ShopWizard = ({
             🚀 Create my shop
           </button>
         ) : (
+          // NOTE: the button is intentionally NOT `disabled`. A disabled button
+          // swallows the click and the user gets no feedback (part of the
+          // original stuck-at-PIN confusion). Instead it stays clickable and a
+          // blocked tap surfaces the reason inline via `next()`. We keep the
+          // dimmed affordance when blocked so the state is still legible.
           <button
             style={btnStyle('primary', !canAdvance)}
-            disabled={!canAdvance}
+            aria-disabled={!canAdvance}
             onClick={next}
           >
             {step === 'welcome' ? 'Get started' : 'Continue'} →

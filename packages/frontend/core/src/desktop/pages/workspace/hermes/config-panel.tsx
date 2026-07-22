@@ -1,5 +1,13 @@
 import { getCapabilities } from '@affine/core/modules/agents/api';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useAgents } from '@affine/core/modules/agents/use-agents';
+import { WorkbenchLink } from '@affine/core/modules/workbench';
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 
 import {
   type AgentMode,
@@ -305,6 +313,11 @@ export const HermesConfigPanel = ({
         )}
       </Panel>
 
+      {/* Canaux — how Hermes reaches the outside world (Telegram / WhatsApp /
+          web). Read-only status derived from the account-level caps; the real
+          setup lives on the global connections page. */}
+      <CanauxPanel />
+
       {/* Saved workflows */}
       <Panel
         title={`Saved workflows (${cleanWorkflows.length})`}
@@ -386,6 +399,168 @@ export const HermesConfigPanel = ({
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Canaux — the account-level channel status card. Reads the R7 roster caps via
+// useAgents() (GET /api/v1/agents → telegramEnabled / whatsappEnabled /
+// webEnabled). This is read-only: pairing / setup happens on the global
+// connections studio, reachable from the button. Fail-soft: when the roster
+// endpoint 404s (feature dark) useAgents flips `disabled` and hands back the
+// safe DEFAULT_AGENT_CAPS, so every channel simply reads "non configuré" — no
+// error surfaces (a dark feature is not a failure). The button is always shown
+// so the user still has a path to the connections page.
+// ---------------------------------------------------------------------------
+type ChannelTone = 'ok' | 'muted';
+
+const CanauxPanel = () => {
+  const { caps, loading } = useAgents();
+  // `whatsappEnabled` is surfaced on the caps object by the backend but is not
+  // yet in the AgentCaps type — read it defensively (same idiom the /agents
+  // connections page uses) so this stays byte-safe if the field is absent.
+  const telegramOn = !!caps.telegramEnabled;
+  const whatsappOn = !!(caps as { whatsappEnabled?: boolean }).whatsappEnabled;
+  const webOn = !!caps.webEnabled;
+
+  return (
+    <Panel
+      title="Canaux"
+      action={
+        <WorkbenchLink
+          to="/agents/connections"
+          draggable={false}
+          style={{ ...miniBtnStyle('secondary'), textDecoration: 'none' }}
+        >
+          Gérer les connexions →
+        </WorkbenchLink>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <ChannelRow
+          icon="✈"
+          label="Telegram"
+          on={telegramOn}
+          loading={loading}
+          okLabel="Configuré"
+          explain="Un bot Telegram doit être configuré par l’admin."
+        />
+        <ChannelRow
+          icon="💬"
+          label="WhatsApp"
+          on={whatsappOn}
+          loading={loading}
+          okLabel="Configuré"
+          explain="La passerelle WhatsApp arrive — sera activée automatiquement."
+        />
+        <ChannelRow
+          icon="🌐"
+          label="Accès web"
+          on={webOn}
+          loading={loading}
+          okLabel="Activé"
+          offLabel="Désactivé"
+          explain="Vos agents peuvent chercher sur le web."
+          explainWhenOn
+        />
+      </div>
+    </Panel>
+  );
+};
+
+// One channel row: an icon + label on the left, a status chip on the right, and
+// a one-line explain beneath. `on` drives the green "configuré/activé" chip;
+// otherwise a neutral chip with the channel's copy. While the roster is loading
+// we show a neutral "…" chip rather than a misleading state.
+const ChannelRow = ({
+  icon,
+  label,
+  on,
+  loading,
+  okLabel,
+  offLabel = 'Non configuré — token requis',
+  explain,
+  explainWhenOn = false,
+}: {
+  icon: string;
+  label: string;
+  on: boolean;
+  loading: boolean;
+  okLabel: string;
+  offLabel?: string;
+  explain: string;
+  // When true the explain line also shows in the enabled state (used for the
+  // web row, whose copy is informational rather than a "how to enable" hint).
+  explainWhenOn?: boolean;
+}) => {
+  const tone: ChannelTone = on ? 'ok' : 'muted';
+  const chipLabel = loading ? '…' : on ? okLabel : offLabel;
+  const showExplain = !loading && (on ? explainWhenOn : true);
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '10px 12px',
+        borderRadius: 9,
+        background: C.bg,
+        border: `1px solid ${C.border}`,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span aria-hidden style={{ fontSize: 15, flexShrink: 0 }}>
+          {icon}
+        </span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.text }}>
+          {label}
+        </span>
+        <ChannelChip tone={tone}>{chipLabel}</ChannelChip>
+      </div>
+      {showExplain ? (
+        <span style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, paddingLeft: 25 }}>
+          {explain}
+        </span>
+      ) : null}
+    </div>
+  );
+};
+
+// A compact status chip: green (configured/enabled) or neutral (everything
+// else). Mirrors the connections-page chip tones using the Hermes C palette.
+const ChannelChip = ({
+  tone,
+  children,
+}: {
+  tone: ChannelTone;
+  children: ReactNode;
+}) => (
+  <span
+    style={{
+      flexShrink: 0,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '3px 9px',
+      borderRadius: 999,
+      fontSize: 11,
+      fontWeight: 600,
+      whiteSpace: 'nowrap',
+      color: tone === 'ok' ? C.okText : C.muted,
+      background: tone === 'ok' ? C.okSoft : 'transparent',
+      border: `1px solid ${tone === 'ok' ? C.okBorder : C.border}`,
+    }}
+  >
+    <span
+      aria-hidden
+      style={{
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: tone === 'ok' ? C.okText : C.muted,
+      }}
+    />
+    {children}
+  </span>
+);
 
 const ToolToggle = ({
   tool,

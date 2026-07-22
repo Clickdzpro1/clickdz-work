@@ -21,8 +21,11 @@ import type {
   AgentThread,
   AgentThreadSummary,
 } from '@affine/core/modules/agents/types';
+import { useAgents } from '@affine/core/modules/agents/use-agents';
+import { WorkbenchLink } from '@affine/core/modules/workbench';
 import {
   type CSSProperties,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -352,6 +355,11 @@ export const OpenClawDashboard = ({
         </Panel>
       </div>
 
+      {/* Canaux — how the agent reaches the outside world (Telegram / WhatsApp
+          / web). Read-only status from the account-level roster caps; setup
+          lives on the global connections studio. Fail-soft on a dark roster. */}
+      <CanauxPanel />
+
       {/* Recent projects/threads */}
       <Panel
         title="Recent tasks"
@@ -500,6 +508,171 @@ export const OpenClawDashboard = ({
 };
 
 // ---- sub-components --------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Canaux — account-level channel status, read from the R7 roster caps via
+// useAgents() (GET /api/v1/agents → telegramEnabled / whatsappEnabled /
+// webEnabled). Read-only here; pairing / setup happens on the global
+// connections studio (reachable from the button). Fail-soft: a 404 (feature
+// dark) flips useAgents `disabled` and returns the safe DEFAULT_AGENT_CAPS, so
+// every channel reads "non configuré" with no error surfaced. Matches the
+// OpenClaw idiom — Panel shell, mono uppercase status chips (like the ThreadRow
+// "sandbox" chip), the shared btnStyle.
+// ---------------------------------------------------------------------------
+type ChannelTone = 'ok' | 'muted';
+
+const CanauxPanel = () => {
+  const { caps, loading } = useAgents();
+  // `whatsappEnabled` is surfaced on the caps object by the backend but is not
+  // yet in the AgentCaps type — read it defensively (same idiom the /agents
+  // connections page uses) so this stays byte-safe if the field is absent.
+  const telegramOn = !!caps.telegramEnabled;
+  const whatsappOn = !!(caps as { whatsappEnabled?: boolean }).whatsappEnabled;
+  const webOn = !!caps.webEnabled;
+
+  return (
+    <Panel
+      title="Canaux"
+      action={
+        <WorkbenchLink
+          to="/agents/connections"
+          draggable={false}
+          style={{ ...btnStyle('secondary'), padding: '4px 10px', fontSize: 12, textDecoration: 'none' }}
+        >
+          Gérer les connexions →
+        </WorkbenchLink>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <ChannelRow
+          icon="✈"
+          label="Telegram"
+          on={telegramOn}
+          loading={loading}
+          okLabel="configuré"
+          explain="Un bot Telegram doit être configuré par l’admin."
+        />
+        <ChannelRow
+          icon="💬"
+          label="WhatsApp"
+          on={whatsappOn}
+          loading={loading}
+          okLabel="configuré"
+          explain="La passerelle WhatsApp arrive — sera activée automatiquement."
+        />
+        <ChannelRow
+          icon="🌐"
+          label="Accès web"
+          on={webOn}
+          loading={loading}
+          okLabel="activé"
+          offLabel="désactivé"
+          explain="Vos agents peuvent chercher sur le web."
+          explainWhenOn
+        />
+      </div>
+    </Panel>
+  );
+};
+
+// One channel row (OpenClaw idiom): icon + label, a mono status chip, and a
+// one-line explain beneath. `on` drives the green "configuré/activé" chip;
+// otherwise a neutral chip with the channel's copy. A loading roster shows a
+// neutral "…" chip rather than a misleading state.
+const ChannelRow = ({
+  icon,
+  label,
+  on,
+  loading,
+  okLabel,
+  offLabel = 'non configuré — token requis',
+  explain,
+  explainWhenOn = false,
+}: {
+  icon: string;
+  label: string;
+  on: boolean;
+  loading: boolean;
+  okLabel: string;
+  offLabel?: string;
+  explain: string;
+  // When true the explain line also shows in the enabled state (used for the
+  // web row, whose copy is informational rather than a "how to enable" hint).
+  explainWhenOn?: boolean;
+}) => {
+  const tone: ChannelTone = on ? 'ok' : 'muted';
+  const chipLabel = loading ? '…' : on ? okLabel : offLabel;
+  const showExplain = !loading && (on ? explainWhenOn : true);
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '10px 12px',
+        borderRadius: 10,
+        background: C.bg,
+        border: `1px solid ${C.border}`,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span aria-hidden style={{ fontSize: 15, flexShrink: 0 }}>
+          {icon}
+        </span>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 700, color: C.text }}>
+          {label}
+        </span>
+        <ChannelChip tone={tone}>{chipLabel}</ChannelChip>
+      </div>
+      {showExplain ? (
+        <span style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, paddingLeft: 25 }}>
+          {explain}
+        </span>
+      ) : null}
+    </div>
+  );
+};
+
+// A compact mono status chip: green (configured/enabled) or neutral. Mirrors
+// the uppercase mono chip used by ThreadRow's "sandbox" badge.
+const ChannelChip = ({
+  tone,
+  children,
+}: {
+  tone: ChannelTone;
+  children: ReactNode;
+}) => (
+  <span
+    style={{
+      flexShrink: 0,
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '1px 9px',
+      borderRadius: 999,
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: '0.04em',
+      textTransform: 'uppercase',
+      fontFamily: monoFamily,
+      whiteSpace: 'nowrap',
+      color: tone === 'ok' ? C.okText : C.muted,
+      background: tone === 'ok' ? C.okBg : 'transparent',
+      border: `1px solid ${tone === 'ok' ? C.okBorder : C.border}`,
+    }}
+  >
+    <span
+      aria-hidden
+      style={{
+        width: 6,
+        height: 6,
+        borderRadius: '50%',
+        background: tone === 'ok' ? C.okText : C.muted,
+      }}
+    />
+    {children}
+  </span>
+);
 
 const ThreadRow = ({
   thread,

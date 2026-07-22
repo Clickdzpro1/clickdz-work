@@ -188,7 +188,7 @@ const ShopErpPage = () => {
 
   return (
     <>
-      <ViewTitle title="Shop ERP" />
+      <ViewTitle title="DzOS" />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
@@ -203,8 +203,8 @@ const ShopErpPage = () => {
             color: C.text,
           }}
         >
-          <span style={{ fontSize: 16 }}>🛍️</span>
-          Shop ERP
+          <span style={{ fontSize: 16 }}>⚡</span>
+          DzOS
           <span
             style={{
               fontSize: 10,
@@ -261,11 +261,11 @@ const ShopErpPage = () => {
                     color: C.text,
                   }}
                 >
-                  <span aria-hidden>🛍️</span> Shop ERP
+                  <span aria-hidden>⚡</span> DzOS
                 </h1>
                 <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
-                  Lancez une boutique en ligne — paiement à la livraison,
-                  commande par WhatsApp — et gérez-la avec son ERP intégré.
+                  Lancez votre business en ligne — encaissement à la livraison,
+                  commandes WhatsApp — le tout géré par DzOS.
                 </p>
               </header>
             )}

@@ -17,6 +17,9 @@ import {
   ViewTitle,
   WorkbenchService,
 } from '@affine/core/modules/workbench';
+// Shared paginated-list kit (R9, Feuillet). Dependency-light, boot-safe; the
+// run history is paged (pageSize 10, column) instead of rendering every run.
+import { PagedList } from '@affine/core/clickdz/paged-list';
 import { useService } from '@toeverything/infra';
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -345,18 +348,26 @@ const AgentsRunsPage = () => {
             ) : runs.length === 0 ? (
               <EmptyRow t={t} agentLabel={agentLabel(agent)} />
             ) : (
-              <div
-                style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
-              >
-                {runs.map(run => (
+              // Paged run history (pageSize 10, column). `key={agent}` resets to
+              // page 1 whenever the selected agent tab changes (each tab shows
+              // its own runs from page 1). Labels come from `pagerLabels(dir)`:
+              // the agents i18n catalogue has NO common.prev/common.next keys,
+              // so we pass FR/AR literals chosen by text direction rather than
+              // invent catalogue keys owned by the agents module.
+              <PagedList<AgentRunSummary>
+                key={agent}
+                items={runs}
+                pageSize={10}
+                labels={pagerLabels(dir)}
+                renderItem={run => (
                   <ExecutionRow
                     key={run.runId}
                     t={t}
                     run={run}
                     onOpen={() => openRun(run.runId)}
                   />
-                ))}
-              </div>
+                )}
+              />
             )}
           </div>
         </div>
@@ -367,6 +378,32 @@ const AgentsRunsPage = () => {
 
 function agentLabel(agent: AgentName): string {
   return AGENTS.find(a => a.id === agent)?.label ?? agent;
+}
+
+// Pager labels for the run-history PagedList. The shared agents i18n catalogue
+// (modules/agents/i18n.ts) does NOT define common.prev / common.next keys, and
+// `t()` returns the key verbatim for an unknown key (never a translated
+// string) — so we can't route the pager through the catalogue without adding
+// keys owned by the agents module. Instead we pick FR (ltr) or Algerian darja
+// (rtl) literals by text direction; this keeps the pager localized in step with
+// the page's language without inventing catalogue keys. (If common.prev /
+// common.next are later added to the catalogue, swap these for t(...) calls.)
+function pagerLabels(dir: 'rtl' | 'ltr'): {
+  prev: string;
+  next: string;
+  page: (n: number, total: number) => string;
+} {
+  return dir === 'rtl'
+    ? {
+        prev: '‹ السابق',
+        next: 'التالي ›',
+        page: (n, total) => `صفحة ${n}/${total}`,
+      }
+    : {
+        prev: '‹ Précédent',
+        next: 'Suivant ›',
+        page: (n, total) => `Page ${n}/${total}`,
+      };
 }
 
 // Mobile polish: tighten the canvas padding on phones (the flex/wrap layout
