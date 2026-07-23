@@ -386,6 +386,60 @@ export function hasPendingCodMarker(
 }
 
 // ---------------------------------------------------------------------------
+// R15 — settled Chargily online payment -> caisse.
+//
+// Unlike the COD marker above, an online Chargily payment is REAL money in the
+// moment the webhook confirms it, so its caisse row is NOT pending — it counts
+// immediately in day-close/reconcile (inByMethod.chargily). The bridge's
+// markOrderPaid() calls buildChargilyCaisseEntry() right after it flips the
+// order to paid, then erpCreateRecord's the returned entry with the write token.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the settled-Chargily caisse entry for an order that just went paid via
+ * the webhook: 'in'/'chargily', amount = order total (integer DZD), tagged with
+ * the order ref, NOT pending. Returns null when the total is <= 0 (no-op). Pure;
+ * the bridge does the create fail-soft. Mirrors buildPendingCodEntry's shape so
+ * the two settlement paths (COD marker, online paid) stay structurally aligned.
+ */
+export function buildChargilyCaisseEntry(
+  order: CaisseRecord
+): { entry: CaisseRecord; collection: string } | null {
+  const amount = caisseOrderTotal(order);
+  if (!(amount > 0)) return null;
+  const date = caisseParseDate(order);
+  const ref = caisseStr(order.ref).trim().slice(0, CAISSE_ORDER_REF_MAX);
+  const entry: CaisseRecord = {
+    date,
+    kind: 'in',
+    amount,
+    method: 'chargily',
+    note: 'Paiement Chargily (en ligne)',
+    ...(ref ? { orderRef: ref } : {}),
+  };
+  return { entry, collection: caisseCollectionForDate(date) };
+}
+
+/**
+ * Idempotency guard: an 'in'/'chargily' caisse row for this orderRef already
+ * exists in the given partition rows. Lets markOrderPaid stay idempotent under
+ * a re-fired webhook or a manual re-mark. Keyed on orderRef.
+ */
+export function hasChargilyCaisseEntry(
+  rows: CaisseRecord[],
+  orderRef: string
+): boolean {
+  const ref = caisseStr(orderRef).trim();
+  if (!ref) return false;
+  return rows.some(
+    r =>
+      caisseStr(r.kind) === 'in' &&
+      caisseStr(r.method) === 'chargily' &&
+      caisseStr(r.orderRef).trim() === ref
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Date-range helpers for reconcile / day-close.
 // ---------------------------------------------------------------------------
 
