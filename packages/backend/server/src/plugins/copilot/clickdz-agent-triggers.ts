@@ -578,7 +578,21 @@ export async function toggleTrigger(
 // ===========================================================================
 export function deferConsequential(rec: { channel?: string } | null): boolean {
   const c = rec?.channel;
-  return c === 'schedule' || c === 'webhook';
+  // A run is UNSUPERVISED when nobody is watching the console in real time.
+  // That's true not only for schedule/webhook triggers but ALSO for inbound
+  // MESSAGING channels: a Telegram/WhatsApp message from a customer spawns a
+  // detached run with no operator present, so a consequential tool inside it
+  // (money-affecting send, external write, etc.) must be DEFERRED for approval
+  // rather than fired autonomously — same trust stance as R8's schedule/webhook
+  // guard. BYOT Telegram + per-user WhatsApp both went live once CDZ_DATA_SECRET
+  // was provisioned; before that they were dark, so this widening has no
+  // retroactive effect on already-running connections.
+  return (
+    c === 'schedule' ||
+    c === 'webhook' ||
+    c === 'telegram' ||
+    c === 'whatsapp'
+  );
 }
 
 // ===========================================================================
