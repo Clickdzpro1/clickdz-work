@@ -19,6 +19,18 @@
 // unavailable and are excluded from the catalog/loop).
 
 import type { CopilotTool } from './tools/tool';
+// R16 (WhatsApp BYOT): the WhatsApp send tool resolves the run's per-(user,agent)
+// gateway instance from the JSON channel record — which is written via the Cache
+// provider (JSON.stringify at rest). buildDefaultRegistry's deps carry only the
+// raw `redis` handle (see the hermes/openclaw ctor callsites: no `cache` is
+// passed), so registerWhatsappFailSoft below WRAPS deps.redis in a `Cache` and
+// hands `{ cache }` to createWhatsappSendTool — the "pass a Cache handle" the
+// design calls for. `Cache` is a plain provider class (new Cache(redis) ===
+// new CacheProvider(redis)); value-importing it is lint-nest-safe (it resolves
+// at boot; it is not a decorator). This is the one place the otherwise
+// framework-light registry touches a base provider, and only to bridge the
+// record store the WA tool reads.
+import { Cache } from '../../base';
 
 // ---------------------------------------------------------------------------
 // Pinned interfaces (R6-CONTRACT §"Tool registry") — exact names.
@@ -247,7 +259,8 @@ export function buildDefaultRegistry(
   // construction), so a tool landing a few ms later is fine.
   void registerTelegramFailSoft(registry, deps).catch(() => {});
 
-  // whatsapp_send — built by Wassila in a sibling module (clickdz-wa-client).
+  // whatsapp_send — built by the WhatsApp BYOT controller module
+  // (clickdz-agent-whatsapp, R16 — the twin of clickdz-agent-telegram).
   // Imported fail-soft on the SAME terms as telegram above: a missing module,
   // a non-function export, or a factory throw all resolve to a silent no-op, so
   // this file boots whether or not that module is present. Fire-and-forget from
@@ -396,20 +409,32 @@ export async function registerTelegramFailSoft(
 }
 
 /**
- * WhatsApp twin of registerTelegramFailSoft: load Wassila's sibling module and,
- * if it exports `createWhatsappSendTool(deps) => AgentToolDef`, register that
- * tool. Fail-soft on every failure mode (absent module, non-function export,
- * factory throw). Returns a promise callers may ignore (fire-and-forget from the
- * synchronous builder) or await (tests). MIRRORS the telegram loader exactly.
+ * WhatsApp twin of registerTelegramFailSoft: load Réseau's sibling module
+ * (clickdz-agent-whatsapp — the per-user BYOT controller that OWNS the WA send
+ * tool, exactly as clickdz-agent-telegram owns telegram_send) and, if it exports
+ * `createWhatsappSendTool({cache}) => AgentToolDef`, register that tool. Fail-soft
+ * on every failure mode (absent module, non-function export, factory throw).
+ * Returns a promise callers may ignore (fire-and-forget from the synchronous
+ * builder) or await (tests).
+ *
+ * UNLIKE the telegram loader (which passes `deps` straight through, so its tool's
+ * `deps.cache` is undefined in the detached-run path — a latent no-op), this
+ * wraps deps.redis in a `Cache` so the WA tool can actually resolve the
+ * per-(user,agent) instance record it needs to send. The record is a JSON blob
+ * written by the controller via Cache; a `new Cache(redis)` reads it identically.
  */
 export async function registerWhatsappFailSoft(
   registry: ClickDzToolRegistry,
   deps: AgentToolRegistryDeps
 ): Promise<void> {
   try {
-    const mod: any = await import('./clickdz-wa-client');
+    const mod: any = await import('./clickdz-agent-whatsapp');
     if (mod && typeof mod.createWhatsappSendTool === 'function') {
-      const def = mod.createWhatsappSendTool(deps);
+      // Bridge the raw redis handle into a Cache the WA tool reads records from.
+      // Guarded: a missing/incompatible redis simply yields a Cache whose
+      // fail-soft get() returns undefined ⇒ the tool reports no_connection.
+      const cache = deps?.redis ? new Cache(deps.redis as any) : undefined;
+      const def = mod.createWhatsappSendTool({ cache });
       if (def && typeof def.name === 'string') {
         registry.register(def as AgentToolDef);
       }
