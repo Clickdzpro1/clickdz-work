@@ -92,7 +92,19 @@ declare global {
 // R6 — RUN RECORD shape (exact). Persisted JSON at the record key below.
 // ===========================================================================
 
-export type RunChannel = 'web' | 'telegram' | 'schedule' | 'webhook';
+// R16: 'whatsapp' joins the channel union for per-user BYOT WhatsApp — a run
+// dispatched from an inbound WhatsApp message is tagged 'whatsapp' EXACTLY like a
+// telegram-channel run is tagged 'telegram', so the WhatsApp run-done hook
+// (registerWhatsappRunDone) can filter on rec.channel==='whatsapp' and push the
+// final answer back over the owner's own gateway instance. Without this the
+// value would be coerced to 'web' by normalizeChannel below and the hook would
+// never fire (the same reason 'telegram' is a member).
+export type RunChannel =
+  | 'web'
+  | 'telegram'
+  | 'whatsapp'
+  | 'schedule'
+  | 'webhook';
 
 export type RunState =
   | 'queued'
@@ -750,7 +762,12 @@ function safeParse<T>(raw: string | null): T | null {
 }
 
 function normalizeChannel(c: unknown): RunChannel {
-  return c === 'telegram' || c === 'schedule' || c === 'webhook' ? c : 'web';
+  return c === 'telegram' ||
+    c === 'whatsapp' ||
+    c === 'schedule' ||
+    c === 'webhook'
+    ? c
+    : 'web';
 }
 
 /** Coerce a possibly-partial persisted record into a well-formed record. */
