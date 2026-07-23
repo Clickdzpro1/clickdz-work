@@ -13,10 +13,11 @@ import {
   ViewTitle,
   WorkbenchLink,
 } from '@affine/core/modules/workbench';
-import { CommentIcon, LinkIcon, SearchIcon } from '@blocksuite/icons/rc';
+import { LinkIcon, SearchIcon } from '@blocksuite/icons/rc';
 import { type CSSProperties, type ReactNode } from 'react';
 
 import { TelegramChannelCard } from './channel-card';
+import { WhatsAppChannelCard } from './whatsapp-channel-card';
 
 // ---------------------------------------------------------------------------
 // ClickDz Agents — CONNEXIONS (WSU-5; R8 WhatsApp cap + Planification + i18n +
@@ -356,37 +357,16 @@ function ConnectionsPage() {
               <TelegramChannelCard agent="hermes" />
               <TelegramChannelCard agent="openclaw" />
 
-              {/* WhatsApp — R8: reads caps.whatsappEnabled. Configured ⇒ the
-                  agent WA send tool is active (store's own number via the ERP
-                  gateway); otherwise the existing "bientôt" stub. */}
-              <ChannelCard
-                icon={<CommentIcon />}
-                title={t('connections.whatsapp.title')}
-                subtitle={t('connections.whatsapp.subtitle')}
-                status={
-                  whatsappOn
-                    ? { label: t('connections.status.ok'), tone: 'ok' }
-                    : { label: t('connections.status.soon'), tone: 'muted' }
-                }
-              >
-                <div
-                  style={{
-                    fontSize: AgentPalette.font.size.md,
-                    color: P.muted,
-                    padding: '10px 12px',
-                    borderRadius: AgentPalette.radius.sm,
-                    background: P.panel,
-                    border: whatsappOn
-                      ? `1px solid ${P.border}`
-                      : `1px dashed ${P.border}`,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {whatsappOn
-                    ? t('connections.whatsapp.configured')
-                    : t('connections.whatsapp.soon')}
-                </div>
-              </ChannelCard>
+              {/* WhatsApp — R16: per-(user,agent) pair-by-code. One card PER
+                  agent (hermes + openclaw), mirroring the Telegram pair above:
+                  each connects the store's OWN WhatsApp number to that specific
+                  agent via an 8-char code (WhatsApp > Linked Devices > "Link
+                  with phone number"), owning its connect → pairing (poll) →
+                  connected → test / disconnect lifecycle. The caps.whatsappEnabled
+                  gate (whatsappOn) is passed as the card's dark-gate → a dark
+                  feature collapses each card to a quiet "bientôt" face. */}
+              <WhatsAppChannelCard agent="hermes" dark={!whatsappOn} />
+              <WhatsAppChannelCard agent="openclaw" dark={!whatsappOn} />
 
               {/* Accès web — informational, reflects caps.webEnabled (the runtime
                   web tool). Enabled in prod; a green/quiet chip either way. */}
