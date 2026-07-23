@@ -27,6 +27,7 @@ import type {
   AgentThread,
   AgentThreadSummary,
 } from '@affine/core/modules/agents/types';
+import { useAgentLang } from '@affine/core/modules/agents/i18n';
 import { useAgents } from '@affine/core/modules/agents/use-agents';
 import { useTelegramChannel } from '@affine/core/modules/agents/use-channels';
 import { WorkbenchLink } from '@affine/core/modules/workbench';
@@ -60,6 +61,7 @@ import {
   Panel,
   relTime,
   RUNTIME_LABELS,
+  SandboxHealthButton,
   SandboxStatus,
   Spinner,
 } from './openclaw-shared';
@@ -114,6 +116,7 @@ export const OpenClawDashboard = ({
   /** Re-run the onboarding wizard to change defaults. */
   onReconfigure: () => void;
 }) => {
+  const { t } = useAgentLang();
   // ---- recent threads ----------------------------------------------------
   const [threadsState, setThreadsState] = useState<
     'loading' | 'ready' | 'error'
@@ -227,12 +230,12 @@ export const OpenClawDashboard = ({
           : 'waiting_approval';
   const sandboxLampTitle =
     capsState === 'loading'
-      ? 'Probing sandbox…'
+      ? t('openclaw.dash.probing')
       : capsState === 'error'
-        ? 'Sandbox capabilities failed to load.'
+        ? t('openclaw.dash.lampErr')
         : caps?.sandbox
-          ? 'Vercel Sandbox is live — tasks run.'
-          : caps?.reason ?? 'Sandbox off — code is generated, not run.';
+          ? t('openclaw.dash.lampLive')
+          : t('openclaw.sandbox.offGeneric');
 
   // ------------------------------------------------------------------ render
   return (
@@ -264,15 +267,19 @@ export const OpenClawDashboard = ({
             <span style={{ fontFamily: monoFamily, color: OC.accent }}>
               {'>_'}
             </span>
-            Start a coding task
+            {t('openclaw.dash.startTitle')}
           </div>
           <p style={{ margin: '4px 0 0', fontSize: 13, color: C.muted }}>
-            Describe what to build — {runtimeLabel} · sandbox{' '}
-            {caps?.sandbox ? 'live' : 'generate-only'}.
+            {t('openclaw.dash.startHint', {
+              runtime: runtimeLabel,
+              mode: caps?.sandbox
+                ? t('openclaw.sandbox.chipLive')
+                : t('openclaw.sandbox.chipOff'),
+            })}
           </p>
         </div>
         <button style={btnStyle('primary')} onClick={() => onNewTask()}>
-          + New task
+          {t('openclaw.dash.newTask')}
         </button>
       </div>
 
@@ -284,11 +291,11 @@ export const OpenClawDashboard = ({
           gap: 8,
         }}
       >
-        {QUICK_TASKS.map((t, i) => (
+        {QUICK_TASKS.map((task, i) => (
           <button
             key={i}
             type="button"
-            onClick={() => onNewTask(t)}
+            onClick={() => onNewTask(task)}
             style={{
               appearance: 'none',
               textAlign: 'left',
@@ -312,7 +319,7 @@ export const OpenClawDashboard = ({
               e.currentTarget.style.borderColor = C.border;
             }}
           >
-            {t}
+            {task}
           </button>
         ))}
       </div>
@@ -326,7 +333,7 @@ export const OpenClawDashboard = ({
         }}
       >
         <Panel
-          title="Sandbox"
+          title={t('openclaw.sandbox.title')}
           action={
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <AgentPresence
@@ -348,7 +355,8 @@ export const OpenClawDashboard = ({
                 }}
                 onClick={onReloadCaps}
               >
-                ↻ Recheck
+                {'↻ '}
+                {t('openclaw.sandbox.recheck')}
               </button>
             </div>
           }
@@ -362,17 +370,22 @@ export const OpenClawDashboard = ({
                 color: C.muted,
               }}
             >
-              <Spinner /> Checking…
+              <Spinner /> {t('openclaw.sandbox.checking')}
             </div>
           ) : capsState === 'error' ? (
-            <Banner tone="error">Couldn’t load capabilities.</Banner>
+            <Banner tone="error">{t('openclaw.sandbox.err.capsLoad')}</Banner>
           ) : (
-            <SandboxStatus caps={caps} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <SandboxStatus caps={caps} />
+              {/* The REAL create→exec→teardown probe (next to the cheap ↻
+                  Recheck capability re-read in the panel header). */}
+              <SandboxHealthButton />
+            </div>
           )}
         </Panel>
 
         <Panel
-          title="Your defaults"
+          title={t('openclaw.dash.yourDefaults')}
           action={
             <button
               style={{
@@ -387,20 +400,41 @@ export const OpenClawDashboard = ({
               }}
               onClick={onReconfigure}
             >
-              Edit
+              {t('openclaw.dash.edit')}
             </button>
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <PrefRow label="Default runtime" value={runtimeLabel} mono />
             <PrefRow
-              label="Auto-open preview"
-              value={config.previewAutoOpen ? 'On' : 'Off'}
+              label={t('openclaw.wizard.rowRuntime')}
+              value={runtimeLabel}
+              mono
+            />
+            <PrefRow
+              label={t('openclaw.wizard.rowPreview')}
+              value={
+                config.previewAutoOpen
+                  ? t('openclaw.wizard.valOn')
+                  : t('openclaw.wizard.valOff')
+              }
             />
             {caps?.plannerReady === false ? (
               <Banner tone="warn">
-                The AI planner isn’t configured — running is disabled until the
-                owner sets <code style={codeChip}>CDZ_AI_KEY</code>.
+                {(() => {
+                  // Render the translated message with the env-var name as a
+                  // mono code chip (splitting on the {key} placeholder so the
+                  // chip styling survives i18n). Fail-soft: no placeholder ⇒
+                  // the chip is appended.
+                  const msg = t('openclaw.dash.plannerOff', { key: '__KEY__' });
+                  const parts = msg.split('__KEY__');
+                  return (
+                    <>
+                      {parts[0]}
+                      <code style={codeChip}>CDZ_AI_KEY</code>
+                      {parts.length > 1 ? parts[1] : null}
+                    </>
+                  );
+                })()}
               </Banner>
             ) : null}
           </div>
@@ -459,13 +493,13 @@ export const OpenClawDashboard = ({
           </EmptyNote>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {threads.slice(0, 8).map(t => (
+            {threads.slice(0, 8).map(th => (
               <ThreadRow
-                key={t.id}
-                thread={t}
-                isLast={t.id === lastId}
-                lastThread={t.id === lastId ? lastThread : null}
-                onOpen={() => onOpenThread(t.id)}
+                key={th.id}
+                thread={th}
+                isLast={th.id === lastId}
+                lastThread={th.id === lastId ? lastThread : null}
+                onOpen={() => onOpenThread(th.id)}
               />
             ))}
           </div>
