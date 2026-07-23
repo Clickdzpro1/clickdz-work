@@ -154,6 +154,15 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   .pill.s-Expédiée{background:var(--violet-soft);color:var(--violet)}
   .pill.s-Livrée{background:var(--ok-soft);color:var(--ok)}
   .pill.s-Retournée{background:var(--bad-soft);color:var(--bad)}
+  .pill.s-brouillon{background:var(--info-soft);color:var(--info)}
+  .pill.s-envoyée{background:var(--violet-soft);color:var(--violet)}
+  .pill.s-validée{background:var(--ok-soft);color:var(--ok)}
+  .pill.s-payée{background:var(--ok-soft);color:var(--ok)}
+  .pill.s-annulée{background:var(--bad-soft);color:var(--bad)}
+  .pill.s-neutre{background:var(--surface-2);color:var(--ink-soft)}
+  .pill.k-in{background:var(--ok-soft);color:var(--ok)}
+  .pill.k-out{background:var(--bad-soft);color:var(--bad)}
+  .pill.k-pending{background:var(--warn-soft);color:var(--warn)}
   .dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:currentColor}
 
   /* ===== KPI ===== */
@@ -299,6 +308,26 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   var STATUSES = ["Nouvelle","Confirmée","Expédiée","Livrée","Retournée"];
   var STATUS_NEXT = { "Nouvelle":"Confirmée", "Confirmée":"Expédiée", "Expédiée":"Livrée" };
   var EXP_CATS = ["Publicité","Achat stock","Livraison","Salaire","Loyer","Autre"];
+  /* R15 — invoicing/caisse enums + FR labels. Kept small + local (same style as
+     STATUSES/EXP_CATS). Invoice types mirror the backend doc (devis|bl|facture);
+     caisse kind/method mirror validateCaisseEntry (in|out / cash|cod|chargily). */
+  var INV_TYPES = ["devis","bl","facture"];
+  var FR_FTYPE = { devis:"Devis", bl:"Bon de livraison", facture:"Facture" };
+  var CAISSE_KINDS = ["in","out"];
+  var FR_KIND = { "in":"Entrée", out:"Sortie" };
+  var CAISSE_METHODS = ["cash","cod","chargily"];
+  var FR_METHOD = { cash:"Espèces", cod:"COD", chargily:"Chargily" };
+  /* Invoice status -> pill class suffix (falls back to a neutral pill for any
+     unknown/owner-set state so the ledger never renders an unstyled chip). */
+  function invStatusClass(status){
+    var s = String(status||"brouillon").toLowerCase();
+    if(s==="brouillon") return "s-brouillon";
+    if(s==="envoyée" || s==="envoyee" || s==="envoyé" || s==="envoye") return "s-envoyée";
+    if(s==="validée" || s==="validee") return "s-validée";
+    if(s==="payée" || s==="payee") return "s-payée";
+    if(s==="annulée" || s==="annulee") return "s-annulée";
+    return "s-neutre";
+  }
 
   /* ============================================================
      Tiny helpers
@@ -362,8 +391,19 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     return h;
   }
   function listColl(coll){
-    return fetch(DATA_URL + "/" + coll + "?limit=500", { headers:{ "Content-Type":"application/json" } })
-      .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    // PR-6 prep: reads carry the SAME Bearer DATA_TOKEN the write path sends
+    // (apiHeaders). Harmless today (the @Public GET ignores it); required once
+    // the backend gates sensitive-collection reads. Kept identical to writes.
+    return fetch(DATA_URL + "/" + coll + "?limit=500", { headers:apiHeaders() })
+      .then(function(r){
+        if(!r.ok){
+          // Sentinel F-1: carry the status so callers can tell "absent month"
+          // (404 -> harmless empty) from a REAL failure (5xx/network) that must
+          // surface — otherwise a blip on a populated month silently zeroes KPIs.
+          var e = new Error("HTTP "+r.status); e.status = r.status; throw e;
+        }
+        return r.json();
+      })
       .then(function(arr){ return Array.isArray(arr)?arr:[]; });
   }
   function createRec(coll, body){
@@ -496,7 +536,10 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
      ============================================================ */
   var store = {
     products:[], orders:[], customers:[], expenses:[], settings:null,
-    loaded:false, loading:false, error:null
+    loaded:false, loading:false, error:null,
+    // R15: lazily-loaded partitioned modules (null = not yet fetched). Kept out
+    // of loadAll so opening the core tabs stays as light as today.
+    erp: { invoices:null, caisse:null }
   };
 
   function loadAll(){
@@ -675,6 +718,9 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     orderSearch: "",
     prodSearch: "",
     clientSearch: "",
+    factType: "Toutes",   // Factures: type filter (Toutes|devis|bl|facture)
+    factMonth: "",         // Factures: month selector ("" = tous les mois)
+    caisseMonth: "",       // Caisse: month selector ("" = mois courant vue KPI, table = tous)
     expanded: {},
     busy: {}   // per-record busy flags
   };
@@ -689,13 +735,13 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     { id:"stock",      label:"Stock",        ico:"📦" },
     { id:"clients",    label:"Clients",      ico:"👥" },
     { id:"depenses",   label:"Dépenses",     ico:"💸" },
-    { id:"factures",   label:"Factures",     ico:"🧮", future:true },
+    { id:"factures",   label:"Factures",     ico:"🧮" },
     { id:"fournisseurs",label:"Fournisseurs",ico:"🚚", future:true },
     { id:"livraison",  label:"Livraison",    ico:"📮", future:true },
-    { id:"caisse",     label:"Caisse",       ico:"💵", future:true },
+    { id:"caisse",     label:"Caisse",       ico:"💵" },
     { id:"reglages",   label:"Réglages",     ico:"⚙️", core:true }
   ];
-  var FUTURE_IDS = ["factures","fournisseurs","livraison","caisse"];
+  var FUTURE_IDS = ["fournisseurs","livraison"];
   /* ---- Module flags (WSF-6) -------------------------------------------------
      moduleOn(id): mirrors the shop template's featureOn/sectionOn approach over
      the shared settings singleton. settings.features is a CSV of enabled module
@@ -810,6 +856,135 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     var body = { phone:c.phone||"", name:c.name||"", note:note, wilaya:c.wilaya||"" };
     return withBusy("cust:"+(digits(c.phone)||c.name), function(){
       return replaceRec("customers", c.custId, body).then(function(){ toast("Note enregistrée","ok"); return loadAll(); });
+    });
+  }
+
+  /* ============================================================
+     R15 — partitioned modules (invoices / caisse) data access.
+     These collections are stored month-by-month as "<prefix>-YYYYMM" (":" is
+     illegal in collection names). We read the current + N prior months via the
+     SAME @Public GET + Bearer path (listColl) the core tabs use, and write with
+     createRec/deleteRec (anon DATA_TOKEN). The owner-only /erp/* reconcile,
+     day-close and fiscal-validation routes are NOT reachable here (they require
+     @CurrentUser), so those transitions stay studio-only — we only read/display
+     server-owned fields (e.g. validated status, pending COD) and create the
+     handful of records that are safe from the storefront.
+     ============================================================ */
+  function ymKey(iso){ return String(iso||todayISO()).slice(0,7).replace("-",""); }
+  function partitionName(prefix, iso){ return prefix + "-" + ymKey(iso); }
+  function invoicePartition(iso){ return partitionName("invoices", iso); }
+  function caissePartition(iso){ return partitionName("caisse", iso); }
+  /* Recent partition names, newest month first: current + (months-1) priors. */
+  function recentMonths(months){
+    var out = [], now = new Date(), y = now.getFullYear(), mo = now.getMonth();
+    for(var i=0;i<months;i++){
+      var d = new Date(y, mo - i, 1);
+      var mm = d.getMonth()+1;
+      out.push(d.getFullYear() + "" + (mm<10?"0"+mm:""+mm));
+    }
+    return out;
+  }
+  /* Load a prefix's recent partitions in parallel. A missing/empty month rejects
+     with 404 -> we swallow it to [] so absent months never break the ledger.
+     Each record is tagged with __part (its collection) so deletes route back to
+     the right partition without re-deriving it from a possibly-absent date. */
+  function listPartitions(prefix, months){
+    var names = recentMonths(months).map(function(ym){ return prefix + "-" + ym; });
+    return Promise.all(names.map(function(coll){
+      return listColl(coll).then(function(arr){
+        return arr.map(function(r){ r.__part = coll; return r; });
+      }).catch(function(e){
+        // Sentinel F-1: ONLY a 404 (absent month) degrades to []; any other
+        // failure re-throws so loadInvoices/loadCaisse toast a real error
+        // instead of rendering understated money totals.
+        if(e && e.status === 404) return [];
+        throw e;
+      });
+    })).then(function(chunks){
+      var all = [];
+      chunks.forEach(function(c){ all = all.concat(c); });
+      return all;
+    });
+  }
+  function loadInvoices(){
+    if(ui.busy.loadInv) return Promise.resolve();
+    ui.busy.loadInv = true;
+    return listPartitions("invoices", 12).then(function(rows){
+      store.erp.invoices = rows; delete ui.busy.loadInv; render();
+    }).catch(function(e){
+      store.erp.invoices = []; delete ui.busy.loadInv;
+      toast("Factures : "+((e&&e.message)||"erreur"),"bad"); render();
+    });
+  }
+  function loadCaisse(){
+    if(ui.busy.loadCai) return Promise.resolve();
+    ui.busy.loadCai = true;
+    return listPartitions("caisse", 12).then(function(rows){
+      store.erp.caisse = rows; delete ui.busy.loadCai; render();
+    }).catch(function(e){
+      store.erp.caisse = []; delete ui.busy.loadCai;
+      toast("Caisse : "+((e&&e.message)||"erreur"),"bad"); render();
+    });
+  }
+  /* Safe create of a DRAFT invoice (type=devis|bl|facture, status=brouillon).
+     No validate/void/convert: those are owner-only fiscal transitions on the
+     server that also own the official numbering, so we never fake them here. */
+  function addInvoiceDraft(f){
+    var items = (f.items||[]).filter(function(it){ return (it.name||"").trim() && num(it.qty)>0; }).map(function(it){
+      var qty = num(it.qty), pu = num(it.pu), tva = num(it.tva);
+      var ht = qty*pu, ttc = ht*(1+tva/100);
+      return { name:(it.name||"").trim().slice(0,120), qty:qty, pu:Math.round(pu), tva:tva, totalHT:Math.round(ht), totalTTC:Math.round(ttc) };
+    });
+    var totalHT = items.reduce(function(s,it){ return s+it.totalHT; },0);
+    var totalTTC = items.reduce(function(s,it){ return s+it.totalTTC; },0);
+    var date = f.date||todayISO();
+    var body = {
+      type: (INV_TYPES.indexOf(f.type)>=0 ? f.type : "devis"),
+      status: "brouillon",
+      number: uid("DEV"),
+      customer: (f.customer||"").trim().slice(0,120),
+      items: items,
+      totalHT: totalHT,
+      totalTVA: totalTTC-totalHT,
+      totalTTC: totalTTC,
+      date: date
+    };
+    return withBusy("addinv", function(){
+      return createRec(invoicePartition(date), body).then(function(){
+        toast("Brouillon enregistré","ok");
+        store.erp.invoices = null;   // force a refetch (partition may be new)
+        return loadInvoices();
+      });
+    });
+  }
+  /* Safe manual cash movement. Mirrors validateCaisseEntry client-side
+     (kind/method allowlists, integer amount) so a bad row is caught before the
+     POST. Excludes the pending-COD auto-marker + reconcile/day-close (server). */
+  function addCaisse(f){
+    if(CAISSE_KINDS.indexOf(f.kind)<0){ toast("Type invalide","bad"); return Promise.resolve(); }
+    if(CAISSE_METHODS.indexOf(f.method)<0){ toast("Méthode invalide","bad"); return Promise.resolve(); }
+    var amt = Math.round(num(f.amount));
+    if(!(amt>0)){ toast("Montant invalide","bad"); return Promise.resolve(); }
+    var date = f.date||todayISO();
+    var body = { kind:f.kind, method:f.method, amount:amt, note:(f.note||"").slice(0,400), date:date };
+    return withBusy("addcaisse", function(){
+      return createRec(caissePartition(date), body).then(function(){
+        toast("Mouvement enregistré","ok");
+        store.erp.caisse = null;   // force a refetch (partition may be new)
+        return loadCaisse();
+      });
+    });
+  }
+  /* Delete is only offered on manual entries (no orderRef/courierId, not
+     pending): server-written COD/reconcile rows stay read-only. */
+  function deleteCaisse(e){
+    var coll = e.__part || caissePartition(parseDate(e));
+    return withBusy("cai:"+e.id, function(){
+      return deleteRec(coll, e.id).then(function(){
+        toast("Mouvement supprimé","ok");
+        store.erp.caisse = null;
+        return loadCaisse();
+      });
     });
   }
 
@@ -1141,9 +1316,255 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     return wrap;
   }
 
-  /* WSF-6 — forward-ready module placeholder. Rendered for factures /
-     fournisseurs / livraison / caisse once their nav slot is unlocked (module on
-     AND backend provisioned) but before their real R3 UI ships. Kept tiny.
+  /* Shared "loading" state box (no dedicated loadingBox helper in this file —
+     mirror stateBox with a spinner glyph). Used by the lazy partition views. */
+  function loadingState(sub){ return stateBox("⏳","Chargement…", sub||"Récupération des données…"); }
+
+  /* Month <select> for a partitioned view: "" = tous les mois, else a YYYY-MM
+     value. onPick(value) updates the ui filter and re-renders. Options come from
+     the months actually present in the loaded rows (newest first) + current. */
+  function monthSelect(rows, current, onPick){
+    var months = {}; months[nowMonth()] = true;
+    (rows||[]).forEach(function(r){ var k=monthKey(parseDate(r)); if(k) months[k]=true; });
+    var keys = Object.keys(months).sort().reverse();
+    var sel = el("select",{class:"select",style:"max-width:200px",onchange:function(e){ onPick(e.target.value); }});
+    sel.appendChild(el("option",{value:""}, "Tous les mois"));
+    keys.forEach(function(k){
+      var lbl = new Date(k+"-01T00:00:00").toLocaleDateString("fr-FR",{month:"long",year:"numeric"});
+      var o = el("option",{value:k}, lbl.charAt(0).toUpperCase()+lbl.slice(1));
+      if(k===current) o.setAttribute("selected","selected");
+      sel.appendChild(o);
+    });
+    return sel;
+  }
+
+  /* ---- Factures (R15) -------------------------------------------------------
+     Read-only invoicing ledger (devis / bons de livraison / factures) across the
+     recent monthly partitions, with a type filter, a month selector, and a SAFE
+     create of a draft "devis" (status=brouillon). Validate / void / convert are
+     owner-only fiscal transitions on the server (they own official numbering), so
+     they are intentionally absent — an info banner points to the studio. */
+  function viewFactures(){
+    var wrap = el("div",{});
+    if(store.erp.invoices==null){ loadInvoices(); wrap.appendChild(loadingState("Chargement des factures…")); return wrap; }
+    var all = store.erp.invoices;
+
+    // ----- safe create: nouveau devis (client + one or more line rows) -----
+    var f = ui._invForm || (ui._invForm = { customer:"", type:"devis", items:[{name:"",qty:"1",pu:"",tva:"0"}] });
+    var addbar = el("div",{class:"card addbar"});
+    addbar.appendChild(el("h3",{},"➕ Nouveau devis"));
+    var grid = el("div",{class:"form-grid"});
+    var custInput = el("input",{class:"input",placeholder:"Ex : Boutique Ali",value:f.customer,oninput:function(e){f.customer=e.target.value;}});
+    grid.appendChild(el("div",{},[ el("label",{class:"fld"},"Client"), custInput ]));
+    var typeSel = el("select",{class:"select",onchange:function(e){f.type=e.target.value;}});
+    INV_TYPES.forEach(function(tp){ var o=el("option",{value:tp}, FR_FTYPE[tp]||tp); if(tp===f.type) o.setAttribute("selected","selected"); typeSel.appendChild(o); });
+    grid.appendChild(el("div",{},[ el("label",{class:"fld"},"Type"), typeSel ]));
+    addbar.appendChild(grid);
+    // line rows
+    var linesWrap = el("div",{style:"margin-top:12px"});
+    function renderLines(){
+      linesWrap.innerHTML="";
+      linesWrap.appendChild(el("label",{class:"fld"},"Lignes (article · quantité · PU HT · TVA %)"));
+      f.items.forEach(function(it, idx){
+        var lg = el("div",{class:"form-grid",style:"margin-bottom:8px"});
+        lg.appendChild(el("div",{},el("input",{class:"input",placeholder:"Article",value:it.name,oninput:function(e){it.name=e.target.value;}})));
+        lg.appendChild(el("div",{},el("input",{class:"input",type:"number",placeholder:"Qté",value:it.qty,oninput:function(e){it.qty=e.target.value;computeSum();}})));
+        lg.appendChild(el("div",{},el("input",{class:"input",type:"number",placeholder:"PU HT",value:it.pu,oninput:function(e){it.pu=e.target.value;computeSum();}})));
+        lg.appendChild(el("div",{},el("input",{class:"input",type:"number",placeholder:"TVA %",value:it.tva,oninput:function(e){it.tva=e.target.value;computeSum();}})));
+        lg.appendChild(el("div",{}, f.items.length>1 ? el("button",{class:"btn sm danger",onclick:function(){ f.items.splice(idx,1); renderLines(); }},"✕") : el("span",{class:"muted"},"")));
+        linesWrap.appendChild(lg);
+      });
+      linesWrap.appendChild(el("button",{class:"btn sm",onclick:function(){ f.items.push({name:"",qty:"1",pu:"",tva:"0"}); renderLines(); }},"+ Ligne"));
+    }
+    var sumTag = el("span",{class:"count-tag"},"");
+    function computeSum(){
+      var ttc = f.items.reduce(function(s,it){ var ht=num(it.qty)*num(it.pu); return s+ht*(1+num(it.tva)/100); },0);
+      sumTag.textContent = "Total TTC estimé : " + fmtDZD(ttc);
+    }
+    addbar.appendChild(linesWrap);
+    renderLines(); computeSum();
+    var actionRow = el("div",{style:"margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap"});
+    actionRow.appendChild(sumTag);
+    actionRow.appendChild(el("div",{class:"grow",style:"flex:1 1 auto"}));
+    actionRow.appendChild(el("button",{class:"btn primary",disabled:!!ui.busy.addinv,onclick:function(){
+      if(!f.customer.trim()){ toast("Le client est requis","bad"); return; }
+      if(!f.items.some(function(it){ return (it.name||"").trim() && num(it.qty)>0; })){ toast("Ajoutez au moins une ligne","bad"); return; }
+      addInvoiceDraft(f).then(function(){ ui._invForm = null; render(); });
+    }}, ui.busy.addinv?"Enregistrement…":"Enregistrer le brouillon"));
+    addbar.appendChild(actionRow);
+    wrap.appendChild(addbar);
+
+    wrap.appendChild(el("div",{class:"banner info",style:"margin-bottom:16px"},[ el("span",{html:"🏛️"}), el("span",{},"La validation fiscale, l'annulation et la conversion en facture se font depuis le studio ClickDz. Ici vous créez des brouillons et consultez le journal.") ]));
+
+    // ----- header: type filter + month selector + count -----
+    var head = el("div",{class:"sec-head"});
+    var chips = el("div",{class:"row"});
+    ["Toutes"].concat(INV_TYPES).forEach(function(ft){
+      chips.appendChild(el("button",{class:"chip"+(ui.factType===ft?" on":""),onclick:function(){ui.factType=ft;render();}}, ft==="Toutes"?"Toutes":(FR_FTYPE[ft]||ft)));
+    });
+    head.appendChild(chips);
+    head.appendChild(el("div",{class:"grow"}));
+    head.appendChild(monthSelect(all, ui.factMonth, function(v){ ui.factMonth=v; render(); }));
+    wrap.appendChild(head);
+
+    // ----- filter + render -----
+    var rows = all.filter(function(iv){
+      if(ui.factType!=="Toutes" && iv.type!==ui.factType) return false;
+      if(ui.factMonth && monthKey(parseDate(iv))!==ui.factMonth) return false;
+      return true;
+    });
+    rows.sort(function(a,b){ return String(parseDate(b)).localeCompare(String(parseDate(a))); });
+
+    if(!all.length){ wrap.appendChild(stateBox("🧮","Aucune facture","Les devis, bons de livraison et factures apparaîtront ici.")); return wrap; }
+    if(!rows.length){ wrap.appendChild(stateBox("🔍","Aucun résultat","Ajustez le filtre ou le mois.")); return wrap; }
+
+    var grand = rows.reduce(function(s,iv){ return s+num(iv.totalTTC!=null?iv.totalTTC:iv.total); },0);
+    wrap.appendChild(el("div",{class:"banner info",style:"margin-bottom:14px"},[ el("span",{html:"Σ"}), el("span",{},"Total TTC (sélection) : "), el("strong",{style:"margin-left:auto"}, fmtDZD(grand)) ]));
+
+    var twrap = el("div",{class:"tbl-wrap"});
+    var t = el("table",{});
+    t.appendChild(el("thead",{},el("tr",{},[
+      el("th",{},"N°"), el("th",{},"Type"), el("th",{},"Client"), el("th",{},"Date"),
+      el("th",{class:"num"},"Total TTC"), el("th",{},"Statut")
+    ])));
+    var tb = el("tbody",{});
+    rows.forEach(function(iv){
+      var open = !!ui.expanded[iv.id];
+      var tr = el("tr",{style:"cursor:pointer",onclick:function(ev){ if(ev.target.closest("a,button")) return; ui.expanded[iv.id]=!open; render(); }});
+      tr.appendChild(el("td",{},el("strong",{}, iv.number||iv.id)));
+      tr.appendChild(el("td",{}, el("span",{class:"chip",style:"font-size:11px;padding:2px 9px"}, FR_FTYPE[iv.type]||iv.type||"—")));
+      tr.appendChild(el("td",{}, iv.customer||iv.client||"—"));
+      tr.appendChild(el("td",{class:"muted"}, frDate(parseDate(iv))));
+      tr.appendChild(el("td",{class:"num"}, fmtDZD(iv.totalTTC!=null?iv.totalTTC:iv.total)));
+      tr.appendChild(el("td",{}, el("span",{class:"pill "+invStatusClass(iv.status)}, iv.status||"brouillon")));
+      tb.appendChild(tr);
+      if(open){
+        var er = el("tr",{class:"exp-row"});
+        var td = el("td",{colspan:6});
+        td.appendChild(invoiceLines(iv));
+        er.appendChild(td); tb.appendChild(er);
+      }
+    });
+    t.appendChild(tb); twrap.appendChild(t); wrap.appendChild(twrap);
+    wrap.appendChild(el("div",{class:"count-tag",style:"margin-top:10px"}, rows.length+" document(s) affiché(s)"));
+    return wrap;
+  }
+  /* Line detail for an invoice row — clone of itemsBox markup (article, qty×,
+     per-line TTC). Trusts stored totalTTC; falls back to qty·PU·(1+TVA) only for
+     display when a line has no stored total. */
+  function invoiceLines(iv){
+    var items = Array.isArray(iv.items)?iv.items:[];
+    var box = el("div",{class:"items-box"});
+    if(!items.length){ box.appendChild(el("div",{class:"muted",style:"font-size:12.5px"},"Aucune ligne détaillée.")); }
+    items.forEach(function(it){
+      var ttc = it.totalTTC!=null ? num(it.totalTTC) : num(it.qty!=null?it.qty:1)*num(it.pu!=null?it.pu:it.price)*(1+num(it.tva)/100);
+      box.appendChild(el("div",{class:"it"},[
+        el("span",{},[ el("span",{class:"q"}, num(it.qty!=null?it.qty:1)+"× "), (it.name||it.product||"Article"), it.tva?el("span",{class:"muted",style:"font-size:11.5px"}," · TVA "+num(it.tva)+"%"):null ]),
+        el("span",{class:"num"}, fmtDZD(ttc))
+      ]));
+    });
+    var foot = el("div",{class:"adv-row",style:"gap:16px"});
+    if(iv.totalHT!=null) foot.appendChild(el("span",{class:"count-tag"}, "HT : "+fmtDZD(iv.totalHT)));
+    if(iv.totalTVA!=null) foot.appendChild(el("span",{class:"count-tag"}, "TVA : "+fmtDZD(iv.totalTVA)));
+    foot.appendChild(el("span",{class:"count-tag"}, "TTC : "+fmtDZD(iv.totalTTC!=null?iv.totalTTC:iv.total)));
+    box.appendChild(foot);
+    var d = el("div",{style:"padding:10px 16px 14px"});
+    d.appendChild(box);
+    return d;
+  }
+
+  /* ---- Caisse (R15) ---------------------------------------------------------
+     Cash ledger with a KPI header (entrées / sorties / solde for the selected or
+     current month) + a SAFE manual in/out movement create, and delete of manual
+     entries only. Day-close, reconcile and the pending-COD auto-marker are
+     server-only aggregations (owner-authed /erp) — pending rows are displayed
+     read-only with an "en attente" chip. */
+  function viewCaisse(){
+    var wrap = el("div",{});
+    if(store.erp.caisse==null){ loadCaisse(); wrap.appendChild(loadingState("Chargement de la caisse…")); return wrap; }
+    var rows = store.erp.caisse;
+    var m = ui.caisseMonth || nowMonth();
+
+    // ----- KPI header (selected month) -----
+    var ins=0, outs=0, today=todayISO(), insToday=0, outsToday=0;
+    rows.forEach(function(e){
+      var mk = monthKey(parseDate(e)); if(mk!==m) return;
+      var a = num(e.amount);
+      if(e.kind==="in"){ if(!e.pending){ ins+=a; if(dayKey(parseDate(e))===today) insToday+=a; } }
+      else if(e.kind==="out"){ outs+=a; if(dayKey(parseDate(e))===today) outsToday+=a; }
+    });
+    var monthLbl = new Date(m+"-01T00:00:00").toLocaleDateString("fr-FR",{month:"long",year:"numeric"});
+    monthLbl = monthLbl.charAt(0).toUpperCase()+monthLbl.slice(1);
+    wrap.appendChild(el("div",{class:"kpis"},[
+      kpiCard("var(--ok-soft)","var(--ok)","⬇️","Entrées du mois", fmtDZD(ins), "Aujourd'hui : "+fmtDZD(insToday)),
+      kpiCard("var(--bad-soft)","var(--bad)","⬆️","Sorties du mois", fmtDZD(outs), "Aujourd'hui : "+fmtDZD(outsToday)),
+      kpiCard((ins-outs)>=0?"var(--brand-soft)":"var(--bad-soft)",(ins-outs)>=0?"var(--brand-ink)":"var(--bad)","💵","Solde", fmtDZD(ins-outs), monthLbl)
+    ]));
+
+    // ----- add movement bar -----
+    var f = ui._caiForm || (ui._caiForm = { kind:"in", method:"cash", amount:"", note:"", date:todayISO() });
+    var addbar = el("div",{class:"card addbar"});
+    addbar.appendChild(el("h3",{},"➕ Mouvement de caisse"));
+    var grid = el("div",{class:"form-grid"});
+    var kindSel = el("select",{class:"select",onchange:function(e){f.kind=e.target.value;}});
+    CAISSE_KINDS.forEach(function(k){ var o=el("option",{value:k}, FR_KIND[k]||k); if(k===f.kind) o.setAttribute("selected","selected"); kindSel.appendChild(o); });
+    grid.appendChild(el("div",{},[ el("label",{class:"fld"},"Type"), kindSel ]));
+    var methSel = el("select",{class:"select",onchange:function(e){f.method=e.target.value;}});
+    CAISSE_METHODS.forEach(function(k){ var o=el("option",{value:k}, FR_METHOD[k]||k); if(k===f.method) o.setAttribute("selected","selected"); methSel.appendChild(o); });
+    grid.appendChild(el("div",{},[ el("label",{class:"fld"},"Méthode"), methSel ]));
+    grid.appendChild(el("div",{},[ el("label",{class:"fld"},"Montant (DZD)"), el("input",{class:"input",type:"number",placeholder:"0",value:f.amount,oninput:function(e){f.amount=e.target.value;}}) ]));
+    grid.appendChild(el("div",{},[ el("label",{class:"fld"},"Note"), el("input",{class:"input",placeholder:"Ex : Vente comptoir",value:f.note,oninput:function(e){f.note=e.target.value;}}) ]));
+    grid.appendChild(el("div",{},[ el("label",{class:"fld"},"Date"), el("input",{class:"input",type:"date",value:f.date,oninput:function(e){f.date=e.target.value;}}) ]));
+    grid.appendChild(el("div",{},[ el("label",{class:"fld",style:"visibility:hidden"},"."), el("button",{class:"btn primary",disabled:!!ui.busy.addcaisse,onclick:function(){
+      if(!(num(f.amount)>0)){ toast("Montant invalide","bad"); return; }
+      addCaisse(f).then(function(){ ui._caiForm = null; render(); });
+    }}, ui.busy.addcaisse?"…":"Enregistrer") ]));
+    addbar.appendChild(grid);
+    wrap.appendChild(addbar);
+
+    // ----- header: month selector -----
+    var head = el("div",{class:"sec-head"});
+    head.appendChild(el("h3",{style:"margin:0;font-size:14px"},"Journal de caisse"));
+    head.appendChild(el("div",{class:"grow"}));
+    head.appendChild(monthSelect(rows, ui.caisseMonth, function(v){ ui.caisseMonth=v; render(); }));
+    wrap.appendChild(head);
+
+    // ----- ledger table (filtered by selected month, or all if none) -----
+    var list = rows.filter(function(e){ return !ui.caisseMonth || monthKey(parseDate(e))===ui.caisseMonth; });
+    list.sort(function(a,b){ return String(parseDate(b)).localeCompare(String(parseDate(a))); });
+
+    if(!rows.length){ wrap.appendChild(stateBox("💵","Caisse vide","Enregistrez une entrée ou une sortie pour démarrer le journal.")); return wrap; }
+    if(!list.length){ wrap.appendChild(stateBox("🔍","Aucun mouvement","Aucun mouvement pour le mois sélectionné.")); return wrap; }
+
+    var twrap = el("div",{class:"tbl-wrap"});
+    var t = el("table",{});
+    t.appendChild(el("thead",{},el("tr",{},[
+      el("th",{},"Date"), el("th",{},"Type"), el("th",{},"Méthode"), el("th",{class:"num"},"Montant"), el("th",{},"Note"), el("th",{},"")
+    ])));
+    var tb = el("tbody",{});
+    list.forEach(function(e){
+      var pending = e.kind==="in" && !!e.pending;
+      var manual = !e.orderRef && !e.courierId && !e.pending;   // only manual rows are deletable
+      var busy = ui.busy["cai:"+e.id];
+      var tr = el("tr",{class:pending?"alert":""});
+      tr.appendChild(el("td",{class:"muted"}, frDate(parseDate(e))));
+      tr.appendChild(el("td",{}, el("span",{class:"pill "+(e.kind==="in"?"k-in":"k-out")}, [el("span",{class:"dot"}), FR_KIND[e.kind]||e.kind])));
+      tr.appendChild(el("td",{}, [ el("span",{class:"chip",style:"font-size:11px;padding:2px 9px"}, FR_METHOD[e.method]||e.method||"—"), pending?el("span",{class:"pill k-pending",style:"margin-left:6px"},"COD en attente"):null ]));
+      tr.appendChild(el("td",{class:"num"}, (e.kind==="out"?"− ":"")+fmtDZD(e.amount)));
+      tr.appendChild(el("td",{class:"muted"}, e.note||"—"));
+      tr.appendChild(el("td",{}, manual ? el("button",{class:"btn sm danger",disabled:busy,onclick:function(){deleteCaisse(e);}}, busy?"…":"Suppr") : el("span",{class:"muted",style:"font-size:11px"},"auto")));
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); twrap.appendChild(t); wrap.appendChild(twrap);
+    wrap.appendChild(el("div",{class:"count-tag",style:"margin-top:10px"}, list.length+" mouvement(s) affiché(s)"));
+    return wrap;
+  }
+
+  /* WSF-6 — forward-ready module placeholder. Still used for the two modules
+     that remain future-gated (fournisseurs / livraison): their real UIs land in
+     a follow-up (PO receive + shipping matrix bulk-edit need owner-only /erp).
+     Rendered once their nav slot is unlocked (module on AND backend provisioned)
+     but before that UI ships. Kept tiny.
      dir="auto" keeps the copy correct if the shared UI later runs in darja/RTL. */
   function viewFutureModule(id){
     var meta = TABS.filter(function(t){ return t.id===id; })[0] || { ico:"🧩", label:id };
@@ -1305,6 +1726,8 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
       else if(tab==="stock") view=viewStock();
       else if(tab==="clients") view=viewClients();
       else if(tab==="depenses") view=viewDepenses();
+      else if(tab==="factures") view=viewFactures();
+      else if(tab==="caisse") view=viewCaisse();
       else if(tab==="reglages") view=viewReglages();
       else if(FUTURE_IDS.indexOf(tab)>=0) view=viewFutureModule(tab);
       else view=viewApercu();
@@ -1340,7 +1763,8 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   window.__CDZ_ERP__ = { store:store, metrics:metrics, deriveCustomers:deriveCustomers,
     chartRevenue:chartRevenue, chartStatus:chartStatus, loadAll:loadAll, advanceStatus:advanceStatus,
     changeStock:changeStock, ui:ui, moduleOn:moduleOn, activeTabs:activeTabs, render:render, TABS:TABS,
-    auth:auth, staffGateActive:staffGateActive, roleAllowsTab:roleAllowsTab, logoutStaff:logoutStaff };
+    auth:auth, staffGateActive:staffGateActive, roleAllowsTab:roleAllowsTab, logoutStaff:logoutStaff,
+    loadInvoices:loadInvoices, loadCaisse:loadCaisse, addInvoiceDraft:addInvoiceDraft, addCaisse:addCaisse };
 })();
 </script>
 </body>
