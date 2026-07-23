@@ -765,6 +765,241 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
     ar: 'التوكن ماشي صحيح — تأكّد و عاود.',
   },
 
+  // ── CHANNELS · WhatsApp pair-by-code (whatsapp-channel-card.tsx — R16) ──────
+  // Per-(user,agent) WhatsApp pairing. The middle face shows an 8-char code the
+  // user types into WhatsApp > Linked Devices > "Link with phone number". Same
+  // register as channels.byot.* — short, code-switched FR / Arabic-script darja.
+  'channels.wa.title': { fr: 'WhatsApp — votre numéro', ar: 'واتساب — النيميرو تاعك' },
+  'channels.wa.subtitle': {
+    fr: 'Vos agents répondront aux clients sur WhatsApp — 3la numéro du magasin.',
+    ar: 'الوكلاء تاعك يجاوبو الكليان على واتساب — على نيميرو المحل.',
+  },
+  'channels.wa.step1': {
+    fr: '1. Entre le numéro WhatsApp de ta boutique',
+    ar: '1. دخّل نيميرو واتساب تاع المحل',
+  },
+  'channels.wa.step2': {
+    fr: '2. On te donne un code à 8 caractères',
+    ar: '2. نعطيوك كود من 8 حروف',
+  },
+  'channels.wa.step3': {
+    fr: '3. WhatsApp > Appareils liés > Lier avec le numéro',
+    ar: '3. واتساب > الأجهزة المربوطة > اربط بالنيميرو',
+  },
+  'channels.wa.phonePlaceholder': {
+    fr: 'Numéro avec indicatif (+213…)',
+    ar: 'النيميرو مع الاندكاتيف (+213…)',
+  },
+  'channels.wa.connect': { fr: 'Connecter', ar: 'اربط' },
+  'channels.wa.hint': {
+    fr: 'On n\'envoie aucun message sans ton accord.',
+    ar: 'ما نصيفطو حتى رسالة بلا إذنك.',
+  },
+  'channels.wa.pairing': { fr: 'Génération du code…', ar: 'كي نجيبو الكود…' },
+  'channels.wa.codeIntro': {
+    fr: 'Ton code (valable 3 min) :',
+    ar: 'الكود تاعك (يدوم 3 دقايق) :',
+  },
+  'channels.wa.codeSteps': {
+    fr: 'Ouvre WhatsApp sur ton téléphone → Appareils liés → Lier avec le numéro → tape ce code.',
+    ar: 'حل واتساب في التيليفون → الأجهزة المربوطة → اربط بالنيميرو → اكتب هاد الكود.',
+  },
+  'channels.wa.waiting': { fr: 'En attente de la liaison…', ar: 'كي نستناو الربط…' },
+  'channels.wa.reissue': { fr: 'Renvoyer un code', ar: 'عاود صيفط كود' },
+  'channels.wa.copy': { fr: 'Copier le code', ar: 'إنسخ الكود' },
+  'channels.wa.copied': { fr: 'Copié', ar: 'تنسخ' },
+  'channels.wa.connected': { fr: 'Connecté', ar: 'مربوط' },
+  'channels.wa.since': { fr: 'Connecté le {when}', ar: 'مربوط من {when}' },
+  'channels.wa.test': { fr: 'Tester', ar: 'جرّب' },
+  'channels.wa.testing': { fr: 'Envoi d\'un message test…', ar: 'كي نصيفطو رسالة تجربة…' },
+  'channels.wa.tested': { fr: 'Message de test envoyé ✓', ar: 'رسالة التجربة تصيفطت ✓' },
+  'channels.wa.testEmpty': { fr: 'Ré-essaie dans un instant.', ar: 'عاود من بعد شوية.' },
+  'channels.wa.disconnect': { fr: 'Déconnecter', ar: 'افصل' },
+  'channels.wa.dark': {
+    fr: 'WhatsApp bientôt disponible. Reviens bientôt.',
+    ar: 'واتساب قريب متوفّر. ارجع قريب.',
+  },
+  // Error-message mapping (backend failure → user-facing; never a raw stack/HTTP).
+  'channels.wa.err.mintFailed': {
+    fr: 'Impossible de générer le code. 3awd mera.',
+    ar: 'ما قدرناش نجيبو الكود. عاود مرة.',
+  },
+  'channels.wa.err.rateLimit': {
+    fr: 'Trop de tentatives. Attends un instant w 3awd.',
+    ar: 'برشا محاولات. استنى شوية و عاود.',
+  },
+  'channels.wa.err.badPhone': {
+    fr: 'Numéro invalide — vérifie l\'indicatif (+213…).',
+    ar: 'النيميرو ماشي صحيح — تأكّد من الاندكاتيف (+213…).',
+  },
+  'channels.wa.err.expired': {
+    fr: 'Code expiré. Renvoie un nouveau code.',
+    ar: 'الكود فات. عاود صيفط كود جديد.',
+  },
+  'channels.wa.err.testFail': {
+    fr: 'Envoi impossible pour l\'instant. 3awd mera.',
+    ar: 'ما نجّمناش نصيفطو دروك. عاود مرة.',
+  },
+  'channels.wa.err.signedOut': {
+    fr: 'Session expirée — reconnecte-toi.',
+    ar: 'الجلسة فاتت — عاود دخّل.',
+  },
+  'channels.wa.err.generic': {
+    fr: 'Une erreur s\'est produite. 3awd mera.',
+    ar: 'وقع مشكل. عاود مرة.',
+  },
+
+  // ── OPENCLAW SETUP · sandbox + wizard + dashboard (R16 i18n + real probe) ───
+  // Replaces the hardcoded English in openclaw-shared.tsx / wizard.tsx /
+  // dashboard.tsx. Honest copy: "provisioning" provisions NOTHING (no per-user
+  // Vercel account); the sandbox test is a real create→exec→teardown probe.
+  'openclaw.sandbox.title': { fr: 'Sandbox', ar: 'الساندبوكس' },
+  'openclaw.sandbox.enabled': { fr: 'Sandbox actif', ar: 'الساندبوكس خدّام' },
+  'openclaw.sandbox.disabled': { fr: 'Sandbox désactivé', ar: 'الساندبوكس مطفي' },
+  'openclaw.sandbox.chipLive': { fr: 'en direct', ar: 'مباشر' },
+  'openclaw.sandbox.chipOff': { fr: 'génération seule', ar: 'توليد فقط' },
+  'openclaw.sandbox.live': {
+    fr: 'Sandbox actif — tes tâches s\'exécutent en vrai.',
+    ar: 'الساندبوكس خدّام — الخدمات تتنفّذ بصح.',
+  },
+  'openclaw.sandbox.liveLong': {
+    fr: 'Les tâches s\'exécutent dans un microVM isolé — les fichiers sont écrits, les commandes tournent, et les apps web ont un aperçu en direct.',
+    ar: 'الخدمات تتنفّذ ف microVM معزول — الفيشيي يتكتبو، الكوموندات يخدمو، و الأبليكاسيونات ويب عندها معاينة مباشرة.',
+  },
+  'openclaw.sandbox.off': {
+    fr: 'Exécution en direct désactivée : {reason} Le code est écrit et expliqué, mais pas exécuté.',
+    ar: 'التنفيذ المباشر مطفي : {reason} الكود يتكتب و يتشرح، بصح ما يتنفّذش.',
+  },
+  'openclaw.sandbox.offGeneric': {
+    fr: 'Exécution en direct désactivée sur ce serveur. Le code est écrit et expliqué, mais pas exécuté.',
+    ar: 'التنفيذ المباشر مطفي على هاد السيرفور. الكود يتكتب و يتشرح، بصح ما يتنفّذش.',
+  },
+  'openclaw.sandbox.checking': {
+    fr: 'Vérification de la disponibilité du sandbox…',
+    ar: 'كي نتأكّدو من توفّر الساندبوكس…',
+  },
+  'openclaw.sandbox.testing': { fr: 'Test du sandbox en cours…', ar: 'كي نجرّبو الساندبوكس…' },
+  'openclaw.sandbox.testOk': {
+    fr: 'Sandbox OK — création + exécution + arrêt réussis.',
+    ar: 'الساندبوكس مليح — تصنع، تنفّذ و توقّف بنجاح.',
+  },
+  'openclaw.sandbox.testOkMs': {
+    fr: '✅ Sandbox opérationnel ({ms}ms)',
+    ar: '✅ الساندبوكس خدّام ({ms}ms)',
+  },
+  'openclaw.sandbox.test': { fr: 'Tester le sandbox', ar: 'جرّب الساندبوكس' },
+  'openclaw.sandbox.recheck': { fr: 'Revérifier', ar: 'عاود تأكّد' },
+  'openclaw.sandbox.retry': { fr: 'Réessayer', ar: 'عاود' },
+  // Sandbox reason mapping (classified backend reason → merchant copy; never raw).
+  'openclaw.sandbox.err.atCapacity': {
+    fr: 'Trop d\'agents actifs en ce moment. Réessaye dans un instant.',
+    ar: 'برشا وكلاء خدّامين دروك. عاود من بعد شوية.',
+  },
+  'openclaw.sandbox.err.coldStart': {
+    fr: 'Le sandbox démarre (démarrage à froid). Réessaye dans quelques secondes.',
+    ar: 'الساندبوكس كي يبدا (démarrage à froid). عاود بعد شوية سواني.',
+  },
+  'openclaw.sandbox.err.token': {
+    fr: 'Exécution indisponible (compte). Le code est écrit mais pas exécuté.',
+    ar: 'التنفيذ ماشي متوفّر (الحساب). الكود يتكتب بصح ما يتنفّذش.',
+  },
+  'openclaw.sandbox.err.probeFail': {
+    fr: 'Sandbox injoignable pour l\'instant. 3awd mera.',
+    ar: 'الساندبوكس ماشي موصول دروك. عاود مرة.',
+  },
+  'openclaw.sandbox.err.capsLoad': {
+    fr: 'Impossible de vérifier le sandbox.',
+    ar: 'ما قدرناش نتأكّدو من الساندبوكس.',
+  },
+  // Wizard copy (steps + terminal phases). "Setup" saves DEFAULTS, provisions nothing.
+  'openclaw.wizard.saving': { fr: 'Enregistrement de ton OpenClaw…', ar: 'كي نسجّلو OpenClaw تاعك…' },
+  'openclaw.wizard.savingHint': { fr: 'Ça prend juste un instant.', ar: 'ياخذ غير شوية.' },
+  'openclaw.wizard.tryAgain': { fr: 'Réessayer', ar: 'عاود' },
+  'openclaw.wizard.backToReview': { fr: 'Retour au récap', ar: 'ارجع للملخّص' },
+  'openclaw.wizard.saveError': {
+    fr: 'Impossible d\'enregistrer ton setup. 3awd mera.',
+    ar: 'ما قدرناش نسجّلو الإعداد تاعك. عاود مرة.',
+  },
+  'openclaw.wizard.welcomeTitle': { fr: 'Configure ton agent codeur', ar: 'إعدّ الوكيل الكودور تاعك' },
+  'openclaw.wizard.welcomeSubtitle': {
+    fr: 'OpenClaw est ton agent codeur IA. Décris une tâche : il écrit les fichiers, les exécute dans un sandbox isolé, streame la sortie et — pour les apps web — montre un aperçu en direct. Choisissons quelques réglages.',
+    ar: 'OpenClaw هو الوكيل الكودور تاع الذكاء الاصطناعي تاعك. وصف خدمة : يكتب الفيشيي، ينفّذهم ف ساندبوكس معزول، يستريمي الخرجة و — للأبليكاسيونات ويب — يوري معاينة مباشرة. نختارو شوية إعدادات.',
+  },
+  'openclaw.wizard.welcomeLi1': { fr: 'Le runtime par défaut de tes tâches', ar: 'الرونتايم الافتراضي تاع خدماتك' },
+  'openclaw.wizard.welcomeLi2': { fr: 'Si les aperçus s\'ouvrent automatiquement', ar: 'واش المعاينات يتحلّو وحدهم' },
+  'openclaw.wizard.welcomeLi3': { fr: 'Une vérification rapide que l\'exécution est disponible', ar: 'تأكّد سريع بلي التنفيذ متوفّر' },
+  'openclaw.wizard.runtimeTitle': { fr: 'Runtime par défaut', ar: 'الرونتايم الافتراضي' },
+  'openclaw.wizard.runtimeSubtitle': {
+    fr: 'Les nouvelles tâches démarrent dans ce runtime. Tu peux changer par tâche depuis le composer à tout moment.',
+    ar: 'الخدمات الجداد يبداو ف هاد الرونتايم. تقدر تبدّل لكل خدمة من الكومبوزور وقت ما تحب.',
+  },
+  'openclaw.wizard.previewTitle': { fr: 'Aperçu en direct', ar: 'المعاينة المباشرة' },
+  'openclaw.wizard.previewSubtitle': {
+    fr: 'Quand une tâche démarre un serveur web, OpenClaw expose une URL d\'aperçu en direct. Doit-il basculer automatiquement sur l\'onglet Aperçu quand une est prête ?',
+    ar: 'كي خدمة تبدا سيرفور ويب، OpenClaw يعطي URL معاينة مباشرة. لازم يبدّل وحده لللونجلي معاينة كي تكون واحدة حاضرة ؟',
+  },
+  'openclaw.wizard.previewToggle': { fr: 'Ouvrir l\'aperçu automatiquement', ar: 'حل المعاينة وحدها' },
+  'openclaw.wizard.previewHint': {
+    fr: 'Recommandé pour les apps web. Désactive si tu préfères rester sur le terminal.',
+    ar: 'مستحسن للأبليكاسيونات ويب. طفّي إذا تحب تبقى ف التيرمينال.',
+  },
+  'openclaw.wizard.sandboxTitle': { fr: 'État du sandbox', ar: 'حالة الساندبوكس' },
+  'openclaw.wizard.sandboxSubtitle': {
+    fr: 'L\'exécution en direct fait tourner ton code dans un microVM isolé. Voici s\'il est disponible sur ce serveur maintenant.',
+    ar: 'التنفيذ المباشر يخلّي الكود تاعك يخدم ف microVM معزول. هاك واش متوفّر على هاد السيرفور دروك.',
+  },
+  'openclaw.wizard.sandboxGenerateOnly': {
+    fr: 'Tu peux quand même configurer et utiliser OpenClaw — il générera et expliquera le code sans l\'exécuter. Si l\'exécution en direct est activée plus tard, tes tâches tournent pour de vrai sans réglage supplémentaire.',
+    ar: 'تقدر بلمعقول تعدّ و تستعمل OpenClaw — يولّد و يشرح الكود بلا ما ينفّذه. إذا التنفيذ المباشر يتفعّل من بعد، خدماتك يخدمو بصح بلا إعداد زايد.',
+  },
+  'openclaw.wizard.reviewTitle': { fr: 'Récapitulatif', ar: 'الملخّص' },
+  'openclaw.wizard.reviewSubtitle': {
+    fr: 'Voici ton setup. Tu peux tout changer plus tard depuis le dashboard.',
+    ar: 'هاك الإعداد تاعك. تقدر تبدّل كلش من بعد من الدашبورد.',
+  },
+  'openclaw.wizard.rowRuntime': { fr: 'Runtime par défaut', ar: 'الرونتايم الافتراضي' },
+  'openclaw.wizard.rowPreview': { fr: 'Ouverture auto de l\'aperçu', ar: 'فتح المعاينة وحدها' },
+  'openclaw.wizard.rowExec': { fr: 'Exécution en direct', ar: 'التنفيذ المباشر' },
+  'openclaw.wizard.valOn': { fr: 'Oui', ar: 'إيه' },
+  'openclaw.wizard.valOff': { fr: 'Non', ar: 'لا' },
+  'openclaw.wizard.valUnknown': { fr: 'Inconnu', ar: 'ماعرفناش' },
+  'openclaw.wizard.valExecOn': { fr: 'Activée (en direct)', ar: 'مفعّلة (مباشر)' },
+  'openclaw.wizard.valExecOff': { fr: 'Désactivée (génération seule)', ar: 'مطفية (توليد فقط)' },
+  'openclaw.wizard.reviewNote': {
+    fr: 'On enregistre ces réglages sur ton compte et on t\'emmène à ton dashboard OpenClaw.',
+    ar: 'نسجّلو هاد الإعدادات على الحساب تاعك و نوصّلوك للدашبورد تاع OpenClaw.',
+  },
+  'openclaw.wizard.edit': { fr: 'Modifier', ar: 'بدّل' },
+  'openclaw.wizard.back': { fr: '← Retour', ar: '← ارجع' },
+  'openclaw.wizard.cancel': { fr: 'Annuler', ar: 'ألغِ' },
+  'openclaw.wizard.getStarted': { fr: 'Commencer', ar: 'ابدا' },
+  'openclaw.wizard.continue': { fr: 'Continuer', ar: 'كمّل' },
+  'openclaw.wizard.finish': { fr: 'Terminer la configuration', ar: 'كمّل الإعداد' },
+  'openclaw.done.title': { fr: 'OpenClaw est prêt', ar: 'OpenClaw واجد' },
+  'openclaw.done.subtitle': {
+    fr: 'Ton agent codeur est configuré. Lance une tâche et regarde-le construire.',
+    ar: 'الوكيل الكودور تاعك معدّ. أطلق خدمة و شوفه كي يبني.',
+  },
+  'openclaw.done.runtime': { fr: 'Runtime', ar: 'رونتايم' },
+  'openclaw.done.autoPreview': { fr: 'Aperçu auto', ar: 'معاينة أوتو' },
+  'openclaw.done.goDashboard': { fr: 'Aller au dashboard', ar: 'روح للدашبورد' },
+  // Dashboard copy.
+  'openclaw.dash.startTitle': { fr: 'Lancer une tâche de code', ar: 'أطلق خدمة كود' },
+  'openclaw.dash.startHint': {
+    fr: 'Décris quoi construire — {runtime} · sandbox {mode}.',
+    ar: 'وصف واش تبني — {runtime} · الساندبوكس {mode}.',
+  },
+  'openclaw.dash.newTask': { fr: '+ Nouvelle tâche', ar: '+ خدمة جديدة' },
+  'openclaw.dash.yourDefaults': { fr: 'Tes réglages', ar: 'الإعدادات تاعك' },
+  'openclaw.dash.probing': { fr: 'Sonde du sandbox…', ar: 'كي نسبرو الساندبوكس…' },
+  'openclaw.dash.lampLive': { fr: 'Sandbox en direct — les tâches s\'exécutent.', ar: 'الساندبوكس مباشر — الخدمات تتنفّذ.' },
+  'openclaw.dash.lampErr': { fr: 'Échec du chargement des capacités du sandbox.', ar: 'فشل تحميل قدرات الساندبوكس.' },
+  'openclaw.dash.edit': { fr: 'Modifier', ar: 'بدّل' },
+  'openclaw.dash.plannerOff': {
+    fr: 'Le planificateur IA n\'est pas configuré — l\'exécution est désactivée tant que l\'admin n\'a pas défini {key}.',
+    ar: 'المخطّط تاع الذكاء الاصطناعي ماشي معدّ — التنفيذ مطفي حتى يعدّ الأدمين {key}.',
+  },
+
   // ── RUN TIMELINE (run-timeline.tsx) ───────────────────────────────────────
   'timeline.stepsLabel': { fr: 'Étapes du run', ar: 'مراحل العملية' },
   'timeline.loading': { fr: 'Chargement du run…', ar: 'كي نحمّلو العملية…' },
