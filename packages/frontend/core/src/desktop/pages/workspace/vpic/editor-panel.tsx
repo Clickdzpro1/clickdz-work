@@ -59,10 +59,20 @@ const MaskPanel = lazy(() => import('./mask-panel'));
 // ---- Backend routes (must match ClickDzVpicController EXACTLY) ------------
 const CAPS_URL = '/api/v1/vpic/caps';
 const PROJECTS_URL = '/api/v1/vpic/projects';
+// R15 — the two cdz-pix AI proxy routes. Same session-authed, credentials-
+// included fetch idiom as caps/projects + the mask panel's generations call.
+const BG_REMOVE_URL = '/api/v1/vpic/bg-remove';
+const UPSCALE_URL = '/api/v1/vpic/upscale';
 
 /** The caps envelope — the ONE ungated route; drives FE visibility. */
 interface VpicCaps {
   enabled: boolean;
+  // R15 — the two AI capabilities (bg-remove + upscale). TRUE only when the
+  // feature flag is on AND cdz-pix is wired server-side; each gates its button.
+  // Optional on the wire so a pre-R15 backend (no flags) reads as `undefined` →
+  // treated as `false` (buttons stay disabled), never a crash.
+  bgRemoveEnabled?: boolean;
+  upscaleEnabled?: boolean;
 }
 
 /** Compact project row from GET /projects (newest-first, no state blob). */
@@ -167,6 +177,28 @@ function centeredCropForAspect(
   // Target is taller: keep full height, shrink width, center it.
   const w = targetAspect / currentAspect;
   return { x: (1 - w) / 2, y: 0, w, h: 1 };
+}
+
+/**
+ * Normalize a cdz-pix `imageBase64` reply into a `data:` URL. The service may
+ * return either a bare base64 payload or an already-prefixed data URL; we accept
+ * both and default to PNG (bg-remove yields a transparent PNG, upscale a PNG).
+ */
+function toDataUrl(imageBase64: string): string {
+  return imageBase64.startsWith('data:')
+    ? imageBase64
+    : `data:image/png;base64,${imageBase64}`;
+}
+
+/**
+ * Decode a cdz-pix `imageBase64` reply into a Blob so it can flow back into the
+ * engine through the SAME result path the mask panel uses (`onApplied`, which
+ * saveBlob → loadFromUrl). `fetch()` on a data URL is the same decode step the
+ * mask panel already relies on for its own result image — no extra transport.
+ */
+async function dataUrlToBlob(imageBase64: string): Promise<Blob> {
+  const resp = await fetch(toDataUrl(imageBase64));
+  return resp.blob();
 }
 
 export function VpicEditorPanel() {
@@ -563,6 +595,98 @@ export function VpicEditorPanel() {
     [media, loadFromUrl, closeMask]
   );
 
+  // ---- IA: cdz-pix ops (bg-remove + upscale) -----------------------------
+  // The two AI buttons (shipped DISABLED in R14) proxy the CURRENT canvas image
+  // to cdz-pix via the VPIC controller and fold the result back into the engine.
+  // Enabled only when the matching cap is true; a single in-flight `pixBusy`
+  // flag disables both while one runs. Fail-soft: any error surfaces a pinned,
+  // translated message and NEVER throws (same stance as the mask panel).
+  const [pixBusy, setPixBusy] = useState(false);
+  // Which pinned message to show under the AI section: 'aiUnavailable' when the
+  // service is off/unconfigured (the caps should already gate this, but the
+  // route can still 400), 'error' for anything else. null = no error shown.
+  const [pixError, setPixError] = useState<null | 'aiUnavailable' | 'error'>(
+    null
+  );
+
+  // Shared runner for both ops. Grabs the engine's current full-res render as a
+  // base64 data URL (the SAME `exportBlob('image/png')` accessor gen-fill uses),
+  // POSTs `{ imageBase64, ...extra }` to the given route (cdzApiUrl + credentials
+  // 'include', exactly like the mask panel), then routes the returned
+  // `imageBase64` back through `onMaskApplied` (saveBlob → loadFromUrl) — the
+  // SAME result path the mask panel's onApplied takes.
+  const runPixOp = useCallback(
+    async (url: string, extra?: Record<string, unknown>) => {
+      if (pixBusy) return;
+      const eng = engineRef.current;
+      if (!eng) return;
+      setPixError(null);
+
+      // Current canvas → base64 data URL. A tainted (cross-origin) canvas can
+      // throw on export; treat that as a generic, fail-soft error.
+      let imageBase64: string;
+      try {
+        const blob = await eng.exportBlob('image/png');
+        imageBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error('read failed'));
+          reader.onload = () => resolve(String(reader.result));
+          reader.readAsDataURL(blob);
+        });
+      } catch {
+        setPixError('error');
+        return;
+      }
+
+      setPixBusy(true);
+      try {
+        const res = await fetch(cdzApiUrl(url), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          // Route is NOT @Public — it authenticates via the session cookie.
+          credentials: 'include',
+          body: JSON.stringify({ imageBase64, ...(extra ?? {}) }),
+        });
+        const data = (await res.json().catch(() => null)) as {
+          imageBase64?: unknown;
+          error?: { message?: string };
+        } | null;
+        if (!res.ok) {
+          // The controller returns a typed 400 ("not enabled" / "not
+          // configured") when the feature/service is off — show the pinned
+          // "AI unavailable" wall for that; anything else is a generic error.
+          if (res.status === 400) setPixError('aiUnavailable');
+          else setPixError('error');
+          return;
+        }
+        if (typeof data?.imageBase64 !== 'string' || !data.imageBase64) {
+          setPixError('error');
+          return;
+        }
+        // Decode → Blob and fold back into the engine via the shared result
+        // path (saveBlob → loadFromUrl), reusing the mask panel's onApplied.
+        const blob = await dataUrlToBlob(data.imageBase64);
+        onMaskApplied(blob);
+      } catch {
+        // Network / abort / unexpected: treat AI as unavailable, never throw.
+        setPixError('aiUnavailable');
+      } finally {
+        setPixBusy(false);
+      }
+    },
+    [pixBusy, onMaskApplied]
+  );
+
+  const onBgRemove = useCallback(() => {
+    void runPixOp(BG_REMOVE_URL);
+  }, [runPixOp]);
+
+  // Upscale 2× — the conservative default (cdz-pix accepts 2 | 4); 2× is the
+  // safe CPU-bound choice and keeps the result within the engine's size budget.
+  const onUpscale = useCallback(() => {
+    void runPixOp(UPSCALE_URL, { scale: 2 });
+  }, [runPixOp]);
+
   // ---- Export ------------------------------------------------------------
   const [exportFmt, setExportFmt] = useState<
     'image/png' | 'image/jpeg' | 'image/webp'
@@ -790,6 +914,11 @@ export function VpicEditorPanel() {
 
   const canUndo = engine?.canUndo() ?? false;
   const canRedo = engine?.canRedo() ?? false;
+
+  // R15 AI caps (read from the same caps object the panel already gates on).
+  // Undefined (pre-R15 backend) coerces to false, so the buttons stay disabled.
+  const bgRemoveEnabled = caps?.bgRemoveEnabled ?? false;
+  const upscaleEnabled = caps?.upscaleEnabled ?? false;
 
   // ---- Render branches ---------------------------------------------------
   // 1) Still checking caps → the shared loading line.
@@ -1231,24 +1360,42 @@ export function VpicEditorPanel() {
               </button>
               <div style={styles.hint}>{t('vpic.genFillHint')}</div>
               <div style={styles.chipRow}>
-                {/* Ship in R15 — rendered DISABLED with the comingSoon tooltip. */}
+                {/* R15 — wired to cdz-pix. Enabled only when the matching cap is
+                    true (and no op is in flight); otherwise disabled with the
+                    "AI unavailable" tooltip. Label flips to vpic.working while
+                    the shared pixBusy op runs. */}
                 <button
                   type="button"
-                  style={styles.chipDisabled}
-                  disabled
-                  title={t('vpic.comingSoon')}
+                  style={
+                    bgRemoveEnabled ? styles.chip : styles.chipDisabled
+                  }
+                  disabled={!bgRemoveEnabled || pixBusy}
+                  title={
+                    bgRemoveEnabled ? undefined : t('vpic.aiUnavailable')
+                  }
+                  onClick={onBgRemove}
                 >
-                  {t('vpic.bgRemove')}
+                  {pixBusy ? t('vpic.working') : t('vpic.bgRemove')}
                 </button>
                 <button
                   type="button"
-                  style={styles.chipDisabled}
-                  disabled
-                  title={t('vpic.comingSoon')}
+                  style={upscaleEnabled ? styles.chip : styles.chipDisabled}
+                  disabled={!upscaleEnabled || pixBusy}
+                  title={
+                    upscaleEnabled ? undefined : t('vpic.aiUnavailable')
+                  }
+                  onClick={onUpscale}
                 >
-                  {t('vpic.upscale')}
+                  {pixBusy ? t('vpic.working') : t('vpic.upscale')}
                 </button>
               </div>
+              {pixError ? (
+                <div style={styles.error}>
+                  {pixError === 'aiUnavailable'
+                    ? t('vpic.aiUnavailable')
+                    : t('vpic.error')}
+                </div>
+              ) : null}
             </section>
 
             {/* ---- Export ---- */}
