@@ -13,6 +13,7 @@
 // is the shared AgentPalette so the wizard reads like the console.
 // ---------------------------------------------------------------------------
 
+import { useAgentLang } from '@affine/core/modules/agents/i18n';
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
 import {
@@ -28,6 +29,7 @@ import {
   RUNTIME_BLURB,
   RUNTIME_LABELS,
   RUNTIMES,
+  SandboxHealthButton,
   SandboxStatus,
   Spinner,
 } from './openclaw-shared';
@@ -65,6 +67,7 @@ export const OpenClawWizard = ({
   /** Seed values when editing an existing config. */
   initial?: OpenClawConfig | null;
 }) => {
+  const { t } = useAgentLang();
   const [stepIdx, setStepIdx] = useState(0);
   const step = FLOW[stepIdx];
 
@@ -99,12 +102,12 @@ export const OpenClawWizard = ({
       setPhase({
         kind: 'error',
         message:
-          err instanceof Error
+          err instanceof Error && err.message
             ? err.message
-            : 'Could not save your setup. Please try again.',
+            : t('openclaw.wizard.saveError'),
       });
     }
-  }, [config]);
+  }, [config, t]);
 
   // ---- Terminal phases render standalone --------------------------------
   if (phase.kind === 'saving') {
@@ -121,9 +124,9 @@ export const OpenClawWizard = ({
         >
           <Spinner />
           <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>
-            Setting up your OpenClaw…
+            {t('openclaw.wizard.saving')}
           </div>
-          <div style={hintStyle}>This only takes a moment.</div>
+          <div style={hintStyle}>{t('openclaw.wizard.savingHint')}</div>
         </div>
       </Card>
     );
@@ -135,13 +138,13 @@ export const OpenClawWizard = ({
         <Banner tone="error">{phase.message}</Banner>
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button style={btnStyle('primary')} onClick={() => void save()}>
-            Try again
+            {t('openclaw.wizard.tryAgain')}
           </button>
           <button
             style={btnStyle('secondary')}
             onClick={() => setPhase({ kind: 'idle' })}
           >
-            Back to review
+            {t('openclaw.wizard.backToReview')}
           </button>
         </div>
       </Card>
@@ -160,8 +163,8 @@ export const OpenClawWizard = ({
       {step === 'welcome' ? (
         <StepShell
           glyph=">_"
-          title="Set up your coding agent"
-          subtitle="OpenClaw is your own AI coding agent. Describe a task and it writes the files, runs them in an isolated sandbox, streams the output, and — for web apps — shows a live preview. Let’s pick a couple of defaults."
+          title={t('openclaw.wizard.welcomeTitle')}
+          subtitle={t('openclaw.wizard.welcomeSubtitle')}
         >
           <ul
             style={{
@@ -172,9 +175,9 @@ export const OpenClawWizard = ({
               lineHeight: 1.7,
             }}
           >
-            <li>The runtime your tasks default to</li>
-            <li>Whether previews open automatically</li>
-            <li>A quick check that live execution is available</li>
+            <li>{t('openclaw.wizard.welcomeLi1')}</li>
+            <li>{t('openclaw.wizard.welcomeLi2')}</li>
+            <li>{t('openclaw.wizard.welcomeLi3')}</li>
           </ul>
         </StepShell>
       ) : null}
@@ -182,8 +185,8 @@ export const OpenClawWizard = ({
       {step === 'runtime' ? (
         <StepShell
           glyph="⚙"
-          title="Default runtime"
-          subtitle="New tasks start in this runtime. You can switch per task from the composer at any time."
+          title={t('openclaw.wizard.runtimeTitle')}
+          subtitle={t('openclaw.wizard.runtimeSubtitle')}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {RUNTIMES.map(rt => {
@@ -256,14 +259,14 @@ export const OpenClawWizard = ({
       {step === 'preview' ? (
         <StepShell
           glyph="🖥"
-          title="Live preview"
-          subtitle="When a task boots a web dev server, OpenClaw exposes a live preview URL. Should it jump to the Preview tab automatically when one is ready?"
+          title={t('openclaw.wizard.previewTitle')}
+          subtitle={t('openclaw.wizard.previewSubtitle')}
         >
           <Toggle
             checked={previewAutoOpen}
             onChange={setPreviewAutoOpen}
-            label="Auto-open the preview"
-            hint="Recommended for web apps. Turn off if you’d rather stay on the terminal and open the preview yourself."
+            label={t('openclaw.wizard.previewToggle')}
+            hint={t('openclaw.wizard.previewHint')}
           />
         </StepShell>
       ) : null}
@@ -271,8 +274,8 @@ export const OpenClawWizard = ({
       {step === 'sandbox' ? (
         <StepShell
           glyph="🔒"
-          title="Sandbox status"
-          subtitle="Live execution runs your code in an isolated Vercel Sandbox. Here’s whether it’s available on this server right now."
+          title={t('openclaw.wizard.sandboxTitle')}
+          subtitle={t('openclaw.wizard.sandboxSubtitle')}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {capsState === 'loading' ? (
@@ -285,13 +288,13 @@ export const OpenClawWizard = ({
                   padding: '8px 2px',
                 }}
               >
-                <Spinner /> Checking sandbox availability…
+                <Spinner /> {t('openclaw.sandbox.checking')}
               </div>
             ) : capsState === 'error' ? (
               <Banner tone="error">
-                Couldn’t reach the capability check.{' '}
+                {t('openclaw.sandbox.err.capsLoad')}{' '}
                 <button style={{ ...btnStyle('secondary'), padding: '2px 8px', fontSize: 12 }} onClick={onReloadCaps}>
-                  Recheck
+                  {t('openclaw.sandbox.recheck')}
                 </button>
               </Banner>
             ) : (
@@ -299,12 +302,12 @@ export const OpenClawWizard = ({
                 <SandboxStatus caps={caps} />
                 {!caps?.sandbox ? (
                   <Banner tone="info">
-                    You can still set up and use OpenClaw — it will{' '}
-                    <strong>generate and explain code</strong> without running
-                    it. If live execution gets enabled later, your tasks run for
-                    real with no extra setup.
+                    {t('openclaw.wizard.sandboxGenerateOnly')}
                   </Banner>
                 ) : null}
+                {/* Two distinct affordances: the REAL create→exec→teardown probe
+                    (honest), and the cheap capability re-read below it. */}
+                <SandboxHealthButton />
                 <div>
                   <button
                     style={{
@@ -314,7 +317,8 @@ export const OpenClawWizard = ({
                     }}
                     onClick={onReloadCaps}
                   >
-                    ↻ Recheck
+                    {'↻ '}
+                    {t('openclaw.sandbox.recheck')}
                   </button>
                 </div>
               </>
@@ -326,8 +330,8 @@ export const OpenClawWizard = ({
       {step === 'review' ? (
         <StepShell
           glyph="✅"
-          title="Review"
-          subtitle="Here’s your setup. You can change any of this later from the dashboard."
+          title={t('openclaw.wizard.reviewTitle')}
+          subtitle={t('openclaw.wizard.reviewSubtitle')}
         >
           <div
             style={{
@@ -340,31 +344,35 @@ export const OpenClawWizard = ({
             }}
           >
             <ReviewRow
-              label="Default runtime"
+              label={t('openclaw.wizard.rowRuntime')}
               value={`${RUNTIME_LABELS[runtime] ?? runtime} (${runtime})`}
               onEdit={() => setStepIdx(FLOW.indexOf('runtime'))}
+              editLabel={t('openclaw.wizard.edit')}
             />
             <ReviewRow
-              label="Auto-open preview"
-              value={previewAutoOpen ? 'On' : 'Off'}
+              label={t('openclaw.wizard.rowPreview')}
+              value={
+                previewAutoOpen
+                  ? t('openclaw.wizard.valOn')
+                  : t('openclaw.wizard.valOff')
+              }
               onEdit={() => setStepIdx(FLOW.indexOf('preview'))}
+              editLabel={t('openclaw.wizard.edit')}
             />
             <ReviewRow
-              label="Live execution"
+              label={t('openclaw.wizard.rowExec')}
               value={
                 capsState !== 'ready'
-                  ? 'Unknown'
+                  ? t('openclaw.wizard.valUnknown')
                   : caps?.sandbox
-                    ? 'Enabled (live)'
-                    : 'Off (generate-only)'
+                    ? t('openclaw.wizard.valExecOn')
+                    : t('openclaw.wizard.valExecOff')
               }
               onEdit={() => setStepIdx(FLOW.indexOf('sandbox'))}
+              editLabel={t('openclaw.wizard.edit')}
             />
           </div>
-          <Banner tone="info">
-            We’ll save these defaults to your account and take you to your
-            OpenClaw dashboard.
-          </Banner>
+          <Banner tone="info">{t('openclaw.wizard.reviewNote')}</Banner>
         </StepShell>
       ) : null}
 
@@ -379,11 +387,11 @@ export const OpenClawWizard = ({
       >
         {stepIdx > 0 ? (
           <button style={btnStyle('secondary')} onClick={back}>
-            ← Back
+            {t('openclaw.wizard.back')}
           </button>
         ) : hasExisting && onCancel ? (
           <button style={btnStyle('secondary')} onClick={onCancel}>
-            Cancel
+            {t('openclaw.wizard.cancel')}
           </button>
         ) : (
           <span />
@@ -391,11 +399,14 @@ export const OpenClawWizard = ({
         <div style={{ flex: 1 }} />
         {step === 'review' ? (
           <button style={btnStyle('primary')} onClick={() => void save()}>
-            Finish setup →
+            {t('openclaw.wizard.finish')} →
           </button>
         ) : (
           <button style={btnStyle('primary')} onClick={next}>
-            {step === 'welcome' ? 'Get started' : 'Continue'} →
+            {step === 'welcome'
+              ? t('openclaw.wizard.getStarted')
+              : t('openclaw.wizard.continue')}{' '}
+            →
           </button>
         )}
       </div>
@@ -561,10 +572,12 @@ const ReviewRow = ({
   label,
   value,
   onEdit,
+  editLabel,
 }: {
   label: string;
   value: string;
   onEdit: () => void;
+  editLabel: string;
 }) => (
   <div
     style={{
@@ -602,7 +615,7 @@ const ReviewRow = ({
       }}
       onClick={onEdit}
     >
-      Edit
+      {editLabel}
     </button>
   </div>
 );
@@ -617,65 +630,72 @@ const DoneCard = ({
   config: OpenClawConfig;
   caps: ClawCapabilities | null;
   onFinish: (config: OpenClawConfig) => void;
-}) => (
-  <Card>
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-        alignItems: 'center',
-        textAlign: 'center',
-      }}
-    >
-      <div style={{ fontSize: 40 }} aria-hidden>
-        🎉
-      </div>
-      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: C.text }}>
-        OpenClaw is ready
-      </h2>
-      <p style={{ margin: 0, fontSize: 13.5, color: C.muted }}>
-        Your coding agent is set up. Start a task and watch it build.
-      </p>
-    </div>
-
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-        marginTop: 22,
-      }}
-    >
+}) => {
+  const { t } = useAgentLang();
+  return (
+    <Card>
       <div
         style={{
           display: 'flex',
-          gap: 10,
-          borderRadius: 12,
-          overflow: 'hidden',
-          border: `1px solid ${C.border}`,
+          flexDirection: 'column',
+          gap: 8,
+          alignItems: 'center',
+          textAlign: 'center',
         }}
       >
-        <SummaryTile
-          label="Runtime"
-          value={RUNTIME_LABELS[config.defaultRuntime ?? 'node24'] ?? 'Node.js 24'}
-        />
-        <SummaryTile
-          label="Auto-preview"
-          value={config.previewAutoOpen ? 'On' : 'Off'}
-        />
+        <div style={{ fontSize: 40 }} aria-hidden>
+          🎉
+        </div>
+        <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: C.text }}>
+          {t('openclaw.done.title')}
+        </h2>
+        <p style={{ margin: 0, fontSize: 13.5, color: C.muted }}>
+          {t('openclaw.done.subtitle')}
+        </p>
       </div>
-      <SandboxStatus caps={caps} />
-    </div>
 
-    <div style={{ display: 'flex', marginTop: 22 }}>
-      <div style={{ flex: 1 }} />
-      <button style={btnStyle('primary')} onClick={() => onFinish(config)}>
-        Go to dashboard →
-      </button>
-    </div>
-  </Card>
-);
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          marginTop: 22,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            gap: 10,
+            borderRadius: 12,
+            overflow: 'hidden',
+            border: `1px solid ${C.border}`,
+          }}
+        >
+          <SummaryTile
+            label={t('openclaw.done.runtime')}
+            value={RUNTIME_LABELS[config.defaultRuntime ?? 'node24'] ?? 'Node.js 24'}
+          />
+          <SummaryTile
+            label={t('openclaw.done.autoPreview')}
+            value={
+              config.previewAutoOpen
+                ? t('openclaw.wizard.valOn')
+                : t('openclaw.wizard.valOff')
+            }
+          />
+        </div>
+        <SandboxStatus caps={caps} />
+      </div>
+
+      <div style={{ display: 'flex', marginTop: 22 }}>
+        <div style={{ flex: 1 }} />
+        <button style={btnStyle('primary')} onClick={() => onFinish(config)}>
+          {t('openclaw.done.goDashboard')} →
+        </button>
+      </div>
+    </Card>
+  );
+};
 
 const SummaryTile = ({ label, value }: { label: string; value: string }) => (
   <div
