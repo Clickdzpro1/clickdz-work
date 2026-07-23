@@ -654,7 +654,14 @@ var api = {
     return h;
   },
   list: function (collection) {
-    return fetch(this.base(collection) + '?limit=500', { headers: { 'Accept': 'application/json' } })
+    /* PR-6 prep (staged rollout): reads now send the SAME bearer the writes
+       already send (headers(true)). Today the backend ignores it on reads;
+       once CDZ_DATA_READ_GATE flips on server-side, sensitive collections
+       (orders, customers, ...) will REQUIRE it — storefronts re-served with
+       this template keep working through the flip with zero downtime. */
+    var h = this.headers(true);
+    h['Accept'] = 'application/json';
+    return fetch(this.base(collection) + '?limit=500', { headers: h })
       .then(function (r) {
         if (!r.ok) throw new Error('list ' + collection + ' → ' + r.status);
         return r.json();

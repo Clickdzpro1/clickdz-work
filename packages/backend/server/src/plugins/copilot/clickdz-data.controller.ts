@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   HttpStatus,
+  Logger,
   Options,
   Param,
   Post,
@@ -20,6 +21,7 @@ import { randomUUID } from 'node:crypto';
 import { AuthenticationRequired, BadRequest, Throttle } from '../../base';
 import { CacheRedis } from '../../base/redis';
 import { Public } from '../../core/auth';
+import { Models } from '../../models';
 import { verifyDataToken } from './cdz-data-token';
 
 /**
@@ -45,6 +47,65 @@ const DATA_TTL_SECONDS = 90 * 24 * 60 * 60;
 const RL_MAX_WRITES_PER_MIN = 60;
 const RL_TTL_SECONDS = 120;
 
+// R15 Phase A: dual-write app-data to Postgres alongside Redis. Reads stay
+// Redis-only. Flag OFF (default) = pure legacy behaviour + full rollback.
+// '1' = on — matches EVERY other CDZ_* flag in this codebase (house convention;
+// the spec draft said 'true' but ops sets flags to '1' everywhere).
+const CDZ_PG_DUAL_WRITE = process.env.CDZ_PG_DUAL_WRITE === '1';
+
+// R15 PR-6: gate READS of PII-bearing collections behind the SAME per-slug
+// data token that already gates writes. The public GET is @Public() and today
+// returns ANY collection unauthenticated, so anyone with a shop slug can dump
+// `orders`/`customers` → DZ phone numbers + addresses. Reads for storefront
+// RENDER collections (products/settings/categories/reviews/…) must stay open.
+//
+// Denylist (not allowlist) so it FAILS SAFE for render: an unknown collection a
+// generated app invented stays public rather than 401-ing the buyer-facing
+// storefront; the PII set is small + well-known (audited from both templates).
+// Exact literals harvested from the shop/ERP clients: orders, customers,
+// clients, expenses, depenses, caisse.
+const SENSITIVE_COLLECTIONS = new Set([
+  'orders',
+  'customers',
+  'clients',
+  'expenses',
+  'depenses',
+  'caisse',
+]);
+
+// Money documents are stored month-partitioned as `<prefix>-YYYYMM` (a ':' is
+// illegal in a collection name — see the ERP client's partitionName()), e.g.
+// `invoices-202607`, `caisse-202607`. So an exact-set lookup is not enough:
+// strip a trailing `-YYYYMM` (6 digits) partition suffix and test the PREFIX,
+// and also treat any `invoice*` name as sensitive (covers `invoices`,
+// `invoices-202607`, and any future invoice-ish partition). Everything else
+// (products/settings/categories/reviews/…) stays public.
+const PARTITION_SUFFIX_RE = /-\d{6}$/;
+const isSensitive = (c: string): boolean => {
+  const base = c.replace(PARTITION_SUFFIX_RE, '');
+  return (
+    SENSITIVE_COLLECTIONS.has(base) ||
+    SENSITIVE_COLLECTIONS.has(c) ||
+    base.startsWith('invoice') ||
+    c.startsWith('invoice')
+  );
+};
+
+// R15 PR-6 staged rollout (zero-break). This flag decouples the SERVER-SIDE
+// enforcement from the CLIENT-SIDE token-sending template edit so deployed
+// storefronts never 401 mid-rollout:
+//   1. flag OFF (default) — deploy this PR. Reads behave BYTE-IDENTICALLY to
+//      today (no @Req extraction, no token check); templates now ALSO send the
+//      bearer on reads but the @Public GET simply ignores it. Nothing breaks.
+//   2. re-serve storefronts — apps re-mint/reload with the patched template JS
+//      that attaches `Authorization: Bearer <DATA_TOKEN>` on GET (the token is
+//      the stable `dataWriteToken(slug)` already embedded, so no data re-mint).
+//   3. flip flag ON — sensitive reads now REQUIRE the token; anonymous slug
+//      scraping of orders/customers/… is refused, while re-served admin/ERP
+//      PII views keep working because their reads now carry the bearer.
+// '1' = on — matches EVERY other CDZ_* flag (house convention; ops sets '1').
+const CDZ_DATA_READ_GATE = process.env.CDZ_DATA_READ_GATE === '1';
+
 const dataKey = (slug: string, collection: string) =>
   `clickdz:appdata:${slug}:${collection}`;
 
@@ -65,7 +126,14 @@ function badRequest(message: string): never {
 @Public()
 @Controller()
 export class ClickDzDataController {
-  constructor(private readonly redis: CacheRedis) {}
+  private readonly logger = new Logger(ClickDzDataController.name);
+
+  // Models is @Global (ModelsModule) — adds no module wiring, same as
+  // clickdz-bridge.controller.ts. Used only by the R15 Phase A PG mirror.
+  constructor(
+    private readonly redis: CacheRedis,
+    private readonly models: Models
+  ) {}
 
   private assertNames(slug: string, collection: string) {
     if (!SLUG_RE.test(slug)) badRequest('Invalid app slug');
@@ -88,12 +156,46 @@ export class ClickDzDataController {
     }
   }
 
+  // R15 PR-6: read-side gate for PII-bearing collections. Identical extraction
+  // + verification to requireWriteToken (SAME secret, SAME verifyDataToken — no
+  // new auth mechanism), just a read-flavoured message. Same typed
+  // AuthenticationRequired the write path throws, so the global exception
+  // filter emits the same 401 (not a raw 500) on a missing/bad token. When the
+  // secret is unset, verifyDataToken returns false → sensitive reads fail
+  // CLOSED, exactly as writes already do.
+  private requireReadToken(req: Request, slug: string) {
+    const auth = String(req.headers['authorization'] || '');
+    const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+    const token = bearer || String((req.query?.t as string) || '');
+    if (!verifyDataToken(slug, token)) {
+      throw new AuthenticationRequired(
+        'A valid token is required for this collection'
+      );
+    }
+  }
+
   // Sliding-window TTL refresh: keep the same DATA_TTL_SECONDS create() uses,
   // but re-arm it on EVERY access (read + write) so a live-but-static shop's
   // collection never silently expires at 90d after its last write. One EXPIRE
   // per request, scoped to the single collection key the route touched.
   private async touchTtl(key: string) {
     await this.redis.expire(key, DATA_TTL_SECONDS);
+  }
+
+  // R15 Phase A: best-effort Postgres mirror. NEVER throws — a PG failure must
+  // not change the HTTP outcome (Redis remains the source of truth this phase).
+  // No-op unless CDZ_PG_DUAL_WRITE is on, so rollback = flip the flag off.
+  private async mirrorToPg(op: () => Promise<void>): Promise<void> {
+    if (!CDZ_PG_DUAL_WRITE) return;
+    try {
+      await op();
+    } catch (err) {
+      this.logger.warn(
+        `[cdz-pg-dual-write] mirror failed (ignored): ${String(
+          (err as Error)?.message ?? err
+        )}`
+      );
+    }
   }
 
   // Per-slug write rate limit. Returns true when the request is OVER the cap
@@ -145,10 +247,22 @@ export class ClickDzDataController {
     @Param('slug') slug: string,
     @Param('collection') collection: string,
     @Query('limit') limit: string | undefined,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response
   ) {
     setCors(res);
     this.assertNames(slug, collection);
+    // R15 PR-6: gate PII-bearing collection reads behind the per-slug data
+    // token, but ONLY once CDZ_DATA_READ_GATE is flipped on (staged rollout —
+    // see the flag's comment). Flag OFF (default) ⇒ this branch is inert and
+    // list() is byte-identical to its pre-PR-6 behaviour. Public render
+    // collections (products/settings/…) are never sensitive, so they stay
+    // open regardless of the flag. Checked right after assertNames so a bad
+    // slug/collection still gets its precise 400 first (mirrors the write path,
+    // which validates names before requiring the token).
+    if (CDZ_DATA_READ_GATE && isSensitive(collection)) {
+      this.requireReadToken(req, slug);
+    }
     const key = dataKey(slug, collection);
     const raw = await this.redis.hgetall(key);
     // Reads slide the expiry window forward: a shop that only serves reads
@@ -215,6 +329,10 @@ export class ClickDzDataController {
     }
     await this.redis.hset(key, id, serialized);
     await this.redis.expire(key, DATA_TTL_SECONDS);
+    // R15 Phase A: durable PG copy (best-effort, never throws).
+    await this.mirrorToPg(() =>
+      this.models.cdzAppData.upsert(slug, collection, id, record)
+    );
     return record;
   }
 
@@ -293,6 +411,11 @@ export class ClickDzDataController {
     // route (vs DELETE+POST). Then re-arm the collection TTL like create().
     await this.redis.hset(key, id, serialized);
     await this.redis.expire(key, DATA_TTL_SECONDS);
+    // R15 Phase A: durable PG copy. upsert() preserves created_at on conflict,
+    // so the PG row keeps the same createdAt this record carries.
+    await this.mirrorToPg(() =>
+      this.models.cdzAppData.upsert(slug, collection, id, record)
+    );
     return record;
   }
 
@@ -320,6 +443,10 @@ export class ClickDzDataController {
     // Deletes also slide the window: touching a collection (even to remove a
     // record) counts as activity, so the rest of the collection stays alive.
     await this.touchTtl(key);
+    // R15 Phase A: mirror the delete to PG (best-effort, never throws).
+    await this.mirrorToPg(() =>
+      this.models.cdzAppData.delete(slug, collection, id)
+    );
     return { deleted: removed > 0 };
   }
 
@@ -340,6 +467,10 @@ export class ClickDzDataController {
     // no back-compat cost.
     this.requireWriteToken(req, slug);
     await this.redis.del(dataKey(slug, collection));
+    // R15 Phase A: mirror the collection wipe to PG (best-effort, never throws).
+    await this.mirrorToPg(() =>
+      this.models.cdzAppData.clearCollection(slug, collection)
+    );
     return { cleared: true };
   }
 }
