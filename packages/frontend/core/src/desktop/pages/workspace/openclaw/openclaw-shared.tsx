@@ -15,12 +15,18 @@
 // ---------------------------------------------------------------------------
 
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
+import {
+  sandboxHealth,
+  type SandboxHealth,
+} from '@affine/core/modules/agents/api';
 import { AgentPalette } from '@affine/core/modules/agents/components';
+import { useAgentLang } from '@affine/core/modules/agents/i18n';
 import type { AgentThreadSummary } from '@affine/core/modules/agents/types';
 import {
   type CSSProperties,
   type PropsWithChildren,
   type ReactNode,
+  useCallback,
   useState,
 } from 'react';
 
@@ -425,18 +431,21 @@ export const SandboxStatus = ({
   caps: ClawCapabilities | null;
   compact?: boolean;
 }) => {
+  const { t } = useAgentLang();
   const on = !!caps?.sandbox;
   const color = on ? C.okText : C.amber;
   const bg = on ? C.okBg : C.warnBg;
   const border = on ? C.okBorder : C.warnBorder;
+  // Honest off-copy: map the backend `reason` to merchant FR/darja text via the
+  // shared classifier (never print the raw reason string). A missing reason ⇒
+  // the generic "off on this server" line.
+  const offCopy = caps?.reason
+    ? t('openclaw.sandbox.off', { reason: reasonMessage(t, caps.reason) })
+    : t('openclaw.sandbox.offGeneric');
   if (compact) {
     return (
       <span
-        title={
-          on
-            ? 'Vercel Sandbox is enabled — tasks run live.'
-            : caps?.reason ?? 'Sandbox off — code is generated, not run.'
-        }
+        title={on ? t('openclaw.sandbox.live') : offCopy}
         style={{
           fontSize: 10,
           fontWeight: 700,
@@ -450,7 +459,7 @@ export const SandboxStatus = ({
           border: `1px solid ${border}`,
         }}
       >
-        {on ? 'live' : 'generate-only'}
+        {on ? t('openclaw.sandbox.chipLive') : t('openclaw.sandbox.chipOff')}
       </span>
     );
   }
@@ -478,7 +487,9 @@ export const SandboxStatus = ({
           }}
         />
         <span style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>
-          {on ? 'Sandbox enabled' : 'Sandbox off'}
+          {on
+            ? t('openclaw.sandbox.enabled')
+            : t('openclaw.sandbox.disabled')}
         </span>
         <span
           style={{
@@ -493,16 +504,200 @@ export const SandboxStatus = ({
             border: `1px solid ${border}`,
           }}
         >
-          {on ? 'live' : 'generate-only'}
+          {on ? t('openclaw.sandbox.chipLive') : t('openclaw.sandbox.chipOff')}
         </span>
       </div>
       <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.55 }}>
-        {on
-          ? 'Tasks run in an isolated Vercel Sandbox microVM — files are written, commands run, and web apps get a live preview.'
-          : caps?.reason
-            ? `Live execution is off: ${caps.reason} Code is written and explained, but not run.`
-            : 'Live execution is off on this server. Code is written and explained, but not run.'}
+        {on ? t('openclaw.sandbox.liveLong') : offCopy}
       </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Sandbox reason mapping + the REAL health-probe button (R16).
+//
+// The honest replacement for the passive capability read: `SandboxHealthButton`
+// actually POSTs /sandbox/health (which creates a microVM, runs `echo`, tears it
+// down) and renders a green "opérationnel (Xms)" / red mapped-reason inline
+// Banner. NEVER prints a raw HTTP/stack — a failure is classified to one of the
+// three sandbox rows in the design's error table and shown as merchant copy.
+// ---------------------------------------------------------------------------
+
+type TT = (key: string, vars?: Record<string, string | number>) => string;
+
+/**
+ * Classify a FREE-TEXT backend `reason` string (from `/capabilities`, which
+ * carries a human-readable cause) into the merchant-facing FR/darja message, per
+ * the design's error table. Keyword-matched, NEVER printed raw:
+ *   quota | concurren | capacity  → row 1 (trop d'agents actifs)
+ *   cold  | timeout              → row 2 (démarrage à froid)
+ *   token | plan | auth | billing → row 3 (compte / génération-seule)
+ *   anything else                → generic probe-fail ("injoignable, 3awd mera")
+ */
+export function reasonMessage(t: TT, reason?: string): string {
+  const r = (reason ?? '').toLowerCase();
+  if (!r) return t('openclaw.sandbox.err.probeFail');
+  if (
+    r.includes('capacity') ||
+    r.includes('quota') ||
+    r.includes('concurren')
+  ) {
+    return t('openclaw.sandbox.err.atCapacity');
+  }
+  if (r.includes('cold') || r.includes('timeout')) {
+    return t('openclaw.sandbox.err.coldStart');
+  }
+  if (
+    r.includes('token') ||
+    r.includes('plan') ||
+    r.includes('auth') ||
+    r.includes('billing') ||
+    r.includes('not_configured') ||
+    r.includes('not_enabled')
+  ) {
+    return t('openclaw.sandbox.err.token');
+  }
+  return t('openclaw.sandbox.err.probeFail');
+}
+
+/**
+ * Classify a failed {@link SandboxHealth} probe result into merchant copy, from
+ * the REAL backend fields (`detail.code`, `detail.status`, `stage`, verbatim
+ * `error`) — the raw string is NEVER shown. Maps to the design's three sandbox
+ * rows:
+ *   · upstream 429 / capacity|quota|concurren      → row 1 (trop d'agents actifs)
+ *   · code 'timeout' OR a create-leg timeout        → row 2 (démarrage à froid)
+ *   · code not_configured|not_enabled OR 401/402/403
+ *     OR token|plan|auth|billing                    → row 3 (compte / gén-seule)
+ *   · anything else                                 → generic probe-fail
+ */
+export function healthMessage(t: TT, h: SandboxHealth | null): string {
+  const detail = h?.detail;
+  const status = typeof detail?.status === 'number' ? detail.status : undefined;
+  const code = (detail?.code ?? '').toLowerCase();
+  const raw = `${h?.error ?? ''} ${detail?.bodyPreview ?? ''}`.toLowerCase();
+
+  // Row 1 — capacity / concurrency exhausted (upstream 429 or a capacity string).
+  if (
+    status === 429 ||
+    raw.includes('capacity') ||
+    raw.includes('quota') ||
+    raw.includes('concurren')
+  ) {
+    return t('openclaw.sandbox.err.atCapacity');
+  }
+  // Row 2 — cold-start / create timeout.
+  if (code === 'timeout' || raw.includes('cold') || raw.includes('timeout')) {
+    return t('openclaw.sandbox.err.coldStart');
+  }
+  // Row 3 — token / plan / billing / auth gate (config-off or an auth/billing HTTP).
+  if (
+    code === 'not_configured' ||
+    code === 'not_enabled' ||
+    status === 401 ||
+    status === 402 ||
+    status === 403 ||
+    raw.includes('token') ||
+    raw.includes('plan') ||
+    raw.includes('auth') ||
+    raw.includes('billing')
+  ) {
+    return t('openclaw.sandbox.err.token');
+  }
+  return t('openclaw.sandbox.err.probeFail');
+}
+
+/** Local phase for the health-probe button — idle → testing → ok / error. */
+type ProbePhase =
+  | { kind: 'idle' }
+  | { kind: 'testing' }
+  | { kind: 'ok'; ms?: number }
+  | { kind: 'error'; message: string };
+
+/**
+ * The REAL "Tester le sandbox" button. On press it runs {@link sandboxHealth}
+ * (create → exec → teardown, ≤20s via an AbortController on the backend) and
+ * shows a green "✅ sandbox opérationnel (Xms)" or a red mapped-reason Banner
+ * with a [Réessayer]. One probe per press — no background poll (R13-safe). Never
+ * surfaces the raw `error`; a `{ ok:false, reason }` result is classified to
+ * copy. A 404 (feature dark) maps to the generate-only note, not a red error.
+ */
+export const SandboxHealthButton = () => {
+  const { t } = useAgentLang();
+  const [phase, setPhase] = useState<ProbePhase>({ kind: 'idle' });
+
+  const run = useCallback(() => {
+    setPhase({ kind: 'testing' });
+    void (async () => {
+      try {
+        const res: SandboxHealth = await sandboxHealth();
+        if (res && res.ok) {
+          setPhase({
+            kind: 'ok',
+            ms: typeof res.ms === 'number' ? res.ms : undefined,
+          });
+        } else {
+          // A sandbox failure comes back HTTP 200 as { ok:false, ... } — classify
+          // from the real backend fields; never surface the verbatim error.
+          setPhase({ kind: 'error', message: healthMessage(t, res ?? null) });
+        }
+      } catch (err) {
+        // A dark feature (404) is not a red error — it's the generate-only note.
+        const status =
+          err && typeof err === 'object' && 'status' in err
+            ? (err as { status?: number }).status
+            : undefined;
+        if (status === 404) {
+          setPhase({ kind: 'error', message: t('openclaw.sandbox.err.token') });
+        } else {
+          setPhase({ kind: 'error', message: t('openclaw.sandbox.err.probeFail') });
+        }
+      }
+    })();
+  }, [t]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div>
+        <button
+          type="button"
+          style={btnStyle('primary', phase.kind === 'testing')}
+          disabled={phase.kind === 'testing'}
+          onClick={run}
+        >
+          {phase.kind === 'testing' ? (
+            <>
+              <Spinner /> {t('openclaw.sandbox.testing')}
+            </>
+          ) : (
+            t('openclaw.sandbox.test')
+          )}
+        </button>
+      </div>
+
+      {phase.kind === 'ok' ? (
+        <Banner tone="ok">
+          {typeof phase.ms === 'number'
+            ? t('openclaw.sandbox.testOkMs', { ms: phase.ms })
+            : t('openclaw.sandbox.testOk')}
+        </Banner>
+      ) : null}
+
+      {phase.kind === 'error' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Banner tone="error">{phase.message}</Banner>
+          <div>
+            <button
+              type="button"
+              style={{ ...btnStyle('secondary'), padding: '6px 12px', fontSize: 12 }}
+              onClick={run}
+            >
+              {t('openclaw.sandbox.retry')}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

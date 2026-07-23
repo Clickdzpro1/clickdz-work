@@ -225,6 +225,77 @@ export function saveOpenclawConfig(
   });
 }
 
+// ── OpenClaw sandbox health probe (R16 — real create→exec→teardown) ───────────
+//
+// The HONEST replacement for the `provisioned` Redis flag: instead of a passive
+// capability READ, this hits the R9 SONDE LIVE diagnostic, which actually
+// provisions a microVM, runs `echo('ok')`, and tears it down under a 60s budget —
+// proving live execution end-to-end. Backend route (asserted against
+// ClickDzOpenclawController.sandboxHealth): `GET /api/v1/openclaw/sandbox/health`
+// (@Throttle('strict'), @CurrentUser, typed 404 when CDZ_AGENTS_ENABLED is off).
+// It NEVER throws server-side — a broken sandbox still 200s the diagnostic as
+// `{ ok:false, stage, ms, error, detail }` so the real prod failure is readable.
+// The verbatim `error` / `detail.bodyPreview` is dev-only; the UI classifies the
+// failure to a merchant message from `detail.code` + `detail.status` + `stage`
+// (see reasonMessage in openclaw-shared) and NEVER prints the raw string.
+
+/** The lifecycle stage the probe reached (mirrors backend `SandboxHealthStage`). */
+export type SandboxHealthStage = 'create' | 'exec' | 'teardown' | 'done';
+
+/**
+ * The failure-classification codes the backend attaches on `detail.code`
+ * (mirrors `SandboxErrorCode`). The UI maps these (plus `detail.status`) to the
+ * design's three sandbox rows — a closed set, never printed raw.
+ */
+export type SandboxHealthCode =
+  | 'not_configured'
+  | 'not_enabled'
+  | 'api_error'
+  | 'timeout';
+
+/**
+ * Result of the sandbox health probe (`GET /api/v1/openclaw/sandbox/health`),
+ * mirroring the backend `SandboxHealthResult` EXACTLY. `ok:true` (with
+ * `stage:'done'`) means the microVM was created, ran `echo`, and torn down
+ * cleanly. `ok:false` carries the leg that broke (`stage`) + the VERBATIM
+ * upstream `error` (dev-only, NEVER shown to merchants) + a structured `detail`
+ * the UI classifies into copy. All fields optional beyond `ok`/`stage` so a
+ * partial/evolving payload never crashes the button.
+ */
+export interface SandboxHealth {
+  /** Whether the full create→exec→teardown cycle succeeded. */
+  ok: boolean;
+  /** How far the probe got: which leg was reached / broke. */
+  stage?: SandboxHealthStage;
+  /** Round-trip duration in milliseconds (rendered as "opérationnel (Xms)"). */
+  ms?: number;
+  /** VERBATIM upstream error string — dev logging ONLY; never surfaced to merchants. */
+  error?: string;
+  /** Structured failure breakdown when the cause was a typed sandbox error. */
+  detail?: {
+    code?: SandboxHealthCode;
+    stage?: string;
+    /** The upstream HTTP status (e.g. 429 capacity, 402 billing, 401/403 auth). */
+    status?: number;
+    bodyPreview?: string;
+  };
+  /** Runtime the create leg provisioned (diagnostic only). */
+  runtime?: string;
+}
+
+/**
+ * Run the real sandbox health probe for the signed-in user
+ * (`GET /api/v1/openclaw/sandbox/health`). Actually creates a microVM, runs
+ * `echo`, and tears it down — the honest live-execution test. Throws {@link
+ * AgentApiError} only on a transport failure OR a typed 404 when the feature is
+ * dark (the caller treats 404 as generate-only, not a red error). A sandbox
+ * FAILURE is NOT a throw — it comes back HTTP 200 as `{ ok:false, stage, error,
+ * detail }` so the UI can classify `detail` to merchant copy.
+ */
+export function sandboxHealth(): Promise<SandboxHealth> {
+  return requestJson<SandboxHealth>('/api/v1/openclaw/sandbox/health');
+}
+
 // ── Telegram channel pairing ──────────────────────────────────────────────────
 
 /** Envelope returned by {@link pairTelegram}. */
@@ -363,6 +434,169 @@ export function testTelegram(
 ): Promise<{ ok: boolean; sent: boolean }> {
   return requestJson<{ ok: boolean; sent: boolean }>(
     `/api/v1/agents/${agent}/channels/telegram/test`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+    }
+  );
+}
+
+// ── WhatsApp channel (R16 BYON: per-(user,agent) pair-by-code) ────────────────
+//
+// The WhatsApp analogue of the R10 Telegram channel above — a per-(user,agent)
+// binding, but WhatsApp pairs by an 8-char CODE (not a bot token, and NOT a QR:
+// WhatsApp's link-QR rotates ~30s and can't be surfaced statically). The user
+// gives their store's phone number; the gateway mints a code with a short TTL;
+// the user types it into WhatsApp → Linked Devices → "Link with phone number".
+// These wrap the R16 WA channel routes, mirroring the Telegram block EXACTLY
+// (note: the plural `agents` segment, per-(user,agent), NOT the fixed console):
+//   POST   /api/v1/agents/<agent>/channels/whatsapp/connect      {phoneNumber}
+//   GET    /api/v1/agents/<agent>/channels/whatsapp
+//   POST   /api/v1/agents/<agent>/channels/whatsapp/pair          (re-issue code)
+//   POST   /api/v1/agents/<agent>/channels/whatsapp/disconnect
+//   POST   /api/v1/agents/<agent>/channels/whatsapp/test
+// gated server-side (feature flag + gateway) — dark ⇒ the routes 404, which
+// {@link getWhatsappChannel} maps to a disconnected status so the card shows a
+// quiet "bientôt" state rather than an error. A status read NEVER carries a code.
+
+/**
+ * The WhatsApp channel status for one agent (`GET .../channels/whatsapp`). Never
+ * carries a pairing code — only whether the store's number is linked and, when
+ * linked, the connected `phoneNumber`. `status` is the gateway's coarse pairing
+ * phase (e.g. `linked` / `pending` / `retry`); all fields optional so a partial
+ * / evolving payload never crashes the card.
+ */
+export interface WhatsAppChannelStatus {
+  /** Whether the user's WhatsApp number is linked to this agent. */
+  connected: boolean;
+  /** The connected WhatsApp number (E.164-ish), when connected. */
+  phoneNumber?: string;
+  /** Coarse pairing phase reported by the gateway (never a raw error). */
+  status?: string;
+  /**
+   * When the number was connected — the backend sends ms-since-epoch (a
+   * `number`); typed as `number | string` so a string timestamp from an older /
+   * evolving record still renders. The card's formatter tolerates both.
+   */
+  connectedAt?: number | string;
+}
+
+/**
+ * Envelope returned by {@link connectWhatsapp} / {@link pairWhatsapp}. `code` is
+ * the raw 8-char pairing code; `formatted` is the gateway's display form (e.g.
+ * `ABCD-EFGH`) the UI shows in a mono block. `status === 'retry'` means the
+ * pairing session wasn't ready yet — the caller should re-call {@link
+ * pairWhatsapp} to obtain the live code (mirrors the design's retry loop). A
+ * `code`-less `{ status:'retry' }` is the "not ready, try pair again" signal.
+ */
+export interface WhatsAppPairResult {
+  /** Whether the mint/connect call itself succeeded. */
+  ok: boolean;
+  /** The raw 8-char pairing code (TTL-limited server-side), when issued. */
+  code?: string;
+  /** The display-formatted code (e.g. `ABCD-EFGH`) to render, when issued. */
+  formatted?: string;
+  /** Coarse pairing phase; `'retry'` ⇒ session not ready, re-call `pair()`. */
+  status?: string;
+}
+
+/**
+ * Connect the signed-in user's WhatsApp number to `agent`
+ * (`POST /api/v1/agents/<agent>/channels/whatsapp/connect`). `phoneNumber` is the
+ * store's number with an international indicatif (`+213…`); the gateway mints a
+ * pairing {@link WhatsAppPairResult.code} the user types into WhatsApp. Throws
+ * {@link AgentApiError} — notably `.status === 404` (feature dark ⇒ the caller
+ * falls back to a "bientôt" state), `.status === 400` (gateway couldn't mint the
+ * code), `.status === 422` (bad phone number), `.status === 429` (rate-limited).
+ */
+export function connectWhatsapp(
+  agent: AgentName,
+  phoneNumber: string
+): Promise<WhatsAppPairResult> {
+  return requestJson<WhatsAppPairResult>(
+    `/api/v1/agents/${agent}/channels/whatsapp/connect`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ phoneNumber }),
+    }
+  );
+}
+
+/**
+ * Read the WhatsApp channel status for `agent`
+ * (`GET /api/v1/agents/<agent>/channels/whatsapp`). Fail-soft: a `.status === 404`
+ * (feature dark OR no connection) is mapped to a disconnected status
+ * (`{ connected: false }`) rather than thrown — so the card renders a quiet
+ * not-connected / "bientôt" state instead of an error. Any OTHER failure (401
+ * signed-out, network, 5xx) still throws {@link AgentApiError}. Never returns a
+ * pairing code. Mirrors {@link getTelegramChannel} exactly.
+ */
+export async function getWhatsappChannel(
+  agent: AgentName
+): Promise<WhatsAppChannelStatus> {
+  try {
+    const res = await requestJson<WhatsAppChannelStatus>(
+      `/api/v1/agents/${agent}/channels/whatsapp`
+    );
+    return res && typeof res === 'object' ? res : { connected: false };
+  } catch (err) {
+    if (err instanceof AgentApiError && err.status === 404) {
+      return { connected: false };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Re-issue (or obtain) a WhatsApp pairing code for `agent`
+ * (`POST /api/v1/agents/<agent>/channels/whatsapp/pair`). Used both to RE-ISSUE a
+ * fresh code (the "Renvoyer un code" button, resetting the TTL) and to resolve a
+ * `status:'retry'` from {@link connectWhatsapp} (pairing session not ready yet).
+ * Returns the same {@link WhatsAppPairResult} envelope. Throws {@link
+ * AgentApiError} — `.status === 404` (dark), `.status === 400` (mint failed),
+ * `.status === 429` (rate-limited).
+ */
+export function pairWhatsapp(agent: AgentName): Promise<WhatsAppPairResult> {
+  return requestJson<WhatsAppPairResult>(
+    `/api/v1/agents/${agent}/channels/whatsapp/pair`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+    }
+  );
+}
+
+/**
+ * Disconnect the user's WhatsApp number from `agent`
+ * (`POST /api/v1/agents/<agent>/channels/whatsapp/disconnect`). The gateway drops
+ * the linked device + stored binding. Idempotent server-side. Throws {@link
+ * AgentApiError} only on a transport/HTTP failure. Mirrors {@link
+ * disconnectTelegram}.
+ */
+export async function disconnectWhatsapp(agent: AgentName): Promise<void> {
+  await requestJson<{ ok?: boolean }>(
+    `/api/v1/agents/${agent}/channels/whatsapp/disconnect`,
+    {
+      method: 'POST',
+      headers: jsonHeaders,
+    }
+  );
+}
+
+/**
+ * Send a test message to the user's linked WhatsApp number for `agent`
+ * (`POST /api/v1/agents/<agent>/channels/whatsapp/test`). `sent` is `false` when
+ * the channel is linked but the gateway couldn't send yet (the UI tells the user
+ * to retry in a moment); `note` is an optional gateway hint (never a raw error).
+ * Throws {@link AgentApiError} on a transport/HTTP failure. Mirrors {@link
+ * testTelegram}.
+ */
+export function testWhatsapp(
+  agent: AgentName
+): Promise<{ ok: boolean; sent: boolean; note?: string }> {
+  return requestJson<{ ok: boolean; sent: boolean; note?: string }>(
+    `/api/v1/agents/${agent}/channels/whatsapp/test`,
     {
       method: 'POST',
       headers: jsonHeaders,

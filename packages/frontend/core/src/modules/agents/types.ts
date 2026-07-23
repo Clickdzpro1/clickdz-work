@@ -315,6 +315,16 @@ export interface AgentCaps {
   /** Whether agent web access is enabled server-side. */
   webEnabled: boolean;
   /**
+   * R16 master switch for the WhatsApp channel (backend WA feature flag +
+   * gateway). Gates the per-(user,agent) `<WhatsAppChannelCard>` on the
+   * connections page: false/absent ⇒ the card shows its quiet "bientôt" (dark)
+   * face rather than the phone-input pairing flow. Optional so a pre-R16 payload
+   * (no flag) reads `undefined` ⇒ falsy ⇒ feature dark, byte-identical to the
+   * pre-WhatsApp build. `DEFAULT_AGENT_CAPS` seeds it explicit `false`. Mirrors
+   * how `telegramEnabled` gates the Telegram card.
+   */
+  whatsappEnabled?: boolean;
+  /**
    * R12 master switch for the custom-agent creator (backend
    * `CDZ_AGENT_CUSTOM_ENABLED`). When false/absent the "Créer un agent"
    * affordance stays hidden and `/agents/new` shows a quiet "bientôt" panel
