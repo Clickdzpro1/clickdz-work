@@ -54,6 +54,7 @@ export const DEFAULT_AGENT_CAPS: AgentCaps = {
   dzdPer1k: 0,
   telegramEnabled: false,
   webEnabled: false,
+  whatsappEnabled: false,
   customEnabled: false,
 };
 
