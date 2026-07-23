@@ -1607,3 +1607,20 @@ model CalendarEventInstance {
   @@index([calendarEventId, startAtUtc])
   @@map("calendar_event_instances")
 }
+
+/// ClickDz app-data durable mirror (R15 Phase A). One row per Redis hash field:
+/// (slug, collection) = the Redis hash key, record_id = the hash field, data =
+/// the same JSON document Redis stores. Reads remain Redis-only in Phase A; this
+/// table is a write-side backup that later phases (read cutover) will promote.
+model CdzAppData {
+  slug       String   @map("slug") @db.VarChar
+  collection String   @map("collection") @db.VarChar
+  recordId   String   @map("record_id") @db.VarChar
+  data       Json     @default("{}") @map("data") @db.JsonB
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@id([slug, collection, recordId])
+  @@index([slug, collection])
+  @@map("cdz_app_data")
+}
