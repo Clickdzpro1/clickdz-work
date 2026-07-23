@@ -32,29 +32,78 @@ import { openSecret, sealSecret, secretBoxReady } from './clickdz-secret-box';
 // through here. Importing the Yalidine module below both makes it a value-usable
 // provider AND runs its self-registration side-effect at boot.
 import {
+  courierStatusToTracking,
   getCourierProvider,
   isCourierProviderId,
   isCourierReferenceKind,
+  isCourierStatus,
   type CourierCredentials,
   type CourierError,
   type CourierProvider,
   type CourierReferenceKind,
+  type CourierStatus,
+  type ParcelInput,
 } from './clickdz-courier';
 // Side-effect + value import: loading this module registers the Yalidine
 // provider into the core registry (so getCourierProvider('yalidine') resolves).
 // Referenced as a value below (a defensive touch) so the import can never be
 // tree-shaken to a type-only elision that would skip the registration.
 import { yalidineProvider } from './clickdz-courier-yalidine';
+// R17 PR-B — the per-slug Data API write token (HMAC of `appdata:{slug}`). The
+// SAME token the bridge re-derives for every ERP write; '' when the deploy has
+// no CDZ_DATA_SECRET (⇒ admin writes unavailable, typed 501). Value-imported.
+import { dataWriteToken } from './cdz-data-token';
+// R17 PR-B — pure shipping logic (framework-free, no Nest deps). We reuse
+// Shipping.buildTrackingPatch + its status literals so the courier tracking sync
+// advances an order's canonical `status` BYTE-IDENTICALLY to the bridge's
+// erpOrderTracking PUT path (one source of truth for tracking→status).
+import * as Shipping from './clickdz-erp-shipping';
+// R17 PR-B — pure caisse logic (framework-free). THE CAISSE FIX: on a courier-
+// driven delivery we call the SAME pending-COD builder + idempotency guard the
+// bridge's erpOrderStatus uses (buildPendingCodEntry / hasPendingCodMarker), so
+// courier-delivered COD is NOT silently missed at day-close/reconcile. The
+// tracking path does not otherwise fire this — that is exactly the gap R17 closes.
+import {
+  buildPendingCodEntry,
+  caisseStr,
+  hasPendingCodMarker,
+  type CaisseRecord,
+} from './clickdz-erp-caisse';
 
 // ---------------------------------------------------------------------------
-// R17 (PR-A) — COURIER CONTROLLER. Per-merchant BYO courier credentials +
-// read/connect routes, behind the CDZ_COURIERS_ENABLED flag (ship-DARK).
+// R17 — COURIER CONTROLLER. Per-merchant BYO courier credentials + the courier
+// ORDER LIFECYCLE, behind the CDZ_COURIERS_ENABLED flag (ship-DARK).
+//
+//   PR-A (merged): connect / status / disconnect / fees / reference routes +
+//   the sealed per-(slug,provider) credential store + resolveCreds + the
+//   ownership gate. Unchanged below.
+//
+//   PR-B (this change): the order lifecycle —
+//     • ship   POST …/courier/:provider/ship {orderId} — turn a paid order into
+//              a real courier parcel (provider.createParcel), then persist
+//              {courierProvider, trackingNumber, labelUrl, courierStatus:'pending',
+//              shippedAt} onto the ORDER record via the data API (PUT-by-id).
+//              Idempotent: an order that already has a trackingNumber returns it
+//              (never double-creates a parcel).
+//     • sync   POST …/courier/:provider/sync {orderId?} — poll provider.trackParcel
+//              → normalizeStatus → advance the order's courierStatus AND its
+//              canonical ERP `status` via Shipping.buildTrackingPatch. Bounded
+//              (≤ SYNC_MAX orders/call) + fail-soft PER order. With `orderId`,
+//              refreshes exactly one order.
+//     • refresh POST …/courier/:provider/ship/:orderId/refresh — single-order
+//              convenience alias that folds into the same sync-one path.
+//
+//   ⚠️ THE CAISSE FIX: when the sync moves an order to DELIVERED it calls the
+//   SAME pending-COD caisse write erpOrderStatus does (buildPendingCodEntry,
+//   idempotent via hasPendingCodMarker) — the tracking/PUT path does NOT fire it
+//   on its own, so courier-delivered COD would otherwise silently miss day-close.
 //
 // Mirrors the Telegram BYOT discipline (connect seals-before-store / status
 // NEVER returns the keys / disconnect is idempotent) and the bridge's ERP
-// ownership gate (assertOwnsErpApp: readPublishedApps(user.id) → slug/storeSlug
-// match, else probe the public settings collection → typed 403/404). It does
-// NOT reuse the bridge's PLAINTEXT Chargily storage — courier keys are SEALED.
+// ownership gate (assertOwnsErpApp) + its Data-API I/O (erpList/erpPutRecord/
+// erpCreateRecord idiom, re-derived per-slug dataWriteToken, 15s timeout, the
+// externalBase data URL). It does NOT reuse the bridge's PLAINTEXT Chargily
+// storage — courier keys are SEALED.
 //
 // FLAG (dark): couriersEnabled() = CDZ_COURIERS_ENABLED === '1' && secretBoxReady().
 // Unset ⇒ every route throws a typed NotFound, byte-identical to the feature not
@@ -62,12 +111,15 @@ import { yalidineProvider } from './clickdz-courier-yalidine';
 // when CDZ_DATA_SECRET is unset ⇒ we must NOT accept keys we can't seal.
 //
 // FAIL-SOFT: every provider call returns a typed CourierResult (never throws);
-// courierErrorToHttp maps it to a clean passthrough JSON body (429 w/ Retry-After,
-// 401→invalid creds, 502 unreachable, …). A courier outage never crashes a route.
+// writeCourierError maps it to a clean passthrough JSON body (429 w/ Retry-After,
+// 401→invalid creds, 502 unreachable, …). A courier OR caisse hiccup never
+// crashes a route, 500s, or regresses the order — the parcel/tracking write and
+// the caisse marker are each independently fail-soft.
 //
 // MULTI-TENANT ISOLATION: creds are keyed per (slug, provider) and unsealed ONLY
 // inside a route already gated by the per-owner ownership check — user Y can
-// never read/use user X's shop's courier keys.
+// never read/use user X's shop's courier keys, and every order read/write is
+// scoped to the gated slug's data namespace.
 //
 // NO SDK — plain use of the pure provider; typed errors only; no key is ever
 // logged or returned. lint-nest: @Controller with ONE value-imported ctor param
@@ -116,6 +168,111 @@ const API_ID_MAX = 64;
 const API_TOKEN_MAX = 512;
 
 // ---------------------------------------------------------------------------
+// R17 PR-B — Data-API I/O config, BYTE-IDENTICAL to the bridge's constants so
+// the courier lifecycle reads/writes the SAME per-slug order datastore the
+// storefront + ERP + bridge use. (The courier controller is a SEPARATE Nest
+// controller from the bridge; the bridge's helpers are private, so we replicate
+// the tiny amount of I/O plumbing we need here rather than couple the two.)
+// ---------------------------------------------------------------------------
+
+// Per-request timeout for a Data-API call (matches bridge ERP_DATA_TIMEOUT_MS).
+const ERP_DATA_TIMEOUT_MS = 15_000;
+// Stay under the data API's 8KB/record cap WITH headroom for the id/createdAt it
+// appends (matches bridge ERP_MAX_WRITE_BYTES) — checked BEFORE any order write.
+const ERP_MAX_WRITE_BYTES = 8 * 1024 - 128;
+// The delivered ERP order status (French) — the one that owes a COD marker. The
+// exact literal the shop template + bridge use (Shipping.ORDER_STATUSES[3]).
+const ORDER_STATUS_DELIVERED = 'Livrée';
+// Bounded fan-out for a batch sync: cap how many non-terminal parcels we poll in
+// one call (each is a live provider round-trip + a data write) so one call can
+// never burst Yalidine's 5/s..10k/day limits or run unbounded. A merchant with
+// more open parcels just calls sync again (it resumes from the still-open ones).
+const SYNC_MAX = 50;
+
+// ---------------------------------------------------------------------------
+// R17 PR-B — loose schemaless readers for order records (mirror the bridge's
+// erpStr/erpNum so this controller stays dependency-free). `erpRec` is the
+// data-API record shape.
+// ---------------------------------------------------------------------------
+type ErpRecord = Record<string, unknown>;
+
+/** Number(v); non-finite → 0 (mirrors the bridge's erpNum). */
+function num(v: unknown): number {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
+}
+
+/**
+ * Extract the FRENCH wilaya name Yalidine's create-by-name endpoint wants from
+ * an order's stored `wilaya` value. Storefront stores it as `"16 - Alger"`
+ * (numeric code + " - " + French name); Yalidine takes the name. Strips a
+ * leading `"NN - "` / `"NN-"` code prefix; returns the trimmed remainder (or the
+ * whole trimmed string when there is no code prefix). Pure + total.
+ */
+function wilayaNameOf(raw: unknown): string {
+  const s = (typeof raw === 'string' ? raw : raw == null ? '' : String(raw)).trim();
+  // Sentinel F-2: a bare code with no name ("16", "16 - ") has no wilaya NAME —
+  // return '' so the caller emits a typed 400 rather than a greedy mis-parse
+  // ("16" → "6"). Only strip the "NN - " prefix when a real name follows.
+  if (/^\d{1,3}\s*[-–—]?\s*$/.test(s)) return '';
+  // "16 - Alger" | "16-Alger" | "16 Alger" → "Alger"; "Alger" → "Alger".
+  // (bare-code cases already returned '' above, so the greedy tail is safe now.)
+  const m = s.match(/^\s*\d{1,3}\s*[-–—]?\s*(.+)$/);
+  return (m ? m[1] : s).trim();
+}
+
+/**
+ * Split a storefront `customer` full-name string into Yalidine's firstname +
+ * familyname. First whitespace token → firstname; the rest → familyname. A
+ * single token is used for BOTH (Yalidine rejects an empty familyname). Pure.
+ */
+function splitName(full: unknown): { firstname: string; familyname: string } {
+  const s = (typeof full === 'string' ? full : full == null ? '' : String(full))
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return { firstname: '', familyname: '' };
+  const sp = s.indexOf(' ');
+  if (sp < 0) return { firstname: s, familyname: s };
+  return { firstname: s.slice(0, sp), familyname: s.slice(sp + 1) };
+}
+
+/**
+ * Order total = stored `total`, else Σ item price×qty (qty ?? 1) — byte-identical
+ * to the bridge's erpOrderTotal AND caisse's caisseOrderTotal, so the COD amount
+ * we hand the courier is exactly what caisse day-close later expects to reconcile.
+ */
+function orderTotal(o: ErpRecord): number {
+  if (o.total != null && Number.isFinite(Number(o.total))) return num(o.total);
+  const items = Array.isArray(o.items) ? (o.items as unknown[]) : [];
+  return items.reduce<number>((sum, raw) => {
+    const it = (raw ?? {}) as ErpRecord;
+    return sum + num(it.price) * num(it.qty != null ? it.qty : 1);
+  }, 0);
+}
+
+/**
+ * A short, human-readable product description for the courier's product_list,
+ * built from the order items ("2× Écouteurs, 1× Chargeur"). Capped so the parcel
+ * payload stays small; falls back to the order ref when there are no items.
+ */
+function productListOf(o: ErpRecord): string {
+  const items = Array.isArray(o.items) ? (o.items as unknown[]) : [];
+  const parts: string[] = [];
+  for (const raw of items) {
+    const it = (raw ?? {}) as ErpRecord;
+    const title =
+      (typeof it.title === 'string' && it.title.trim()) ||
+      (typeof it.name === 'string' && it.name.trim()) ||
+      'Produit';
+    const qty = num(it.qty != null ? it.qty : 1) || 1;
+    parts.push(`${qty}× ${title}`);
+    if (parts.join(', ').length > 200) break;
+  }
+  const desc = parts.join(', ').slice(0, 240);
+  return desc || `Commande ${typeof o.ref === 'string' ? o.ref : ''}`.trim();
+}
+
+// ---------------------------------------------------------------------------
 // The sealed per-(shop, provider) credential record persisted at
 // courierCredKey. `apiIdSealed`/`apiTokenSealed` are Serrure-sealed (NEVER the
 // plaintext); `provider` self-describes the row; `enabled` toggles use;
@@ -128,6 +285,25 @@ export interface CourierCredRecord {
   apiTokenSealed: string;
   enabled: boolean;
   connectedAt: number;
+}
+
+/**
+ * R17 PR-B — the outcome of syncing ONE order's tracking (the shared result of
+ * syncOneOrder, aggregated by the batch sync + returned by refresh). A closed
+ * set of typed outcomes so a caller never has to interpret a free-form string.
+ */
+type SyncOutcome =
+  | 'updated'
+  | 'unchanged'
+  | 'no_tracking'
+  | 'terminal'
+  | 'courier_error'
+  | 'write_failed';
+interface SyncOneResult {
+  orderId: string;
+  outcome: SyncOutcome;
+  courierStatus?: CourierStatus;
+  delivered?: boolean;
 }
 
 /** Loose string read for schemaless bodies: null/undefined → ''. */
@@ -637,5 +813,664 @@ export class ClickDzCourierController {
       return provider.listCommunes(creds, wilayaId as number);
     }
     return provider.listCenters(creds, wilayaId as number);
+  }
+
+  // =========================================================================
+  // R17 PR-B — DATA-API I/O. The per-slug order datastore, reached with the
+  // SAME primitives the bridge uses (re-derived dataWriteToken, 15s timeout,
+  // the externalBase data URL). Every method is FAIL-SOFT: a data-API hiccup
+  // returns null / {ok:false}, never throws, and never logs the token. These
+  // are only ever called from a route already past assertOwnsErpApp, so the
+  // slug's namespace is the caller's.
+  // =========================================================================
+
+  /**
+   * Absolute per-slug Data API base — BYTE-IDENTICAL to the bridge's
+   * erpDataBase, so the courier lifecycle and the storefront/ERP/bridge all hit
+   * the one shared datastore for this shop.
+   */
+  private erpDataBase(slug: string): string {
+    const externalBase = (
+      process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+    ).replace(/\/+$/, '');
+    return `${externalBase}/api/v2/apps-data/${slug}`;
+  }
+
+  /**
+   * GET the whole `orders` collection (≤500, newest-first — the data API's own
+   * sort/cap). null when the data API is unreachable / non-2xx / malformed;
+   * callers map that to a typed 502. Never throws.
+   */
+  private async erpListOrders(slug: string): Promise<ErpRecord[] | null> {
+    const res = await fetch(`${this.erpDataBase(slug)}/orders?limit=500`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+    }).catch(() => null);
+    if (!res || !res.ok) return null;
+    const data = (await res.json().catch(() => null)) as unknown;
+    return Array.isArray(data) ? (data as ErpRecord[]) : null;
+  }
+
+  /**
+   * GET one collection's rows (used by the caisse-marker dedupe read). Same
+   * fail-soft contract as erpListOrders. null on any failure.
+   */
+  private async erpListCollection(
+    slug: string,
+    collection: string
+  ): Promise<ErpRecord[] | null> {
+    const res = await fetch(
+      `${this.erpDataBase(slug)}/${collection}?limit=500`,
+      {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+      }
+    ).catch(() => null);
+    if (!res || !res.ok) return null;
+    const data = (await res.json().catch(() => null)) as unknown;
+    return Array.isArray(data) ? (data as ErpRecord[]) : null;
+  }
+
+  /**
+   * PUT one order IN PLACE via the data API's atomic v2 PUT-by-id upsert, using
+   * the re-derived per-slug write token. Preserves the record's id + createdAt
+   * (the storefront/ERP reference an order by its server id, so ship/sync must
+   * NOT delete+recreate). {ok:false,status} on failure (status 0 = unreachable).
+   * NEVER logs the token.
+   */
+  private async erpPutRecord(
+    slug: string,
+    collection: string,
+    id: string,
+    record: ErpRecord,
+    token: string
+  ): Promise<{ ok: true; record: ErpRecord } | { ok: false; status: number }> {
+    const res = await fetch(
+      `${this.erpDataBase(slug)}/${collection}/${encodeURIComponent(id)}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(record),
+        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+      }
+    ).catch(() => null);
+    if (!res || !res.ok) {
+      return { ok: false, status: res ? res.status : 0 };
+    }
+    const saved = (await res.json().catch(() => null)) as ErpRecord | null;
+    return { ok: true, record: saved ?? record };
+  }
+
+  /**
+   * POST one record with the per-slug write token (used ONLY for the caisse
+   * pending-COD marker). {ok:false,status} on failure. NEVER logs the token.
+   */
+  private async erpCreateRecord(
+    slug: string,
+    collection: string,
+    record: ErpRecord,
+    token: string
+  ): Promise<{ ok: true; record: ErpRecord } | { ok: false; status: number }> {
+    const res = await fetch(`${this.erpDataBase(slug)}/${collection}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(record),
+      signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+    }).catch(() => null);
+    if (!res || !res.ok) {
+      return { ok: false, status: res ? res.status : 0 };
+    }
+    const created = (await res.json().catch(() => null)) as ErpRecord | null;
+    return { ok: true, record: created ?? record };
+  }
+
+  // =========================================================================
+  // R17 PR-B — ⚠️ THE CAISSE FIX. Replicates the bridge's private
+  // erpWritePendingCod EXACTLY (same pure buildPendingCodEntry builder, same
+  // hasPendingCodMarker idempotency guard, same fail-soft swallow). Called from
+  // the sync's DELIVERED-transition branch, because the tracking/PUT path does
+  // NOT fire the caisse hook on its own — only erpOrderStatus does — so without
+  // this a courier-delivered COD order would silently miss day-close/reconcile.
+  //
+  // The marker is an 'in'/'cod' pending caisse row tagged with the order's ref +
+  // courierId (buildPendingCodEntry reads both off the order — the order carries
+  // courierId from ship/assign, so the per-courier reconcile tag is correct).
+  // Idempotent: skips when a marker for the ref already exists in the partition,
+  // so re-syncing a delivered order never stacks duplicate markers. NEVER throws.
+  // =========================================================================
+  private async writePendingCod(
+    slug: string,
+    order: ErpRecord,
+    token: string
+  ): Promise<void> {
+    try {
+      const built = buildPendingCodEntry(order as CaisseRecord);
+      if (!built) return; // total <= 0 → nothing to collect (no-op, not an error)
+      const ref = caisseStr((built.entry as ErpRecord).orderRef).trim();
+      const existing = await this.erpListCollection(slug, built.collection);
+      if (existing && ref && hasPendingCodMarker(existing as CaisseRecord[], ref)) {
+        return; // marker already present — stay idempotent
+      }
+      await this.erpCreateRecord(
+        slug,
+        built.collection,
+        built.entry as ErpRecord,
+        token
+      );
+    } catch {
+      // Fail-soft: a delivered order must still advance even if caisse is down.
+      // Swallowed (no logger on this controller) — never regresses the order.
+    }
+  }
+
+  // =========================================================================
+  // R17 PR-B — order → ParcelInput mapping. Assembles the provider-agnostic
+  // parcel from a stored order record + the ship request. All reads are loose
+  // (schemaless order). Returns null with a `field` when a required field is
+  // missing so the route can 400 without a provider round-trip.
+  //
+  //   recipient  : order.customer (full name) → firstname + familyname
+  //   phone      : order.phone (digits, '0555…')
+  //   to wilaya  : order.wilaya ('16 - Alger') → FR name 'Alger'
+  //   to commune : order.commune (FR free text)
+  //   from wilaya: request `fromWilaya` (name OR '16 - Alger' OR '16' code →
+  //                resolved to a FR name); the cred record does not store a pickup
+  //                wilaya (that lands with the ERP tab), so ship supplies it.
+  //   price(COD) : request `price` if given, else order total — the SAME amount
+  //                caisse day-close expects to reconcile. freeshipping defaults
+  //                true so Yalidine does not add a SECOND delivery fee on top of
+  //                the shop's own (the customer pays exactly the shop total);
+  //                both are body-overridable.
+  //   is_stopdesk: order.deliveryMode === 'desk' (unless overridden)
+  // =========================================================================
+  private orderToParcel(
+    order: ErpRecord,
+    body: {
+      fromWilaya?: unknown;
+      price?: unknown;
+      freeshipping?: unknown;
+      weight?: unknown;
+      economic?: unknown;
+      stopdeskId?: unknown;
+      isStopdesk?: unknown;
+    }
+  ): { ok: true; parcel: ParcelInput } | { ok: false; field: string } {
+    const orderId = str(order.ref).trim() || str(order.id).trim();
+    if (!orderId) return { ok: false, field: 'ref' };
+
+    const { firstname, familyname } = splitName(order.customer);
+    if (!firstname) return { ok: false, field: 'customer' };
+
+    const contactPhone = str(order.phone).trim();
+    if (!contactPhone) return { ok: false, field: 'phone' };
+
+    const toWilayaName = wilayaNameOf(order.wilaya);
+    if (!toWilayaName) return { ok: false, field: 'wilaya' };
+
+    const toCommuneName = str(order.commune).trim();
+    if (!toCommuneName) return { ok: false, field: 'commune' };
+
+    // Pickup wilaya: accept a FR name, a '16 - Alger' label, or a bare '16'
+    // code — all normalized to the FR name Yalidine's create-by-name wants.
+    const fromWilayaName = wilayaNameOf(body?.fromWilaya);
+    if (!fromWilayaName) return { ok: false, field: 'fromWilaya' };
+
+    // COD amount: explicit override wins; else the order total (== what caisse
+    // reconcile expects). Non-negative integer.
+    const priceOverride =
+      body?.price !== undefined && body?.price !== null && body?.price !== ''
+        ? num(body.price)
+        : orderTotal(order);
+    const price = Math.max(0, Math.round(priceOverride));
+
+    // Desk vs home: explicit override, else the order's assigned deliveryMode.
+    const isStopdesk =
+      body?.isStopdesk !== undefined
+        ? body.isStopdesk === true || body.isStopdesk === 'desk'
+        : str(order.deliveryMode).trim().toLowerCase() === 'desk';
+
+    // freeshipping: default TRUE (customer pays exactly the shop total; merchant
+    // absorbs the courier's delivery fee) unless the caller sets it false.
+    const freeshipping =
+      body?.freeshipping !== undefined ? body.freeshipping === true : true;
+
+    const parcel: ParcelInput = {
+      orderId,
+      firstname,
+      familyname,
+      contactPhone,
+      address: str(order.address).trim() || toCommuneName,
+      toWilayaName,
+      toCommuneName,
+      fromWilayaName,
+      productList: productListOf(order),
+      price,
+      isStopdesk,
+      freeshipping,
+    };
+    if (body?.stopdeskId !== undefined && body?.stopdeskId !== null && body?.stopdeskId !== '') {
+      parcel.stopdeskId = num(body.stopdeskId);
+    }
+    if (body?.weight !== undefined && body?.weight !== null && body?.weight !== '') {
+      parcel.weight = num(body.weight);
+    } else if (order.weight !== undefined) {
+      parcel.weight = num(order.weight);
+    }
+    if (body?.economic !== undefined) {
+      parcel.economic = body.economic === true;
+    }
+    return { ok: true, parcel };
+  }
+
+  // =========================================================================
+  // POST /api/v1/apps/:slug/courier/:provider/ship  { orderId, fromWilaya,
+  //   mode?, price?, freeshipping?, weight?, economic?, stopdeskId? }
+  //   → { ok, tracking, label?, courierStatus, alreadyShipped? }
+  //
+  // Turn a paid order into a real courier parcel. Owner-gated + flag-gated.
+  // IDEMPOTENT: an order that already carries a trackingNumber returns it (never
+  // double-creates). Persists {courierProvider, trackingNumber, labelUrl,
+  // courierStatus:'pending', shippedAt} onto the ORDER via PUT-by-id. Fail-soft:
+  // a provider outage returns a typed passthrough body and leaves the order
+  // untouched (no partial write); a data-write failure after a successful create
+  // is surfaced (the tracking exists at the courier — the FE can re-run ship,
+  // which will then hit the idempotency short-circuit once the write lands).
+  // @Throttle('strict').
+  // =========================================================================
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/courier/:provider/ship')
+  async ship(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('provider') providerParam: string,
+    @Body() body: {
+      orderId?: unknown;
+      fromWilaya?: unknown;
+      price?: unknown;
+      freeshipping?: unknown;
+      weight?: unknown;
+      economic?: unknown;
+      stopdeskId?: unknown;
+      isStopdesk?: unknown;
+    },
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertEnabled();
+    const provider = this.resolveProviderOr404(providerParam);
+    await this.assertOwnsErpApp(user, slug);
+
+    const orderId = str(body?.orderId).trim();
+    if (!orderId) {
+      throw new BadRequest('orderId is required');
+    }
+
+    // A write token is required to persist the tracking; fail early (before any
+    // provider call) if the deploy can't do admin writes.
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(501).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+
+    // Resolve the connection (unsealed only here, after the ownership gate).
+    const creds = await this.resolveCreds(slug, provider.id);
+    if (!creds) {
+      throw new BadRequest('not_connected');
+    }
+
+    // Load the order (owner-scoped namespace). `:orderId` matches the data-API
+    // record id OR the business `ref` (the FE has the id; a caller may pass ref).
+    const orders = await this.erpListOrders(slug);
+    if (!orders) {
+      res.status(502).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const order = orders.find(
+      o => str(o.id) === orderId || str(o.ref).trim() === orderId
+    );
+    if (!order) {
+      throw new NotFound('Order not found');
+    }
+    const recId = str(order.id);
+    if (!recId) {
+      // No server id to PUT by — cannot persist safely; do not create a parcel.
+      res.status(502).json({ error: 'order_unwritable' });
+      return;
+    }
+
+    // IDEMPOTENCY: already shipped ⇒ return the existing tracking, do NOT create
+    // a second parcel at the courier.
+    const existingTracking = str(order.trackingNumber).trim();
+    if (existingTracking) {
+      return {
+        ok: true,
+        tracking: existingTracking,
+        ...(str(order.labelUrl) ? { label: str(order.labelUrl) } : {}),
+        courierStatus: str(order.courierStatus) || 'pending',
+        alreadyShipped: true,
+      };
+    }
+
+    // Map order → parcel; a missing required field is a client-fixable 400.
+    const mapped = this.orderToParcel(order, body);
+    if (!mapped.ok) {
+      res.status(400).json({ error: 'invalid_order', field: mapped.field });
+      return;
+    }
+
+    // Create the parcel. Any provider failure is typed + passthrough; the order
+    // is left UNTOUCHED (we only write on a real tracking number).
+    const created = await provider.createParcel(creds, mapped.parcel);
+    if (!created.ok) {
+      writeCourierError(res, created);
+      return;
+    }
+    const tracking = str(created.value.tracking).trim();
+    if (!tracking) {
+      // Defensive — the provider contract guarantees a tracking on ok, but never
+      // persist an empty one.
+      res.status(502).json({ error: 'courier_bad_response' });
+      return;
+    }
+    const label = str(created.value.label).trim();
+
+    // Persist onto the ORDER (PUT-by-id upsert; id/createdAt preserved). Additive
+    // fields only — never touches the order's status/paid/tracking sub-state.
+    const now = new Date().toISOString();
+    const patch: ErpRecord = {
+      courierProvider: provider.id,
+      trackingNumber: tracking,
+      courierStatus: 'pending' as CourierStatus,
+      shippedAt: now,
+    };
+    if (label) patch.labelUrl = label;
+    const merged: ErpRecord = { ...order, ...patch };
+    delete (merged as { createdAt?: unknown }).createdAt; // upsert keeps stored createdAt
+    if (Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      // The tracking exists at the courier but we can't fit the write — surface
+      // it so the FE can show the tracking; a re-ship will short-circuit once the
+      // record is trimmed. Do NOT 500.
+      res
+        .status(200)
+        .json({ ok: true, tracking, ...(label ? { label } : {}), courierStatus: 'pending', persisted: false });
+      return;
+    }
+    const saved = await this.erpPutRecord(slug, 'orders', recId, merged, token);
+    if (!saved.ok) {
+      // Parcel created but persistence failed — return the tracking (so it's not
+      // lost) with persisted:false rather than a 500. A retry hits idempotency
+      // only after a successful write, so the FE should surface + store this.
+      res
+        .status(200)
+        .json({ ok: true, tracking, ...(label ? { label } : {}), courierStatus: 'pending', persisted: false });
+      return;
+    }
+    return {
+      ok: true,
+      tracking,
+      ...(label ? { label } : {}),
+      courierStatus: 'pending',
+      persisted: true,
+    };
+  }
+
+  // =========================================================================
+  // R17 PR-B — the per-order sync step (shared by batch sync + refresh).
+  // Polls provider.trackParcel → normalizeStatus → (when the coarse courier
+  // sub-state changed) advances BOTH the order's courierStatus AND — via
+  // Shipping.buildTrackingPatch — its canonical ERP `status`, IN PLACE. On a
+  // DELIVERED transition it fires the caisse pending-COD marker (THE FIX).
+  //
+  // FAIL-SOFT + isolated: any provider/data failure for ONE order returns a
+  // typed outcome; the caller keeps going with the rest of the batch. Returns a
+  // small result the batch route aggregates. NEVER throws.
+  // =========================================================================
+  private async syncOneOrder(
+    slug: string,
+    provider: CourierProvider,
+    creds: CourierCredentials,
+    order: ErpRecord,
+    token: string
+  ): Promise<SyncOneResult> {
+    const recId = str(order.id);
+    const tracking = str(order.trackingNumber).trim();
+    const orderId = recId || str(order.ref).trim();
+    if (!tracking) return { orderId, outcome: 'no_tracking' };
+
+    // Current coarse courier sub-state on the order (default 'pending').
+    const prevRaw = str(order.courierStatus);
+    const prev: CourierStatus = isCourierStatus(prevRaw) ? prevRaw : 'pending';
+    // Terminal states are never re-polled (delivered/returned don't change at the
+    // courier). BUT a `delivered` order still gets a best-effort caisse retry: if
+    // a prior sync advanced the ERP status yet the pending-COD marker write hiccuped,
+    // this re-attempts it — idempotent via hasPendingCodMarker, so it's a no-op once
+    // the marker exists. This guarantees a courier-delivered COD is never lost.
+    if (prev === 'delivered' || prev === 'returned') {
+      if (prev === 'delivered' && recId) {
+        await this.writePendingCod(slug, order, token);
+      }
+      return { orderId, outcome: 'terminal', courierStatus: prev };
+    }
+
+    // Poll the courier. A typed error is isolated to THIS order.
+    const tracked = await provider.trackParcel(creds, tracking);
+    if (!tracked.ok) {
+      return { orderId, outcome: 'courier_error' };
+    }
+    const next = provider.normalizeStatus(tracked.value.lastRawStatus);
+
+    // No coarse-state change ⇒ nothing to write (avoids a needless PUT + keeps
+    // us idempotent when the courier hasn't advanced).
+    if (next === prev) {
+      return { orderId, outcome: 'unchanged', courierStatus: prev };
+    }
+
+    // Advance the order: courierStatus + (via the SAME pure builder the bridge's
+    // tracking route uses) the canonical ERP status. buildTrackingPatch is total
+    // over the mapped TrackingStatus, so ok is always true here.
+    const trackingStatus = courierStatusToTracking(next);
+    const built = Shipping.buildTrackingPatch(
+      trackingStatus,
+      new Date().toISOString()
+    );
+    if (!built.ok) {
+      return { orderId, outcome: 'unchanged', courierStatus: prev };
+    }
+    const merged: ErpRecord = {
+      ...order,
+      ...built.patch, // { tracking, status, trackingAt } — advances ERP status
+      courierStatus: next,
+    };
+    delete (merged as { createdAt?: unknown }).createdAt;
+    if (!recId) {
+      return { orderId, outcome: 'write_failed', courierStatus: prev };
+    }
+    if (Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      return { orderId, outcome: 'write_failed', courierStatus: prev };
+    }
+    const saved = await this.erpPutRecord(slug, 'orders', recId, merged, token);
+    if (!saved.ok) {
+      return { orderId, outcome: 'write_failed', courierStatus: prev };
+    }
+
+    // ⚠️ THE CAISSE FIX: a courier-driven DELIVERED transition owes a pending-COD
+    // marker, exactly like erpOrderStatus's `if (status === 'Livrée')` branch.
+    // Fail-soft + idempotent; uses the freshly-saved record (carries courierId).
+    const delivered = built.orderStatus === ORDER_STATUS_DELIVERED;
+    if (delivered) {
+      await this.writePendingCod(slug, saved.record, token);
+    }
+    return {
+      orderId,
+      outcome: 'updated',
+      courierStatus: next,
+      delivered,
+    };
+  }
+
+  // =========================================================================
+  // POST /api/v1/apps/:slug/courier/:provider/sync  { orderId? }
+  //   → { ok, scanned, updated, delivered, results:[{orderId,outcome,...}] }
+  //
+  // Tracking sync. Owner-gated + flag-gated. With `orderId`, refreshes exactly
+  // that one order; without, scans the `orders` collection for parcels with a
+  // trackingNumber and a NON-terminal courierStatus and polls up to SYNC_MAX of
+  // them (bounded, to respect the courier's rate limits). Each order is synced
+  // fail-soft in isolation — one bad parcel never aborts the batch. On any order
+  // that transitions to DELIVERED, the pending-COD caisse marker is written (the
+  // fix). @Throttle('strict').
+  // =========================================================================
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/courier/:provider/sync')
+  async sync(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('provider') providerParam: string,
+    @Body() body: { orderId?: unknown },
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertEnabled();
+    const provider = this.resolveProviderOr404(providerParam);
+    await this.assertOwnsErpApp(user, slug);
+
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(501).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const creds = await this.resolveCreds(slug, provider.id);
+    if (!creds) {
+      throw new BadRequest('not_connected');
+    }
+    const orders = await this.erpListOrders(slug);
+    if (!orders) {
+      res.status(502).json({ error: 'data_api_unavailable' });
+      return;
+    }
+
+    // Candidate set: this provider's shipped-but-not-terminal parcels.
+    const wantId = str(body?.orderId).trim();
+    const candidates = orders.filter(o => {
+      if (!str(o.trackingNumber).trim()) return false;
+      // Only sync parcels that belong to THIS provider (a shop could in future
+      // connect more than one). Tolerate a legacy row with no courierProvider.
+      const cp = str(o.courierProvider).trim();
+      if (cp && cp !== provider.id) return false;
+      if (wantId) {
+        return str(o.id) === wantId || str(o.ref).trim() === wantId;
+      }
+      const cs = str(o.courierStatus);
+      const norm: CourierStatus = isCourierStatus(cs) ? cs : 'pending';
+      return norm !== 'delivered' && norm !== 'returned';
+    });
+    if (wantId && candidates.length === 0) {
+      throw new NotFound('Order not found or not shipped');
+    }
+
+    const batch = candidates.slice(0, SYNC_MAX);
+    const results: SyncOneResult[] = [];
+    let updated = 0;
+    let delivered = 0;
+    // Sequential (not Promise.all) so a burst of parcels paces out under the
+    // courier's 5/s limit and the fan-out stays bounded + predictable. Each
+    // order is additionally try/caught here as defense-in-depth: syncOneOrder is
+    // already fail-soft (typed outcomes, never throws), but this GUARANTEES one
+    // pathological parcel can never abort the batch — the whole point of a
+    // bounded, fault-tolerant sync.
+    for (const o of batch) {
+      let r: SyncOneResult;
+      try {
+        r = await this.syncOneOrder(slug, provider, creds, o, token);
+      } catch {
+        r = {
+          orderId: str(o.id) || str(o.ref).trim(),
+          outcome: 'courier_error',
+        };
+      }
+      results.push(r);
+      if (r.outcome === 'updated') updated++;
+      if (r.delivered) delivered++;
+    }
+    return {
+      ok: true,
+      scanned: batch.length,
+      total: candidates.length,
+      capped: candidates.length > batch.length,
+      updated,
+      delivered,
+      results,
+    };
+  }
+
+  // =========================================================================
+  // POST /api/v1/apps/:slug/courier/:provider/ship/:orderId/refresh
+  //   → { ok, orderId, outcome, courierStatus?, delivered? }
+  //
+  // Single-order tracking refresh — a convenience alias that folds into the
+  // SAME fail-soft syncOneOrder path (so the caisse fix applies identically).
+  // Owner-gated + flag-gated. @Throttle('strict').
+  // =========================================================================
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/courier/:provider/ship/:orderId/refresh')
+  async refresh(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('provider') providerParam: string,
+    @Param('orderId') orderId: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    this.assertEnabled();
+    const provider = this.resolveProviderOr404(providerParam);
+    await this.assertOwnsErpApp(user, slug);
+
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(501).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const creds = await this.resolveCreds(slug, provider.id);
+    if (!creds) {
+      throw new BadRequest('not_connected');
+    }
+    const orders = await this.erpListOrders(slug);
+    if (!orders) {
+      res.status(502).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const wantId = str(orderId).trim();
+    const order = orders.find(
+      o => str(o.id) === wantId || str(o.ref).trim() === wantId
+    );
+    if (!order) {
+      throw new NotFound('Order not found');
+    }
+    if (!str(order.trackingNumber).trim()) {
+      // Not shipped yet — nothing to refresh (client-fixable, not a 500).
+      res.status(400).json({ error: 'not_shipped' });
+      return;
+    }
+    // Guard the provider match so a refresh can't cross a (future) multi-provider
+    // order onto the wrong courier's API.
+    const cp = str(order.courierProvider).trim();
+    if (cp && cp !== provider.id) {
+      res.status(400).json({ error: 'provider_mismatch' });
+      return;
+    }
+    const r = await this.syncOneOrder(slug, provider, creds, order, token);
+    return {
+      ok: true,
+      orderId: r.orderId,
+      outcome: r.outcome,
+      ...(r.courierStatus ? { courierStatus: r.courierStatus } : {}),
+      ...(r.delivered ? { delivered: true } : {}),
+    };
   }
 }
