@@ -52,9 +52,23 @@ import {
   createAgentRun,
   enqueueAgentRun,
 } from './clickdz-agent-runs';
+// R15 (custom agents): AgentId is the opaque runtime-id type (a built-in name OR
+// an owned custom `cz_` id) — every per-agent Redis key already treats the
+// trigger record's `agent` segment as an opaque string, so widening to AgentId is
+// documentation + type-truth, not a behaviour change. Imported type-only EXACTLY
+// like the two sibling controllers (clickdz-agent-runs.controller / -telegram).
+import type { AgentId } from './clickdz-agent-runs';
 // Reuse the shared runtime's agent-name type so triggers speak ONE vocabulary
 // with the run engine + FE.
 import type { AgentName } from './clickdz-agent-runtime';
+// Fonderie's registry owns the multi-tenant gate. resolveArchetype(redis,userId,id)
+// → the archetype for a built-in / an OWNED custom id, or null (unknown/not-owned
+// ⇒ 404). resolveAgentDef returns the full def (built-ins → a synthetic def) so a
+// fired trigger's run-create can thread the custom persona into the loop. A custom
+// id resolves ONLY under its owner's userId — a request-supplied id is NEVER
+// trusted without this. Both pure, framework-light, fail-soft (never throw). VALUE
+// imports (used at runtime), matching the two sibling controllers.
+import { resolveAgentDef, resolveArchetype } from './clickdz-agent-registry';
 
 // ===========================================================================
 // clickdz-agent-triggers.ts — SCHEDULED + WEBHOOK TRIGGERS (WSA-11, owner:
@@ -233,7 +247,10 @@ export function nextFireAt(preset: string, from: number = Date.now()): number {
 export interface AgentTriggerRecord {
   id: string;
   userId: string;
-  agent: AgentName;
+  // R15: the RUNTIME id (AgentId — a built-in name OR an owned custom `cz_` id).
+  // The record is keyed per-user + the trigger id, so a custom agent's triggers
+  // store under ITS id (byte-identical for a built-in). Widened from AgentName.
+  agent: AgentId;
   kind: TriggerKind;
   preset?: string;
   hookSecret?: string;
@@ -318,8 +335,18 @@ function safeParse<T>(raw: string | null): T | null {
   }
 }
 
-function normalizeAgent(a: unknown): AgentName {
-  return a === 'openclaw' ? 'openclaw' : 'hermes';
+// R15: DO NOT collapse a valid custom id to a built-in. A trigger record's
+// `agent` is the RUNTIME id (AgentId — a built-in name OR an owned `cz_` id); a
+// custom agent must store + fire triggers under ITS OWN id, not Hermes's. We
+// pass through the two built-ins and any well-formed `cz_`+8hex id verbatim, and
+// default only a legacy/corrupt/absent value to 'hermes'. isCustomAgentId is the
+// registry's structural check (`cz_`+8 lowercase hex) — it cannot match a
+// built-in, so the shape stays unambiguous. (Flag OFF ⇒ no `cz_` id is ever
+// persisted ⇒ this is byte-identical to the old openclaw/hermes coercion.)
+function normalizeAgent(a: unknown): AgentId {
+  if (a === 'openclaw' || a === 'hermes') return a;
+  if (typeof a === 'string' && /^cz_[0-9a-f]{8}$/.test(a)) return a;
+  return 'hermes';
 }
 
 /** A webhook secret: short, URL-safe, unguessable. */
@@ -391,7 +418,7 @@ export async function readTrigger(
 export async function listTriggers(
   redis: TrigRedis,
   userId: string,
-  agent: AgentName
+  agent: AgentId
 ): Promise<AgentTriggerRecord[]> {
   if (!userId) return [];
   let ids: string[];
@@ -428,7 +455,9 @@ export async function listTriggers(
 
 export interface CreateTriggerInput {
   userId: string;
-  agent: AgentName;
+  // R15: the RUNTIME id (AgentId — a built-in name OR an owned custom `cz_` id),
+  // stored verbatim by createTrigger so a custom agent's triggers key by its id.
+  agent: AgentId;
   kind: TriggerKind;
   preset?: string;
   prompt: string;
@@ -589,13 +618,33 @@ async function fireTrigger(
       : rec.prompt;
 
   try {
+    // R15: resolve the archetype (loop dispatch) + persona under the trigger
+    // OWNER's userId — the record was persisted under the owner, so ownership is
+    // intrinsic (a custom def only resolves for its owner). For a built-in agent
+    // this is a no-Redis short-circuit: archetype === agent, no persona ⇒
+    // byte-identical. Mirrors telegram's handleInboundText run-create EXACTLY.
+    const def = await resolveAgentDef(redis as any, rec.userId, rec.agent);
+    const archetype: AgentName =
+      rec.agent === 'openclaw'
+        ? 'openclaw'
+        : rec.agent === 'hermes'
+          ? 'hermes'
+          : def?.archetype ?? 'hermes';
     // REDIS-FIRST create (R6 signature: createAgentRun(redis, input)), then
     // QUEUE-FIRST enqueue (enqueueAgentRun(queue, rec)) — the exact order the
     // run controller + telegram controller use (the R6 telegram bug was calling
     // these object-first).
     const run = await createAgentRun(redis as any, {
       userId: rec.userId,
-      agent: rec.agent,
+      // R15: key the fired run by the RUNTIME id (agentId — a built-in name OR
+      // the owned custom `cz_` id) and dispatch its loop by the resolved
+      // ARCHETYPE; thread the def's persona (undefined for a built-in ⇒
+      // byte-identical prompt). Previously this passed `agent: rec.agent` raw,
+      // which — with normalizeAgent collapsing every non-openclaw id to hermes —
+      // fired every custom trigger as Hermes. Now it dispatches the right loop.
+      agentId: rec.agent,
+      archetype,
+      persona: def?.persona,
       prompt,
       channel,
     });
@@ -735,8 +784,36 @@ export class ClickDzAgentTriggersController {
     }
   }
 
-  private agentOf(agent: string): AgentName {
-    if (agent === 'hermes' || agent === 'openclaw') return agent;
+  // R15 multi-tenant gate. Custom-agent resolution is behind
+  // CDZ_AGENT_CUSTOM_ENABLED: OFF ⇒ ONLY the two built-ins resolve, byte-identical
+  // to the old sync agentOf (an arbitrary id 404s, exactly as before). ON ⇒ an
+  // OWNED custom id (a def exists at clickdz:agentdef:{userId}:{id}) also resolves.
+  private customAgentsEnabled(): boolean {
+    return process.env.CDZ_AGENT_CUSTOM_ENABLED === '1';
+  }
+
+  /**
+   * Resolve + AUTHORIZE the :agent path segment to the trigger's RUNTIME ID under
+   * this user, or throw a typed NotFound. Replaces the old sync `agentOf`. Returns
+   * the runtime id (the built-in name, or the owned custom `cz_` id) — the SAME
+   * value the trigger record's `agent` field is keyed/filtered by (for a built-in
+   * the id IS its archetype ⇒ byte-identical). resolveArchetype resolves a built-in
+   * with NO Redis touch and returns null for an unknown OR NOT-OWNED id (a def only
+   * exists under its owner's userId), so a custom id minted by user Y 404s under
+   * user X's session — the isolation invariant. Custom resolution is skipped
+   * entirely when the flag is off. The caller MUST pass @CurrentUser().id — NEVER a
+   * request-supplied id. Mirrors clickdz-agent-runs.controller / -telegram VERBATIM.
+   */
+  private async resolveAgentOr404(
+    userId: string,
+    agent: string
+  ): Promise<AgentId> {
+    const id = typeof agent === 'string' ? agent : '';
+    if (id === 'hermes' || id === 'openclaw') return id;
+    if (this.customAgentsEnabled()) {
+      const archetype = await resolveArchetype(this.redis as any, userId, id);
+      if (archetype) return id; // owned custom id — key triggers by the id itself
+    }
     throw new NotFound(`unknown agent "${agent}"`);
   }
 
@@ -765,7 +842,7 @@ export class ClickDzAgentTriggersController {
     @Param('agent') agentParam: string
   ) {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     const recs = await listTriggers(this.redis as any, user.id, agent);
     return recs.map(r => this.view(r));
   }
@@ -782,7 +859,7 @@ export class ClickDzAgentTriggersController {
     @Body() body: any
   ) {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
 
     const kind: TriggerKind = body?.kind === 'webhook' ? 'webhook' : 'cron';
     const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
@@ -823,7 +900,7 @@ export class ClickDzAgentTriggersController {
     @Param('id') id: string
   ): Promise<{ ok: true }> {
     this.gate();
-    this.agentOf(agentParam);
+    await this.resolveAgentOr404(user.id, agentParam);
     await deleteTrigger(this.redis as any, user.id, typeof id === 'string' ? id.trim() : '');
     return { ok: true };
   }
@@ -839,7 +916,7 @@ export class ClickDzAgentTriggersController {
     @Param('id') id: string
   ) {
     this.gate();
-    const agent = this.agentOf(agentParam);
+    const agent = await this.resolveAgentOr404(user.id, agentParam);
     const rec = await toggleTrigger(
       this.redis as any,
       user.id,
