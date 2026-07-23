@@ -11,10 +11,15 @@ import {
 // @nestjs/common HttpException is coerced to a generic 500 by base/nestjs/
 // exception.ts): NotFound = the gated-OFF "feature disabled" 404 — the SAME
 // stance the sibling clickdz-agents/vdz controllers take; BadRequest = a bad
-// body (oversized state / invalid id / cap reached). Throttle = the house
-// rate-limit decorator ('default' | 'strict', with a per-route override) — the
-// SAME one the vdz controller annotates its routes with.
-import { BadRequest, NotFound, Throttle } from '../../base';
+// body (oversized state / invalid id / cap reached, or an unconfigured pix
+// backend — a client-observable precondition, EXACTLY the render controller's
+// 400 stance). CopilotProviderSideError = an upstream (cdz-pix) failure, typed
+// as a provider error so it maps to a 5xx instead of a bare 500 — the SAME
+// class + shape the peer clickdz-vdz-render controller uses for its render
+// service. Throttle = the house rate-limit decorator ('default' | 'strict',
+// with a per-route override) — the SAME one the vdz controller annotates its
+// routes with.
+import { BadRequest, CopilotProviderSideError, NotFound, Throttle } from '../../base';
 // CacheRedis = the @Global raw ioredis provider — the SAME handle Hermes/bridge/
 // vdz inject. We need the RAW client here for the per-user index zset (zadd /
 // zrevrange / zrem / zcard) + the record's string GET/SET with a rolling EX
@@ -52,6 +57,30 @@ import { CurrentUser } from '../../core/auth';
 // Config (read once at module load, same idiom as the sibling controllers — env
 // is fixed for the process, so a per-request read is unnecessary).
 const CDZ_VPIC_ENABLED = process.env.CDZ_VPIC_ENABLED || '';
+
+// ---------------------------------------------------------------------------
+// cdz-pix service wiring (R15 — the AI bg-remove + upscale buttons). cdz-pix
+// (a standalone CPU-first FastAPI microservice) owns the actual model inference;
+// this controller is the session-authed proxy in front of it, so the FRONTEND
+// never sees the pix token. Same self-contained stance as the peer
+// clickdz-vdz-render controller: env-driven, Bearer-authed, typed errors,
+// imports nothing from the frontend. Trailing slash trimmed off the URL so
+// `${CDZ_PIX_URL}${path}` never double-slashes (identical to RENDER_URL).
+const CDZ_PIX_URL = (process.env.CDZ_PIX_URL || '').replace(/\/+$/, '');
+const CDZ_PIX_TOKEN = process.env.CDZ_PIX_TOKEN || '';
+// True only when the feature flag is ON *and* the pix backend is fully wired
+// (both URL + token present). This is the SINGLE predicate behind both the
+// route gate (assertPixReady) and the caps flags, so caps can never advertise a
+// capability the routes would reject — they move together by construction.
+const PIX_READY = CDZ_VPIC_ENABLED === '1' && !!CDZ_PIX_URL && !!CDZ_PIX_TOKEN;
+// Base64 char-length cap on the forwarded image (~9MB decoded at 4/3 overhead).
+// cdz-pix enforces its own decoded-byte cap (CDZ_PIX_MAX_BYTES), but we reject
+// an oversized payload at the edge BEFORE round-tripping it, same as the render
+// controller byte-caps its HTML/manifest inputs.
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
+// CPU inference is seconds, not ms (bg-remove ~2-12s, upscale ~5-20s+); the
+// cdz-pix README pins the proxy timeout at >= 30s. Bounded against a hung upstream.
+const PIX_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Project store caps (mirror the vdz projects conventions).
@@ -174,16 +203,164 @@ export class ClickDzVpicController {
     }
   }
 
-  // GET /api/v1/vpic/caps — { enabled }. @CurrentUser (a signed-in feature), but
-  // deliberately NOT gated: the FE studio registry reads this to decide whether
-  // to show the VPIC tab, so it must answer honestly even when the flag is off
-  // (enabled:false ⇒ tab hidden). Throttle override 300/60s (a cheap, hot poll).
+  // -------------------------------------------------------------------------
+  // cdz-pix proxy helpers (R15). Mirror the peer clickdz-vdz-render controller's
+  // assertRenderReady / headers / upstream / proxy shape, pointed at cdz-pix.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Gate the AI routes: the CDZ_VPIC_ENABLED master flag first, then the pix
+   * service config. A typed 400 (NOT a 500) — an unconfigured/disabled backend
+   * is a client-observable precondition, so the FE degrades to the disabled /
+   * "coming soon" state instead of surfacing a server error (the SAME stance
+   * clickdz-vdz-render's assertRenderReady takes; CopilotProviderSideError would
+   * map to 500). PIX_READY folds both checks, but we split the messages so a
+   * misconfig is diagnosable from the response.
+   */
+  private assertPixReady(): void {
+    if (CDZ_VPIC_ENABLED !== '1') {
+      throw new BadRequest('VPIC AI is not enabled');
+    }
+    if (!CDZ_PIX_URL || !CDZ_PIX_TOKEN) {
+      throw new BadRequest('Image service is not configured');
+    }
+  }
+
+  /** Common headers for every cdz-pix call — Bearer token, NEVER sent to the FE. */
+  private pixHeaders(extra?: Record<string, string>): Record<string, string> {
+    return { authorization: `Bearer ${CDZ_PIX_TOKEN}`, ...extra };
+  }
+
+  /** Wrap a fetch to cdz-pix, mapping network/timeout to a typed provider error. */
+  private async pixUpstream(
+    path: string,
+    init: RequestInit
+  ): Promise<Response> {
+    try {
+      return (await fetch(`${CDZ_PIX_URL}${path}`, {
+        ...init,
+        signal: AbortSignal.timeout(PIX_TIMEOUT_MS),
+      })) as unknown as Response;
+    } catch (cause) {
+      throw new CopilotProviderSideError({
+        provider: 'pix',
+        kind: 'network_error',
+        message:
+          cause instanceof Error
+            ? `Image service request failed: ${cause.message}`
+            : 'Image service request failed',
+      });
+    }
+  }
+
+  /**
+   * Proxy an image op to cdz-pix. SSRF-safe by construction: we ONLY forward a
+   * caller-supplied base64 STRING (`imageBase64`) plus a whitelisted scalar
+   * `extra` (model / scale) — NO url is ever accepted or fetched, so there is no
+   * attacker-controlled fetch target. Validates + byte-caps the input at the
+   * edge (typed 400), relays it with the Bearer header, and reads `imageBase64`
+   * back on success. cdz-pix's error shape is `{ error: { message } }`; a
+   * non-2xx bubbles that message as a 400 (a client-fixable rejection — e.g.
+   * "image too large"), while a 2xx with no image is a provider-side 5xx.
+   */
+  private async pixProxy(
+    path: string,
+    body: Record<string, unknown>,
+    extra?: Record<string, unknown>
+  ): Promise<{ imageBase64: string }> {
+    this.assertPixReady();
+
+    const imageBase64 = body?.imageBase64;
+    if (typeof imageBase64 !== 'string' || imageBase64.length < 100) {
+      throw new BadRequest('"imageBase64" must be a base64 image string');
+    }
+    if (imageBase64.length > MAX_IMAGE_BYTES) {
+      throw new BadRequest('Image is too large (max ~9MB)');
+    }
+
+    const res = await this.pixUpstream(path, {
+      method: 'POST',
+      headers: this.pixHeaders({ 'Content-Type': 'application/json' }),
+      // Forward ONLY the base64 string + any whitelisted scalar extras (never a
+      // url, never the raw caller body) so no attacker-controlled field reaches
+      // the upstream.
+      body: JSON.stringify({ imageBase64, ...(extra ?? {}) }),
+    });
+
+    const data = (await res.json().catch(() => ({}))) as {
+      imageBase64?: unknown;
+      error?: { message?: string };
+    };
+    if (!res.ok) {
+      // Bubble cdz-pix's own message (e.g. "image too large", "bad scale").
+      throw new BadRequest(
+        data?.error?.message ||
+          `Image service rejected the request (${res.status})`
+      );
+    }
+    if (typeof data?.imageBase64 !== 'string' || !data.imageBase64) {
+      throw new CopilotProviderSideError({
+        provider: 'pix',
+        kind: 'invalid_output',
+        message: 'Image service returned no image',
+      });
+    }
+    return { imageBase64: data.imageBase64 };
+  }
+
+  // GET /api/v1/vpic/caps — { enabled, bgRemoveEnabled, upscaleEnabled }.
+  // @CurrentUser (a signed-in feature), but deliberately NOT gated: the FE studio
+  // registry reads this to decide whether to show the VPIC tab, so it must answer
+  // honestly even when the flag is off (enabled:false ⇒ tab hidden). The two AI
+  // flags (R15) gate the bg-remove/upscale buttons — TRUE only when the feature
+  // flag is on AND cdz-pix is wired (PIX_READY), the SAME predicate the routes
+  // assert, so a button is never enabled for a call the backend would reject.
+  // Throttle override 300/60s (a cheap, hot poll).
   @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/vpic/caps')
   async getCaps(
     @CurrentUser() _user: CurrentUser
-  ): Promise<{ enabled: boolean }> {
-    return { enabled: CDZ_VPIC_ENABLED === '1' };
+  ): Promise<{
+    enabled: boolean;
+    bgRemoveEnabled: boolean;
+    upscaleEnabled: boolean;
+  }> {
+    return {
+      enabled: CDZ_VPIC_ENABLED === '1',
+      bgRemoveEnabled: PIX_READY,
+      upscaleEnabled: PIX_READY,
+    };
+  }
+
+  // POST /api/v1/vpic/bg-remove — proxy a background-removal to cdz-pix. Body
+  // { imageBase64, model? }; forwards { imageBase64, model? } to cdz-pix's
+  // /bg-remove and returns { imageBase64 } (a transparent PNG). Session-authed
+  // (global guard, no @Public — like the render proxy), @Throttle('strict') (a
+  // paid model call), gated by assertPixReady (typed 400 when off). `model` is
+  // an OPTIONAL whitelisted scalar (cdz-pix validates it: 'birefnet' | 'u2net');
+  // ONLY the base64 string + model are forwarded, never a url (SSRF-safe).
+  @Throttle('strict')
+  @Post('/api/v1/vpic/bg-remove')
+  async bgRemove(@Body() body: unknown): Promise<{ imageBase64: string }> {
+    const payload = (body ?? {}) as Record<string, unknown>;
+    const extra =
+      typeof payload.model === 'string' ? { model: payload.model } : undefined;
+    return this.pixProxy('/bg-remove', payload, extra);
+  }
+
+  // POST /api/v1/vpic/upscale — proxy an upscale to cdz-pix. Body
+  // { imageBase64, scale? }; forwards { imageBase64, scale? } to cdz-pix's
+  // /upscale and returns { imageBase64 } (a PNG). Session-authed,
+  // @Throttle('strict'), gated by assertPixReady. `scale` is an OPTIONAL
+  // whitelisted numeric (cdz-pix accepts 2 | 4); ONLY the base64 string + scale
+  // are forwarded, never a url (SSRF-safe).
+  @Throttle('strict')
+  @Post('/api/v1/vpic/upscale')
+  async upscale(@Body() body: unknown): Promise<{ imageBase64: string }> {
+    const payload = (body ?? {}) as Record<string, unknown>;
+    const extra =
+      typeof payload.scale === 'number' ? { scale: payload.scale } : undefined;
+    return this.pixProxy('/upscale', payload, extra);
   }
 
   // GET /api/v1/vpic/projects — the caller's projects, newest-first (id, name,
