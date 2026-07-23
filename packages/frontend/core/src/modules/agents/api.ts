@@ -764,8 +764,13 @@ export interface AgentTrigger {
   id: string;
   /** Owner user id (echoed back by the backend). */
   userId: string;
-  /** Which agent this trigger drives. */
-  agent: AgentName;
+  /**
+   * Which agent this trigger drives. R15: the RUNTIME id — a built-in NAME
+   * ('hermes'/'openclaw') OR an owned custom `cz_` id — so the type widens to
+   * `AgentName | string` (mirrors AgentSummary.id + the backend AgentId widen).
+   * A pre-R15 built-in payload is byte-identical (still a literal).
+   */
+  agent: AgentName | string;
   /** Schedule (`cron`) vs inbound webhook (`webhook`). */
   kind: AgentTriggerKind;
   /** Preset schedule id for a `cron` trigger: `hourly` | `daily@HH:MM` | `weekly@D@HH:MM`. */
@@ -801,7 +806,15 @@ export interface CreateTriggerInput {
  * caller can flag-detect and show a quiet fallback. Returns `[]` on a non-array
  * body.
  */
-export async function listTriggers(agent: AgentName): Promise<AgentTrigger[]> {
+// R15: `agent` is the RUNTIME id — a built-in NAME ('hermes'/'openclaw') OR an
+// owned custom `cz_` id — interpolated straight into the URL. Widened from
+// AgentName to `AgentName | string` (matching AgentSummary.id + the R12 backend
+// AgentId widen) so a custom agent's triggers page reaches its OWN triggers; a
+// built-in name is byte-identical. The backend resolveAgentOr404 authorizes the
+// id under the caller, so an unknown/not-owned id still 404s.
+export async function listTriggers(
+  agent: AgentName | string
+): Promise<AgentTrigger[]> {
   const rows = await requestJson<AgentTrigger[]>(
     `/api/v1/agents/${agent}/triggers`
   );
@@ -816,7 +829,7 @@ export async function listTriggers(agent: AgentName): Promise<AgentTrigger[]> {
  * invalid preset/prompt).
  */
 export function createTrigger(
-  agent: AgentName,
+  agent: AgentName | string,
   input: CreateTriggerInput
 ): Promise<AgentTrigger> {
   return requestJson<AgentTrigger>(`/api/v1/agents/${agent}/triggers`, {
@@ -828,7 +841,7 @@ export function createTrigger(
 
 /** Delete a trigger by id (idempotent server-side). Throws {@link AgentApiError} on a transport/HTTP failure. */
 export async function deleteTrigger(
-  agent: AgentName,
+  agent: AgentName | string,
   id: string
 ): Promise<void> {
   await requestJson<unknown>(
@@ -843,7 +856,7 @@ export async function deleteTrigger(
  * AgentApiError}.
  */
 export function toggleTrigger(
-  agent: AgentName,
+  agent: AgentName | string,
   id: string
 ): Promise<AgentTrigger> {
   return requestJson<AgentTrigger>(

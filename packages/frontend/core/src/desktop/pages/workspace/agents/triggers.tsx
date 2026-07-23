@@ -164,9 +164,17 @@ function maskWebhookUrl(url: string | undefined): string {
   return `${u.slice(0, dot + 1)}••••••••`;
 }
 
-// Coerce a search-param string into a known AgentName ('hermes' default).
-function coerceAgent(v: string | null): AgentName {
-  return v === 'openclaw' ? 'openclaw' : 'hermes';
+// R15: pass the real agent id through — a built-in NAME ('hermes'/'openclaw') OR
+// an owned custom `cz_` id — instead of clamping every non-'openclaw' value to
+// 'hermes' (which silently pointed a custom agent's triggers at Hermes). The id
+// flows straight into listTriggers/createTrigger/toggleTrigger/deleteTrigger,
+// which interpolate it into the `/api/v1/agents/:agent/triggers` URL, so a
+// deep-linked `?agent=cz_…` now reaches ITS OWN triggers. Empty ⇒ 'hermes'
+// default. Return type widens to `AgentName | string` (AgentSummary.id is already
+// this union), assignable from the built-in literals so `selectAgent` + the
+// built-in AGENTS tabs stay valid. Mirrors R12's backend AgentName→AgentId widen.
+function coerceAgent(v: string | null): AgentName | string {
+  return v && v.trim() ? v.trim() : 'hermes';
 }
 
 // Relative-time formatter (mirrors runs.tsx timeAgo). Uses `t()` so it follows
