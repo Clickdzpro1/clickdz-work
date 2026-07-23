@@ -85,6 +85,7 @@ import type {
 import {
   createSession,
   createSessionWithPorts,
+  describeSandboxError,
   extendSession,
   getPreviewUrl,
   listFiles,
@@ -98,6 +99,7 @@ import {
   stopSession,
   writeFile,
 } from './clickdz-vercel-sandbox';
+import type { SandboxFailure } from './clickdz-vercel-sandbox';
 
 // --- CDZ_AI planner envs — EXACT normalization copied from
 // clickdz-integrations.controller.ts (the WS10 /v1-double-suffix fix). Prod
@@ -939,15 +941,18 @@ export class ClickDzOpenclawController {
         runtime,
         writer
       );
-      if (!ready) {
+      if (!ready.ok) {
         // Sandbox creation failed mid-setup — degrade to plan-only rather than
-        // aborting the turn (the message is still saved on the thread).
+        // aborting the turn (the message is still saved on the thread). D2 — the
+        // reason is now DISTINCT (at-capacity / billing / auth / timeout) instead
+        // of a single generic line, so the user gets an honest, actionable notice.
         await this.streamPlanOnly(
           user.id,
           thread,
           message,
           runtime,
-          'the sandbox session could not be created for this thread',
+          ready.reason ??
+            'the sandbox session could not be created for this thread',
           writer
         );
         return;
@@ -995,18 +1000,34 @@ export class ClickDzOpenclawController {
   /**
    * Ensure the thread owns a live, persistent sandbox session.
    *   - reuse: thread.sandbox.sessionId present AND sessionStatus()==='running'
-   *     → extendSession(+15m) and keep the stored routes.
+   *     AND extendSession(+15m) SUCCEEDS → keep the stored routes.
    *   - recreate: otherwise createSessionWithPorts({runtime, ports:[3000]}) and
    *     persist {sessionId, runtime, routes} onto the thread.
-   * Returns true when the thread has a usable session; false on hard failure
-   * (caller degrades to plan-only). Defensive — swallows/logs, never throws.
+   * Returns `{ ok:true }` when the thread has a usable session, or
+   * `{ ok:false, reason }` on hard failure (the caller degrades to plan-only and
+   * shows `reason`). Defensive — swallows/logs, never throws.
+   *
+   * D1 FIX (R16) — a stale/stopped/failed reused session (sessionStatus() not
+   * 'running', which INCLUDES a 404 → 'stopped') is transparently recreated
+   * instead of being reused and blowing up later inside the exec loop. This was
+   * already the fall-through, but it is now explicit and guarded.
+   *
+   * D4 FIX (R16) — if extendSession THROWS on a session that looked 'running',
+   * that VM is about to hit its old deadline mid-turn. We no longer swallow the
+   * failure and reuse it; we treat the session as DEAD and recreate proactively,
+   * so the planner never gets an opaque "session expired" error halfway through.
+   *
+   * RECREATE-LOOP GUARD — recreation is delegated to recreateSandboxSession(),
+   * which makes AT MOST one retry (two create attempts total) and can never
+   * spin: there is no loop back into status-checking, and a create failure
+   * returns a typed reason rather than re-entering this method.
    */
   private async ensurePersistentSandbox(
     userId: string,
     thread: AgentThread,
     runtime: string,
     writer: AgentSseWriterLike
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; reason?: string }> {
     const existing = thread.sandbox;
     if (existing?.sessionId) {
       let status: 'running' | 'stopped' | 'failed' | 'unknown' = 'unknown';
@@ -1019,51 +1040,144 @@ export class ClickDzOpenclawController {
         status = 'unknown';
       }
       if (status === 'running') {
-        // Reuse the warm microVM and push its deadline forward.
+        // Reuse the warm microVM and push its deadline forward. D4 FIX — a FAILED
+        // extend means the VM keeps its OLD (soon-to-expire) deadline, so reusing
+        // it risks dying mid-turn. On extend failure we drop through to recreate
+        // instead of the old behavior (swallow + reuse anyway).
+        let extended = true;
         try {
           await extendSession(existing.sessionId, STREAM_SESSION_EXTEND_MS);
         } catch (err) {
+          extended = false;
           this.logger.warn(
-            `[openclaw] extendSession failed: ${(err as Error)?.message ?? err}`
+            `[openclaw] extendSession failed — treating session as dead, will recreate: ${
+              (err as Error)?.message ?? err
+            }`
           );
         }
-        existing.updatedAt = Date.now();
-        thread.updatedAt = Date.now();
-        await this.runtime.saveThread(userId, thread);
-        writer.emit({
-          type: 'status',
-          phase: 'planning',
-          label: 'Reconnected to workspace',
-        });
-        return true;
+        if (extended) {
+          existing.updatedAt = Date.now();
+          thread.updatedAt = Date.now();
+          await this.runtime.saveThread(userId, thread);
+          writer.emit({
+            type: 'status',
+            phase: 'planning',
+            label: 'Reconnected to workspace',
+          });
+          return { ok: true };
+        }
+        // extend failed → best-effort release the doomed VM before recreating so
+        // it doesn't linger against the shared concurrency budget, then recreate.
+        try {
+          await stopSession(existing.sessionId);
+        } catch {
+          /* best-effort — stopSession already swallows, belt-and-braces */
+        }
       }
-      // Dead/unknown session — fall through and recreate.
+      // Dead / unknown / stopped / failed / extend-failed → recreate below.
     }
 
+    return this.recreateSandboxSession(userId, thread, runtime, writer);
+  }
+
+  /**
+   * Provision a FRESH persistent sandbox for the thread and persist it. Isolated
+   * from ensurePersistentSandbox so the recreate path has a HARD, self-contained
+   * retry budget: it attempts createSessionWithPorts, and on the FIRST failure
+   * retries EXACTLY ONCE. There is no path back into status-checking or into
+   * ensurePersistentSandbox, so a persistent upstream fault can never cause an
+   * infinite recreate loop — it fails after two attempts with a typed reason.
+   *
+   * On success persists {sessionId, runtime, routes} onto the thread and returns
+   * `{ ok:true }`. On failure returns `{ ok:false, reason }` where `reason` is a
+   * DISTINCT, human message derived from the discriminated describeSandboxError()
+   * result (D2): at-capacity / billing / auth / timeout each read differently so
+   * the user isn't told a generic "couldn't create". Never throws.
+   */
+  private async recreateSandboxSession(
+    userId: string,
+    thread: AgentThread,
+    runtime: string,
+    writer: AgentSseWriterLike
+  ): Promise<{ ok: boolean; reason?: string }> {
     writer.emit({
       type: 'status',
       phase: 'planning',
       label: 'Starting a fresh workspace',
     });
-    try {
-      const created = await createSessionWithPorts({
-        runtime,
-        ports: [PREVIEW_PORT],
-        timeoutMs: STREAM_SESSION_TIMEOUT_MS,
-      });
-      thread.sandbox = {
-        sessionId: created.sessionId,
-        runtime: created.runtime,
-        routes: (created.routes ?? []).map(r => ({ url: r.url, port: r.port })),
-        updatedAt: Date.now(),
-      };
-      thread.updatedAt = Date.now();
-      await this.runtime.saveThread(userId, thread);
-      return true;
-    } catch (err) {
-      const detail = (err as Error)?.message ?? 'sandbox_session_failed';
-      this.logger.warn(`[openclaw] createSessionWithPorts failed: ${detail}`);
-      return false;
+    // At most 2 attempts total (one retry). A bounded for-loop — NOT a while —
+    // so it is structurally impossible to spin.
+    const MAX_ATTEMPTS = 2;
+    let lastFailure: SandboxFailure | null = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const created = await createSessionWithPorts({
+          runtime,
+          ports: [PREVIEW_PORT],
+          timeoutMs: STREAM_SESSION_TIMEOUT_MS,
+        });
+        thread.sandbox = {
+          sessionId: created.sessionId,
+          runtime: created.runtime,
+          routes: (created.routes ?? []).map(r => ({
+            url: r.url,
+            port: r.port,
+          })),
+          updatedAt: Date.now(),
+        };
+        thread.updatedAt = Date.now();
+        await this.runtime.saveThread(userId, thread);
+        return { ok: true };
+      } catch (err) {
+        // D2 — project the throw onto the discriminated shape for a distinct msg.
+        lastFailure = describeSandboxError(err);
+        this.logger.warn(
+          `[openclaw] createSessionWithPorts failed (attempt ${attempt}/${MAX_ATTEMPTS}, reason=${lastFailure.reason}${
+            typeof lastFailure.status === 'number'
+              ? ` status=${lastFailure.status}`
+              : ''
+          }): ${lastFailure.detail ?? ''}`
+        );
+        // Only a TRANSIENT reason is worth a retry. A durable fault
+        // (auth/billing) will fail identically on the second try, so fail fast
+        // and don't burn the budget or spam Vercel.
+        // Sentinel F-1: 'at_capacity' (429) is NOT retryable here. A 429 means
+        // the shared account is already at its concurrency/rate cap and a 15m
+        // VM won't free in the ~0ms before a retry — re-firing POST /v2/sandboxes
+        // would just DOUBLE the create rate while Vercel is rate-limiting us,
+        // worsening the very problem. Capacity is left to the user-driven retry
+        // the UX already prompts. Only genuinely-transient reasons retry once.
+        const retryable =
+          lastFailure.reason === 'timeout' ||
+          lastFailure.reason === 'unknown';
+        if (attempt >= MAX_ATTEMPTS || !retryable) break;
+      }
+    }
+    return {
+      ok: false,
+      reason: this.sandboxFailureMessage(lastFailure),
+    };
+  }
+
+  /**
+   * D2 — turn a discriminated {reason} create failure into the friendly, DISTINCT
+   * message the plan-only degrade shows the user. Each reason reads differently so
+   * "at capacity" is never confused with an outage or a billing/auth problem. Kept
+   * tiny + pure; a null failure (shouldn't happen) falls back to the legacy line
+   * so behavior is safe if a new reason is ever added.
+   */
+  private sandboxFailureMessage(failure: SandboxFailure | null): string {
+    switch (failure?.reason) {
+      case 'at_capacity':
+        return 'the sandbox is at capacity right now — retry in a few moments';
+      case 'billing':
+        return 'the sandbox is temporarily unavailable due to an account billing/quota issue (the operator has been notified)';
+      case 'auth':
+        return 'the sandbox is not configured correctly on the server — code was generated but not executed';
+      case 'timeout':
+        return 'the sandbox took too long to start — retry shortly';
+      default:
+        return 'the sandbox session could not be created for this thread';
     }
   }
 
@@ -2052,12 +2166,21 @@ export class ClickDzOpenclawController {
       });
       sessionId = session.sessionId;
     } catch (err) {
-      const detail = (err as Error)?.message ?? 'sandbox_session_failed';
-      this.logger.warn(`[openclaw] createSession failed: ${detail}`);
+      // D2 — project onto the discriminated reason so a 429/402 reads distinctly
+      // (at-capacity vs billing vs auth) instead of a bare message. Behavior is
+      // unchanged: legacy /run still degrades to plan-only and returns.
+      const failure = describeSandboxError(err);
+      const detail =
+        failure.detail || (err as Error)?.message || 'sandbox_session_failed';
+      this.logger.warn(
+        `[openclaw] createSession failed (reason=${failure.reason}${
+          typeof failure.status === 'number' ? ` status=${failure.status}` : ''
+        }): ${detail}`
+      );
       await this.runPlanOnly(
         task,
         runtime,
-        `sandbox session could not be created: ${detail}`,
+        `sandbox session could not be created (${failure.reason}): ${detail}`,
         timeLeft,
         res
       );
@@ -2847,13 +2970,16 @@ export class ClickDzOpenclawController {
           runtime,
           writer
         );
-        if (!ready) {
+        if (!ready.ok) {
+          // D2 — distinct reason (at-capacity / billing / auth / timeout) instead
+          // of the old single generic string; falls back to it if unset.
           await this.streamPlanOnly(
             userId,
             thread,
             prompt,
             runtime,
-            'the sandbox session could not be created for this run',
+            ready.reason ??
+              'the sandbox session could not be created for this run',
             writer,
             args.persona // R12
           );

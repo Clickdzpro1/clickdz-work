@@ -89,8 +89,19 @@ const UPSTREAM_MSG_CAP = 300;
 // Capability results are cached so the UI polling /capabilities doesn't
 // hammer Vercel: positive results are stable, negative ones re-probe sooner
 // (the operator may flip the feature on).
+// D3 FIX (R16) — the fail-TTL is HALVED (60s → 15s). The audit flags that a
+// single transient probe blip used to dark the WHOLE console fleet for up to a
+// minute because this cache is module-global (shared by every user). Two changes
+// address that with the smaller-risk option (see sandboxCapability):
+//   (1) only DURABLE negatives (missing token / 401 auth / 403 feature gate /
+//       402 billing) are cached at all — a durable negative won't self-heal, so
+//       caching it is safe and spares Vercel the repeat probes.
+//   (2) TRANSIENT negatives (network blip, probe timeout, 429 capacity, 5xx) are
+//       NOT cached, so one user's momentary failure never gates everyone, and
+//       the next request re-probes immediately.
+// The shortened TTL is belt-and-braces for anything that still gets cached.
 const CAPABILITY_OK_TTL_MS = 300_000;
-const CAPABILITY_FAIL_TTL_MS = 60_000;
+const CAPABILITY_FAIL_TTL_MS = 15_000;
 
 // --- C4 budgets (persistent-session + streaming ops) ---
 const EXTEND_TIMEOUT_MS = 10_000; // extend-timeout control call
@@ -111,11 +122,22 @@ const logger = new Logger('ClickDzVercelSandbox');
 // ---------------------------------------------------------------------------
 // Typed error — callers (OPENCLAW) branch on `code`:
 //   not_configured | not_enabled  → "sandbox unavailable" (degrade gracefully)
+//   at_capacity                   → concurrency/rate cap (429) — retryable soon
+//   billing                       → payment/quota gate (402) — operator hard-stop
 //   api_error | timeout           → runtime failure (feed back to the planner)
+//
+// D2 FIX (R16) — `at_capacity` + `billing` SPLIT out of the old catch-alls so a
+// quota/concurrency cap no longer collapses into a generic "couldn't create"
+// message. Both are additive: every existing throw site that passed one of the
+// four original codes still type-checks and behaves identically. See
+// statusToError (429→at_capacity, 402→billing) and describeSandboxError (the
+// controller-facing discriminated mapper).
 // ---------------------------------------------------------------------------
 export type SandboxErrorCode =
   | 'not_configured'
   | 'not_enabled'
+  | 'at_capacity'
+  | 'billing'
   | 'api_error'
   | 'timeout';
 
@@ -176,6 +198,84 @@ export class SandboxError extends Error {
       ...(this.bodyPreview ? { bodyPreview: this.bodyPreview } : {}),
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// D2 FIX (R16) — controller/UX-facing DISCRIMINATED result for a failed create.
+//
+// The imperative functions (createSession/createSessionWithPorts/…) still THROW
+// SandboxError — their contract is unchanged and the happy path is byte-for-byte
+// identical. This is an ADDITIVE projection the controller can call on the catch
+// side to turn any create failure into a small tagged object it maps 1:1 to a
+// friendly message, WITHOUT re-parsing the human string:
+//
+//   { ok:false, reason, status?, detail? }
+//
+// `reason` is deliberately COARSER than SandboxErrorCode — it is the set of
+// user/operator-visible outcomes the console distinguishes:
+//   - 'at_capacity' → 429: retryable soon ("capacity reached, retry shortly").
+//   - 'billing'     → 402: operator hard-stop (payment/budget). Fail fast.
+//   - 'auth'        → 401/403/not_configured/not_enabled: the operator must fix
+//                     the token or enable the feature. (not_configured and
+//                     not_enabled both collapse here — from the USER's seat both
+//                     read "the operator needs to set the sandbox up"; the exact
+//                     knob is still in `detail.code`/`detail.message` for logs.)
+//   - 'timeout'     → the create/exec leg exceeded its AbortSignal budget.
+//   - 'unknown'     → anything else (api_error, transport errors, non-SandboxError).
+// `status` is the upstream HTTP status when known; `detail` is the short verbatim
+// upstream body slice (NEVER token material — it is the RESPONSE body, not our
+// request headers). Consumers should switch on `reason` only.
+// ---------------------------------------------------------------------------
+export type SandboxFailureReason =
+  | 'at_capacity'
+  | 'billing'
+  | 'auth'
+  | 'timeout'
+  | 'unknown';
+
+export interface SandboxFailure {
+  ok: false;
+  reason: SandboxFailureReason;
+  status?: number;
+  detail?: string;
+}
+
+/**
+ * Project ANY thrown error from a create/exec path onto the coarse
+ * {ok:false, reason, status?, detail?} shape above. Pure + total (never throws,
+ * always returns a value) so a controller catch block can do:
+ *
+ *   catch (err) { const f = describeSandboxError(err); ... switch (f.reason) }
+ *
+ * A non-SandboxError (transport blip, TypeError) maps to reason:'unknown' with
+ * no status. `detail` prefers the verbatim upstream body slice, else the
+ * composed message — bounded and never carrying token material.
+ */
+export function describeSandboxError(err: unknown): SandboxFailure {
+  if (err instanceof SandboxError) {
+    const reason: SandboxFailureReason =
+      err.code === 'at_capacity'
+        ? 'at_capacity'
+        : err.code === 'billing'
+          ? 'billing'
+          : err.code === 'not_configured' || err.code === 'not_enabled'
+            ? 'auth'
+            : err.code === 'timeout'
+              ? 'timeout'
+              : 'unknown';
+    const detail = (err.bodyPreview || err.message || '').slice(0, UPSTREAM_MSG_CAP);
+    return {
+      ok: false,
+      reason,
+      ...(typeof err.status === 'number' ? { status: err.status } : {}),
+      ...(detail ? { detail } : {}),
+    };
+  }
+  const detail = ((err as Error)?.message ?? String(err ?? '')).slice(
+    0,
+    UPSTREAM_MSG_CAP
+  );
+  return { ok: false, reason: 'unknown', ...(detail ? { detail } : {}) };
 }
 
 export interface SandboxSession {
@@ -281,10 +381,25 @@ function upstreamMessage(data: any): string {
  *   - 401 → `not_configured` (a CONFIG / auth fault: the token is wrong, expired
  *     or scoped to the wrong team). Distinct message "check VERCEL_TOKEN…" so a
  *     bad token is never masked by the plan-gate banner.
- *   - 402/403 → `not_enabled` (plan/feature gate — enable Sandbox in the Vercel
- *     dashboard / upgrade the plan).
- * Both codes still degrade OpenClaw to plan-only, but the surfaced `reason`
- * now tells the operator which knob to turn. NEVER logs/echoes token material.
+ *   - 403 → `not_enabled` (feature/permission gate — enable Sandbox in the Vercel
+ *     dashboard / the token lacks the scope).
+ *
+ * D2 FIX (R16) — the two OPERATIONAL caps that the audit says were being
+ * collapsed into the generic "couldn't create" message now get their OWN codes,
+ * so the console can tell the user something honest and actionable:
+ *   - 429 → `at_capacity` (concurrency cap / control-plane rate limit / vCPU
+ *     allocation-rate limit — all documented to return 429). RETRYABLE: the
+ *     right UX is "sandbox capacity reached, retry shortly", NOT an outage
+ *     banner. The three distinct 429 sub-causes are indistinguishable by status
+ *     alone; the verbatim bodyPreview carries the upstream detail for logs.
+ *   - 402 → `billing` (payment method missing / account past its budget). This
+ *     is an OPERATOR hard-stop — waiting will not clear it — so it is kept
+ *     DISTINCT from 403's feature-gate and from 429's retryable cap. SPLIT out
+ *     of the old `402 || 403 → not_enabled` pair.
+ *
+ * Each branch yields a DISTINCT reason code (not_configured / not_enabled /
+ * at_capacity / billing / api_error) so the controller/UX maps 1:1 without
+ * re-parsing the message. NEVER logs/echoes token material.
  *
  * R9 SONDE — now takes the lifecycle `stage` + a raw `bodyPreview` and threads
  * BOTH onto the error (see SandboxError.stage/bodyPreview). The message also
@@ -320,10 +435,32 @@ function statusToError(
       bodyPreview
     );
   }
-  if (status === 402 || status === 403) {
+  // D2 FIX — 429 concurrency/rate cap: retryable, keep it out of the generic
+  // bucket so the UX can say "capacity reached, retry shortly".
+  if (status === 429) {
+    return new SandboxError(
+      'at_capacity',
+      `Vercel Sandbox capacity reached (HTTP 429) — the account hit a concurrency or rate limit; retry shortly${suffix}`,
+      status,
+      stage,
+      bodyPreview
+    );
+  }
+  // D2 FIX — 402 billing/quota gate: operator hard-stop (payment/budget), NOT
+  // the same thing as a 403 feature gate and NOT retryable by waiting.
+  if (status === 402) {
+    return new SandboxError(
+      'billing',
+      `Vercel Sandbox is blocked by a billing/quota issue (HTTP 402) — check the account payment method and usage limits in the Vercel dashboard${suffix}`,
+      status,
+      stage,
+      bodyPreview
+    );
+  }
+  if (status === 403) {
     return new SandboxError(
       'not_enabled',
-      `Vercel Sandbox is not enabled for this account (HTTP ${status}) — enable it in the Vercel dashboard${suffix}`,
+      `Vercel Sandbox is not enabled for this account (HTTP 403) — enable it in the Vercel dashboard${suffix}`,
       status,
       stage,
       bodyPreview
@@ -499,16 +636,32 @@ async function lookupOrCreateProject(): Promise<string> {
 // Capability probe — NEVER throws
 // ---------------------------------------------------------------------------
 
+// D3 FIX (R16) — the cached probe result now also records whether a NEGATIVE was
+// `durable` (a real config/enablement/billing problem that won't self-heal) or
+// transient. Only durable results are ever stored (see sandboxCapability), so a
+// transient blip can't linger in the fleet-wide cache. `durable` is undefined on
+// a positive result (positives are always cached at the OK TTL).
+type CapabilityResult = { sandbox: boolean; reason?: string; durable?: boolean };
+
 let capabilityCache: {
   at: number;
-  result: { sandbox: boolean; reason?: string };
+  result: CapabilityResult;
 } | null = null;
 
 /**
  * Ensure the dedicated project exists, then hit the Sandbox API surface with
- * the cheapest possible call (list sandboxes, limit=1). A 402/403 anywhere
- * means the feature/plan gate is closed → `{ sandbox:false, reason }` with an
- * actionable message. Never throws; results are briefly cached.
+ * the cheapest possible call (list sandboxes, limit=1). A 401/402/403 anywhere
+ * means an auth / billing / feature gate is closed → `{ sandbox:false, reason }`
+ * with an actionable message. Never throws; results are briefly cached.
+ *
+ * D3 FIX (R16) — negative caching is now CONDITIONAL. A durable negative (no
+ * token / auth / billing / feature-gate) is cached at the (shortened) fail TTL
+ * because it will not self-heal without operator action. A TRANSIENT negative
+ * (network blip, probe timeout, 429 capacity, 5xx, or any non-typed error) is
+ * NOT cached — so one user's momentary probe failure never darks the shared
+ * console for everyone, and the very next request (or a per-user create attempt)
+ * re-probes live. The public return shape is unchanged ({sandbox, reason?}); the
+ * `durable` flag is an internal caching hint that is stripped before returning.
  */
 export async function sandboxCapability(): Promise<{
   sandbox: boolean;
@@ -519,21 +672,50 @@ export async function sandboxCapability(): Promise<{
     const ttl = capabilityCache.result.sandbox
       ? CAPABILITY_OK_TTL_MS
       : CAPABILITY_FAIL_TTL_MS;
-    if (now - capabilityCache.at < ttl) return capabilityCache.result;
+    if (now - capabilityCache.at < ttl) {
+      const { sandbox, reason } = capabilityCache.result;
+      return { sandbox, ...(reason ? { reason } : {}) };
+    }
   }
   const result = await probeCapability();
-  capabilityCache = { at: now, result };
-  return result;
+  // Cache positives always; cache negatives ONLY when durable. A transient
+  // negative is intentionally left uncached so it can't gate the fleet.
+  if (result.sandbox || result.durable) {
+    capabilityCache = { at: now, result };
+  } else {
+    // Drop any stale (possibly durable) entry so we don't serve it past a
+    // transient failure, and force the next call to re-probe fresh.
+    capabilityCache = null;
+  }
+  const { sandbox, reason } = result;
+  return { sandbox, ...(reason ? { reason } : {}) };
 }
 
-async function probeCapability(): Promise<{
-  sandbox: boolean;
-  reason?: string;
-}> {
+/**
+ * Classify a probe failure as DURABLE (won't self-heal — safe to cache) vs
+ * transient. Durable = the operator must change something: missing token,
+ * 401 auth, 403 feature gate, 402 billing (their typed codes:
+ * not_configured / not_enabled / billing). Everything else — 429 capacity, 5xx,
+ * transport/timeout, untyped — is transient and must NOT be cached fleet-wide.
+ */
+function isDurableNegative(err: unknown): boolean {
+  if (err instanceof SandboxError) {
+    return (
+      err.code === 'not_configured' ||
+      err.code === 'not_enabled' ||
+      err.code === 'billing'
+    );
+  }
+  return false;
+}
+
+async function probeCapability(): Promise<CapabilityResult> {
   try {
     if (!VERCEL_TOKEN) {
+      // Missing token is the canonical DURABLE negative — cache it.
       return {
         sandbox: false,
+        durable: true,
         reason:
           'VERCEL_TOKEN is not configured on the server — add a Vercel access token to enable sandbox execution',
       };
@@ -556,8 +738,11 @@ async function probeCapability(): Promise<{
       err instanceof SandboxError
         ? err.message
         : `Vercel Sandbox check failed: ${(err as Error)?.message ?? String(err)}`;
-    logger.warn(`[sandbox] capability probe negative: ${reason}`);
-    return { sandbox: false, reason };
+    const durable = isDurableNegative(err);
+    logger.warn(
+      `[sandbox] capability probe negative (${durable ? 'durable' : 'transient'}): ${reason}`
+    );
+    return { sandbox: false, durable, reason };
   }
 }
 
@@ -1362,6 +1547,13 @@ export interface SandboxHealthResult {
   // VERBATIM upstream error string (empty/omitted on success). This is the field
   // that lets us read the REAL prod failure through the health route.
   error?: string;
+  // D2 FIX (R16) — coarse, FE-facing failure reason (at_capacity / billing /
+  // auth / timeout / unknown), present on failures only. Additive: the
+  // create → exec → teardown shape is unchanged; this just lets the FE "test"
+  // button show an honest message (e.g. "at capacity, retry shortly" on a 429,
+  // "billing" on a 402) by reading ONE field instead of decoding `detail.code`.
+  // The full typed breakdown is still in `detail`.
+  reason?: SandboxFailureReason;
   // Structured breakdown when the failure was a typed SandboxError.
   detail?: {
     code: SandboxErrorCode;
@@ -1411,6 +1603,8 @@ export async function sandboxHealthProbe(opts?: {
       ms: elapsed(),
       error:
         'VERCEL_TOKEN is not configured on the server — add a Vercel access token to enable sandbox execution',
+      // D2 — not_configured folds into the coarse 'auth' reason for the FE.
+      reason: 'auth',
       detail: { code: 'not_configured', stage: 'create' },
     };
   }
@@ -1429,11 +1623,15 @@ export async function sandboxHealthProbe(opts?: {
   } catch (err) {
     const detail =
       err instanceof SandboxError ? err.toStructured() : undefined;
+    // D2 — the CREATE leg is where a 429 (at_capacity) / 402 (billing) surfaces;
+    // attach the coarse reason so the health route reports it distinctly.
+    const { reason } = describeSandboxError(err);
     return {
       ok: false,
       stage: 'create',
       ms: elapsed(),
       error: verbatimError(err),
+      reason,
       ...(detail
         ? {
             detail: {
@@ -1487,11 +1685,15 @@ export async function sandboxHealthProbe(opts?: {
       }
     } catch (err) {
       const d = err instanceof SandboxError ? err.toStructured() : undefined;
+      // D2 — an exec-time 429 (control-plane rate limit) also maps to a coarse
+      // reason for the FE.
+      const { reason } = describeSandboxError(err);
       execFailure = {
         ok: false,
         stage: 'exec',
         ms: elapsed(),
         error: verbatimError(err),
+        reason,
         runtime,
         ...(d
           ? {
