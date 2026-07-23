@@ -123,12 +123,14 @@ import {
   putErpRecord,
 } from './clickdz-erp-procurement';
 import {
+  buildChargilyCaisseEntry,
   buildDayClose,
   buildPendingCodEntry,
   caisseCollectionFor,
   caisseCollectionForDate,
   caisseCollectionsInRange,
   caisseStr,
+  hasChargilyCaisseEntry,
   hasPendingCodMarker,
   mergeCaisseEntry,
   normalizeRange,
@@ -2295,15 +2297,24 @@ export class ClickDzBridgeController {
       return '';
     }
     try {
+      // R15: fetch the image bytes ourselves; the new Make OCR scenario takes
+      // base64 in JSON and returns the extracted text as a raw text/plain body
+      // (the old {file_url}->{text} contract belonged to the prior account).
+      const imgRes = await fetch(fileUrl, { signal: AbortSignal.timeout(30000) });
+      if (!imgRes.ok) return '';
+      const bytes = Buffer.from(await imgRes.arrayBuffer());
+      if (bytes.length === 0 || bytes.length > MAX_IMAGE_INPUT_BYTES) return '';
+      const imageBase64 = bytes.toString('base64');
+
       const response = await fetch(MAKE_OCR_WEBHOOK_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_url: fileUrl }),
+        body: JSON.stringify({ imageBase64 }),
         signal: AbortSignal.timeout(30000),
       });
       if (!response.ok) return '';
-      const data = (await response.json()) as { text?: string };
-      return typeof data?.text === 'string' ? data.text.slice(0, 4000) : '';
+      const text = await response.text();
+      return typeof text === 'string' ? text.trim().slice(0, 4000) : '';
     } catch {
       // OCR is best-effort context — never block generation on it
       return '';
@@ -5505,6 +5516,49 @@ export class ClickDzBridgeController {
   }
 
   /**
+   * R15 — mirror a just-settled Chargily online payment into the caisse ledger
+   * as a real (non-pending) 'in'/'chargily' row, so day-close/reconcile counts
+   * online revenue. Structurally identical to erpWritePendingCod: pure builder →
+   * list → dedupe guard → create, fully fail-soft (a caisse hiccup must NEVER
+   * regress the order's paid flip or the webhook 200 ack). Idempotent on orderRef.
+   */
+  private async erpWriteChargilyCaisse(
+    slug: string,
+    order: ErpRecord,
+    token: string
+  ): Promise<void> {
+    try {
+      const built = buildChargilyCaisseEntry(order as CaisseRecord);
+      if (!built) return;
+      const existing = await this.erpList(slug, built.collection);
+      const ref = caisseStr((built.entry as ErpRecord).orderRef);
+      if (
+        existing &&
+        ref &&
+        hasChargilyCaisseEntry(existing as CaisseRecord[], ref)
+      ) {
+        return; // already posted — stay idempotent
+      }
+      const created = await this.erpCreateRecord(
+        slug,
+        built.collection,
+        built.entry as ErpRecord,
+        token
+      );
+      if (created.ok) {
+        this.logger.log(
+          `[pay] caisse chargily slug=${slug} ref=${ref.slice(0, 40)} amount=${(built.entry as ErpRecord).amount}`
+        );
+      }
+    } catch (e) {
+      // Fail-soft: an online payment stays 'paid' even if the caisse write hiccups.
+      this.logger.warn(
+        `[pay] caisse chargily write skipped slug=${slug}: ${String((e as Error)?.message || e).slice(0, 120)}`
+      );
+    }
+  }
+
+  /**
    * R2-d — GET /api/v1/apps/:slug/erp/caisse?month=YYYYMM (auth'd, owner-only).
    * Lists ONE monthly partition (`caisse-YYYYMM`); defaults to the current month.
    * `month` is validated to 6 digits (bad → current month). Returns the raw
@@ -8249,6 +8303,10 @@ export class ClickDzBridgeController {
       }
     }
     const created = await this.erpCreateRecord(slug, 'orders', next, token);
-    return created.ok ? 'paid' : 'write_failed';
+    if (!created.ok) return 'write_failed';
+    // R15: mirror the paid order into the caisse ledger (fail-soft, deduped) so
+    // online revenue shows up in day-close/reconcile alongside COD + cash.
+    await this.erpWriteChargilyCaisse(slug, next, token);
+    return 'paid';
   }
 }
