@@ -110,7 +110,12 @@ export class CdzAppDataModel extends BaseModel {
     migrationMarked: boolean;
     markError?: string;
   }> {
-    await this.db.$queryRaw`
+    // $executeRaw, NOT $queryRaw: pg_advisory_xact_lock() returns SQL `void`,
+    // which Prisma's $queryRaw cannot deserialize ("Failed to deserialize
+    // column of type 'void'" — hit live on first prod call, R18-A3 hotfix).
+    // $executeRaw skips row deserialization; this is the canonical Prisma
+    // advisory-lock idiom.
+    await this.db.$executeRaw`
       SELECT pg_advisory_xact_lock(hashtext('cdz_app_data_migration'))
     `;
     const probe = await this.db.$queryRaw<{ reg: string | null }[]>`
