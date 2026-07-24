@@ -5,10 +5,22 @@ import {
   Banner,
   btnStyle,
   C,
+  connectCourier,
+  COURIER_STATUS_COLORS,
+  COURIER_STATUS_LABELS,
+  type CourierStatus,
+  type CourierWilaya,
+  courierFees,
+  courierRefresh,
+  courierShip,
+  courierSync,
+  disconnectCourier,
   EmptyNote,
   type ErpOrder,
   type ErpSettings,
   fetchCouriers,
+  fetchCourierReference,
+  fetchCourierStatus,
   fetchErpCollection,
   fetchShippingRates,
   fetchWilayas,
@@ -23,6 +35,7 @@ import {
   orderDate,
   orderTotal,
   Panel,
+  parseCourierWilayas,
   postErpSettings,
   postShippingRates,
   postTracking,
@@ -43,8 +56,13 @@ import {
 
 // ---------------------------------------------------------------------------
 // LIVRAISON studio page (WSE-7, R3-c). The owner's shipping cockpit for one
-// store, over the R2 shipping bridge routes (all owner-only, authed). Three
+// store, over the R2 shipping bridge routes (all owner-only, authed). Four
 // sub-tabs:
+//   • Transporteurs — R17. Connect the merchant's OWN Yalidine account (BYO API
+//                  keys, sealed server-side), then ship orders + track parcels
+//                  from here over the owner-authed /courier/:provider routes.
+//                  Ships DARK: a 404 on the GET-status probe = feature flag off
+//                  → a calm "bientôt disponible", never an error.
 //   • Livreurs   — courier list / create / edit (name, phone, codFee, active)
 //                  + a wa.me tap link (open WhatsApp to the courier).
 //   • Tarifs     — per-courier 58-wilaya rate matrix editor (fee/homeFee/
@@ -63,9 +81,10 @@ import {
 // read stays usable and writes disable with a clear notice.
 // ---------------------------------------------------------------------------
 
-type Tab = 'couriers' | 'rates' | 'shipments';
+type Tab = 'transporteurs' | 'couriers' | 'rates' | 'shipments';
 
 const TABS: Array<{ id: Tab; label: string; icon: string }> = [
+  { id: 'transporteurs', label: 'Transporteurs', icon: '🔗' },
   { id: 'couriers', label: 'Livreurs', icon: '🚚' },
   { id: 'rates', label: 'Tarifs par wilaya', icon: '🗺️' },
   { id: 'shipments', label: 'Expéditions', icon: '📦' },
@@ -150,7 +169,15 @@ export const ShippingPanel = ({
         ))}
       </div>
 
-      {tab === 'couriers' ? (
+      {tab === 'transporteurs' ? (
+        <TransporteursTab
+          slug={slug}
+          settings={settings}
+          readOnly={readOnly}
+          onWritesBlocked={onWritesBlocked}
+          onMutated={onMutated}
+        />
+      ) : tab === 'couriers' ? (
         <CouriersTab
           slug={slug}
           couriers={couriers}
@@ -296,6 +323,1035 @@ const AppVisibilityToggle = ({
         <span style={{ fontSize: 12, fontWeight: 700 }}>{on ? 'Activé' : 'Masqué'}</span>
       </button>
     </div>
+  );
+};
+
+// ===========================================================================
+// TRANSPORTEURS tab (R17) — connect a merchant's OWN Yalidine account, then
+// ship orders + track parcels straight from the studio. The whole tab is gated
+// on a GET-status probe: when CDZ_COURIERS_ENABLED is OFF the backend returns a
+// typed 404, which the client surfaces as 'dark' → we render a subtle "bientôt
+// disponible" note and STOP (no error spam). When ON:
+//   • ConnectCard   — API ID + API Token → connect (validated live server-side);
+//                     shows connected state + disconnect. Inline FR errors only.
+//   • Pickup wilaya — the merchant's parcel origin (from the reference wilayas
+//                     list), remembered per-shop in localStorage (the backend
+//                     ship route takes fromWilaya per call; no cred field for it).
+//   • FeesPreview   — from/to wilaya → a live delivery-fee quote.
+//   • CourierOrders — shippable orders (Confirmée/Expédiée, no tracking yet) get
+//                     an "Expédier" button → tracking no. + label link; shipped
+//                     orders show a live status chip + "Rafraîchir le suivi", and
+//                     a batch "Synchroniser" polls them all (button-driven only).
+// Mirrors the R16 connections-card state machine (connect / status / disconnect,
+// inline errors not toasts) + the R15 studio patterns (Panel/Field/Banner/…).
+// ===========================================================================
+
+const COURIER_PROVIDER_LABEL = 'Yalidine';
+
+/** Per-shop pickup-wilaya memory (the backend ship route wants it per call; the
+ *  sealed cred record deliberately does NOT store it). localStorage keeps the
+ *  merchant from re-picking it on every visit — a pure client convenience. */
+function pickupStorageKey(slug: string): string {
+  return `cdz.courier.pickupWilaya.${slug}`;
+}
+function readPickupWilaya(slug: string): number | null {
+  try {
+    const v = window.localStorage.getItem(pickupStorageKey(slug));
+    const n = v ? Number(v) : NaN;
+    return Number.isInteger(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+function writePickupWilaya(slug: string, wilaya: number): void {
+  try {
+    window.localStorage.setItem(pickupStorageKey(slug), String(wilaya));
+  } catch {
+    // best-effort — a blocked localStorage just means re-picking next visit.
+  }
+}
+
+type ConnPhase = 'loading' | 'dark' | 'connected' | 'disconnected' | 'error';
+
+const TransporteursTab = ({
+  slug,
+  settings,
+  readOnly,
+  onWritesBlocked,
+  onMutated,
+}: {
+  slug: string;
+  settings?: ErpSettings;
+  readOnly: boolean;
+  onWritesBlocked: () => void;
+  onMutated?: () => void;
+}) => {
+  const [phase, setPhase] = useState<ConnPhase>('loading');
+  const [enabled, setEnabled] = useState(false);
+  const [statusErr, setStatusErr] = useState('');
+
+  // The merchant's pickup wilaya (parcel origin). Seeded from localStorage; the
+  // wilaya reference list (below) resolves its name for display.
+  const [pickupWilaya, setPickupWilaya] = useState<number | null>(() =>
+    readPickupWilaya(slug)
+  );
+
+  // Reference wilayas (loaded once a connection exists) — drives the pickup +
+  // fees pickers. Loaded lazily so a disconnected shop makes no courier calls.
+  const [wilayas, setWilayas] = useState<CourierWilaya[]>([]);
+  const [wilayasPhase, setWilayasPhase] = useState<'idle' | 'loading' | 'ready' | 'error'>(
+    'idle'
+  );
+
+  const probe = useCallback(async () => {
+    setPhase('loading');
+    setStatusErr('');
+    const out = await fetchCourierStatus(slug);
+    if (out.status === 'dark') {
+      setPhase('dark');
+      return;
+    }
+    if (out.status === 'error') {
+      setStatusErr(out.message);
+      setPhase('error');
+      return;
+    }
+    setEnabled(out.enabled);
+    setPhase(out.connected ? 'connected' : 'disconnected');
+  }, [slug]);
+
+  useEffect(() => {
+    void probe();
+  }, [probe]);
+
+  const loadWilayas = useCallback(async () => {
+    setWilayasPhase('loading');
+    const out = await fetchCourierReference(slug, 'wilayas');
+    if (out.status === 'ok') {
+      const list = parseCourierWilayas(out.items);
+      setWilayas(list);
+      setWilayasPhase('ready');
+      // Seed a default pickup wilaya (Alger=16 if present, else the first) so a
+      // fresh connection is immediately shippable without a manual pick.
+      setPickupWilaya(cur => {
+        if (cur && list.some(w => w.id === cur)) return cur;
+        const fallback = list.find(w => w.id === 16) || list[0];
+        return fallback ? fallback.id : cur;
+      });
+    } else if (out.status === 'dark') {
+      setPhase('dark');
+    } else {
+      setWilayasPhase('error');
+    }
+  }, [slug]);
+
+  // Load the wilaya reference once we know a connection exists (skip otherwise).
+  useEffect(() => {
+    if (phase === 'connected' && wilayasPhase === 'idle') {
+      void loadWilayas();
+    }
+  }, [phase, wilayasPhase, loadWilayas]);
+
+  const onPickupChange = useCallback(
+    (w: number) => {
+      setPickupWilaya(w);
+      writePickupWilaya(slug, w);
+    },
+    [slug]
+  );
+
+  const onConnected = useCallback(
+    (isEnabled: boolean) => {
+      setEnabled(isEnabled);
+      setPhase('connected');
+      setWilayasPhase('idle'); // trigger a fresh reference load
+      onMutated?.();
+    },
+    [onMutated]
+  );
+
+  const onDisconnected = useCallback(() => {
+    setPhase('disconnected');
+    setWilayas([]);
+    setWilayasPhase('idle');
+    onMutated?.();
+  }, [onMutated]);
+
+  if (phase === 'loading') {
+    return <LoadingRow label="Vérification du transporteur…" />;
+  }
+
+  // Feature dark (flag off on this server) — a calm "bientôt", never an error.
+  if (phase === 'dark') {
+    return (
+      <Panel title="Transporteurs">
+        <EmptyNote>
+          <span aria-hidden style={{ fontSize: 22, display: 'block', marginBottom: 6 }}>
+            🔗
+          </span>
+          Intégration transporteur bientôt disponible. Connectez bientôt votre
+          compte Yalidine pour expédier vos commandes et suivre les colis
+          automatiquement — sans quitter votre tableau de bord.
+        </EmptyNote>
+      </Panel>
+    );
+  }
+
+  if (phase === 'error') {
+    return (
+      <Banner tone="error">
+        {statusErr}{' '}
+        <button style={linkRetryStyle} onClick={() => void probe()}>
+          Réessayer
+        </button>
+      </Banner>
+    );
+  }
+
+  const connected = phase === 'connected';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <ConnectCard
+        slug={slug}
+        connected={connected}
+        enabled={enabled}
+        readOnly={readOnly}
+        onWritesBlocked={onWritesBlocked}
+        onConnected={onConnected}
+        onDisconnected={onDisconnected}
+      />
+
+      {connected ? (
+        <>
+          <PickupWilayaCard
+            wilayas={wilayas}
+            wilayasPhase={wilayasPhase}
+            pickupWilaya={pickupWilaya}
+            onPickupChange={onPickupChange}
+            onRetryWilayas={() => void loadWilayas()}
+          />
+          <FeesPreview slug={slug} wilayas={wilayas} pickupWilaya={pickupWilaya} />
+          <CourierOrders
+            slug={slug}
+            settings={settings}
+            pickupWilaya={pickupWilaya}
+            readOnly={readOnly}
+            onWritesBlocked={onWritesBlocked}
+            onMutated={onMutated}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+};
+
+// ---- Connect / status / disconnect card (R16 connections-card state machine) --
+
+const ConnectCard = ({
+  slug,
+  connected,
+  enabled,
+  readOnly,
+  onWritesBlocked,
+  onConnected,
+  onDisconnected,
+}: {
+  slug: string;
+  connected: boolean;
+  enabled: boolean;
+  readOnly: boolean;
+  onWritesBlocked: () => void;
+  onConnected: (enabled: boolean) => void;
+  onDisconnected: () => void;
+}) => {
+  const [apiId, setApiId] = useState('');
+  const [apiToken, setApiToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmDisc, setConfirmDisc] = useState(false);
+
+  const disabled = readOnly || busy;
+
+  const submit = useCallback(async () => {
+    if (disabled) {
+      if (readOnly) onWritesBlocked();
+      return;
+    }
+    const id = apiId.trim();
+    const token = apiToken.trim();
+    if (!id || !token) {
+      setErr('Saisissez votre API ID et votre API Token Yalidine.');
+      return;
+    }
+    setErr(null);
+    setBusy(true);
+    const out = await connectCourier(slug, id, token);
+    if (out.status === 'ok') {
+      setApiId('');
+      setApiToken('');
+      onConnected(out.enabled);
+    } else if (out.status === 'dark') {
+      // Flag flipped off between the probe and now — bubble up as a soft error.
+      setErr('Intégration transporteur indisponible sur ce serveur.');
+    } else {
+      setErr(out.message);
+    }
+    setBusy(false);
+  }, [disabled, readOnly, apiId, apiToken, slug, onConnected, onWritesBlocked]);
+
+  const doDisconnect = useCallback(async () => {
+    if (disabled) {
+      if (readOnly) onWritesBlocked();
+      return;
+    }
+    setErr(null);
+    setBusy(true);
+    const out = await disconnectCourier(slug);
+    if (out.status === 'ok') {
+      setConfirmDisc(false);
+      onDisconnected();
+    } else if (out.status === 'dark') {
+      setErr('Intégration transporteur indisponible sur ce serveur.');
+    } else {
+      setErr(out.message);
+    }
+    setBusy(false);
+  }, [disabled, readOnly, slug, onDisconnected, onWritesBlocked]);
+
+  if (connected) {
+    return (
+      <Panel title={`${COURIER_PROVIDER_LABEL} · connecté`}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
+            <ConnectedBadge />
+            <span style={{ fontSize: 12.5, color: C.muted }}>
+              {enabled
+                ? 'Votre compte Yalidine est actif — vous pouvez expédier vos commandes.'
+                : 'Compte connecté mais désactivé.'}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              style={miniBtnStyle('danger', disabled)}
+              disabled={disabled}
+              onClick={() => {
+                if (readOnly) return onWritesBlocked();
+                setConfirmDisc(v => !v);
+              }}
+            >
+              Déconnecter
+            </button>
+          </div>
+          {confirmDisc ? (
+            <Banner tone="warn">
+              Déconnecter Yalidine ? Vos clés seront supprimées ; les commandes
+              déjà expédiées gardent leur suivi.
+              <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                <button
+                  style={btnStyle('danger', disabled)}
+                  disabled={disabled}
+                  onClick={() => void doDisconnect()}
+                >
+                  {busy ? (
+                    <>
+                      <Spinner dark /> Déconnexion…
+                    </>
+                  ) : (
+                    'Oui, déconnecter'
+                  )}
+                </button>
+                <button
+                  style={btnStyle('secondary', busy)}
+                  disabled={busy}
+                  onClick={() => setConfirmDisc(false)}
+                >
+                  Annuler
+                </button>
+              </div>
+            </Banner>
+          ) : null}
+          {err ? <Banner tone="error">{err}</Banner> : null}
+        </div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title={`Connecter ${COURIER_PROVIDER_LABEL}`}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={hintStyle}>
+          Collez vos identifiants API depuis votre espace Yalidine (Développeurs →
+          API). Vos clés sont chiffrées et ne sont jamais réaffichées. Rana
+          nخزنوهم مشفّرين — matbanwelkch.
+        </div>
+        <div style={twoColStyle}>
+          <Field label="API ID" hint="Identifiant API Yalidine (X-API-ID).">
+            <input
+              style={inputStyle}
+              value={apiId}
+              maxLength={64}
+              disabled={disabled}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Ex. 12345678"
+              onChange={e => setApiId(e.target.value)}
+            />
+          </Field>
+          <Field label="API Token" hint="Jeton API Yalidine (X-API-TOKEN).">
+            <input
+              style={inputStyle}
+              type="password"
+              value={apiToken}
+              maxLength={512}
+              disabled={disabled}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Collez le token"
+              onChange={e => setApiToken(e.target.value)}
+            />
+          </Field>
+        </div>
+        {err ? <Banner tone="error">{err}</Banner> : null}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button
+            style={btnStyle('primary', disabled || !apiId.trim() || !apiToken.trim())}
+            disabled={disabled || !apiId.trim() || !apiToken.trim()}
+            onClick={() => void submit()}
+          >
+            {busy ? (
+              <>
+                <Spinner dark /> Connexion…
+              </>
+            ) : (
+              'Connecter Yalidine'
+            )}
+          </button>
+        </div>
+      </div>
+    </Panel>
+  );
+};
+
+// ---- Pickup-wilaya picker (parcel origin, per-shop) -------------------------
+
+const PickupWilayaCard = ({
+  wilayas,
+  wilayasPhase,
+  pickupWilaya,
+  onPickupChange,
+  onRetryWilayas,
+}: {
+  wilayas: CourierWilaya[];
+  wilayasPhase: 'idle' | 'loading' | 'ready' | 'error';
+  pickupWilaya: number | null;
+  onPickupChange: (w: number) => void;
+  onRetryWilayas: () => void;
+}) => {
+  return (
+    <Panel title="Wilaya de départ">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={hintStyle}>
+          D’où partent vos colis ? Cette wilaya sert d’origine pour l’expédition et
+          le calcul des frais. Men win yطلعو الكوليات.
+        </div>
+        {wilayasPhase === 'loading' ? (
+          <LoadingRow label="Chargement des wilayas…" />
+        ) : wilayasPhase === 'error' ? (
+          <Banner tone="error">
+            Impossible de charger les wilayas.{' '}
+            <button style={linkRetryStyle} onClick={onRetryWilayas}>
+              Réessayer
+            </button>
+          </Banner>
+        ) : (
+          <div style={{ maxWidth: 320 }}>
+            <select
+              style={{ ...inputStyle, cursor: 'pointer' }}
+              value={pickupWilaya ? String(pickupWilaya) : ''}
+              onChange={e => onPickupChange(Number(e.target.value))}
+            >
+              <option value="" disabled>
+                Choisir une wilaya…
+              </option>
+              {wilayas.map(w => (
+                <option key={w.id} value={w.id}>
+                  {String(w.id).padStart(2, '0')} — {w.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+    </Panel>
+  );
+};
+
+// ---- Fees preview (from/to wilaya → live quote) -----------------------------
+
+const FeesPreview = ({
+  slug,
+  wilayas,
+  pickupWilaya,
+}: {
+  slug: string;
+  wilayas: CourierWilaya[];
+  pickupWilaya: number | null;
+}) => {
+  const [toWilaya, setToWilaya] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = useCallback(async () => {
+    if (busy) return;
+    if (!pickupWilaya) {
+      setErr('Choisissez d’abord votre wilaya de départ.');
+      return;
+    }
+    if (!toWilaya) {
+      setErr('Choisissez la wilaya de destination.');
+      return;
+    }
+    setErr(null);
+    setResult(null);
+    setBusy(true);
+    const out = await courierFees(slug, pickupWilaya, toWilaya);
+    if (out.status === 'ok') {
+      setResult(summarizeFees(out.fees));
+    } else if (out.status === 'dark') {
+      setErr('Intégration transporteur indisponible sur ce serveur.');
+    } else {
+      setErr(out.message);
+    }
+    setBusy(false);
+  }, [busy, pickupWilaya, toWilaya, slug]);
+
+  return (
+    <Panel title="Estimer les frais">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={hintStyle}>
+          Un aperçu rapide du tarif de livraison Yalidine entre deux wilayas.
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 200, flex: '1 1 200px' }}>
+            <span style={labelStyle}>Vers la wilaya</span>
+            <select
+              style={{ ...inputStyle, marginTop: 6, cursor: 'pointer' }}
+              value={toWilaya ? String(toWilaya) : ''}
+              onChange={e => setToWilaya(Number(e.target.value))}
+            >
+              <option value="" disabled>
+                Destination…
+              </option>
+              {wilayas.map(w => (
+                <option key={w.id} value={w.id}>
+                  {String(w.id).padStart(2, '0')} — {w.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            style={btnStyle('secondary', busy || !toWilaya || !pickupWilaya)}
+            disabled={busy || !toWilaya || !pickupWilaya}
+            onClick={() => void run()}
+          >
+            {busy ? (
+              <>
+                <Spinner /> Calcul…
+              </>
+            ) : (
+              'Calculer'
+            )}
+          </button>
+        </div>
+        {err ? <Banner tone="error">{err}</Banner> : null}
+        {result ? <Banner tone="info">{result}</Banner> : null}
+      </div>
+    </Panel>
+  );
+};
+
+/**
+ * Fold Yalidine's fees payload into one readable FR line. The shape is a
+ * per-commune matrix ({ delivery_fee, cod, … } or nested {home,desk}); we probe
+ * the common numeric fields defensively and show a from…to range in DZD, or a
+ * plain "reçu" when the shape is unfamiliar (never throws).
+ */
+function summarizeFees(fees: unknown): string {
+  const nums: number[] = [];
+  const walk = (v: unknown, depth: number) => {
+    if (depth > 4 || v == null) return;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
+      nums.push(v);
+      return;
+    }
+    if (Array.isArray(v)) {
+      for (const it of v) walk(it, depth + 1);
+      return;
+    }
+    if (typeof v === 'object') {
+      for (const key of Object.keys(v as Record<string, unknown>)) {
+        // Only follow fee-ish fields to avoid folding weights/ids into the range.
+        if (/fee|price|tarif|cost|livraison|delivery|home|desk/i.test(key)) {
+          walk((v as Record<string, unknown>)[key], depth + 1);
+        }
+      }
+    }
+  };
+  walk(fees, 0);
+  if (nums.length === 0) {
+    return 'Tarif reçu de Yalidine — variable selon la commune.';
+  }
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  return min === max
+    ? `Frais de livraison : ${fmtDZD(min)}.`
+    : `Frais de livraison : ${fmtDZD(min)} à ${fmtDZD(max)} selon la commune.`;
+}
+
+// ---- Courier orders: ship shippable orders + track shipped ones -------------
+
+const CourierOrders = ({
+  slug,
+  settings,
+  pickupWilaya,
+  readOnly,
+  onWritesBlocked,
+  onMutated,
+}: {
+  slug: string;
+  settings?: ErpSettings;
+  pickupWilaya: number | null;
+  readOnly: boolean;
+  onWritesBlocked: () => void;
+  onMutated?: () => void;
+}) => {
+  const [orders, setOrders] = useState<ErpOrder[] | null>(null);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [errMsg, setErrMsg] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [rowNotice, setRowNotice] = useState<{ id: string; text: string; bad?: boolean } | null>(
+    null
+  );
+  const [banner, setBanner] = useState<{ tone: 'ok' | 'info' | 'error'; text: string } | null>(
+    null
+  );
+
+  // `settings` is accepted for future default-wilaya wiring; touch it so the
+  // prop isn't flagged unused while it stays reserved.
+  void settings;
+
+  const load = useCallback(async () => {
+    setPhase(orders === null ? 'loading' : 'ready');
+    try {
+      const all = await fetchErpCollection<ErpOrder>(slug, 'orders');
+      // Dedupe on the business ref (order-status replace = delete+recreate),
+      // keeping the newest copy so a freshly-shipped order shows its tracking.
+      const byRef = new Map<string, ErpOrder>();
+      for (const o of all) {
+        const key = String(o?.ref || o?.id || '');
+        if (!key) continue;
+        const prev = byRef.get(key);
+        if (!prev || String(o.createdAt || '') > String(prev.createdAt || '')) {
+          byRef.set(key, o);
+        }
+      }
+      setOrders([...byRef.values()].slice(0, 60));
+      setPhase('ready');
+    } catch (e) {
+      setErrMsg(e instanceof Error ? e.message : 'Chargement des commandes impossible.');
+      if (orders === null) setPhase('error');
+    }
+  }, [slug, orders]);
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
+  const { toShip, shipped } = useMemo(() => splitOrders(orders ?? []), [orders]);
+
+  const onShip = useCallback(
+    async (order: ErpOrder) => {
+      const oid = String(order.id || order.ref || '');
+      if (!oid) return;
+      if (readOnly) return onWritesBlocked();
+      if (!pickupWilaya) {
+        setRowNotice({ id: oid, text: 'Choisissez votre wilaya de départ d’abord.', bad: true });
+        return;
+      }
+      setBusyId(oid);
+      setRowNotice(null);
+      setBanner(null);
+      const isStopdesk =
+        String((order as Record<string, unknown>).deliveryMode || '').toLowerCase() === 'desk';
+      const out = await courierShip(slug, oid, pickupWilaya, { isStopdesk });
+      if (out.status === 'ok') {
+        if (out.persisted === false) {
+          setRowNotice({
+            id: oid,
+            text: `Colis créé (suivi ${out.tracking}) mais non enregistré — réessayez « Expédier » pour finaliser.`,
+            bad: true,
+          });
+        } else {
+          setRowNotice({
+            id: oid,
+            text: out.alreadyShipped
+              ? `Déjà expédié — suivi ${out.tracking}.`
+              : `Expédié ! Suivi ${out.tracking}.`,
+          });
+        }
+        await load();
+        onMutated?.();
+      } else if (out.status === 'dark') {
+        setBanner({ tone: 'error', text: 'Intégration transporteur indisponible sur ce serveur.' });
+      } else {
+        setRowNotice({ id: oid, text: out.message, bad: true });
+      }
+      setBusyId(null);
+    },
+    [readOnly, pickupWilaya, slug, load, onMutated, onWritesBlocked]
+  );
+
+  const onRefreshOne = useCallback(
+    async (order: ErpOrder) => {
+      const oid = String(order.id || order.ref || '');
+      if (!oid) return;
+      setBusyId(oid);
+      setRowNotice(null);
+      const out = await courierRefresh(slug, oid);
+      if (out.status === 'ok') {
+        const label = out.courierStatus ? COURIER_STATUS_LABELS[out.courierStatus] : 'à jour';
+        setRowNotice({ id: oid, text: `Suivi : ${label}.` });
+        await load();
+        onMutated?.();
+      } else if (out.status === 'dark') {
+        setBanner({ tone: 'error', text: 'Intégration transporteur indisponible sur ce serveur.' });
+      } else {
+        setRowNotice({ id: oid, text: out.message, bad: true });
+      }
+      setBusyId(null);
+    },
+    [slug, load, onMutated]
+  );
+
+  const onSyncAll = useCallback(async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setBanner(null);
+    setRowNotice(null);
+    const out = await courierSync(slug);
+    if (out.status === 'ok') {
+      setBanner({
+        tone: out.updated > 0 ? 'ok' : 'info',
+        text:
+          out.scanned === 0
+            ? 'Aucun colis en cours à synchroniser.'
+            : `${out.scanned} colis vérifié(s) · ${out.updated} mis à jour${
+                out.delivered ? ` · ${out.delivered} livré(s)` : ''
+              }${out.capped ? ` (sur ${out.total}, relancez pour la suite)` : ''}.`,
+      });
+      await load();
+      onMutated?.();
+    } else if (out.status === 'dark') {
+      setBanner({ tone: 'error', text: 'Intégration transporteur indisponible sur ce serveur.' });
+    } else {
+      setBanner({ tone: 'error', text: out.message });
+    }
+    setSyncing(false);
+  }, [syncing, slug, load, onMutated]);
+
+  if (phase === 'loading' && orders === null) {
+    return <LoadingRow label="Chargement des commandes…" />;
+  }
+  if (phase === 'error' && orders === null) {
+    return (
+      <Banner tone="error">
+        {errMsg}{' '}
+        <button style={linkRetryStyle} onClick={() => void load()}>
+          Réessayer
+        </button>
+      </Banner>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {banner ? <Banner tone={banner.tone}>{banner.text}</Banner> : null}
+
+      {/* Shippable orders */}
+      <Panel
+        title={`À expédier${toShip.length ? ` · ${toShip.length}` : ''}`}
+        action={
+          <button style={miniBtnStyle('secondary')} onClick={() => void load()}>
+            ↻ Actualiser
+          </button>
+        }
+      >
+        {toShip.length === 0 ? (
+          <EmptyNote>
+            Aucune commande prête à expédier. Confirmez une commande (onglet
+            Commandes) pour l’envoyer via Yalidine.
+          </EmptyNote>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {toShip.map(o => {
+              const oid = String(o.id || o.ref || '');
+              const busy = busyId === oid;
+              return (
+                <div key={oid || Math.random()} style={shipmentCardStyle}>
+                  <OrderHead order={o} />
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <button
+                      style={miniBtnStyle('primary', busy || readOnly || !pickupWilaya)}
+                      disabled={busy || readOnly || !pickupWilaya}
+                      onClick={() => void onShip(o)}
+                      title={
+                        !pickupWilaya
+                          ? 'Choisissez votre wilaya de départ'
+                          : 'Créer le colis Yalidine'
+                      }
+                    >
+                      {busy ? (
+                        <>
+                          <Spinner dark /> Expédition…
+                        </>
+                      ) : (
+                        '📦 Expédier'
+                      )}
+                    </button>
+                    {!pickupWilaya ? (
+                      <span style={{ fontSize: 11.5, color: C.muted }}>
+                        wilaya de départ requise
+                      </span>
+                    ) : null}
+                  </div>
+                  {rowNotice && rowNotice.id === oid ? (
+                    <RowNote text={rowNotice.text} bad={rowNotice.bad} />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+
+      {/* Shipped / tracking */}
+      <Panel
+        title={`Colis en cours${shipped.length ? ` · ${shipped.length}` : ''}`}
+        action={
+          <button
+            style={miniBtnStyle('secondary', syncing)}
+            disabled={syncing}
+            onClick={() => void onSyncAll()}
+            title="Interroger Yalidine pour tous les colis en cours"
+          >
+            {syncing ? (
+              <>
+                <Spinner /> Synchro…
+              </>
+            ) : (
+              '⟳ Synchroniser'
+            )}
+          </button>
+        }
+      >
+        {shipped.length === 0 ? (
+          <EmptyNote>Aucun colis expédié pour le moment.</EmptyNote>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {shipped.map(o => {
+              const oid = String(o.id || o.ref || '');
+              const busy = busyId === oid;
+              const rec = o as Record<string, unknown>;
+              const tracking = String(rec.trackingNumber || '');
+              const labelUrl = String(rec.labelUrl || '');
+              const csRaw = String(rec.courierStatus || 'pending');
+              const cs = (['pending', 'shipped', 'delivered', 'returned'].includes(csRaw)
+                ? csRaw
+                : 'pending') as CourierStatus;
+              return (
+                <div key={oid || Math.random()} style={shipmentCardStyle}>
+                  <OrderHead order={o} />
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <CourierStatusChip status={cs} />
+                    <span
+                      style={{
+                        fontFamily: 'var(--affine-font-code-family, monospace)',
+                        fontSize: 12,
+                        color: C.text,
+                      }}
+                      title="Numéro de suivi"
+                    >
+                      {tracking || '—'}
+                    </span>
+                    {labelUrl ? (
+                      <a
+                        href={labelUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          color: C.accent,
+                          textDecoration: 'none',
+                          fontWeight: 700,
+                          fontSize: 12,
+                        }}
+                        title="Télécharger l’étiquette (PDF)"
+                      >
+                        🏷️ Télécharger l’étiquette
+                      </a>
+                    ) : null}
+                    <span style={{ flex: 1 }} />
+                    <button
+                      style={miniBtnStyle('secondary', busy)}
+                      disabled={busy}
+                      onClick={() => void onRefreshOne(o)}
+                      title="Interroger Yalidine pour ce colis"
+                    >
+                      {busy ? (
+                        <>
+                          <Spinner /> Suivi…
+                        </>
+                      ) : (
+                        '⟳ Rafraîchir le suivi'
+                      )}
+                    </button>
+                  </div>
+                  {rowNotice && rowNotice.id === oid ? (
+                    <RowNote text={rowNotice.text} bad={rowNotice.bad} />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+};
+
+/**
+ * Split the order list into shippable vs shipped. Shippable = a confirmed/paid
+ * order with NO tracking number yet (Confirmée or Expédiée status, or a paid
+ * flag). Shipped = anything carrying a trackingNumber (courier parcel created).
+ */
+function splitOrders(orders: ErpOrder[]): { toShip: ErpOrder[]; shipped: ErpOrder[] } {
+  const toShip: ErpOrder[] = [];
+  const shipped: ErpOrder[] = [];
+  for (const o of orders) {
+    const rec = o as Record<string, unknown>;
+    const hasTracking = !!String(rec.trackingNumber || '').trim();
+    if (hasTracking) {
+      shipped.push(o);
+      continue;
+    }
+    const status = String(o.status || '');
+    const paid = rec.paid === true;
+    if (status === 'Confirmée' || status === 'Expédiée' || paid) {
+      toShip.push(o);
+    }
+  }
+  return { toShip, shipped };
+}
+
+const OrderHead = ({ order: o }: { order: ErpOrder }) => (
+  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+    <span
+      style={{
+        fontFamily: 'var(--affine-font-code-family, monospace)',
+        fontWeight: 700,
+        fontSize: 12.5,
+      }}
+    >
+      {o.ref || '—'}
+    </span>
+    <StatusBadge status={o.status} />
+    <span style={{ fontSize: 12, color: C.muted }}>{orderDate(o) || '—'}</span>
+    <span style={{ fontSize: 12.5, fontWeight: 600 }}>{o.customer || '—'}</span>
+    {o.wilaya ? <span style={{ fontSize: 12, color: C.muted }}>· {o.wilaya}</span> : null}
+    <span style={{ flex: 1 }} />
+    <span style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap' }}>
+      {fmtDZD(orderTotal(o))}
+    </span>
+  </div>
+);
+
+const RowNote = ({ text, bad }: { text: string; bad?: boolean }) => (
+  <div
+    style={{
+      fontSize: 11.5,
+      color: bad ? 'var(--affine-error-color, #eb4b4b)' : C.muted,
+    }}
+  >
+    {text}
+  </div>
+);
+
+const ConnectedBadge = () => {
+  const color = STATUS_COLORS['Livrée'];
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '2px 9px',
+        borderRadius: 999,
+        whiteSpace: 'nowrap',
+        color,
+        background: `color-mix(in srgb, ${color} 15%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
+      }}
+    >
+      ● Connecté
+    </span>
+  );
+};
+
+const CourierStatusChip = ({ status }: { status: CourierStatus }) => {
+  const color = COURIER_STATUS_COLORS[status];
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '2px 9px',
+        borderRadius: 999,
+        whiteSpace: 'nowrap',
+        color,
+        background: `color-mix(in srgb, ${color} 15%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
+      }}
+    >
+      {COURIER_STATUS_LABELS[status]}
+    </span>
   );
 };
 
