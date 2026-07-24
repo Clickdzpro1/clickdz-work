@@ -132,13 +132,62 @@ export class ClickDzPgAdminController {
     }
   }
 
-  // Phase B backfill: mirror historical Redis app-data into Postgres. Performs
-  // exactly ONE Redis SCAN step per HTTP call and fully processes the keys that
-  // step returns, then hands the next cursor back. Because it never truncates a
-  // SCAN batch mid-way, a client that loops from cursor '0' until `done` visits
-  // every collection at least once; idempotent upserts make SCAN's
-  // "may return duplicates" guarantee harmless. Bounded per call ⇒ no long-held
-  // request that an edge proxy could cut.
+  // R18-A2: apply the cdz_app_data migration in-app. This deployment's boot
+  // never runs `prisma migrate deploy` (verified: zero migration lines in the
+  // boot logs), so image-shipped migrations never reach the live DB — the
+  // status probe surfaced 42P01. Narrow by construction: the model can only
+  // replay the ONE hardcoded migration (exact repo DDL + checksum), never
+  // arbitrary SQL. Idempotent — safe to call repeatedly; reports what it did.
+  @Throttle('default', { limit: 300, ttl: 60_000 })
+  @Post(['/api/v1/cdz-admin/pg/migrate'])
+  async migrate(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (this.denyIfDisabled(res)) return;
+    if (!this.authOk(req, res)) return;
+    try {
+      const result = await this.models.cdzAppData.ensureSchema();
+      this.logger.log(
+        `[cdz-pg-migrate] alreadyExisted=${result.alreadyExisted} ranDdl=${result.ranDdl} migrationMarked=${result.migrationMarked}`
+      );
+      return { ok: true, ...result };
+    } catch (err) {
+      return {
+        ok: false,
+        error: String((err as Error)?.message ?? err).slice(0, 300),
+      };
+    }
+  }
+
+  // R18-A2 diagnostic: which migrations the live DB believes are applied
+  // (latest 30 rows of _prisma_migrations). Read-only.
+  @Throttle('default', { limit: 300, ttl: 60_000 })
+  @Get(['/api/v1/cdz-admin/pg/migrations'])
+  async migrations(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    if (this.denyIfDisabled(res)) return;
+    if (!this.authOk(req, res)) return;
+    try {
+      const rows = await this.models.cdzAppData.migrationsStatus();
+      return { ok: true, count: rows.length, migrations: rows };
+    } catch (err) {
+      return {
+        ok: false,
+        error: String((err as Error)?.message ?? err).slice(0, 300),
+      };
+    }
+  }
+
+  // Phase B backfill: mirror historical Redis app-data into Postgres. Each HTTP
+  // call drains WHOLE SCAN batches until the per-call record budget is spent,
+  // then hands the next cursor back. Because a batch is never truncated mid-way,
+  // a client that loops from cursor '0' until `done` visits every collection at
+  // least once; idempotent upserts make SCAN's "may return duplicates"
+  // guarantee harmless. Budget-bounded per call ⇒ no long-held request that an
+  // edge proxy could cut.
   @Throttle('default', { limit: 300, ttl: 60_000 })
   @Post(['/api/v1/cdz-admin/pg/backfill'])
   async backfill(
