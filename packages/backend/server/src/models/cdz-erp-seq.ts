@@ -142,7 +142,11 @@ export class CdzErpSeqModel extends BaseModel {
     migrationMarked: boolean;
     markError?: string;
   }> {
-    await this.db.$queryRaw`
+    // $executeRaw, NOT $queryRaw: pg_advisory_xact_lock() returns SQL `void`,
+    // which Prisma's $queryRaw cannot deserialize (hit live in the twin
+    // cdz-app-data ensureSchema — R18-A3 hotfix). $executeRaw skips row
+    // deserialization; canonical Prisma advisory-lock idiom.
+    await this.db.$executeRaw`
       SELECT pg_advisory_xact_lock(hashtext('cdz_erp_seq_migration'))
     `;
     const probe = await this.db.$queryRaw<{ reg: string | null }[]>`
