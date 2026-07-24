@@ -1624,3 +1624,19 @@ model CdzAppData {
   @@index([slug, collection])
   @@map("cdz_app_data")
 }
+
+/// ClickDz ERP gap-less legal counters (R18 PR-B). One row per
+/// (slug, doc_type, year) yearly series — devis/bl/facture/po, the DZ fiscal
+/// convention. Postgres is the monotonic FLOOR of the legacy Redis INCR
+/// (max-merge reserve in CdzErpSeqModel): a Redis crash-restore can no longer
+/// reissue a legal facture number.
+model CdzErpSeq {
+  slug      String   @map("slug") @db.VarChar
+  docType   String   @map("doc_type") @db.VarChar
+  year      Int      @map("year")
+  value     BigInt   @map("value")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@id([slug, docType, year])
+  @@map("cdz_erp_seq")
+}

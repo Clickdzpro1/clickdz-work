@@ -14,6 +14,7 @@ import { CalendarEventModel } from './calendar-event';
 import { CalendarEventInstanceModel } from './calendar-event-instance';
 import { CalendarSubscriptionModel } from './calendar-subscription';
 import { CdzAppDataModel } from './cdz-app-data';
+import { CdzErpSeqModel } from './cdz-erp-seq';
 import { CommentModel } from './comment';
 import { CommentAttachmentModel } from './comment-attachment';
 import { AppConfigModel } from './config';
@@ -88,6 +89,7 @@ const MODELS = {
   copilotJob: CopilotJobModel,
   appConfig: AppConfigModel,
   cdzAppData: CdzAppDataModel,
+  cdzErpSeq: CdzErpSeqModel,
   comment: CommentModel,
   commentAttachment: CommentAttachmentModel,
   blob: BlobModel,
