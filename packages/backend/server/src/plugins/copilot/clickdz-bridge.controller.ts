@@ -104,7 +104,7 @@ import {
   filterInvoices,
   invoiceCollectionForDate,
   invoiceCollectionsInRange,
-  reserveInvoiceSeq,
+  invoiceSeqKey,
   resolveInvoiceRates,
   type InvoiceOptions,
   type InvoiceRecord,
@@ -1112,6 +1112,16 @@ const ERP_TOP_PRODUCTS_MAX = 5;
 // oversized replacement can never destroy the record it was replacing.
 const ERP_MAX_WRITE_BYTES = 8 * 1024 - 128;
 const CDZ_SHOP_STATE = process.env.CDZ_SHOP_STATE === '1';
+// R18 PR-B — durable ERP legal counters. OFF (default) = the legacy bare Redis
+// INCR, byte-identical behaviour. '1' = Postgres cdz_erp_seq becomes the
+// monotonic floor via max-merge (see CdzErpSeqModel.reserve + erpReserveSeq).
+const CDZ_ERPSEQ_PG = process.env.CDZ_ERPSEQ_PG === '1';
+// Bound the PG hop on the validation path; past this the reserve fails soft to
+// the Redis number so invoicing never stalls on a slow Postgres.
+const CDZ_ERPSEQ_PG_TIMEOUT_MS = Math.max(
+  250,
+  Number(process.env.CDZ_ERPSEQ_PG_TIMEOUT_MS) || 2500
+);
 // WSE-12 (R2-e) — staff auth. Roles mirror ./cdz-data-token's StaffRole union
 // (owner=all, manager=all-minus-staff.manage/settings.write, staff=orders only).
 const ERP_STAFF_ROLES = ['owner', 'manager', 'staff'] as const;
@@ -4445,9 +4455,147 @@ export class ClickDzBridgeController {
     return { invoice: found.record };
   }
 
+  // R18 PR-B — durable gap-less reserve, shared by invoice validation and PO
+  // creation. The legacy Redis INCR stays the source of the hint (and the
+  // whole answer while CDZ_ERPSEQ_PG is off — byte-identical legacy path).
+  // Flag on: Postgres cdz_erp_seq becomes the monotonic floor via max-merge
+  // (CdzErpSeqModel.reserve) — the returned number is always >= the Redis one
+  // and two concurrent validations still get distinct numbers. PG trouble does
+  // not block invoicing: the PG hop is bounded by CDZ_ERPSEQ_PG_TIMEOUT_MS and
+  // fails soft — BUT never blindly (Sentinel MAJOR-1): before trusting the raw
+  // Redis number the fallback takes a fast look at the PG floor; if PG proves
+  // the number was already issued (floor >= rNum ⇒ Redis has regressed, e.g.
+  // RDB restore), it atomically jumps Redis PAST the floor with INCRBY (which
+  // can never regress, so concurrent healers get distinct numbers — worst case
+  // a small burned gap, never a duplicate) and returns the healed number. Only
+  // when PG is completely unreadable does it return the raw Redis number —
+  // exactly today's pre-PR exposure, never worse. Duplicates are fiscal
+  // violations; rare gaps are the documented gap-less cost (see the burned-
+  // number note in erpValidateInvoice). When PG advances past Redis on the
+  // happy path, the Redis key heals forward (best-effort SET outside the
+  // fallback so a heal failure can't discard PG's answer).
+  private async erpReserveSeq(
+    key: string,
+    slug: string,
+    docType: string,
+    year: number
+  ): Promise<number> {
+    const rNum = Math.max(
+      1,
+      Math.floor(Number(await this.redis.incr(key)) || 1)
+    );
+    if (!CDZ_ERPSEQ_PG) return rNum;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let finalN = rNum;
+    try {
+      const running = this.models.cdzErpSeq.reserve(slug, docType, year, rNum);
+      running.catch(() => {});
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('erpseq pg timeout')),
+          CDZ_ERPSEQ_PG_TIMEOUT_MS
+        );
+      });
+      finalN = await Promise.race([running, timeout]);
+    } catch (err) {
+      this.logger.warn(
+        `[cdz-erpseq-pg] reserve failed (${String(
+          (err as Error)?.message ?? err
+        ).slice(0, 160)}) key=${key} — checking floor before fallback`
+      );
+      return await this.erpReserveFallback(key, slug, docType, year, rNum);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (finalN > rNum) {
+      try {
+        await this.redis.set(key, String(finalN));
+      } catch {
+        // Heal is cosmetic (keeps the hint close); PG's floor already
+        // guarantees monotonicity, so a failed SET changes nothing.
+      }
+    }
+    return finalN;
+  }
+
+  // The MAJOR-1 guard (see erpReserveSeq). Runs only when the main PG reserve
+  // failed/timed out. Bounded fast floor read (min(1s, main timeout)):
+  //   floor unreadable       → PG fully down; return the raw Redis number
+  //                            (identical to the pre-PR exposure — never worse).
+  //   floor <  rNum          → Redis is ahead of PG; rNum was never issued
+  //                            before — safe to use.
+  //   floor >= rNum          → Redis has REGRESSED (restore) — rNum may already
+  //                            be on a merchant's facture. Self-heal: INCRBY
+  //                            jumps Redis past the floor atomically (INCRBY
+  //                            never regresses ⇒ concurrent healers still get
+  //                            distinct numbers; worst case burns a small gap,
+  //                            never duplicates) and the healed number is
+  //                            returned. If even that INCRBY fails (Redis broke
+  //                            in the last millisecond), throw a typed 4xx so
+  //                            the merchant retries — the ONLY deliberate throw
+  //                            on this path, because the alternative is issuing
+  //                            a duplicate legal number.
+  private async erpReserveFallback(
+    key: string,
+    slug: string,
+    docType: string,
+    year: number,
+    rNum: number
+  ): Promise<number> {
+    let floorV: number | null = null;
+    let floorTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const reading = this.models.cdzErpSeq.floor(slug, docType, year);
+      reading.catch(() => {});
+      const floorTimeout = new Promise<never>((_, reject) => {
+        floorTimer = setTimeout(
+          () => reject(new Error('erpseq floor timeout')),
+          Math.min(1000, CDZ_ERPSEQ_PG_TIMEOUT_MS)
+        );
+      });
+      floorV = await Promise.race([reading, floorTimeout]);
+    } catch {
+      floorV = null;
+    } finally {
+      if (floorTimer) clearTimeout(floorTimer);
+    }
+    if (floorV === null || floorV < rNum) {
+      this.logger.warn(
+        `[cdz-erpseq-pg] fallback to redis number (floor=${floorV === null ? 'unreadable' : floorV}) key=${key}`
+      );
+      return rNum;
+    }
+    try {
+      const jumped = Math.floor(
+        Number(await this.redis.incrby(key, floorV - rNum + 1))
+      );
+      // Airtight invariant: the heal path must NEVER hand out a number <= the
+      // proven floor (that would be the very duplicate this guard exists to
+      // prevent). A racing SET-heal can theoretically drag the counter down;
+      // refuse rather than trust an anomalous result.
+      if (!Number.isFinite(jumped) || jumped <= floorV) {
+        throw new Error(`incrby anomaly (got ${jumped}, floor ${floorV})`);
+      }
+      this.logger.warn(
+        `[cdz-erpseq-pg] healed regressed counter (floor=${floorV} redis=${rNum} → ${jumped}) key=${key}`
+      );
+      return jumped;
+    } catch (err) {
+      this.logger.error(
+        `[cdz-erpseq-pg] REFUSING potential duplicate (floor=${floorV} >= redis=${rNum}, heal failed: ${String(
+          (err as Error)?.message ?? err
+        ).slice(0, 120)}) key=${key}`
+      );
+      throw new BadRequest(
+        'Numérotation momentanément indisponible — réessayez'
+      );
+    }
+  }
+
   /**
    * WSE-2 — POST /api/v1/apps/:slug/erp/invoices/:id/validate (auth'd, owner).
-   * Assigns the gap-less legal number AT VALIDATION (Redis INCR), stamps the
+   * Assigns the gap-less legal number AT VALIDATION (Redis INCR; with
+   * CDZ_ERPSEQ_PG on, PG max-merge floors it — see erpReserveSeq), stamps the
    * legal id `<type>-<year>-<seq>`, status→valide, and writes the NEW id via
    * PUT while removing the old draft record from the same partition. The seq is
    * reserved immediately before the write; a failed write does not retry the
@@ -4482,11 +4630,13 @@ export class ClickDzBridgeController {
       return;
     }
     const { timbreRate } = this.erpInvoiceOptions();
-    // Reserve the gap-less number ONLY now, right before persisting.
-    const seq = await reserveInvoiceSeq(
-      this.redis as unknown as { incr(k: string): Promise<number> },
+    // Reserve the gap-less number ONLY now, right before persisting. Routed
+    // through erpReserveSeq: legacy Redis INCR when CDZ_ERPSEQ_PG is off,
+    // PG-floored max-merge when on (same clamp semantics as reserveInvoiceSeq).
+    const seq = await this.erpReserveSeq(
+      invoiceSeqKey(slug, draft.type as InvoiceType, Number(draft.year)),
       slug,
-      draft.type as InvoiceType,
+      String(draft.type),
       Number(draft.year)
     );
     const validated = applyValidation(draft, seq, timbreRate);
@@ -4884,9 +5034,15 @@ export class ClickDzBridgeController {
       throw new NotFound('Supplier not found');
     }
     // Gap-less numbering: reserve the seq only after a successful write would be
-    // rare to fail here, but INCR is atomic so numbers are monotonic per year.
+    // rare to fail here, but the reserve is atomic so numbers are monotonic per
+    // year (Redis INCR; PG-floored via erpReserveSeq when CDZ_ERPSEQ_PG is on).
     const year = new Date().getUTCFullYear();
-    const seq = await this.redis.incr(procPoSeqKey(slug, year));
+    const seq = await this.erpReserveSeq(
+      procPoSeqKey(slug, year),
+      slug,
+      'po',
+      year
+    );
     const built = buildPoRecord({
       id: procPoId(year, seq),
       supplierId,
