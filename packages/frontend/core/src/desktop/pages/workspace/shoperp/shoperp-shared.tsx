@@ -2017,8 +2017,113 @@ export function postTracking(
 // are mapped to human FR copy in courierErrMessage — NEVER a raw HTTP code.
 // ---------------------------------------------------------------------------
 
-/** The only courier provider live today; ZR Express / Maystro land in PR-D. */
-export type CourierProviderId = 'yalidine';
+/**
+ * Courier providers. Yalidine is LIVE today; the rest ride the same per-provider
+ * routes (`/courier/:provider/…`) and stay DARK (backend 404 → 'bientôt') until
+ * their server flag flips. Widening this union is safe: the route base already
+ * interpolates `:provider` and every wrapper defaults to 'yalidine'.
+ */
+export type CourierProviderId =
+  | 'yalidine'
+  | 'zrexpress'
+  | 'maystro'
+  | 'noest'
+  | 'ecotrack';
+
+/**
+ * Per-provider display + connect-form metadata. Drives the Transporteurs picker
+ * and the connect card so the form renders per provider WITHOUT branching in the
+ * component: `singleToken` hides the API-ID field (Maystro); `apiIdLabel`/
+ * `apiIdHint` relabel it (Ecotrack asks for the merchant's Ecotrack host, not an
+ * id). `label` replaces the former module-local COURIER_PROVIDER_LABEL constant.
+ * `tokenLabel`/`tokenHint` keep the (non-secret) copy provider-specific.
+ */
+export interface CourierProviderMeta {
+  id: CourierProviderId;
+  label: string;
+  /** Token-only provider: hide the API-ID field and gate submit on the token alone. */
+  singleToken: boolean;
+  /** Label for the first credential field (API ID by default). */
+  apiIdLabel?: string;
+  /** Hint under the first credential field. */
+  apiIdHint?: string;
+  /** Placeholder for the first credential field. */
+  apiIdPlaceholder?: string;
+  /** maxLength for the first credential field (Ecotrack host needs more room). */
+  apiIdMaxLength?: number;
+  /** Label for the token field. */
+  tokenLabel?: string;
+  /** Hint under the token field. */
+  tokenHint?: string;
+  /** Optional provider-specific note appended to the connect hint (e.g. where to
+   *  find the keys). Kept per-provider so the live Yalidine copy is unchanged. */
+  connectHintExtra?: string;
+}
+
+export const COURIER_PROVIDERS: CourierProviderMeta[] = [
+  {
+    id: 'yalidine',
+    label: 'Yalidine',
+    singleToken: false,
+    apiIdLabel: 'API ID',
+    apiIdHint: 'Identifiant API Yalidine (X-API-ID).',
+    apiIdPlaceholder: 'Ex. 12345678',
+    apiIdMaxLength: 64,
+    tokenLabel: 'API Token',
+    tokenHint: 'Jeton API Yalidine (X-API-TOKEN).',
+    connectHintExtra: ' (Développeurs → API)',
+  },
+  {
+    id: 'zrexpress',
+    label: 'ZR Express',
+    singleToken: false,
+    apiIdLabel: 'Token ID (key)',
+    apiIdHint: 'Identifiant (key) de votre espace ZR Express.',
+    apiIdPlaceholder: 'Ex. votre key',
+    tokenLabel: 'API Token',
+    tokenHint: 'Jeton API ZR Express.',
+  },
+  {
+    id: 'maystro',
+    label: 'Maystro',
+    // Token-only: Maystro authenticates with a single API token (no separate id).
+    singleToken: true,
+    tokenLabel: 'API Token',
+    tokenHint: 'Jeton API Maystro.',
+  },
+  {
+    id: 'noest',
+    label: 'Noest',
+    singleToken: false,
+    apiIdLabel: 'API ID',
+    apiIdHint: 'Identifiant API Noest.',
+    apiIdPlaceholder: 'Ex. votre identifiant',
+    tokenLabel: 'API Token',
+    tokenHint: 'Jeton API Noest.',
+  },
+  {
+    id: 'ecotrack',
+    label: 'Ecotrack',
+    singleToken: false,
+    // Ecotrack's "id" is the merchant's own Ecotrack domain/host, not a key.
+    apiIdLabel: 'Domaine Ecotrack',
+    apiIdHint: 'Votre domaine Ecotrack, ex. https://xxx.ecotrack.dz.',
+    apiIdPlaceholder: 'https://xxx.ecotrack.dz',
+    apiIdMaxLength: 256,
+    tokenLabel: 'API Token',
+    tokenHint: 'Jeton API Ecotrack.',
+  },
+];
+
+/** Look up a provider's metadata (falls back to Yalidine's for an unknown id). */
+export function courierProviderMeta(provider: CourierProviderId): CourierProviderMeta {
+  return COURIER_PROVIDERS.find(p => p.id === provider) ?? COURIER_PROVIDERS[0];
+}
+
+/** A provider's human label (used in FR copy + error messages). */
+export function courierProviderLabel(provider: CourierProviderId): string {
+  return courierProviderMeta(provider).label;
+}
 
 /**
  * Coarse per-parcel courier sub-state the backend persists on an order
@@ -2138,20 +2243,22 @@ function courierBase(slug: string, provider: CourierProviderId): string {
 function courierErrMessage(
   errCode: string,
   httpStatus: number,
-  fallbackMsg?: string
+  fallbackMsg?: string,
+  provider: CourierProviderId = 'yalidine'
 ): string {
+  const label = courierProviderLabel(provider);
   switch (errCode) {
     case 'invalid_credentials':
-      return 'Identifiants Yalidine refusés — vérifiez l’API ID et l’API Token, puis réessayez.';
+      return `Identifiants ${label} refusés — vérifiez l’API ID et l’API Token, puis réessayez.`;
     case 'rate_limited':
-      return 'Trop de requêtes vers Yalidine — patientez un instant avant de réessayer.';
+      return `Trop de requêtes vers ${label} — patientez un instant avant de réessayer.`;
     case 'courier_unreachable':
-      return 'Yalidine est injoignable pour le moment. Réessayez dans quelques minutes.';
+      return `${label} est injoignable pour le moment. Réessayez dans quelques minutes.`;
     case 'courier_bad_response':
     case 'courier_error':
-      return 'Réponse inattendue de Yalidine. Réessayez ; si ça persiste, contactez le support.';
+      return `Réponse inattendue de ${label}. Réessayez ; si ça persiste, contactez le support.`;
     case 'not_connected':
-      return 'Compte transporteur non connecté — connectez Yalidine d’abord.';
+      return `Compte transporteur non connecté — connectez ${label} d’abord.`;
     case 'not_shipped':
       return 'Cette commande n’a pas encore été expédiée.';
     case 'provider_mismatch':
@@ -2213,7 +2320,7 @@ export async function fetchCourierStatus(
     | null;
   if (!res.ok) {
     const { code, message } = courierErrParts(data);
-    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+    return { status: 'error', message: courierErrMessage(code, res.status, message, provider) };
   }
   return {
     status: 'ok',
@@ -2252,7 +2359,7 @@ export async function connectCourier(
     | null;
   if (!res.ok) {
     const { code, message } = courierErrParts(data);
-    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+    return { status: 'error', message: courierErrMessage(code, res.status, message, provider) };
   }
   return {
     status: 'ok',
@@ -2284,7 +2391,7 @@ export async function disconnectCourier(
     | null;
   if (!res.ok) {
     const { code, message } = courierErrParts(data);
-    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+    return { status: 'error', message: courierErrMessage(code, res.status, message, provider) };
   }
   return { status: 'ok' };
 }
@@ -2332,7 +2439,7 @@ export async function courierShip(
     | null;
   if (!res.ok) {
     const { code, message } = courierErrParts(data);
-    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+    return { status: 'error', message: courierErrMessage(code, res.status, message, provider) };
   }
   const cs = typeof data?.courierStatus === 'string' ? data.courierStatus : 'pending';
   return {
@@ -2382,7 +2489,7 @@ export async function courierSync(
     | null;
   if (!res.ok) {
     const { code, message } = courierErrParts(data);
-    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+    return { status: 'error', message: courierErrMessage(code, res.status, message, provider) };
   }
   const rawResults = Array.isArray(data?.results) ? (data.results as unknown[]) : [];
   const results: CourierSyncResult[] = [];
@@ -2447,7 +2554,7 @@ export async function courierRefresh(
     | null;
   if (!res.ok) {
     const { code, message } = courierErrParts(data);
-    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+    return { status: 'error', message: courierErrMessage(code, res.status, message, provider) };
   }
   const cs = typeof data?.courierStatus === 'string' ? data.courierStatus : '';
   return {
@@ -2490,7 +2597,7 @@ export async function courierFees(
     | null;
   if (!res.ok) {
     const { code, message } = courierErrParts(data);
-    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+    return { status: 'error', message: courierErrMessage(code, res.status, message, provider) };
   }
   return { status: 'ok', fees: data?.fees };
 }
@@ -2527,7 +2634,7 @@ export async function fetchCourierReference(
     | null;
   if (!res.ok) {
     const { code, message } = courierErrParts(data);
-    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+    return { status: 'error', message: courierErrMessage(code, res.status, message, provider) };
   }
   return {
     status: 'ok',

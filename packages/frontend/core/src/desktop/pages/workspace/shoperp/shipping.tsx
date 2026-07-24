@@ -6,6 +6,10 @@ import {
   btnStyle,
   C,
   connectCourier,
+  COURIER_PROVIDERS,
+  type CourierProviderId,
+  courierProviderLabel,
+  courierProviderMeta,
   COURIER_STATUS_COLORS,
   COURIER_STATUS_LABELS,
   type CourierStatus,
@@ -346,8 +350,6 @@ const AppVisibilityToggle = ({
 // inline errors not toasts) + the R15 studio patterns (Panel/Field/Banner/…).
 // ===========================================================================
 
-const COURIER_PROVIDER_LABEL = 'Yalidine';
-
 /** Per-shop pickup-wilaya memory (the backend ship route wants it per call; the
  *  sealed cred record deliberately does NOT store it). localStorage keeps the
  *  merchant from re-picking it on every visit — a pure client convenience. */
@@ -373,6 +375,12 @@ function writePickupWilaya(slug: string, wilaya: number): void {
 
 type ConnPhase = 'loading' | 'dark' | 'connected' | 'disconnected' | 'error';
 
+// ---- Provider picker + active-provider resolution (§F Option 1) --------------
+// The BE has NO "active provider" field, so on tab open we probe ALL providers'
+// status in parallel (fetchCourierStatus, cheap + BE-cached). The one returning
+// connected:true is preselected as active; if none is connected we default to
+// Yalidine (the live provider). Zero BE contract change — every provider already
+// answers on its own /courier/:provider route (404 → dark).
 const TransporteursTab = ({
   slug,
   settings,
@@ -386,6 +394,124 @@ const TransporteursTab = ({
   onWritesBlocked: () => void;
   onMutated?: () => void;
 }) => {
+  // The selected provider. Seeded to Yalidine (live) and re-seeded to whichever
+  // provider the fan-out reports connected. User selection wins after that.
+  const [provider, setProvider] = useState<CourierProviderId>('yalidine');
+  // Fan-out phase: while 'resolving' we haven't picked the active provider yet.
+  const [resolvePhase, setResolvePhase] = useState<'resolving' | 'ready'>('resolving');
+  // Whether the user has manually picked a provider (so a late fan-out result
+  // doesn't yank the selection out from under them).
+  const [userPicked, setUserPicked] = useState(false);
+
+  // Resolve the active provider once on mount via a status fan-out. We never
+  // surface an error here: a failed/dark probe just means "not this one" and we
+  // fall back to the Yalidine default so the live path is always reachable.
+  useEffect(() => {
+    let alive = true;
+    setResolvePhase('resolving');
+    void (async () => {
+      const results = await Promise.all(
+        COURIER_PROVIDERS.map(async p => {
+          const out = await fetchCourierStatus(slug, p.id);
+          return { id: p.id, connected: out.status === 'ok' && out.connected };
+        })
+      );
+      if (!alive) return;
+      // Preserve the metadata order (Yalidine first) when picking the active one.
+      const active = COURIER_PROVIDERS.find(p =>
+        results.some(r => r.id === p.id && r.connected)
+      );
+      // Only auto-select if the user hasn't already chosen a provider.
+      setUserPicked(picked => {
+        if (!picked && active) setProvider(active.id);
+        return picked;
+      });
+      setResolvePhase('ready');
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
+
+  const onPickProvider = useCallback((id: CourierProviderId) => {
+    setUserPicked(true);
+    setProvider(id);
+  }, []);
+
+  if (resolvePhase === 'resolving') {
+    return <LoadingRow label="Vérification du transporteur…" />;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <ProviderPicker provider={provider} onPick={onPickProvider} />
+      {/* key={provider} remounts the panel per provider so ALL per-provider
+          state (phase / enabled / wilayas / pickup) resets cleanly on switch —
+          and one dark provider never bleeds into another's panel. */}
+      <ProviderPanel
+        key={provider}
+        provider={provider}
+        slug={slug}
+        settings={settings}
+        readOnly={readOnly}
+        onWritesBlocked={onWritesBlocked}
+        onMutated={onMutated}
+      />
+    </div>
+  );
+};
+
+// ---- Provider selector (segmented chips, reuses the TABS chip pattern) -------
+
+const ProviderPicker = ({
+  provider,
+  onPick,
+}: {
+  provider: CourierProviderId;
+  onPick: (id: CourierProviderId) => void;
+}) => {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span style={labelStyle}>Transporteur</span>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {COURIER_PROVIDERS.map(p => (
+          <button
+            key={p.id}
+            type="button"
+            style={providerChipStyle(provider === p.id)}
+            aria-pressed={provider === p.id}
+            onClick={() => onPick(p.id)}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// ---- One provider's panel — the former TransporteursTab body, now scoped to a
+// single provider. Owns its own connect/status/dark state; because the parent
+// remounts it via key={provider}, a switch fully resets it. A 'dark' probe here
+// renders "bientôt" INSIDE this panel only (the tab + picker stay visible). -----
+
+const ProviderPanel = ({
+  provider,
+  slug,
+  settings,
+  readOnly,
+  onWritesBlocked,
+  onMutated,
+}: {
+  provider: CourierProviderId;
+  slug: string;
+  settings?: ErpSettings;
+  readOnly: boolean;
+  onWritesBlocked: () => void;
+  onMutated?: () => void;
+}) => {
+  const label = courierProviderLabel(provider);
   const [phase, setPhase] = useState<ConnPhase>('loading');
   const [enabled, setEnabled] = useState(false);
   const [statusErr, setStatusErr] = useState('');
@@ -406,7 +532,7 @@ const TransporteursTab = ({
   const probe = useCallback(async () => {
     setPhase('loading');
     setStatusErr('');
-    const out = await fetchCourierStatus(slug);
+    const out = await fetchCourierStatus(slug, provider);
     if (out.status === 'dark') {
       setPhase('dark');
       return;
@@ -418,7 +544,7 @@ const TransporteursTab = ({
     }
     setEnabled(out.enabled);
     setPhase(out.connected ? 'connected' : 'disconnected');
-  }, [slug]);
+  }, [slug, provider]);
 
   useEffect(() => {
     void probe();
@@ -426,7 +552,7 @@ const TransporteursTab = ({
 
   const loadWilayas = useCallback(async () => {
     setWilayasPhase('loading');
-    const out = await fetchCourierReference(slug, 'wilayas');
+    const out = await fetchCourierReference(slug, 'wilayas', undefined, provider);
     if (out.status === 'ok') {
       const list = parseCourierWilayas(out.items);
       setWilayas(list);
@@ -443,7 +569,7 @@ const TransporteursTab = ({
     } else {
       setWilayasPhase('error');
     }
-  }, [slug]);
+  }, [slug, provider]);
 
   // Load the wilaya reference once we know a connection exists (skip otherwise).
   useEffect(() => {
@@ -481,17 +607,18 @@ const TransporteursTab = ({
     return <LoadingRow label="Vérification du transporteur…" />;
   }
 
-  // Feature dark (flag off on this server) — a calm "bientôt", never an error.
+  // Feature dark (flag off for THIS provider on this server) — a calm "bientôt",
+  // never an error, scoped to this panel so the picker + other providers persist.
   if (phase === 'dark') {
     return (
-      <Panel title="Transporteurs">
+      <Panel title={label}>
         <EmptyNote>
           <span aria-hidden style={{ fontSize: 22, display: 'block', marginBottom: 6 }}>
             🔗
           </span>
-          Intégration transporteur bientôt disponible. Connectez bientôt votre
-          compte Yalidine pour expédier vos commandes et suivre les colis
-          automatiquement — sans quitter votre tableau de bord.
+          Intégration {label} bientôt disponible. Connectez bientôt votre compte{' '}
+          {label} pour expédier vos commandes et suivre les colis automatiquement
+          — sans quitter votre tableau de bord.
         </EmptyNote>
       </Panel>
     );
@@ -513,6 +640,7 @@ const TransporteursTab = ({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <ConnectCard
+        provider={provider}
         slug={slug}
         connected={connected}
         enabled={enabled}
@@ -531,8 +659,14 @@ const TransporteursTab = ({
             onPickupChange={onPickupChange}
             onRetryWilayas={() => void loadWilayas()}
           />
-          <FeesPreview slug={slug} wilayas={wilayas} pickupWilaya={pickupWilaya} />
+          <FeesPreview
+            provider={provider}
+            slug={slug}
+            wilayas={wilayas}
+            pickupWilaya={pickupWilaya}
+          />
           <CourierOrders
+            provider={provider}
             slug={slug}
             settings={settings}
             pickupWilaya={pickupWilaya}
@@ -549,6 +683,7 @@ const TransporteursTab = ({
 // ---- Connect / status / disconnect card (R16 connections-card state machine) --
 
 const ConnectCard = ({
+  provider,
   slug,
   connected,
   enabled,
@@ -557,6 +692,7 @@ const ConnectCard = ({
   onConnected,
   onDisconnected,
 }: {
+  provider: CourierProviderId;
   slug: string;
   connected: boolean;
   enabled: boolean;
@@ -565,6 +701,11 @@ const ConnectCard = ({
   onConnected: (enabled: boolean) => void;
   onDisconnected: () => void;
 }) => {
+  const meta = courierProviderMeta(provider);
+  const label = meta.label;
+  const singleToken = meta.singleToken;
+  const apiIdLabel = meta.apiIdLabel ?? 'API ID';
+  const tokenLabel = meta.tokenLabel ?? 'API Token';
   const [apiId, setApiId] = useState('');
   const [apiToken, setApiToken] = useState('');
   const [busy, setBusy] = useState(false);
@@ -572,6 +713,10 @@ const ConnectCard = ({
   const [confirmDisc, setConfirmDisc] = useState(false);
 
   const disabled = readOnly || busy;
+  // Missing-credentials gate: token-only providers (Maystro) ignore the API ID.
+  const missingCreds = singleToken
+    ? !apiToken.trim()
+    : !apiId.trim() || !apiToken.trim();
 
   const submit = useCallback(async () => {
     if (disabled) {
@@ -580,13 +725,19 @@ const ConnectCard = ({
     }
     const id = apiId.trim();
     const token = apiToken.trim();
-    if (!id || !token) {
-      setErr('Saisissez votre API ID et votre API Token Yalidine.');
+    // singleToken providers require only the token; others need both fields.
+    if (singleToken ? !token : !id || !token) {
+      setErr(
+        singleToken
+          ? `Saisissez votre API Token ${label}.`
+          : `Saisissez votre API ID et votre API Token ${label}.`
+      );
       return;
     }
     setErr(null);
     setBusy(true);
-    const out = await connectCourier(slug, id, token);
+    // For a token-only provider send an empty apiId (the BE ignores it).
+    const out = await connectCourier(slug, singleToken ? '' : id, token, provider);
     if (out.status === 'ok') {
       setApiId('');
       setApiToken('');
@@ -598,7 +749,7 @@ const ConnectCard = ({
       setErr(out.message);
     }
     setBusy(false);
-  }, [disabled, readOnly, apiId, apiToken, slug, onConnected, onWritesBlocked]);
+  }, [disabled, readOnly, singleToken, label, apiId, apiToken, slug, provider, onConnected, onWritesBlocked]);
 
   const doDisconnect = useCallback(async () => {
     if (disabled) {
@@ -607,7 +758,7 @@ const ConnectCard = ({
     }
     setErr(null);
     setBusy(true);
-    const out = await disconnectCourier(slug);
+    const out = await disconnectCourier(slug, provider);
     if (out.status === 'ok') {
       setConfirmDisc(false);
       onDisconnected();
@@ -617,11 +768,11 @@ const ConnectCard = ({
       setErr(out.message);
     }
     setBusy(false);
-  }, [disabled, readOnly, slug, onDisconnected, onWritesBlocked]);
+  }, [disabled, readOnly, slug, provider, onDisconnected, onWritesBlocked]);
 
   if (connected) {
     return (
-      <Panel title={`${COURIER_PROVIDER_LABEL} · connecté`}>
+      <Panel title={`${label} · connecté`}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div
             style={{
@@ -634,7 +785,7 @@ const ConnectCard = ({
             <ConnectedBadge />
             <span style={{ fontSize: 12.5, color: C.muted }}>
               {enabled
-                ? 'Votre compte Yalidine est actif — vous pouvez expédier vos commandes.'
+                ? `Votre compte ${label} est actif — vous pouvez expédier vos commandes.`
                 : 'Compte connecté mais désactivé.'}
             </span>
             <span style={{ flex: 1 }} />
@@ -651,7 +802,7 @@ const ConnectCard = ({
           </div>
           {confirmDisc ? (
             <Banner tone="warn">
-              Déconnecter Yalidine ? Vos clés seront supprimées ; les commandes
+              Déconnecter {label} ? Vos clés seront supprimées ; les commandes
               déjà expédiées gardent leur suivi.
               <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
                 <button
@@ -684,27 +835,31 @@ const ConnectCard = ({
   }
 
   return (
-    <Panel title={`Connecter ${COURIER_PROVIDER_LABEL}`}>
+    <Panel title={`Connecter ${label}`}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={hintStyle}>
-          Collez vos identifiants API depuis votre espace Yalidine (Développeurs →
-          API). Vos clés sont chiffrées et ne sont jamais réaffichées. Rana
-          nخزنوهم مشفّرين — matbanwelkch.
+          Collez vos identifiants API depuis votre espace {label}
+          {meta.connectHintExtra ?? ''}. Vos clés sont chiffrées et ne sont
+          jamais réaffichées. Rana nخزنوهم مشفّرين — matbanwelkch.
+          {singleToken ? ' Ce transporteur ne demande qu’un token.' : ''}
         </div>
         <div style={twoColStyle}>
-          <Field label="API ID" hint="Identifiant API Yalidine (X-API-ID).">
-            <input
-              style={inputStyle}
-              value={apiId}
-              maxLength={64}
-              disabled={disabled}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="Ex. 12345678"
-              onChange={e => setApiId(e.target.value)}
-            />
-          </Field>
-          <Field label="API Token" hint="Jeton API Yalidine (X-API-TOKEN).">
+          {/* Token-only providers (Maystro) hide the API-ID field entirely. */}
+          {singleToken ? null : (
+            <Field label={apiIdLabel} hint={meta.apiIdHint}>
+              <input
+                style={inputStyle}
+                value={apiId}
+                maxLength={meta.apiIdMaxLength ?? 64}
+                disabled={disabled}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={meta.apiIdPlaceholder ?? ''}
+                onChange={e => setApiId(e.target.value)}
+              />
+            </Field>
+          )}
+          <Field label={tokenLabel} hint={meta.tokenHint}>
             <input
               style={inputStyle}
               type="password"
@@ -721,8 +876,8 @@ const ConnectCard = ({
         {err ? <Banner tone="error">{err}</Banner> : null}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button
-            style={btnStyle('primary', disabled || !apiId.trim() || !apiToken.trim())}
-            disabled={disabled || !apiId.trim() || !apiToken.trim()}
+            style={btnStyle('primary', disabled || missingCreds)}
+            disabled={disabled || missingCreds}
             onClick={() => void submit()}
           >
             {busy ? (
@@ -730,7 +885,7 @@ const ConnectCard = ({
                 <Spinner dark /> Connexion…
               </>
             ) : (
-              'Connecter Yalidine'
+              `Connecter ${label}`
             )}
           </button>
         </div>
@@ -796,14 +951,17 @@ const PickupWilayaCard = ({
 // ---- Fees preview (from/to wilaya → live quote) -----------------------------
 
 const FeesPreview = ({
+  provider,
   slug,
   wilayas,
   pickupWilaya,
 }: {
+  provider: CourierProviderId;
   slug: string;
   wilayas: CourierWilaya[];
   pickupWilaya: number | null;
 }) => {
+  const label = courierProviderLabel(provider);
   const [toWilaya, setToWilaya] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
@@ -822,22 +980,22 @@ const FeesPreview = ({
     setErr(null);
     setResult(null);
     setBusy(true);
-    const out = await courierFees(slug, pickupWilaya, toWilaya);
+    const out = await courierFees(slug, pickupWilaya, toWilaya, provider);
     if (out.status === 'ok') {
-      setResult(summarizeFees(out.fees));
+      setResult(summarizeFees(out.fees, label));
     } else if (out.status === 'dark') {
       setErr('Intégration transporteur indisponible sur ce serveur.');
     } else {
       setErr(out.message);
     }
     setBusy(false);
-  }, [busy, pickupWilaya, toWilaya, slug]);
+  }, [busy, pickupWilaya, toWilaya, slug, provider, label]);
 
   return (
     <Panel title="Estimer les frais">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={hintStyle}>
-          Un aperçu rapide du tarif de livraison Yalidine entre deux wilayas.
+          Un aperçu rapide du tarif de livraison {label} entre deux wilayas.
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div style={{ minWidth: 200, flex: '1 1 200px' }}>
@@ -879,12 +1037,14 @@ const FeesPreview = ({
 };
 
 /**
- * Fold Yalidine's fees payload into one readable FR line. The shape is a
+ * Fold a provider's fees payload into one readable FR line. The shape is a
  * per-commune matrix ({ delivery_fee, cod, … } or nested {home,desk}); we probe
  * the common numeric fields defensively and show a from…to range in DZD, or a
- * plain "reçu" when the shape is unfamiliar (never throws).
+ * plain "reçu" when the shape is unfamiliar (never throws). Provider-agnostic:
+ * the defensive walk works for every courier's shape; `label` only names the
+ * source in the unfamiliar-shape fallback.
  */
-function summarizeFees(fees: unknown): string {
+function summarizeFees(fees: unknown, label: string): string {
   const nums: number[] = [];
   const walk = (v: unknown, depth: number) => {
     if (depth > 4 || v == null) return;
@@ -907,7 +1067,7 @@ function summarizeFees(fees: unknown): string {
   };
   walk(fees, 0);
   if (nums.length === 0) {
-    return 'Tarif reçu de Yalidine — variable selon la commune.';
+    return `Tarif reçu de ${label} — variable selon la commune.`;
   }
   const min = Math.min(...nums);
   const max = Math.max(...nums);
@@ -919,6 +1079,7 @@ function summarizeFees(fees: unknown): string {
 // ---- Courier orders: ship shippable orders + track shipped ones -------------
 
 const CourierOrders = ({
+  provider,
   slug,
   settings,
   pickupWilaya,
@@ -926,6 +1087,7 @@ const CourierOrders = ({
   onWritesBlocked,
   onMutated,
 }: {
+  provider: CourierProviderId;
   slug: string;
   settings?: ErpSettings;
   pickupWilaya: number | null;
@@ -933,6 +1095,7 @@ const CourierOrders = ({
   onWritesBlocked: () => void;
   onMutated?: () => void;
 }) => {
+  const label = courierProviderLabel(provider);
   const [orders, setOrders] = useState<ErpOrder[] | null>(null);
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errMsg, setErrMsg] = useState('');
@@ -993,7 +1156,7 @@ const CourierOrders = ({
       setBanner(null);
       const isStopdesk =
         String((order as Record<string, unknown>).deliveryMode || '').toLowerCase() === 'desk';
-      const out = await courierShip(slug, oid, pickupWilaya, { isStopdesk });
+      const out = await courierShip(slug, oid, pickupWilaya, { isStopdesk }, provider);
       if (out.status === 'ok') {
         if (out.persisted === false) {
           setRowNotice({
@@ -1018,7 +1181,7 @@ const CourierOrders = ({
       }
       setBusyId(null);
     },
-    [readOnly, pickupWilaya, slug, load, onMutated, onWritesBlocked]
+    [readOnly, pickupWilaya, slug, provider, load, onMutated, onWritesBlocked]
   );
 
   const onRefreshOne = useCallback(
@@ -1027,10 +1190,12 @@ const CourierOrders = ({
       if (!oid) return;
       setBusyId(oid);
       setRowNotice(null);
-      const out = await courierRefresh(slug, oid);
+      const out = await courierRefresh(slug, oid, provider);
       if (out.status === 'ok') {
-        const label = out.courierStatus ? COURIER_STATUS_LABELS[out.courierStatus] : 'à jour';
-        setRowNotice({ id: oid, text: `Suivi : ${label}.` });
+        const statusLabel = out.courierStatus
+          ? COURIER_STATUS_LABELS[out.courierStatus]
+          : 'à jour';
+        setRowNotice({ id: oid, text: `Suivi : ${statusLabel}.` });
         await load();
         onMutated?.();
       } else if (out.status === 'dark') {
@@ -1040,7 +1205,7 @@ const CourierOrders = ({
       }
       setBusyId(null);
     },
-    [slug, load, onMutated]
+    [slug, provider, load, onMutated]
   );
 
   const onSyncAll = useCallback(async () => {
@@ -1048,7 +1213,7 @@ const CourierOrders = ({
     setSyncing(true);
     setBanner(null);
     setRowNotice(null);
-    const out = await courierSync(slug);
+    const out = await courierSync(slug, undefined, provider);
     if (out.status === 'ok') {
       setBanner({
         tone: out.updated > 0 ? 'ok' : 'info',
@@ -1067,7 +1232,7 @@ const CourierOrders = ({
       setBanner({ tone: 'error', text: out.message });
     }
     setSyncing(false);
-  }, [syncing, slug, load, onMutated]);
+  }, [syncing, slug, provider, load, onMutated]);
 
   if (phase === 'loading' && orders === null) {
     return <LoadingRow label="Chargement des commandes…" />;
@@ -1099,7 +1264,7 @@ const CourierOrders = ({
         {toShip.length === 0 ? (
           <EmptyNote>
             Aucune commande prête à expédier. Confirmez une commande (onglet
-            Commandes) pour l’envoyer via Yalidine.
+            Commandes) pour l’envoyer via {label}.
           </EmptyNote>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1124,7 +1289,7 @@ const CourierOrders = ({
                       title={
                         !pickupWilaya
                           ? 'Choisissez votre wilaya de départ'
-                          : 'Créer le colis Yalidine'
+                          : `Créer le colis ${label}`
                       }
                     >
                       {busy ? (
@@ -1159,7 +1324,7 @@ const CourierOrders = ({
             style={miniBtnStyle('secondary', syncing)}
             disabled={syncing}
             onClick={() => void onSyncAll()}
-            title="Interroger Yalidine pour tous les colis en cours"
+            title={`Interroger ${label} pour tous les colis en cours`}
           >
             {syncing ? (
               <>
@@ -1228,7 +1393,7 @@ const CourierOrders = ({
                       style={miniBtnStyle('secondary', busy)}
                       disabled={busy}
                       onClick={() => void onRefreshOne(o)}
-                      title="Interroger Yalidine pour ce colis"
+                      title={`Interroger ${label} pour ce colis`}
                     >
                       {busy ? (
                         <>
@@ -2419,6 +2584,24 @@ function subTabStyle(active: boolean): CSSProperties {
     gap: 6,
     color: active ? C.text : C.muted,
     transition: 'color 160ms ease, border-color 160ms ease',
+  };
+}
+
+// Provider selector chip — a rounded segmented control matching the studio's
+// chip register (compare modePillStyle); the active provider fills with accent.
+function providerChipStyle(active: boolean): CSSProperties {
+  return {
+    appearance: 'none',
+    cursor: 'pointer',
+    borderRadius: 999,
+    padding: '6px 14px',
+    fontSize: 12.5,
+    fontWeight: 700,
+    whiteSpace: 'nowrap',
+    color: active ? '#fff' : C.muted,
+    background: active ? C.accent : 'transparent',
+    border: `1px solid ${active ? C.accent : C.border}`,
+    transition: 'background 160ms ease, color 160ms ease, border-color 160ms ease',
   };
 }
 

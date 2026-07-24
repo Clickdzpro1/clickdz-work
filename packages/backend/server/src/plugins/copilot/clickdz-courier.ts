@@ -33,8 +33,20 @@ import type { TrackingStatus } from './clickdz-erp-shipping';
 // per-provider so multi-provider is a later, cheap extension.
 // ---------------------------------------------------------------------------
 
-/** Every courier ClickDz can integrate (Yalidine live; ZR/Maystro future). */
-export const COURIER_PROVIDERS = ['yalidine', 'zrexpress', 'maystro'] as const;
+// Every courier ClickDz can integrate. `yalidine` is LIVE. The rest ship DARK
+// (R17-PR-D): each is registered but gated OFF per-provider by the controller
+// (env `CDZ_COURIER_<ID>=1`) until its BYO creds are validated against the live
+// API — so an un-flagged provider 404s exactly like an unregistered one, and
+// enabling one is a flag flip, not a deploy. Ecotrack is a GENERIC provider: one
+// impl fronts the ~72 couriers that run on the Ecotrack platform, keyed by the
+// merchant's own tenant host (see clickdz-courier-ecotrack.ts).
+export const COURIER_PROVIDERS = [
+  'yalidine',
+  'zrexpress',
+  'maystro',
+  'noest',
+  'ecotrack',
+] as const;
 export type CourierProviderId = (typeof COURIER_PROVIDERS)[number];
 
 /** Type guard: a caller-supplied string is a known provider id. */
@@ -86,9 +98,15 @@ export interface CommuneRef {
   isDeliverable?: boolean;
 }
 
-/** One stop-desk center (desk-pickup office) for a wilaya. */
+/**
+ * One stop-desk center (desk-pickup office) for a wilaya. `centerId` is
+ * `number | string`: Yalidine/ZR use numeric desk ids, but NOEST identifies a
+ * desk by an alphanumeric `station_code` (e.g. "16A") — so the shared shape
+ * carries either, and each provider reads it back in its own createParcel
+ * mapping (a numeric-only provider coerces via its own reader).
+ */
 export interface CenterRef {
-  centerId: number;
+  centerId: number | string;
   name: string;
   address?: string;
   communeId?: number;
@@ -147,9 +165,14 @@ export interface ParcelInput {
   productList: string;
   /** COD amount to collect = product subtotal, NOT total-with-shipping. */
   price: number;
-  /** Desk pickup vs home delivery; desk requires a stopdeskId. */
+  /**
+   * Desk pickup vs home delivery; desk requires a stopdeskId. The id is
+   * `number | string` for the same reason as CenterRef.centerId (NOEST uses an
+   * alphanumeric station_code). A numeric-only provider coerces via its own
+   * reader (e.g. Yalidine's `n()` maps a non-numeric to 0/ignored).
+   */
   isStopdesk?: boolean;
-  stopdeskId?: number;
+  stopdeskId?: number | string;
   /** Merchant absorbs delivery when true. */
   freeshipping?: boolean;
   /** Parcel weight in KG (>5KG incurs oversize fees at some couriers). */
@@ -459,6 +482,17 @@ export function normalizeYalidineStatus(raw: unknown): CourierStatus {
 export interface CourierProvider {
   /** The provider id — matches the credential record's `provider` field. */
   readonly id: CourierProviderId;
+
+  /**
+   * Whether this provider needs BOTH credentials. `true` (Yalidine/ZR/NOEST:
+   * id+token; Ecotrack: host+token) ⇒ the connect route requires and seals
+   * both, and unseal fails if either is missing. `false` (Maystro: a single
+   * `Authorization: Token` — `apiId` is unused/optional) ⇒ the controller
+   * requires only `apiToken` and tolerates an empty `apiId`. This is the ONE
+   * hook that lets a single-credential provider connect without loosening the
+   * two-cred invariant for everyone else.
+   */
+  readonly requiresApiId: boolean;
 
   /** Create one parcel from a provider-agnostic order shape (PR-B action). */
   createParcel(

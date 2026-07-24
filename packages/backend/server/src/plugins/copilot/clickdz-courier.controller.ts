@@ -44,11 +44,17 @@ import {
   type CourierStatus,
   type ParcelInput,
 } from './clickdz-courier';
-// Side-effect + value import: loading this module registers the Yalidine
-// provider into the core registry (so getCourierProvider('yalidine') resolves).
-// Referenced as a value below (a defensive touch) so the import can never be
-// tree-shaken to a type-only elision that would skip the registration.
+// Side-effect + value import: loading a provider module registers it into the
+// core registry (so getCourierProvider(id) resolves). Referenced as a value in
+// the constructor (a defensive touch) so the import can never be tree-shaken to
+// a type-only elision that would skip the registration. Yalidine is LIVE; the
+// R17-PR-D providers are registered too but gated OFF per-provider (see
+// providerAllowed) so they 404 until their CDZ_COURIER_<ID> flag is set.
 import { yalidineProvider } from './clickdz-courier-yalidine';
+import { zrexpressProvider } from './clickdz-courier-zrexpress';
+import { maystroProvider } from './clickdz-courier-maystro';
+import { noestProvider } from './clickdz-courier-noest';
+import { ecotrackProvider } from './clickdz-courier-ecotrack';
 // R17 PR-B — the per-slug Data API write token (HMAC of `appdata:{slug}`). The
 // SAME token the bridge re-derives for every ERP write; '' when the deploy has
 // no CDZ_DATA_SECRET (⇒ admin writes unavailable, typed 501). Value-imported.
@@ -143,6 +149,34 @@ const publishedAppsKey = (ownerId: string) =>
 const courierCredKey = (slug: string, provider: string) =>
   `clickdz:ship:courier:${slug}:${provider}`;
 
+// -------------------------------------------------------------------------
+// SHIP IDEMPOTENCY (Waybill F-2). Creating a parcel at the courier is the one
+// IRREVERSIBLE side effect in this controller (a COD-dominant market → a
+// duplicate parcel = a duplicate delivery + double cash to collect). Two keys
+// harden it beyond the order's own `trackingNumber`:
+//
+//  • shipLockKey — a short-lived NX lock per (slug, order) held across the
+//    create+persist critical section. Closes the TOCTOU where two concurrent
+//    ship calls both read an empty trackingNumber and both create a parcel.
+//  • shipOrphanKey — when the parcel WAS created but persisting the tracking
+//    onto the order failed (data-API hiccup), we stash the tracking here so a
+//    later re-ship SHORT-CIRCUITS to it instead of creating a second parcel.
+//    Longer TTL than the lock (the order may stay un-persisted for a while);
+//    cleared on a successful persist.
+// Both are keyed by the order's server id (recId), the same id the tracking is
+// persisted under. Fail-soft: a Redis hiccup on either never blocks a ship.
+// -------------------------------------------------------------------------
+const shipLockKey = (slug: string, provider: string, recId: string) =>
+  `clickdz:ship:lock:${slug}:${provider}:${recId}`;
+const shipOrphanKey = (slug: string, provider: string, recId: string) =>
+  `clickdz:ship:orphan:${slug}:${provider}:${recId}`;
+// Lock TTL: comfortably longer than one create+persist round-trip (provider
+// 15s abort + a data write) yet short enough to auto-heal a crashed holder.
+const SHIP_LOCK_TTL_SEC = 45;
+// Orphan TTL: the window in which a re-ship should reuse a created-but-unsaved
+// tracking rather than re-create. 24h is ample for a merchant to retry.
+const SHIP_ORPHAN_TTL_SEC = 24 * 60 * 60;
+
 // Short-TTL reference cache (wilayas/communes/centers) to respect Yalidine's
 // 5/s..10k/day limits — reference data changes rarely. Communes/centers are
 // per-wilaya, so the wilaya id is folded into the key.
@@ -183,6 +217,12 @@ const ERP_MAX_WRITE_BYTES = 8 * 1024 - 128;
 // The delivered ERP order status (French) — the one that owes a COD marker. The
 // exact literal the shop template + bridge use (Shipping.ORDER_STATUSES[3]).
 const ORDER_STATUS_DELIVERED = 'Livrée';
+// The returned ERP order status (French) — the other TERMINAL canonical status
+// (Shipping.ORDER_STATUSES[4]). Used with ORDER_STATUS_DELIVERED to detect an
+// order a human already settled via the Commandes tab (erpOrderStatus advances
+// the canonical `status` but does NOT set `courierStatus`), so a later courier
+// poll must not regress it (Waybill F-3).
+const ORDER_STATUS_RETURNED = 'Retournée';
 // Bounded fan-out for a batch sync: cap how many non-terminal parcels we poll in
 // one call (each is a live provider round-trip + a data write) so one call can
 // never burst Yalidine's 5/s..10k/day limits or run unbounded. A merchant with
@@ -362,9 +402,14 @@ export class ClickDzCourierController {
   // the sealed courier records + reference cache. @Global provider ⇒ no module
   // wiring. Same injection style as clickdz-bridge.controller.ts.
   constructor(private readonly redis: CacheRedis) {
-    // Defensive value-touch of the Yalidine provider so its self-registration
-    // import is never elided; the registry lookup below is the real path.
+    // Defensive value-touch of every provider so its self-registration import is
+    // never elided; the registry lookup below is the real path. Yalidine is LIVE;
+    // the rest are registered-but-dark (providerAllowed gates them).
     void yalidineProvider;
+    void zrexpressProvider;
+    void maystroProvider;
+    void noestProvider;
+    void ecotrackProvider;
   }
 
   // -------------------------------------------------------------------------
@@ -387,20 +432,39 @@ export class ClickDzCourierController {
 
   /**
    * Resolve the :provider path segment to a concrete CourierProvider, or throw a
-   * typed NotFound. An unknown/unimplemented provider (e.g. zrexpress/maystro
-   * until PR-D) 404s — byte-identical to the route not existing for that
-   * provider. The credential record's key is per-provider, so this also scopes
-   * the record namespace.
+   * typed NotFound. An unknown provider, or a registered-but-DARK one (its
+   * per-provider flag is off), 404s — byte-identical to the route not existing
+   * for that provider. The credential record's key is per-provider, so this also
+   * scopes the record namespace.
    */
   private resolveProviderOr404(provider: string): CourierProvider {
     if (!isCourierProviderId(provider)) {
       throw new NotFound(`unknown courier provider "${provider}"`);
+    }
+    if (!this.providerAllowed(provider)) {
+      // Registered but dark → 404 (same body as unregistered): never reveals
+      // that an un-flagged provider exists. Enabling = a flag flip, not a deploy.
+      throw new NotFound(`courier provider "${provider}" is not available`);
     }
     const impl = getCourierProvider(provider);
     if (!impl) {
       throw new NotFound(`courier provider "${provider}" is not available`);
     }
     return impl;
+  }
+
+  /**
+   * Per-provider DARK gate (R17-PR-D). Yalidine is grandfathered ON — it went
+   * live in R17 under CDZ_COURIERS_ENABLED alone, so its live behavior is
+   * byte-unchanged. Every PR-D provider (zrexpress/maystro/noest/ecotrack)
+   * requires its OWN `CDZ_COURIER_<ID>=1` flag, so each ships dark until its BYO
+   * creds are validated against the live API; an un-flagged provider is a typed
+   * 404, identical to being unregistered. Read from env each call so a flag
+   * flips a provider live WITHOUT a code change (matches the house '1' idiom).
+   */
+  private providerAllowed(id: CourierProviderId): boolean {
+    if (id === 'yalidine') return true;
+    return (process.env[`CDZ_COURIER_${id.toUpperCase()}`] || '') === '1';
   }
 
   // -------------------------------------------------------------------------
@@ -535,14 +599,20 @@ export class ClickDzCourierController {
    */
   private async resolveCreds(
     slug: string,
-    provider: string
+    provider: CourierProvider
   ): Promise<CourierCredentials | null> {
-    const rec = await this.readCredRecord(slug, provider);
+    const rec = await this.readCredRecord(slug, provider.id);
     if (!rec) return null;
     const apiId = openSecret(rec.apiIdSealed);
     const apiToken = openSecret(rec.apiTokenSealed);
-    if (!apiId || !apiToken) return null;
-    return { apiId, apiToken };
+    // apiToken is ALWAYS required. apiId is required only for providers that
+    // declare it (requiresApiId) — a token-only provider (Maystro) sealed an
+    // empty apiId at connect, so openSecret returns '' here, which is valid.
+    // openSecret returns null only on a real unseal failure (tampered / rotated
+    // key); '' vs null are distinct, so we test for null explicitly.
+    if (apiToken === null) return null;
+    if (provider.requiresApiId && !apiId) return null;
+    return { apiId: apiId ?? '', apiToken };
   }
 
   // =========================================================================
@@ -570,8 +640,16 @@ export class ClickDzCourierController {
 
     const apiId = str(body?.apiId).trim();
     const apiToken = str(body?.apiToken).trim();
-    if (!apiId || !apiToken) {
-      throw new BadRequest('apiId and apiToken are required');
+    // apiToken is always required. apiId is required only for providers that
+    // declare requiresApiId (Yalidine/ZR/NOEST id+token; Ecotrack host+token).
+    // A token-only provider (Maystro) connects with just the token — apiId may
+    // be blank and is sealed as '' so the record shape stays uniform.
+    if (!apiToken || (provider.requiresApiId && !apiId)) {
+      throw new BadRequest(
+        provider.requiresApiId
+          ? 'apiId and apiToken are required'
+          : 'apiToken is required'
+      );
     }
     if (apiId.length > API_ID_MAX || apiToken.length > API_TOKEN_MAX) {
       throw new BadRequest('credentials too long');
@@ -697,7 +775,7 @@ export class ClickDzCourierController {
       throw new BadRequest('from_wilaya and to_wilaya are required (numeric)');
     }
 
-    const creds = await this.resolveCreds(slug, provider.id);
+    const creds = await this.resolveCreds(slug, provider);
     if (!creds) {
       // No usable connection — typed 400 so the FE prompts a (re)connect. Does
       // not distinguish "never connected" from "seal unreadable" (both = fix by
@@ -770,7 +848,7 @@ export class ClickDzCourierController {
     }
 
     // Cold: need a live connection to fetch from the courier.
-    const creds = await this.resolveCreds(slug, provider.id);
+    const creds = await this.resolveCreds(slug, provider);
     if (!creds) {
       throw new BadRequest('not_connected');
     }
@@ -1121,7 +1199,7 @@ export class ClickDzCourierController {
     }
 
     // Resolve the connection (unsealed only here, after the ownership gate).
-    const creds = await this.resolveCreds(slug, provider.id);
+    const creds = await this.resolveCreds(slug, provider);
     if (!creds) {
       throw new BadRequest('not_connected');
     }
@@ -1159,67 +1237,178 @@ export class ClickDzCourierController {
       };
     }
 
-    // Map order → parcel; a missing required field is a client-fixable 400.
-    const mapped = this.orderToParcel(order, body);
-    if (!mapped.ok) {
-      res.status(400).json({ error: 'invalid_order', field: mapped.field });
-      return;
+    // IDEMPOTENCY (orphan reuse, F-2): a prior ship may have created the parcel
+    // at the courier but failed to persist the tracking onto the order (a
+    // data-API hiccup / record-too-big). We stashed that tracking under
+    // shipOrphanKey; reuse it now instead of creating a SECOND COD parcel. A
+    // Redis miss just falls through. Best-effort re-persist so the fast-path
+    // (order.trackingNumber) takes over next time; we return the tracking
+    // regardless so the merchant never loses it.
+    let orphanTracking = '';
+    try {
+      orphanTracking = str(
+        await this.redis.get(shipOrphanKey(slug, provider.id, recId))
+      ).trim();
+    } catch {
+      orphanTracking = '';
+    }
+    if (orphanTracking) {
+      const healed: ErpRecord = {
+        ...order,
+        courierProvider: provider.id,
+        trackingNumber: orphanTracking,
+        courierStatus: (str(order.courierStatus) || 'pending') as CourierStatus,
+      };
+      delete (healed as { createdAt?: unknown }).createdAt;
+      let persisted = false;
+      if (
+        Buffer.byteLength(JSON.stringify(healed), 'utf8') <= ERP_MAX_WRITE_BYTES
+      ) {
+        const reSaved = await this.erpPutRecord(
+          slug,
+          'orders',
+          recId,
+          healed,
+          token
+        );
+        persisted = reSaved.ok;
+        if (persisted) {
+          try {
+            await this.redis.del(shipOrphanKey(slug, provider.id, recId));
+          } catch {
+            /* fail-soft: orphan clears on TTL anyway */
+          }
+        }
+      }
+      return {
+        ok: true,
+        tracking: orphanTracking,
+        ...(str(order.labelUrl) ? { label: str(order.labelUrl) } : {}),
+        courierStatus: str(order.courierStatus) || 'pending',
+        alreadyShipped: true,
+        persisted,
+      };
     }
 
-    // Create the parcel. Any provider failure is typed + passthrough; the order
-    // is left UNTOUCHED (we only write on a real tracking number).
-    const created = await provider.createParcel(creds, mapped.parcel);
-    if (!created.ok) {
-      writeCourierError(res, created);
-      return;
+    // CONCURRENCY LOCK (F-2): the order's own `trackingNumber` is written only
+    // AFTER the courier round-trip, so it cannot serialize two simultaneous ship
+    // calls — both would read it empty and both create a parcel. Hold a short NX
+    // lock (per slug+provider+order) across the create+persist critical section:
+    // a held lock ⇒ a ship is already in flight ⇒ typed 409, no second parcel.
+    // FAIL-OPEN on a Redis outage (availability over the rare double-ship; the
+    // orphan reuse + trackingNumber checks still cover the common retry paths).
+    const lockKey = shipLockKey(slug, provider.id, recId);
+    let locked = false;
+    try {
+      const acquired = await this.redis.set(
+        lockKey,
+        new Date().toISOString(),
+        'EX',
+        SHIP_LOCK_TTL_SEC,
+        'NX'
+      );
+      locked = acquired === 'OK';
+      if (!locked) {
+        res.status(409).json({ error: 'ship_in_progress' });
+        return;
+      }
+    } catch {
+      locked = false; // Redis unreachable → proceed lock-free (fail-open).
     }
-    const tracking = str(created.value.tracking).trim();
-    if (!tracking) {
-      // Defensive — the provider contract guarantees a tracking on ok, but never
-      // persist an empty one.
-      res.status(502).json({ error: 'courier_bad_response' });
-      return;
-    }
-    const label = str(created.value.label).trim();
 
-    // Persist onto the ORDER (PUT-by-id upsert; id/createdAt preserved). Additive
-    // fields only — never touches the order's status/paid/tracking sub-state.
-    const now = new Date().toISOString();
-    const patch: ErpRecord = {
-      courierProvider: provider.id,
-      trackingNumber: tracking,
-      courierStatus: 'pending' as CourierStatus,
-      shippedAt: now,
-    };
-    if (label) patch.labelUrl = label;
-    const merged: ErpRecord = { ...order, ...patch };
-    delete (merged as { createdAt?: unknown }).createdAt; // upsert keeps stored createdAt
-    if (Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES) {
-      // The tracking exists at the courier but we can't fit the write — surface
-      // it so the FE can show the tracking; a re-ship will short-circuit once the
-      // record is trimmed. Do NOT 500.
-      res
-        .status(200)
-        .json({ ok: true, tracking, ...(label ? { label } : {}), courierStatus: 'pending', persisted: false });
-      return;
+    try {
+      // Map order → parcel; a missing required field is a client-fixable 400.
+      const mapped = this.orderToParcel(order, body);
+      if (!mapped.ok) {
+        res.status(400).json({ error: 'invalid_order', field: mapped.field });
+        return;
+      }
+
+      // Create the parcel. Any provider failure is typed + passthrough; the order
+      // is left UNTOUCHED (we only write on a real tracking number).
+      const created = await provider.createParcel(creds, mapped.parcel);
+      if (!created.ok) {
+        writeCourierError(res, created);
+        return;
+      }
+      const tracking = str(created.value.tracking).trim();
+      if (!tracking) {
+        // Defensive — the provider contract guarantees a tracking on ok, but never
+        // persist an empty one.
+        res.status(502).json({ error: 'courier_bad_response' });
+        return;
+      }
+      const label = str(created.value.label).trim();
+
+      // Persist onto the ORDER (PUT-by-id upsert; id/createdAt preserved).
+      // Additive fields only — never touches the order's status/paid sub-state.
+      const now = new Date().toISOString();
+      const patch: ErpRecord = {
+        courierProvider: provider.id,
+        trackingNumber: tracking,
+        courierStatus: 'pending' as CourierStatus,
+        shippedAt: now,
+      };
+      if (label) patch.labelUrl = label;
+      const merged: ErpRecord = { ...order, ...patch };
+      delete (merged as { createdAt?: unknown }).createdAt; // upsert keeps stored createdAt
+
+      const tooBig =
+        Buffer.byteLength(JSON.stringify(merged), 'utf8') > ERP_MAX_WRITE_BYTES;
+      const saved = tooBig
+        ? null
+        : await this.erpPutRecord(slug, 'orders', recId, merged, token);
+      if (tooBig || !saved || !saved.ok) {
+        // Parcel created at the courier but NOT persisted onto the order (record
+        // too big, or the write failed). Stash the tracking under shipOrphanKey
+        // so a re-ship REUSES it rather than creating a second parcel (F-2).
+        // Fail-soft: even if the stash fails, we still return the tracking so it
+        // is never lost — but the orphan write is what closes the double-parcel
+        // window, so it is attempted first.
+        try {
+          await this.redis.set(
+            shipOrphanKey(slug, provider.id, recId),
+            tracking,
+            'EX',
+            SHIP_ORPHAN_TTL_SEC
+          );
+        } catch {
+          /* fail-soft: best-effort orphan stash */
+        }
+        res.status(200).json({
+          ok: true,
+          tracking,
+          ...(label ? { label } : {}),
+          courierStatus: 'pending',
+          persisted: false,
+        });
+        return;
+      }
+
+      // Persisted cleanly — drop any stale orphan marker for this order.
+      try {
+        await this.redis.del(shipOrphanKey(slug, provider.id, recId));
+      } catch {
+        /* fail-soft */
+      }
+      return {
+        ok: true,
+        tracking,
+        ...(label ? { label } : {}),
+        courierStatus: 'pending',
+        persisted: true,
+      };
+    } finally {
+      // Release the lock as soon as the critical section ends (success OR any
+      // handled failure/return above); the TTL is only a crash-safety net.
+      if (locked) {
+        try {
+          await this.redis.del(lockKey);
+        } catch {
+          /* fail-soft: lock auto-expires via its TTL */
+        }
+      }
     }
-    const saved = await this.erpPutRecord(slug, 'orders', recId, merged, token);
-    if (!saved.ok) {
-      // Parcel created but persistence failed — return the tracking (so it's not
-      // lost) with persisted:false rather than a 500. A retry hits idempotency
-      // only after a successful write, so the FE should surface + store this.
-      res
-        .status(200)
-        .json({ ok: true, tracking, ...(label ? { label } : {}), courierStatus: 'pending', persisted: false });
-      return;
-    }
-    return {
-      ok: true,
-      tracking,
-      ...(label ? { label } : {}),
-      courierStatus: 'pending',
-      persisted: true,
-    };
   }
 
   // =========================================================================
@@ -1248,16 +1437,30 @@ export class ClickDzCourierController {
     // Current coarse courier sub-state on the order (default 'pending').
     const prevRaw = str(order.courierStatus);
     const prev: CourierStatus = isCourierStatus(prevRaw) ? prevRaw : 'pending';
+    // The canonical ERP status a HUMAN may have set from the Commandes tab. The
+    // status route (erpOrderStatus) advances `status` to 'Livrée'/'Retournée'
+    // WITHOUT writing `courierStatus`, so a manually-settled order can still carry
+    // a non-terminal courierStatus (Waybill F-3). We must treat a terminal
+    // canonical status as terminal too — otherwise a stale courier poll (e.g.
+    // 'en-route') would overwrite the human's 'Livrée' back to 'Expédiée'.
+    const canonical = str(order.status).trim();
+    const canonicalDelivered = canonical === ORDER_STATUS_DELIVERED;
+    const canonicalTerminal =
+      canonicalDelivered || canonical === ORDER_STATUS_RETURNED;
     // Terminal states are never re-polled (delivered/returned don't change at the
     // courier). BUT a `delivered` order still gets a best-effort caisse retry: if
     // a prior sync advanced the ERP status yet the pending-COD marker write hiccuped,
     // this re-attempts it — idempotent via hasPendingCodMarker, so it's a no-op once
     // the marker exists. This guarantees a courier-delivered COD is never lost.
-    if (prev === 'delivered' || prev === 'returned') {
-      if (prev === 'delivered' && recId) {
+    if (prev === 'delivered' || prev === 'returned' || canonicalTerminal) {
+      if ((prev === 'delivered' || canonicalDelivered) && recId) {
         await this.writePendingCod(slug, order, token);
       }
-      return { orderId, outcome: 'terminal', courierStatus: prev };
+      return {
+        orderId,
+        outcome: 'terminal',
+        courierStatus: prev === 'pending' && canonicalDelivered ? 'delivered' : prev,
+      };
     }
 
     // Poll the courier. A typed error is isolated to THIS order.
@@ -1346,7 +1549,7 @@ export class ClickDzCourierController {
       res.status(501).json({ error: 'admin_writes_unavailable' });
       return;
     }
-    const creds = await this.resolveCreds(slug, provider.id);
+    const creds = await this.resolveCreds(slug, provider);
     if (!creds) {
       throw new BadRequest('not_connected');
     }
@@ -1436,7 +1639,7 @@ export class ClickDzCourierController {
       res.status(501).json({ error: 'admin_writes_unavailable' });
       return;
     }
-    const creds = await this.resolveCreds(slug, provider.id);
+    const creds = await this.resolveCreds(slug, provider);
     if (!creds) {
       throw new BadRequest('not_connected');
     }

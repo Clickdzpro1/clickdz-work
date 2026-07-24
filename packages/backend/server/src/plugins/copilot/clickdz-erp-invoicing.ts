@@ -256,23 +256,14 @@ export function invoiceSeqKey(
   return `clickdz:erpseq:${slug}:${type}:${year}`;
 }
 
-/**
- * Reserve the NEXT sequence number for (slug, type, year) atomically. Returns a
- * positive integer (INCR starts at 1 on a fresh key). Caller reserves the
- * number ONLY when it is about to persist a valid document, and — per the DZ
- * gap-less rule — must NOT reserve again if the persist fails (a burned number
- * leaves a legal gap). We deliberately do not pre-read/CAS: INCR is the atomic
- * primitive and two concurrent validations get two distinct numbers.
- */
-export async function reserveInvoiceSeq(
-  redis: SeqClient,
-  slug: string,
-  type: InvoiceType,
-  year: number
-): Promise<number> {
-  const n = await redis.incr(invoiceSeqKey(slug, type, year));
-  return Math.max(1, Math.floor(Number(n) || 1));
-}
+// NOTE (Ledger SAFE-POLISH): the legacy `reserveInvoiceSeq(redis, …)` helper that
+// once lived here was a plain Redis INCR with no durable floor. It was SUPERSEDED
+// by the bridge's `erpReserveSeq` (clickdz-bridge.controller.ts), which INCRs the
+// SAME `invoiceSeqKey` but adds the Postgres max-merge floor + Redis forward-heal
+// (R18) so a Redis regression can never REISSUE a burned legal number. The old
+// export had ZERO callers (verified tree-wide) and was removed to leave one — and
+// only one — reserve path. `invoiceSeqKey` (+ the `SeqClient` shape) stay: the
+// bridge imports `invoiceSeqKey` for exactly that PG-floored path.
 
 /**
  * Format the legal document id/number: `<type>-<year>-<seq>` with the seq
@@ -512,7 +503,7 @@ export function buildDraftInvoice(
 // ===========================================================================
 // VALIDATE (assign gap-less number) — the legal transition brouillon → valide.
 // The number is reserved HERE, at validation, never at draft creation. The
-// caller reserves via reserveInvoiceSeq(), then calls this to stamp the record.
+// caller reserves via the bridge's erpReserveSeq() (PG-floored), then stamps here.
 // ===========================================================================
 /**
  * Produce the VALIDATED form of a draft: assign `seq` (the reserved gap-less

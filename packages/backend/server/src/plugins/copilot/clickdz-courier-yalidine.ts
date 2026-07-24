@@ -121,6 +121,8 @@ function parseRetryAfter(res: Response): number | undefined {
 // ---------------------------------------------------------------------------
 class YalidineProvider implements CourierProvider {
   readonly id = 'yalidine' as const;
+  /** Yalidine needs BOTH X-API-ID and X-API-TOKEN. */
+  readonly requiresApiId = true as const;
 
   /** Build the two required auth headers from the unsealed creds. */
   private authHeaders(creds: CourierCredentials): Record<string, string> {
@@ -438,12 +440,26 @@ class YalidineProvider implements CourierProvider {
    * array, or `[]` when `data` is explicitly an empty array, or `null` when the
    * envelope is unexpected (→ the caller maps to 'malformed'). Tolerates a bare
    * top-level array too (defensive).
+   *
+   * FAIL-SOFT (Waybill F-1): every caller `.map`s the returned rows and reads
+   * named fields off each (`s(row.status)`, `n(row.id)`, …). A malformed upstream
+   * payload like `{ data: [null] }` / `{ data: ["x"] }` would make that deref
+   * THROW a TypeError *inside* the map — escaping `request()`'s fetch-only
+   * try/catch and breaking the never-throw provider contract (a live 500 on the
+   * connect/refresh paths). So we filter to object rows here, at the single
+   * choke point: well-formed responses are unaffected (every real row is an
+   * object), and a junk element is dropped rather than crashing the request.
+   * `computeFees` guards its cells inline and does not use this.
    */
   private rowsOf(payload: unknown): any[] | null {
-    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload)) {
+      return payload.filter(r => r != null && typeof r === 'object');
+    }
     if (payload && typeof payload === 'object') {
       const data = (payload as any).data;
-      if (Array.isArray(data)) return data;
+      if (Array.isArray(data)) {
+        return data.filter(r => r != null && typeof r === 'object');
+      }
     }
     return null;
   }
