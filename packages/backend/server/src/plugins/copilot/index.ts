@@ -12,6 +12,7 @@ import { WorkspaceModule } from '../../core/workspaces';
 import { IndexerModule } from '../indexer';
 import { ClickDzBridgeController } from './clickdz-bridge.controller';
 import { ClickDzDataController } from './clickdz-data.controller';
+import { ClickDzPgAdminController } from './clickdz-pg-admin.controller';
 import { ClickDzAgentTelegramController } from './clickdz-agent-telegram';
 import { ClickDzAgentTriggersController } from './clickdz-agent-triggers';
 import { ClickDzAgentWhatsappController } from './clickdz-agent-whatsapp';
@@ -97,6 +98,7 @@ export class CopilotApiModule {}
     CopilotController,
     ClickDzBridgeController,
     ClickDzDataController,
+    ClickDzPgAdminController,
     ClickDzAgentTelegramController,
     ClickDzAgentTriggersController,
     ClickDzAgentWhatsappController,
