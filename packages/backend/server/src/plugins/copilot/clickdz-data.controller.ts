@@ -53,6 +53,17 @@ const RL_TTL_SECONDS = 120;
 // the spec draft said 'true' but ops sets flags to '1' everywhere).
 const CDZ_PG_DUAL_WRITE = process.env.CDZ_PG_DUAL_WRITE === '1';
 
+// R18: the Phase A mirror is awaited on the merchant WRITE path, so a slow or
+// unreachable Postgres would otherwise add its full pool/query wait to every
+// order/caisse/invoice write. Bound it: on timeout the write still succeeds on
+// Redis (the source of truth this phase) and the mirror is logged + dropped,
+// exactly like any other mirror failure. Only reached when CDZ_PG_DUAL_WRITE is
+// on; floor 250ms, default 2.5s.
+const CDZ_PG_MIRROR_TIMEOUT_MS = Math.max(
+  250,
+  Number(process.env.CDZ_PG_MIRROR_TIMEOUT_MS) || 2500
+);
+
 // R15 PR-6: gate READS of PII-bearing collections behind the SAME per-slug
 // data token that already gates writes. The public GET is @Public() and today
 // returns ANY collection unauthenticated, so anyone with a shop slug can dump
@@ -185,16 +196,32 @@ export class ClickDzDataController {
   // R15 Phase A: best-effort Postgres mirror. NEVER throws — a PG failure must
   // not change the HTTP outcome (Redis remains the source of truth this phase).
   // No-op unless CDZ_PG_DUAL_WRITE is on, so rollback = flip the flag off.
+  // R18: additionally time-bounded (CDZ_PG_MIRROR_TIMEOUT_MS) so a slow PG can
+  // never stall a merchant write past that budget — on timeout the mirror is
+  // abandoned (logged) while the underlying op keeps running harmlessly to
+  // completion in the background (its late settlement is swallowed so it can
+  // never surface as an unhandled rejection).
   private async mirrorToPg(op: () => Promise<void>): Promise<void> {
     if (!CDZ_PG_DUAL_WRITE) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      await op();
+      const running = op();
+      running.catch(() => {});
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('pg mirror timeout')),
+          CDZ_PG_MIRROR_TIMEOUT_MS
+        );
+      });
+      await Promise.race([running, timeout]);
     } catch (err) {
       this.logger.warn(
         `[cdz-pg-dual-write] mirror failed (ignored): ${String(
           (err as Error)?.message ?? err
         )}`
       );
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
