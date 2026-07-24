@@ -1987,6 +1987,583 @@ export function postTracking(
     { status }
   );
 }
+
+// ---------------------------------------------------------------------------
+// R17 (PR-C) — COURIER integration client layer (Yalidine first). Thin, typed
+// wrappers over the OWNER-AUTHED courier controller routes, which live under a
+// SEPARATE path tree from the /erp bridge:
+//     /api/v1/apps/:slug/courier/:provider/…      (provider = 'yalidine')
+// All calls are session-cookie authed (credentials:'include', identical to the
+// shipping wrappers above). The whole feature ships DARK behind CDZ_COURIERS_
+// ENABLED on the server: when the flag is off EVERY route returns a typed 404,
+// byte-identical to the routes not existing. So the FE treats a 404 on the GET
+// status probe as a first-class 'dark' outcome (render a subtle "bientôt" and
+// STOP) — NOT an error. Mirrors the WSF-2 customize dark-gating stance.
+//
+// Backend response contracts (PR-A + PR-B, live on canary):
+//   GET  …/                      → { connected, enabled }              | 404 dark
+//   POST …/connect {apiId,apiToken} → { connected, enabled }  (400 invalid_credentials)
+//   POST …/disconnect            → { ok }
+//   GET  …/fees?to_wilaya=&from_wilaya= → { fees }
+//   GET  …/reference?kind=wilayas|communes|centers[&wilaya_id=] → { kind, items, cached }
+//   POST …/ship {orderId, fromWilaya, price?, isStopdesk?, …} →
+//            { ok, tracking, label?, courierStatus, alreadyShipped?, persisted? }
+//   POST …/sync {orderId?}       → { ok, scanned, total, capped, updated,
+//            delivered, results:[{ orderId, outcome, courierStatus?, delivered? }] }
+//   POST …/ship/:orderId/refresh → { ok, orderId, outcome, courierStatus?, delivered? }
+//
+// The typed error bodies the controller emits on a provider hiccup
+// (invalid_credentials / rate_limited / courier_unreachable / not_connected …)
+// are mapped to human FR copy in courierErrMessage — NEVER a raw HTTP code.
+// ---------------------------------------------------------------------------
+
+/** The only courier provider live today; ZR Express / Maystro land in PR-D. */
+export type CourierProviderId = 'yalidine';
+
+/**
+ * Coarse per-parcel courier sub-state the backend persists on an order
+ * (normalizeStatus maps a provider's ~30 raw statuses onto these four). Kept in
+ * lock-step with the server's CourierStatus union (clickdz-courier.ts).
+ */
+export type CourierStatus = 'pending' | 'shipped' | 'delivered' | 'returned';
+
+/** FR labels + accent colors for the four courier sub-states (this surface is French). */
+export const COURIER_STATUS_LABELS: Record<CourierStatus, string> = {
+  pending: 'En préparation',
+  shipped: 'Expédié',
+  delivered: 'Livré',
+  returned: 'Retourné',
+};
+export const COURIER_STATUS_COLORS: Record<CourierStatus, string> = {
+  pending: '#38bdf8',
+  shipped: '#8b5cf6',
+  delivered: '#22c55e',
+  returned: '#ef4444',
+};
+
+/** Reference-list kinds the controller serves (cache-friendly geo data). */
+export type CourierReferenceKind = 'wilayas' | 'communes' | 'centers';
+
+/** One wilaya row from the courier reference endpoint (drives the pickup picker). */
+export interface CourierWilaya {
+  id: number;
+  name: string;
+}
+
+/** Connect/status probe outcome. 'dark' = the feature flag is OFF (404) — hide
+ *  the panel behind a subtle "bientôt" note, never an error. */
+export type CourierStatusOutcome =
+  | { status: 'ok'; connected: boolean; enabled: boolean }
+  | { status: 'dark' }
+  | { status: 'error'; message: string };
+
+/** connect / disconnect outcome (dark-aware; inline error, never a raw code). */
+export type CourierConnectOutcome =
+  | { status: 'ok'; connected: boolean; enabled: boolean }
+  | { status: 'dark' }
+  | { status: 'error'; message: string };
+
+export type CourierDisconnectOutcome =
+  | { status: 'ok' }
+  | { status: 'dark' }
+  | { status: 'error'; message: string };
+
+/** ship outcome — carries the tracking + optional label + the coarse status. */
+export type CourierShipOutcome =
+  | {
+      status: 'ok';
+      tracking: string;
+      label?: string;
+      courierStatus: CourierStatus;
+      alreadyShipped: boolean;
+      persisted: boolean;
+    }
+  | { status: 'dark' }
+  | { status: 'error'; message: string };
+
+/** One order's sync result (aggregated by the batch sync + returned by refresh). */
+export interface CourierSyncResult {
+  orderId: string;
+  outcome: string;
+  courierStatus?: CourierStatus;
+  delivered?: boolean;
+}
+export type CourierSyncOutcome =
+  | {
+      status: 'ok';
+      scanned: number;
+      total: number;
+      capped: boolean;
+      updated: number;
+      delivered: number;
+      results: CourierSyncResult[];
+    }
+  | { status: 'dark' }
+  | { status: 'error'; message: string };
+
+export type CourierRefreshOutcome =
+  | {
+      status: 'ok';
+      orderId: string;
+      outcome: string;
+      courierStatus?: CourierStatus;
+      delivered: boolean;
+    }
+  | { status: 'dark' }
+  | { status: 'error'; message: string };
+
+export type CourierFeesOutcome =
+  | { status: 'ok'; fees: unknown }
+  | { status: 'dark' }
+  | { status: 'error'; message: string };
+
+export type CourierReferenceOutcome =
+  | { status: 'ok'; kind: CourierReferenceKind; items: unknown[]; cached: boolean }
+  | { status: 'dark' }
+  | { status: 'error'; message: string };
+
+/** Base path for a courier route. provider is a fixed literal today ('yalidine'). */
+function courierBase(slug: string, provider: CourierProviderId): string {
+  return `/api/v1/apps/${encodeURIComponent(slug)}/courier/${encodeURIComponent(
+    provider
+  )}`;
+}
+
+/**
+ * Map the courier controller's typed error body → human FR copy. NEVER a raw
+ * HTTP status. `error` is the machine code the passthrough JSON carries
+ * (invalid_credentials, rate_limited, courier_unreachable, not_connected, …);
+ * `status` is the HTTP code as a fallback for the unmapped case.
+ */
+function courierErrMessage(
+  errCode: string,
+  httpStatus: number,
+  fallbackMsg?: string
+): string {
+  switch (errCode) {
+    case 'invalid_credentials':
+      return 'Identifiants Yalidine refusés — vérifiez l’API ID et l’API Token, puis réessayez.';
+    case 'rate_limited':
+      return 'Trop de requêtes vers Yalidine — patientez un instant avant de réessayer.';
+    case 'courier_unreachable':
+      return 'Yalidine est injoignable pour le moment. Réessayez dans quelques minutes.';
+    case 'courier_bad_response':
+    case 'courier_error':
+      return 'Réponse inattendue de Yalidine. Réessayez ; si ça persiste, contactez le support.';
+    case 'not_connected':
+      return 'Compte transporteur non connecté — connectez Yalidine d’abord.';
+    case 'not_shipped':
+      return 'Cette commande n’a pas encore été expédiée.';
+    case 'provider_mismatch':
+      return 'Cette commande a été expédiée avec un autre transporteur.';
+    case 'invalid_order':
+      return 'Informations de commande incomplètes (client, wilaya, commune ou téléphone).';
+    case 'admin_writes_unavailable':
+      return 'Écritures indisponibles sur ce serveur — réessayez plus tard.';
+    case 'store_unavailable':
+    case 'data_api_unavailable':
+      return 'Service de données indisponible — réessayez dans un instant.';
+    case 'order_unwritable':
+      return 'Impossible d’enregistrer le suivi sur cette commande.';
+    default:
+      break;
+  }
+  if (httpStatus === 401) return 'Reconnectez-vous pour continuer.';
+  if (httpStatus === 403) return 'Cette boutique appartient à un autre compte.';
+  if (httpStatus === 400 && fallbackMsg) {
+    // Surface a validation reason plainly (never leak internal detail).
+    return 'Requête invalide — vérifiez les informations saisies.';
+  }
+  return fallbackMsg || `L’opération a échoué (${httpStatus}).`;
+}
+
+/** Pull the machine error code + optional message off a parsed JSON body. */
+function courierErrParts(
+  data: (Record<string, unknown> & { error?: unknown; message?: unknown }) | null
+): { code: string; message?: string } {
+  const code = typeof data?.error === 'string' ? data.error : '';
+  const message = typeof data?.message === 'string' ? data.message : undefined;
+  return { code, message };
+}
+
+/**
+ * GET …/courier/:provider — connection status. A 404 means the feature flag is
+ * OFF on this server → 'dark' (hide behind a subtle "bientôt", NEVER error).
+ */
+export async function fetchCourierStatus(
+  slug: string,
+  provider: CourierProviderId = 'yalidine'
+): Promise<CourierStatusOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(courierBase(slug, provider)), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — impossible de vérifier le transporteur.' };
+  }
+  if (res.status === 404) {
+    // Feature dark (flag off) — treated as "not available yet", not an error.
+    return { status: 'dark' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { connected?: unknown; enabled?: unknown })
+    | null;
+  if (!res.ok) {
+    const { code, message } = courierErrParts(data);
+    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+  }
+  return {
+    status: 'ok',
+    connected: data?.connected === true,
+    enabled: data?.enabled === true,
+  };
+}
+
+/**
+ * POST …/courier/:provider/connect { apiId, apiToken }. The server validates the
+ * keys with a live Yalidine call BEFORE sealing them; a 400 invalid_credentials
+ * surfaces as inline FR copy. A 404 = flag off (dark). NEVER echoes the keys.
+ */
+export async function connectCourier(
+  slug: string,
+  apiId: string,
+  apiToken: string,
+  provider: CourierProviderId = 'yalidine'
+): Promise<CourierConnectOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(`${courierBase(slug, provider)}/connect`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ apiId, apiToken }),
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — rien n’a été enregistré.' };
+  }
+  if (res.status === 404) {
+    return { status: 'dark' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { connected?: unknown; enabled?: unknown })
+    | null;
+  if (!res.ok) {
+    const { code, message } = courierErrParts(data);
+    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+  }
+  return {
+    status: 'ok',
+    connected: data?.connected === true,
+    enabled: data?.enabled === true,
+  };
+}
+
+/** POST …/courier/:provider/disconnect — idempotent; a 404 = flag off (dark). */
+export async function disconnectCourier(
+  slug: string,
+  provider: CourierProviderId = 'yalidine'
+): Promise<CourierDisconnectOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(`${courierBase(slug, provider)}/disconnect`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+  }
+  if (res.status === 404) {
+    return { status: 'dark' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { ok?: unknown })
+    | null;
+  if (!res.ok) {
+    const { code, message } = courierErrParts(data);
+    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+  }
+  return { status: 'ok' };
+}
+
+/**
+ * POST …/courier/:provider/ship { orderId, fromWilaya, price?, isStopdesk?, … }.
+ * Idempotent on the server (an order already carrying a tracking returns it with
+ * alreadyShipped:true). `persisted:false` means the parcel exists at the courier
+ * but the tracking couldn't be written onto the order (surface the tracking, let
+ * the merchant re-ship — it will short-circuit once the write lands).
+ */
+export async function courierShip(
+  slug: string,
+  orderId: string,
+  fromWilaya: string | number,
+  opts?: { price?: number; isStopdesk?: boolean; freeshipping?: boolean },
+  provider: CourierProviderId = 'yalidine'
+): Promise<CourierShipOutcome> {
+  const body: Record<string, unknown> = { orderId, fromWilaya };
+  if (opts?.price !== undefined) body.price = opts.price;
+  if (opts?.isStopdesk !== undefined) body.isStopdesk = opts.isStopdesk;
+  if (opts?.freeshipping !== undefined) body.freeshipping = opts.freeshipping;
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(`${courierBase(slug, provider)}/ship`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — la commande n’a pas été expédiée.' };
+  }
+  if (res.status === 404) {
+    return { status: 'dark' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & {
+        tracking?: unknown;
+        label?: unknown;
+        courierStatus?: unknown;
+        alreadyShipped?: unknown;
+        persisted?: unknown;
+      })
+    | null;
+  if (!res.ok) {
+    const { code, message } = courierErrParts(data);
+    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+  }
+  const cs = typeof data?.courierStatus === 'string' ? data.courierStatus : 'pending';
+  return {
+    status: 'ok',
+    tracking: typeof data?.tracking === 'string' ? data.tracking : '',
+    ...(typeof data?.label === 'string' && data.label ? { label: data.label } : {}),
+    courierStatus: (isCourierStatusValue(cs) ? cs : 'pending') as CourierStatus,
+    alreadyShipped: data?.alreadyShipped === true,
+    // The server omits `persisted` on the happy fast-return, so default true.
+    persisted: data?.persisted !== false,
+  };
+}
+
+/**
+ * POST …/courier/:provider/sync { orderId? } — poll tracking → advance orders +
+ * caisse. Without orderId, scans all shipped-but-non-terminal parcels (bounded
+ * server-side). Button-driven only (no tight polling) to respect rate limits.
+ */
+export async function courierSync(
+  slug: string,
+  orderId?: string,
+  provider: CourierProviderId = 'yalidine'
+): Promise<CourierSyncOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(`${courierBase(slug, provider)}/sync`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(orderId ? { orderId } : {}),
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — le suivi n’a pas été actualisé.' };
+  }
+  if (res.status === 404) {
+    return { status: 'dark' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & {
+        scanned?: unknown;
+        total?: unknown;
+        capped?: unknown;
+        updated?: unknown;
+        delivered?: unknown;
+        results?: unknown;
+      })
+    | null;
+  if (!res.ok) {
+    const { code, message } = courierErrParts(data);
+    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+  }
+  const rawResults = Array.isArray(data?.results) ? (data.results as unknown[]) : [];
+  const results: CourierSyncResult[] = [];
+  for (const item of rawResults) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const oid = typeof r.orderId === 'string' ? r.orderId : '';
+    if (!oid) continue;
+    const cs = typeof r.courierStatus === 'string' ? r.courierStatus : '';
+    results.push({
+      orderId: oid,
+      outcome: typeof r.outcome === 'string' ? r.outcome : '',
+      ...(isCourierStatusValue(cs) ? { courierStatus: cs as CourierStatus } : {}),
+      ...(r.delivered === true ? { delivered: true } : {}),
+    });
+  }
+  return {
+    status: 'ok',
+    scanned: num(data?.scanned),
+    total: num(data?.total),
+    capped: data?.capped === true,
+    updated: num(data?.updated),
+    delivered: num(data?.delivered),
+    results,
+  };
+}
+
+/**
+ * POST …/courier/:provider/ship/:orderId/refresh — single-order tracking refresh
+ * (folds into the same sync-one path server-side, so the caisse hook applies).
+ */
+export async function courierRefresh(
+  slug: string,
+  orderId: string,
+  provider: CourierProviderId = 'yalidine'
+): Promise<CourierRefreshOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(
+      cdzApiUrl(
+        `${courierBase(slug, provider)}/ship/${encodeURIComponent(orderId)}/refresh`
+      ),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      }
+    );
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — le suivi n’a pas été actualisé.' };
+  }
+  if (res.status === 404) {
+    return { status: 'dark' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & {
+        orderId?: unknown;
+        outcome?: unknown;
+        courierStatus?: unknown;
+        delivered?: unknown;
+      })
+    | null;
+  if (!res.ok) {
+    const { code, message } = courierErrParts(data);
+    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+  }
+  const cs = typeof data?.courierStatus === 'string' ? data.courierStatus : '';
+  return {
+    status: 'ok',
+    orderId: typeof data?.orderId === 'string' ? data.orderId : orderId,
+    outcome: typeof data?.outcome === 'string' ? data.outcome : '',
+    ...(isCourierStatusValue(cs) ? { courierStatus: cs as CourierStatus } : {}),
+    delivered: data?.delivered === true,
+  };
+}
+
+/**
+ * GET …/courier/:provider/fees?to_wilaya=&from_wilaya= — a delivery-fee quote.
+ * Both wilayas are numeric codes; the server requires from_wilaya (the pickup).
+ */
+export async function courierFees(
+  slug: string,
+  fromWilaya: number,
+  toWilaya: number,
+  provider: CourierProviderId = 'yalidine'
+): Promise<CourierFeesOutcome> {
+  const qs = `?to_wilaya=${encodeURIComponent(String(toWilaya))}&from_wilaya=${encodeURIComponent(
+    String(fromWilaya)
+  )}`;
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(`${courierBase(slug, provider)}/fees${qs}`), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — impossible de récupérer le tarif.' };
+  }
+  if (res.status === 404) {
+    return { status: 'dark' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { fees?: unknown })
+    | null;
+  if (!res.ok) {
+    const { code, message } = courierErrParts(data);
+    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+  }
+  return { status: 'ok', fees: data?.fees };
+}
+
+/**
+ * GET …/courier/:provider/reference?kind=wilayas|communes|centers[&wilaya_id=].
+ * Cache-friendly geo lists. communes/centers require a numeric wilaya_id.
+ */
+export async function fetchCourierReference(
+  slug: string,
+  kind: CourierReferenceKind,
+  wilayaId?: number,
+  provider: CourierProviderId = 'yalidine'
+): Promise<CourierReferenceOutcome> {
+  let qs = `?kind=${encodeURIComponent(kind)}`;
+  if (wilayaId !== undefined) {
+    qs += `&wilaya_id=${encodeURIComponent(String(wilayaId))}`;
+  }
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl(`${courierBase(slug, provider)}/reference${qs}`), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    });
+  } catch {
+    return { status: 'error', message: 'Erreur réseau — impossible de charger la liste.' };
+  }
+  if (res.status === 404) {
+    return { status: 'dark' };
+  }
+  const data = (await res.json().catch(() => null)) as
+    | (Record<string, unknown> & { kind?: unknown; items?: unknown; cached?: unknown })
+    | null;
+  if (!res.ok) {
+    const { code, message } = courierErrParts(data);
+    return { status: 'error', message: courierErrMessage(code, res.status, message) };
+  }
+  return {
+    status: 'ok',
+    kind: (typeof data?.kind === 'string' ? data.kind : kind) as CourierReferenceKind,
+    items: Array.isArray(data?.items) ? (data.items as unknown[]) : [],
+    cached: data?.cached === true,
+  };
+}
+
+/**
+ * Parse the courier reference `wilayas` payload into a compact {id,name} list
+ * (drives the pickup-wilaya picker). Yalidine wilaya rows carry {id, name, …};
+ * tolerant of missing fields so an older/newer shape never throws.
+ */
+export function parseCourierWilayas(items: unknown[]): CourierWilaya[] {
+  const out: CourierWilaya[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const w = item as Record<string, unknown>;
+    const id = num(w.id !== undefined ? w.id : w.wilaya_id);
+    const name =
+      typeof w.name === 'string'
+        ? w.name
+        : typeof w.wilaya_name === 'string'
+          ? w.wilaya_name
+          : '';
+    if (id >= 1 && name) out.push({ id, name });
+  }
+  return out;
+}
+
+/** Type-guard for the four courier sub-states (mirrors server isCourierStatus). */
+function isCourierStatusValue(v: string): v is CourierStatus {
+  return v === 'pending' || v === 'shipped' || v === 'delivered' || v === 'returned';
+}
+
 // ---------------------------------------------------------------------------
 // WSE-9 (COMPTOIR) — Caisse (cash register) + COD reconciliation client layer.
 // Thin wrappers over the R2-d bridge routes (/api/v1/apps/:slug/erp/caisse*),
