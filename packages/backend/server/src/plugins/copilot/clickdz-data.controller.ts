@@ -151,13 +151,24 @@ export class ClickDzDataController {
     if (!COLLECTION_RE.test(collection)) badRequest('Invalid collection name');
   }
 
-  // v2 requests are token-gated for writes/deletes; v1 stays open for
-  // back-compat with already-deployed apps (EXCEPT the destructive clear,
-  // which is gated on both versions — see clear()).
-  private isV2(req: Request): boolean {
-    return (req.path || '').startsWith('/api/v2/');
-  }
-
+  // SEC-1: ALL writes/deletes are token-gated on BOTH the v1 and v2 paths.
+  //
+  // Previously create()/remove() gated only when the request path started with
+  // '/api/v2/' (a since-deleted isV2() helper), for "back-compat with
+  // already-deployed apps". That back-compat need does not exist: both
+  // generated clients mint their data base as `<externalBase>/api/v2/apps-data/
+  // <slug>` (see __CLICKDZ_DATA_URL__ in clickdz-shop-template.ts and
+  // clickdz-erp-template.ts) and neither contains a single '/api/apps-data/'
+  // reference. The v1 alias therefore served no legitimate client — only an
+  // unauthenticated bypass: POST /api/apps-data/<slug>/<collection> created
+  // records and DELETE .../<id> removed them with no credentials at all
+  // (verified against production before this change: v1 → 201/200, v2 → 401).
+  //
+  // put() and clear() were already gated unconditionally; create()/remove()
+  // were the outliers. All four now share one rule, so there is no version-
+  // dependent auth path left to reason about. The v1 route aliases are kept
+  // (removing them would 404 rather than 401, which is a worse error for any
+  // stale client) but they now require the same per-slug token as v2.
   private requireWriteToken(req: Request, slug: string) {
     const auth = String(req.headers['authorization'] || '');
     const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
@@ -327,7 +338,8 @@ export class ClickDzDataController {
   ) {
     setCors(res);
     this.assertNames(slug, collection);
-    if (this.isV2(req)) this.requireWriteToken(req, slug);
+    // SEC-1: gated on BOTH v1 and v2 (was: v2 only — see requireWriteToken).
+    this.requireWriteToken(req, slug);
     // Per-slug write throttle (typed 429, never a raw HttpException). Applied
     // after name/token checks so bad input still gets its precise 4xx.
     if (await this.isRateLimited(slug)) {
@@ -369,9 +381,9 @@ export class ClickDzDataController {
   // gap. Money documents (invoices/caisse) must never vanish mid-edit under
   // concurrency — this is the primitive the delete+recreate path cannot give.
   //
-  // Always token-gated (there is no v1 back-compat surface for a brand-new
-  // route, so we require the write token unconditionally rather than via
-  // isV2()). Preserves the original createdAt on update and stamps updatedAt;
+  // Always token-gated — as every write/delete route now is (SEC-1); this route
+  // never had a v1 alias to begin with, being v2-only from birth.
+  // Preserves the original createdAt on update and stamps updatedAt;
   // on first write it mints createdAt like create() does. The record's id is
   // always the path id, ignoring any id in the body (the URL is authoritative).
   @Put(['/api/v2/apps-data/:slug/:collection/:id'])
@@ -459,7 +471,8 @@ export class ClickDzDataController {
   ) {
     setCors(res);
     this.assertNames(slug, collection);
-    if (this.isV2(req)) this.requireWriteToken(req, slug);
+    // SEC-1: gated on BOTH v1 and v2 (was: v2 only — see requireWriteToken).
+    this.requireWriteToken(req, slug);
     // Per-slug write throttle (typed 429 via passthrough — never raw).
     if (await this.isRateLimited(slug)) {
       res.status(HttpStatus.TOO_MANY_REQUESTS).json({ error: 'rate_limited' });

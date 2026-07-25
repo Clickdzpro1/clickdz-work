@@ -167,6 +167,17 @@ const MAX_HISTORY_TURN_CHARS = 2_000;
 const MAX_HISTORY_TOTAL_CHARS = 8_000;
 const MAX_SELECTION_TEXT_CHARS = 200;
 const MAX_SELECTION_DESCRIPTOR_CHARS = 500;
+
+// SEC-1: collections the studio may write through the generic owner-gated
+// /erp/collections route. Deliberately an ALLOWLIST, not a denylist: this route
+// exists only so studio-owned collections that have no dedicated bridge route
+// (créances today) stop depending on the data API's unauthenticated v1 alias.
+// Money documents with their own validated routes — caisse, invoices, orders,
+// products, suppliers, purchase-orders, inventory — must keep going through
+// those routes so their shape validation and side effects are not bypassed.
+// Adding a name here grants schemaless owner-authenticated create/delete on it;
+// do that only for collections the studio genuinely owns end to end.
+const STUDIO_OWNED_COLLECTIONS = new Set(['creances']);
 // SECURITY: hard ceiling on max_tokens forwarded to upstream model APIs, to
 // cap per-request cost. Floor of 1 keeps requests valid.
 const MAX_TOKENS_CEILING = 4096;
@@ -5878,6 +5889,114 @@ export class ClickDzBridgeController {
       `[erp] caisse-update slug=${slug} user=${user.id} id=${entryId} coll=${targetCollection}`
     );
     return { ok: true, entry: saved.record };
+  }
+
+  /**
+   * SEC-1 — POST/DELETE /api/v1/apps/:slug/erp/collections/:collection[/:id]
+   * (auth'd, owner-only). Generic studio-owned collection writes.
+   *
+   * WHY THIS EXISTS: the studio used to write these records straight to the
+   * data API's *v1* alias (`POST /api/apps-data/:slug/:collection`) precisely
+   * because v1 accepted writes with NO token — the owner's browser cannot hold
+   * the per-slug HMAC write token, which only a published app carries. That
+   * made the merchant's own Créances ledger depend on an endpoint that was
+   * equally open to the entire internet (anonymous create/delete on any slug,
+   * verified against production). Closing the v1 hole therefore REQUIRES giving
+   * the studio an authenticated channel first — this is it.
+   *
+   * Same shape as every other owner-gated ERP mutation here: assert ownership,
+   * re-derive the write token SERVER-SIDE (never exposed to the browser), then
+   * go through the normal erpCreateRecord/erpDeleteRecord helpers, which target
+   * v2. Records stay schemaless (the data API stamps id + createdAt).
+   *
+   * The collection name is allowlisted rather than free-form: this route must
+   * not become a generic write primitive over money documents that have their
+   * own validated routes (caisse/invoices/orders/products/...). Anything not in
+   * STUDIO_OWNED_COLLECTIONS is refused with a typed 400.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/collections/:collection')
+  async erpStudioCollectionCreate(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('collection') collection: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    if (!STUDIO_OWNED_COLLECTIONS.has(collection)) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'collection_not_allowed', collection });
+      return;
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_record', message: 'Record must be an object' });
+      return;
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const created = await this.erpCreateRecord(
+      slug,
+      collection,
+      body as ErpRecord,
+      token
+    );
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] studio-coll-create slug=${slug} user=${user.id} coll=${collection}`
+    );
+    return { ok: true, record: created.record };
+  }
+
+  @Throttle('strict')
+  @Delete('/api/v1/apps/:slug/erp/collections/:collection/:id')
+  async erpStudioCollectionDelete(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('collection') collection: string,
+    @Param('id') id: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    if (!STUDIO_OWNED_COLLECTIONS.has(collection)) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'collection_not_allowed', collection });
+      return;
+    }
+    if (!id) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_record', message: 'Record id is required' });
+      return;
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const ok = await this.erpDeleteRecord(slug, collection, id, token);
+    if (!ok) {
+      this.erpWriteFailed(res, 0);
+      return;
+    }
+    this.logger.log(
+      `[erp] studio-coll-delete slug=${slug} user=${user.id} coll=${collection} id=${id}`
+    );
+    return { ok: true, deleted: true };
   }
 
   /**
