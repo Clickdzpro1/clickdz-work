@@ -3159,25 +3159,34 @@ export function postErpBackends(
 // ---------------------------------------------------------------------------
 // R3 — generic collection write wrappers (WSE-10 créances, and any future
 // studio-owned collection with no dedicated bridge route). Reads already go
-// through fetchErpCollection (public v2 GET, no token). WRITES from the studio
-// have a constraint: the v2 data routes require a per-slug HMAC write token
-// that only the PUBLISHED app carries — the owner's browser does not have it.
-// The v1 data routes (/api/apps-data/:slug/:collection) accept POST/DELETE with
-// NO token (open, same-origin), which is exactly the path a first-party studio
-// session can use. So these wrappers target v1 and mirror the erpMutate outcome
-// shape (ErpMutateOutcome<T>) so callers get the same ok/unavailable/error
-// branching every other mutation here uses. Records are schemaless; the data
-// API assigns id + createdAt on create. There is no update route, so callers
+// through fetchErpCollection (public v2 GET, no token).
+//
+// SEC-1: these wrappers USED TO write directly to the data API's v1 alias
+// (/api/apps-data/...), because v1 accepted writes with NO token while v2
+// requires the per-slug HMAC write token that only a PUBLISHED app carries —
+// the owner's browser cannot hold it. That worked, but it meant the merchant's
+// own Créances ledger rode an endpoint that was equally open to the whole
+// internet: anyone could create or delete records on any slug, unauthenticated
+// (verified against production). The v1 alias is now token-gated like v2, so
+// these wrappers go through an owner-authenticated BRIDGE route instead:
+//   POST   /api/v1/apps/:slug/erp/collections/:collection
+//   DELETE /api/v1/apps/:slug/erp/collections/:collection/:id
+// The bridge asserts app ownership from the session, then re-derives the write
+// token server-side and forwards to v2. The token never reaches the browser.
+//
+// Outcome shape (ErpMutateOutcome<T>) is unchanged, so callers keep the same
+// ok/unavailable/error branching. Records are schemaless; the data API assigns
+// id + createdAt on create. There is still no update route, so callers
 // implement "edit" as deleteErpRecord + postErpRecord (delete+recreate), the
 // same pattern the published templates' replaceRec() uses.
 // ---------------------------------------------------------------------------
 
 /**
- * POST /api/apps-data/:slug/:collection (v1, open) — append one record to a
- * collection. `record` is any JSON object (< 8KB); the server stamps id +
- * createdAt and echoes the stored record. A 404/absent collection is created on
- * first write. Never throws — network failure and the server's own
- * unavailability come back as typed outcomes.
+ * POST /api/v1/apps/:slug/erp/collections/:collection (auth'd, owner-only) —
+ * append one record to a studio-owned collection. `record` is any JSON object
+ * (< 8KB); the server stamps id + createdAt and echoes the stored record. A
+ * 404/absent collection is created on first write. Never throws — network
+ * failure and the server's own unavailability come back as typed outcomes.
  */
 export async function postErpRecord<T = Record<string, unknown>>(
   storeSlug: string,
@@ -3188,11 +3197,12 @@ export async function postErpRecord<T = Record<string, unknown>>(
   try {
     res = await fetch(
       cdzApiUrl(
-        `/api/apps-data/${encodeURIComponent(storeSlug)}/${encodeURIComponent(collection)}`
+        `/api/v1/apps/${encodeURIComponent(storeSlug)}/erp/collections/${encodeURIComponent(collection)}`
       ),
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(record),
       }
     );
@@ -3202,9 +3212,9 @@ export async function postErpRecord<T = Record<string, unknown>>(
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
     | null;
-  // The open v1 write route has no owner session; a 401/403 here means the
-  // server can't accept the write (locked-down deployment) → 'unavailable' so
-  // the caller degrades to read-only rather than surfacing a scary error.
+  // 401/403 means the owner session is gone or the deployment can't write
+  // (admin_writes_unavailable) → 'unavailable' so the caller degrades to
+  // read-only rather than surfacing a scary error.
   if (
     data?.error === 'admin_writes_unavailable' ||
     res.status === 401 ||
@@ -3221,13 +3231,29 @@ export async function postErpRecord<T = Record<string, unknown>>(
           : `L’enregistrement a échoué (${res.status}).`;
     return { status: 'error', message };
   }
-  return { status: 'ok', data: data as T };
+  // SEC-1 contract note: the bridge route wraps its payload as
+  // `{ ok: true, record }` (the house shape for owner-gated ERP mutations —
+  // compare erpCaisseCreate's `{ ok, entry }`), whereas the data API's v1 route
+  // this used to call returned the stored record BARE. Callers consume
+  // `outcome.data` AS the record (e.g. admin-clients' addDebt does
+  // `setCreances(prev => [outcome.data, ...prev])`), so unwrap here and keep the
+  // ErpMutateOutcome contract unchanged. Without this the UI would prepend the
+  // envelope: a row with no id (so it could never be settled) and no amount (so
+  // the client's outstanding balance would not move), and a settled debt would
+  // reappear as OPEN because `settled` would read undefined. The `?? data`
+  // fallback keeps the bare-record shape working, so this wrapper stays correct
+  // whichever route it is pointed at.
+  const unwrapped =
+    data && typeof data === 'object' && 'record' in data
+      ? (data as { record?: unknown }).record
+      : data;
+  return { status: 'ok', data: (unwrapped ?? data) as T };
 }
 
 /**
- * DELETE /api/apps-data/:slug/:collection/:id (v1, open) — remove one record by
- * its data-API id. A 404 (already gone) converges to 'ok' so the UI settles
- * either way. Mirrors deleteErpWarehouse's outcome handling.
+ * DELETE /api/v1/apps/:slug/erp/collections/:collection/:id (auth'd, owner-only)
+ * — remove one record by its data-API id. A 404 (already gone) converges to 'ok'
+ * so the UI settles either way. Mirrors deleteErpWarehouse's outcome handling.
  */
 export async function deleteErpRecord(
   storeSlug: string,
@@ -3238,9 +3264,13 @@ export async function deleteErpRecord(
   try {
     res = await fetch(
       cdzApiUrl(
-        `/api/apps-data/${encodeURIComponent(storeSlug)}/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`
+        `/api/v1/apps/${encodeURIComponent(storeSlug)}/erp/collections/${encodeURIComponent(collection)}/${encodeURIComponent(id)}`
       ),
-      { method: 'DELETE', headers: { Accept: 'application/json' } }
+      {
+        method: 'DELETE',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
     );
   } catch {
     return { status: 'error', message: 'Network error — nothing was changed.' };
@@ -3255,13 +3285,27 @@ export async function deleteErpRecord(
   ) {
     return { status: 'unavailable' };
   }
-  if (!res.ok && res.status !== 404) {
+  // SEC-1: 404 is NO LONGER a benign "record already gone".
+  //
+  // On the data API's v1 route this used to call, a 404 meant exactly that, so
+  // converging it to 'ok' let the UI settle idempotently. The owner-gated bridge
+  // route has a different vocabulary: it answers 404 when the APP is not found
+  // for this session (assertOwnsErpApp -> NotFound), and the data API itself
+  // reports an already-deleted record as 200 {deleted:false}, never 404.
+  //
+  // Treating an ownership 404 as success would be actively harmful in
+  // settleDebt: the delete would fake-succeed, the follow-up create would then
+  // fail the same way, and the open debt would disappear from the merchant's
+  // screen while still existing on the server. So a 404 is now a real error.
+  if (!res.ok) {
     const message =
       res.status === 429
         ? 'Trop de changements d’un coup — patientez un instant puis réessayez.'
-        : typeof data?.message === 'string'
-          ? (data.message as string)
-          : `La suppression a échoué (${res.status}).`;
+        : res.status === 404
+          ? 'Boutique introuvable — rechargez la page puis réessayez.'
+          : typeof data?.message === 'string'
+            ? (data.message as string)
+            : `La suppression a échoué (${res.status}).`;
     return { status: 'error', message };
   }
   return { status: 'ok', data: { ok: true } };

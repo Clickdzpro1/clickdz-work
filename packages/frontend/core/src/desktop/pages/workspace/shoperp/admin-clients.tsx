@@ -45,9 +45,14 @@ import {
 //     Add debt / mark settled; per-client balance in the list + a total KPI.
 //     The Data API has NO update route, so "mark settled" = delete + recreate
 //     the record with settled:true (the house delete+recreate pattern). Writes
-//     go through the OPEN v1 data route (postErpRecord/deleteErpRecord) — the
-//     studio owner has no per-slug write token, exactly like every other
-//     browser-side ERP mutation here degrades to read-only on failure.
+//     go through the owner-authenticated bridge route
+//     (postErpRecord/deleteErpRecord → /api/v1/apps/:slug/erp/collections/*).
+//     SEC-1: these writes previously used the data API's OPEN v1 route, because
+//     the studio owner's browser holds no per-slug write token — but that route
+//     accepted writes from anyone at all, so it is now token-gated like v2 and
+//     the bridge re-derives the token server-side after asserting ownership.
+//     Exactly like every other browser-side ERP mutation here, a failure
+//     degrades to read-only rather than surfacing a scary error.
 //   • Segments: computed client-side tags (fidèle / gros panier / retours /
 //     inactif) as filter chips.
 //   • Export: "copier la liste" → phone,name CSV to the clipboard for a
@@ -415,7 +420,7 @@ export const ClientsAdmin = ({
     [openKey, roster]
   );
 
-  // --- Créances mutations (v1 open data route; degrade to read-only) -------
+  // --- Créances mutations (owner-authed bridge route; degrade to read-only) --
 
   const addDebt = useCallback(
     async (clientPhone: string, amount: number, note: string) => {
