@@ -53,6 +53,14 @@ import {
 // is safe on the caps hot path (no I/O). The orchestrator merges R8 files, so
 // this static import resolves at boot; flags-off it just returns false.
 import { waCapsEnabled } from './clickdz-wa-client';
+// Horloge's trigger helpers (clickdz-agent-triggers.ts). The reset route uses
+// `deleteTrigger` rather than deleting trigger keys directly, because it also
+// ZREMs the caller's members from the GLOBAL cross-user due zset — the one thing
+// a per-user wipe must prune rather than delete.
+import {
+  deleteTrigger,
+  listTriggers,
+} from './clickdz-agent-triggers';
 // SEC-2: the pulse reads the shop's `orders` collection, which the read gate
 // protects, so it must carry the same per-slug token every other internal reader
 // now sends. Derived server-side per call; never logged, never returned.
@@ -136,6 +144,62 @@ const dailyRunCountKey = (userId: string, day: string) =>
 // State-flag TTL (Cache API takes MS). 90d, re-armed on write — matches the
 // tg-binding lifetime so a settings toggle sticks.
 const STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// RESET — the exact keys POST /agents/:agent/reset removes.
+//
+// This is deliberately INDEX-DRIVEN rather than glob-driven, and that choice is
+// the whole safety story.
+//
+// Threads and runs are keyed per-USER, with the agent stored INSIDE the record:
+//
+//   clickdz:agent:<userId>:<threadId>       (thread.agent says which agent)
+//   clickdz:agentrun:<userId>:<runId>       (record.agentId says which agent)
+//
+// So the intuitive patterns — `clickdz:agent:<userId>:*` and
+// `clickdz:agentrun:<userId>:*` — would sweep up the OTHER agent's threads and
+// run history as well. Resetting Hermes would silently destroy OpenClaw. Redis
+// `*` also spans `:`, so those globs are far broader than they look.
+//
+// Instead we read each agent's OWN index (a thread-id list and a run-id zset,
+// both already keyed per-agent) and delete only those ids. Nothing is guessed.
+//
+// Two neighbours share this Redis DB and the `clickdz:` prefix and must never be
+// touched: `clickdz:appdata:<slug>:<collection>` (the live shop — orders,
+// products, customers, settings; Hermes only READS these) and
+// `clickdz:apps:published:<ownerId>`. Because we never glob, they are
+// unreachable by construction rather than by careful pattern-writing.
+//
+// The fixed, per-agent singletons that CAN be named exactly:
+export function resetSingletonKeys(userId: string, agent: AgentName): string[] {
+  return [
+    // The thread-id index for this agent.
+    `clickdz:agent:index:${userId}:${agent}`,
+    // The provisioning record. Removing it is what returns the merchant to the
+    // setup wizard — there is no other way to un-provision, since every config
+    // PUT forces provisioned:true.
+    `clickdz:agent:config:${userId}:${agent}`,
+    // The run-id index (zset) for this agent.
+    `clickdz:agentruns:${userId}:${agent}`,
+    // Long-term memory: facts, preferences, summaries.
+    `clickdz:agentmem:${userId}:${agent}`,
+    // The informational enable flag.
+    `clickdz:agentstate:${userId}:${agent}`,
+  ];
+}
+
+/** The per-thread key — agent-scoped only via the index we read the id from. */
+export const resetThreadKey = (userId: string, threadId: string) =>
+  `clickdz:agent:${userId}:${threadId}`;
+
+/** The per-run record + its SSE replay list. */
+export const resetRunKeys = (userId: string, runId: string) => [
+  `clickdz:agentrun:${userId}:${runId}`,
+  `clickdz:agentrun:${userId}:${runId}:events`,
+];
+
+/** Upper bound on ids pulled from an index, so a reset is always bounded. */
+const RESET_MAX_IDS = 500;
 
 // ---------------------------------------------------------------------------
 // R11 — SHOP PULSE (WS11-9, Pouls). The PulseCard hero on the Bureau reads the
@@ -910,5 +974,153 @@ export class ClickDzAgentsController {
       deleted = false; // fail-soft: a delete failure is reported, never a 500
     }
     return { deleted };
+  }
+
+  /**
+   * UNLINK an explicit list of keys, re-checking each one.
+   *
+   * Defence in depth: every key here was built from a per-agent index, so it is
+   * already owner-scoped — but each is re-verified to start with `clickdz:agent`
+   * and to contain the caller's id before deletion. The cost of a mistake in
+   * this Redis DB is a merchant's orders, so the check is worth its microsecond.
+   *
+   * UNLINK rather than DEL so reclamation happens off Redis's main thread.
+   */
+  private async unlinkKeys(keys: string[], userId: string): Promise<number> {
+    const safe = Array.from(
+      new Set(
+        keys.filter(k => k.startsWith('clickdz:agent') && k.includes(userId))
+      )
+    );
+    if (!safe.length) return 0;
+    let removed = 0;
+    // Chunked so one command never carries an unbounded argument list.
+    for (let i = 0; i < safe.length; i += 100) {
+      const chunk = safe.slice(i, i + 100);
+      try {
+        await this.redis.unlink(...chunk);
+        removed += chunk.length;
+      } catch {
+        /* fail-soft — every one of these keys is TTL'd anyway */
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * POST /api/v1/agents/:agent/reset — wipe THIS caller's state for ONE agent
+   * and return it to its first-run state.
+   *
+   * Why this route exists: there was no way to reset an agent. Configs are
+   * write-only (every PUT forces `provisioned: true`), and runs, memory and
+   * artifacts had no delete path at all — so a merchant whose Hermes had
+   * accumulated bad state could not start over, and neither could we.
+   *
+   * Order matters, and it is not the obvious one:
+   *
+   *  1. CHANNELS FIRST, through the disconnect helpers rather than by deleting
+   *     keys. The channel record holds the SEALED bot token, and that token is
+   *     what lets us call Telegram's deleteWebhook / the WhatsApp gateway's
+   *     deleteInstance. Delete the key first and those external registrations
+   *     are orphaned — still pointed at this server, with no way left to
+   *     retract them. (Channels are left to the existing disconnect routes; we
+   *     deliberately do NOT touch `clickdz:agentchan:*` here, and say so in the
+   *     response.)
+   *  2. TRIGGERS via `deleteTrigger`, which also ZREMs the caller's members
+   *     from the GLOBAL due zset. Deleting the trigger records directly would
+   *     leave the sweep firing schedules whose definition no longer exists.
+   *  3. Threads and runs by reading each agent's OWN index for ids, never by
+   *     globbing. Both families are keyed per-USER with the agent stored inside
+   *     the record, so `clickdz:agent:<userId>:*` would take the other agent's
+   *     threads too — resetting Hermes would silently wipe OpenClaw.
+   *  4. The named per-agent singletons (config, memory, indexes, state flag).
+   *
+   * NOT touched, deliberately: the shop (`clickdz:appdata:*`), the published-app
+   * registry, integration flows, the shared artifacts/spend/daily-counter keys
+   * (one per USER across every agent — wiping "just hermes" through those would
+   * silently reset OpenClaw's accounting too), and the global due zset itself.
+   *
+   * Idempotent: resetting an already-clean agent removes nothing and still
+   * returns 200. Fail-soft throughout — a partial wipe reports what it did.
+   */
+  @Post('/api/v1/agents/:agent/reset')
+  async resetAgent(
+    @CurrentUser() user: CurrentUser,
+    @Param('agent') agentParam: string
+  ): Promise<{
+    ok: true;
+    agent: AgentName;
+    keysRemoved: number;
+    triggersRemoved: number;
+    note: string;
+  }> {
+    this.assertEnabled();
+    const agent = normalizeAgent(agentParam);
+    if (!agent) {
+      throw new BadRequest('Unknown agent');
+    }
+
+    // (2) Triggers — through the helper, so the global due zset stays correct.
+    let triggersRemoved = 0;
+    try {
+      const triggers = await listTriggers(this.redis as any, user.id, agent);
+      for (const t of triggers) {
+        try {
+          await deleteTrigger(this.redis as any, user.id, t.id);
+          triggersRemoved += 1;
+        } catch {
+          /* fail-soft per trigger */
+        }
+      }
+    } catch {
+      /* fail-soft: no trigger list ⇒ nothing to prune */
+    }
+
+    // (3) THREADS — ids come from this agent's own index, so the other agent's
+    // threads (which share the `clickdz:agent:<userId>:` namespace) are never
+    // touched.
+    const keys: string[] = [];
+    try {
+      const raw = await this.cache.get<unknown>(
+        `clickdz:agent:index:${user.id}:${agent}`
+      );
+      const threadIds = Array.isArray(raw)
+        ? raw.filter((x): x is string => typeof x === 'string')
+        : [];
+      for (const id of threadIds.slice(0, RESET_MAX_IDS)) {
+        keys.push(resetThreadKey(user.id, id));
+      }
+    } catch {
+      /* fail-soft: no index ⇒ no threads we can safely identify */
+    }
+
+    // (3b) RUNS — same reasoning: the run-id zset is per-agent, the run KEY is
+    // per-user, so the index is the only safe source of ids.
+    try {
+      const runs = await listAgentRuns(
+        this.redis as any,
+        user.id,
+        agent,
+        100 // listAgentRuns clamps to 100 internally
+      );
+      for (const r of runs) {
+        keys.push(...resetRunKeys(user.id, r.runId));
+      }
+    } catch {
+      /* fail-soft */
+    }
+
+    // (4) The named per-agent singletons.
+    keys.push(...resetSingletonKeys(user.id, agent));
+
+    const keysRemoved = await this.unlinkKeys(keys, user.id);
+
+    return {
+      ok: true,
+      agent,
+      keysRemoved,
+      triggersRemoved,
+      note: 'Channels are not reset here — disconnect them first so their external webhooks are retracted. Your shop data is never touched.',
+    };
   }
 }
