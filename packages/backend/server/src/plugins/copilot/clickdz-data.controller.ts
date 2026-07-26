@@ -74,7 +74,13 @@ const CDZ_PG_MIRROR_TIMEOUT_MS = Math.max(
 // generated app invented stays public rather than 401-ing the buyer-facing
 // storefront; the PII set is small + well-known (audited from both templates).
 // Exact literals harvested from the shop/ERP clients: orders, customers,
-// clients, expenses, depenses, caisse.
+// clients, expenses, depenses, caisse, creances.
+//
+// SEC-2 added `creances` — the client debt ledger. Each row carries a customer's
+// phone number alongside how much they owe, which is at least as sensitive as the
+// rest of this set. It was omitted originally because the studio read it
+// anonymously and gating it would have blanked the panel; now that studio reads go
+// through the owner-authenticated bridge route, it can be protected.
 const SENSITIVE_COLLECTIONS = new Set([
   'orders',
   'customers',
@@ -82,6 +88,7 @@ const SENSITIVE_COLLECTIONS = new Set([
   'expenses',
   'depenses',
   'caisse',
+  'creances',
 ]);
 
 // Money documents are stored month-partitioned as `<prefix>-YYYYMM` (a ':' is

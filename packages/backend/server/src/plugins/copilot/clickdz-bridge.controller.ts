@@ -4099,10 +4099,30 @@ export class ClickDzBridgeController {
     slug: string,
     collection: string
   ): Promise<ErpRecord[] | null> {
+    // SEC-2: carry the per-slug read/write token on internal reads.
+    //
+    // This helper is the backend's own read path for every ERP collection —
+    // orders, caisse, invoices, customers, products, suppliers. It previously
+    // sent no credential, which works only while CDZ_DATA_READ_GATE is off. The
+    // moment that gate is switched on to stop anonymous scraping of buyers'
+    // phone numbers and addresses, every one of these internal reads would 401
+    // and the ERP backend would break wholesale — courier sync, reconciliation,
+    // invoicing, the dashboard.
+    //
+    // The token is the same value verifyDataToken checks on the read side (the
+    // gate reuses the write secret deliberately — no new auth mechanism), it is
+    // re-derived server-side per request, and it never reaches the browser.
+    // Sending it while the gate is OFF is a no-op: the @Public GET ignores an
+    // Authorization header it does not need. So this is safe to ship BEFORE the
+    // flag flips, which is exactly the staged rollout the gate was designed for.
+    const token = dataWriteToken(slug);
     const res = await fetch(
       `${this.erpDataBase(slug)}/${collection}?limit=500`,
       {
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
       }
     ).catch(() => null);
@@ -5979,6 +5999,59 @@ export class ClickDzBridgeController {
    * own validated routes (caisse/invoices/orders/products/...). Anything not in
    * STUDIO_OWNED_COLLECTIONS is refused with a typed 400.
    */
+  /**
+   * SEC-2 — GET /api/v1/apps/:slug/erp/collections/:collection (auth'd,
+   * owner-only). Owner-authenticated READ of any of the shop's collections.
+   *
+   * WHY THIS EXISTS: the studio reads its ERP panels straight off the data API's
+   * @Public GET with no credential at all — 8 call sites across 5 surfaces
+   * (orders, customers, creances). That works today only because the read gate
+   * (CDZ_DATA_READ_GATE) is off, which is exactly the problem: while it is off,
+   * ANYONE who knows a shop slug can dump that shop's orders and customers,
+   * i.e. Algerian buyers' phone numbers and street addresses. Slugs are public
+   * by construction — they are in every storefront URL.
+   *
+   * The gate cannot simply be switched on, because the studio's own reads would
+   * start 401-ing and every ERP panel would blank. So the studio needs an
+   * authenticated read channel first — this is it, and it is the mirror image of
+   * the SEC-1 write route: assert ownership from the session, re-derive the
+   * per-slug token SERVER-SIDE, and read through it. The token never reaches the
+   * browser.
+   *
+   * No allowlist here (unlike the write route): reading is not destructive, and
+   * the caller has already proven they own the shop, so they are entitled to any
+   * of its collections. The collection name is still shape-validated by the data
+   * API itself.
+   */
+  // Deliberately NOT a bare @Throttle('strict'). The guard keys a bare named
+  // throttler as `${tracker};strict`, i.e. ONE bucket of 20 requests/60s shared
+  // across every strict route in this controller — and this route now absorbs the
+  // studio's collection reads (admin-clients alone loads 3, reports 4). A merchant
+  // moving between panels within a minute would exhaust the shared bucket and get
+  // 429s on their reads AND on any subsequent write. Supplying an explicit
+  // limit/ttl makes the guard append ';custom' and key the bucket PER HANDLER
+  // (see CloudThrottlerGuard.handleRequest + generateKey), so heavy read traffic
+  // can no longer starve the write routes. 120/60s is generous for a human
+  // browsing panels and still bounds abuse.
+  @Throttle('default', { limit: 120, ttl: 60_000 })
+  @Get('/api/v1/apps/:slug/erp/collections/:collection')
+  async erpStudioCollectionList(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('collection') collection: string,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const rows = await this.erpList(slug, collection);
+    if (!rows) {
+      res
+        .status(HttpStatus.BAD_GATEWAY)
+        .json({ error: 'data_api_unavailable' });
+      return;
+    }
+    return { ok: true, records: rows };
+  }
+
   @Throttle('strict')
   @Post('/api/v1/apps/:slug/erp/collections/:collection')
   async erpStudioCollectionCreate(

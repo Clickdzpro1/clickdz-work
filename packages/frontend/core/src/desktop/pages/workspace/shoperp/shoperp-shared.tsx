@@ -561,8 +561,21 @@ export async function fetchErpSummary(slug: string): Promise<ErpSummaryOutcome> 
 }
 
 /**
- * GET a full collection from the public per-slug data API (no token needed for
- * reads — same design the deployed shop/ERP uses). Newest-first, capped at 500.
+ * GET a full collection through the owner-authenticated bridge route.
+ * Newest-first, capped at 500.
+ *
+ * SEC-2: this used to read the data API's @Public GET directly, with no
+ * credential. That works only while CDZ_DATA_READ_GATE is off — and while it is
+ * off, anyone who knows a shop slug can dump that shop's `orders` and
+ * `customers`, i.e. Algerian buyers' phone numbers and street addresses. Slugs
+ * are public by construction; they appear in every storefront URL.
+ *
+ * The gate could not be switched on while the studio read anonymously, because
+ * all 8 sensitive-collection reads across 5 panels (orders, customers, creances)
+ * would have started 401-ing and every ERP panel would have blanked. So reads now
+ * go through GET /api/v1/apps/:slug/erp/collections/:collection, which asserts
+ * app ownership from the session and re-derives the per-slug token server-side —
+ * the mirror image of the SEC-1 write route. The token never reaches the browser.
  */
 export async function fetchErpCollection<T = Record<string, unknown>>(
   storeSlug: string,
@@ -570,15 +583,24 @@ export async function fetchErpCollection<T = Record<string, unknown>>(
 ): Promise<T[]> {
   const res = await fetch(
     cdzApiUrl(
-      `/api/v2/apps-data/${encodeURIComponent(storeSlug)}/${encodeURIComponent(collection)}?limit=500`
+      `/api/v1/apps/${encodeURIComponent(storeSlug)}/erp/collections/${encodeURIComponent(collection)}`
     ),
-    { method: 'GET', headers: { Accept: 'application/json' } }
+    {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    }
   );
   if (!res.ok) {
     throw new Error(`Could not load ${collection} (${res.status})`);
   }
   const data = (await res.json().catch(() => null)) as unknown;
-  return Array.isArray(data) ? (data as T[]) : [];
+  // The bridge wraps its payload as { ok, records } (the house shape for
+  // owner-gated ERP routes); the old data-API route returned a bare array. Accept
+  // both so this helper stays correct whichever route it is pointed at.
+  if (Array.isArray(data)) return data as T[];
+  const records = (data as { records?: unknown } | null)?.records;
+  return Array.isArray(records) ? (records as T[]) : [];
 }
 
 // Admin mutations return a discriminated outcome; 'unavailable' means the
