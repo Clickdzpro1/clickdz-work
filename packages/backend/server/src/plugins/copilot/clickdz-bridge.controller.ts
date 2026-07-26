@@ -6023,7 +6023,17 @@ export class ClickDzBridgeController {
    * of its collections. The collection name is still shape-validated by the data
    * API itself.
    */
-  @Throttle('strict')
+  // Deliberately NOT a bare @Throttle('strict'). The guard keys a bare named
+  // throttler as `${tracker};strict`, i.e. ONE bucket of 20 requests/60s shared
+  // across every strict route in this controller — and this route now absorbs the
+  // studio's collection reads (admin-clients alone loads 3, reports 4). A merchant
+  // moving between panels within a minute would exhaust the shared bucket and get
+  // 429s on their reads AND on any subsequent write. Supplying an explicit
+  // limit/ttl makes the guard append ';custom' and key the bucket PER HANDLER
+  // (see CloudThrottlerGuard.handleRequest + generateKey), so heavy read traffic
+  // can no longer starve the write routes. 120/60s is generous for a human
+  // browsing panels and still bounds abuse.
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/collections/:collection')
   async erpStudioCollectionList(
     @CurrentUser() user: CurrentUser,

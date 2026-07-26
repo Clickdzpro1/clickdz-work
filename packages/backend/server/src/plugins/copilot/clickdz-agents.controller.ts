@@ -53,6 +53,10 @@ import {
 // is safe on the caps hot path (no I/O). The orchestrator merges R8 files, so
 // this static import resolves at boot; flags-off it just returns false.
 import { waCapsEnabled } from './clickdz-wa-client';
+// SEC-2: the pulse reads the shop's `orders` collection, which the read gate
+// protects, so it must carry the same per-slug token every other internal reader
+// now sends. Derived server-side per call; never logged, never returned.
+import { dataWriteToken } from './cdz-data-token';
 // R12 (custom agents — owner: Fonderie, clickdz-agent-registry.ts). The registry
 // is FRAMEWORK-LIGHT (plain functions taking the raw redis handle first — the
 // SAME RunRedis-ish slice this controller already injects as CacheRedis), so the
@@ -465,10 +469,22 @@ export class ClickDzAgentsController {
     collection: string
   ): Promise<PulseRecord[]> {
     try {
+      // SEC-2: carry the per-slug token, like the bridge's erpList and the
+      // courier's list helpers now do. This reads `orders`, which the read gate
+      // protects — and because this helper swallows every failure into [], an
+      // unauthenticated read would not error once the gate is on: it would
+      // silently report the merchant's pulse as zero orders and zero revenue,
+      // with `connected: true`. A wrong number presented confidently is worse
+      // than an error. Harmless while the gate is off (the @Public GET ignores a
+      // header it does not need). Never logged.
+      const token = dataWriteToken(dataSlug);
       const res = await fetch(
         `${CDZ_ERP_EXTERNAL_BASE}/api/v2/apps-data/${dataSlug}/${collection}?limit=500`,
         {
-          headers: { Accept: 'application/json' },
+          headers: {
+            Accept: 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
           signal: AbortSignal.timeout(PULSE_DATA_TIMEOUT_MS),
         }
       ).catch(() => null);
