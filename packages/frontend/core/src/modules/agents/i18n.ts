@@ -657,7 +657,7 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
 
   'connections.telegram.title': { fr: 'Telegram', ar: 'تيليغرام' },
   'connections.telegram.subtitle': {
-    fr: 'Discutez avec vos agents depuis Telegram — donnez vos tâches men l\'application.',
+    fr: 'Discutez avec vos agents depuis Telegram — donnez vos tâches depuis l\'application.',
     ar: 'هدر مع الوكلاء تاعك من تيليغرام — أعطي خدماتك من الأبليكاسيون.',
   },
   'connections.telegram.dark': {
