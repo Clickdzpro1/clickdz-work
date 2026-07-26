@@ -54,7 +54,12 @@ jobs:
           electron-install: false
           full-cache: true
       - name: Run clickdz money guards
-        working-directory: packages/backend/server
-        # Scoped glob: only the pure clickdz specs, so this job stays fast and
-        # cannot be broken by unrelated server-test failures.
-        run: yarn ava "src/__tests__/copilot/copilot-clickdz-*.spec.ts" --forbid-only
+        # Must go through `yarn affine @affine/server <script>` from the repo
+        # ROOT, the way every other test job in this repo does. Running `yarn ava`
+        # inside packages/backend/server breaks ava's prelude resolution —
+        # it looks for node_modules/.cache/ava/src/prelude.ts and fails with
+        # ERR_MODULE_NOT_FOUND before any test executes.
+        #
+        # test:clickdz is scoped to copilot-clickdz-*.spec.ts, so this job stays
+        # fast and cannot be broken by unrelated server-test failures.
+        run: yarn affine @affine/server test:clickdz --forbid-only
