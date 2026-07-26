@@ -921,8 +921,18 @@ export class ClickDzCourierController {
    * callers map that to a typed 502. Never throws.
    */
   private async erpListOrders(slug: string): Promise<ErpRecord[] | null> {
+    // SEC-2: carry the per-slug token on internal reads. `orders` is one of the
+    // PII-bearing collections the read gate protects, so once
+    // CDZ_DATA_READ_GATE is on, an unauthenticated read here would 401 and the
+    // whole courier lifecycle (ship, track, sync, COD reconcile) would break.
+    // Harmless while the gate is off — the @Public GET ignores a header it does
+    // not need — so this ships safely ahead of the flag. Never logged.
+    const token = dataWriteToken(slug);
     const res = await fetch(`${this.erpDataBase(slug)}/orders?limit=500`, {
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
     }).catch(() => null);
     if (!res || !res.ok) return null;
@@ -938,10 +948,16 @@ export class ClickDzCourierController {
     slug: string,
     collection: string
   ): Promise<ErpRecord[] | null> {
+    // SEC-2: same reasoning as erpListOrders — this reads caisse partitions for
+    // the pending-COD marker dedupe, and `caisse` is read-gate protected.
+    const token = dataWriteToken(slug);
     const res = await fetch(
       `${this.erpDataBase(slug)}/${collection}?limit=500`,
       {
-        headers: { Accept: 'application/json' },
+        headers: {
+          Accept: 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
       }
     ).catch(() => null);
