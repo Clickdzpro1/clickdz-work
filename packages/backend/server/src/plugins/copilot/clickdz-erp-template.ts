@@ -818,6 +818,15 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     for(var k in o){ if(k!=="id" && k!=="createdAt") body[k]=o[k]; }
     body.status = target;
     if(!body.orderedAt) body.orderedAt = parseDate(o);
+    // MONEY-3: stamp the delivery moment on a genuine transition into Livrée,
+    // once. The caisse pending-COD marker and the courier reconcile are
+    // partitioned BY MONTH and must be dated by delivery, not by order
+    // placement: a COD placed late in one month and delivered in the next
+    // otherwise lands in the wrong month's books. Guarded on the PREVIOUS status
+    // so re-marking an already-delivered order cannot move its delivery date.
+    if(target==="Livrée" && o.status!=="Livrée" && !body.deliveredAt){
+      body.deliveredAt = new Date().toISOString();
+    }
     return withBusy("ord:"+o.id, function(){
       return replaceRec("orders", o.id, body).then(function(){ toast("Commande → "+target,"ok"); return loadAll(); });
     });

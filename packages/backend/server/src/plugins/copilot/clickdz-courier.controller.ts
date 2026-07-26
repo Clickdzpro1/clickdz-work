@@ -73,6 +73,7 @@ import {
   buildPendingCodEntry,
   caisseStr,
   hasPendingCodMarker,
+  pendingCodMarkerPartitions,
   type CaisseRecord,
 } from './clickdz-erp-caisse';
 
@@ -1033,9 +1034,18 @@ export class ClickDzCourierController {
       const built = buildPendingCodEntry(order as CaisseRecord);
       if (!built) return; // total <= 0 → nothing to collect (no-op, not an error)
       const ref = caisseStr((built.entry as ErpRecord).orderRef).trim();
-      const existing = await this.erpListCollection(slug, built.collection);
-      if (existing && ref && hasPendingCodMarker(existing as CaisseRecord[], ref)) {
-        return; // marker already present — stay idempotent
+      // MONEY-3: check EVERY partition the marker could already be in. Markers
+      // are filed by delivery month now, but ones written before deliveredAt
+      // existed sit in the placement month, and markers are never cleaned up —
+      // a single-partition check would let the same COD be counted twice in
+      // pendingCodTotal, permanently.
+      if (ref) {
+        for (const coll of pendingCodMarkerPartitions(order as CaisseRecord)) {
+          const rows = await this.erpListCollection(slug, coll);
+          if (rows && hasPendingCodMarker(rows as CaisseRecord[], ref)) {
+            return; // marker already present somewhere — stay idempotent
+          }
+        }
       }
       await this.erpCreateRecord(
         slug,

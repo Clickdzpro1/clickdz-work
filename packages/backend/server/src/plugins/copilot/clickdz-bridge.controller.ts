@@ -476,6 +476,35 @@ const publishedAppsKey = (ownerId: string) =>
 const APP_SLUG_RE = /^[a-z0-9-]{3,50}$/;
 
 // ---------------------------------------------------------------------------
+// MONEY-2 — settlement idempotency lock.
+//
+// markOrderPaid is reached from the Chargily payment webhook. Its dedupe was
+// read-then-write over a remote HTTP data API: list orders, check whether every
+// copy is already paid, then write. Two concurrent deliveries of the SAME
+// payment event (Chargily retries on timeout, and the handler chain is five-plus
+// serial HTTPS round-trips through our own public URL, so a timeout-retry
+// overlapping the still-running first delivery is the normal case, not the edge
+// case) both pass the check and both write. Result: the order's total counted
+// twice in the caisse `in/chargily` bucket, so day-close and reconcile show the
+// drawer over by one order.
+//
+// Same NX-lock idiom as clickdz-courier.controller.ts's shipLockKey, for the
+// same reason and with the same properties: keyed per (slug, orderRef), short
+// TTL so a crashed holder auto-heals, and FAIL-OPEN on a Redis outage —
+// availability beats a rare double-count, and the `already` short-circuit still
+// covers sequential retries. On contention we return 'in_progress'; the webhook
+// answers 200 regardless (it must, or Chargily retries forever), and the next
+// provider retry lands after the lock clears and hits `already`.
+// orderRef is bounded to 80 chars here (matching CHARGILY_ORDER_REF_MAX, which
+// is declared further down) so a forged webhook can never mint an unbounded
+// Redis key. The literal avoids a use-before-declaration on that const.
+const payLockKey = (slug: string, orderRef: string) =>
+  `clickdz:pay:paid:lock:${slug}:${orderRef.slice(0, 80)}`;
+// Longer than the worst-case chain (list + put + N deletes + caisse list +
+// caisse create, each with a 15s abort budget) but short enough to self-heal.
+const PAY_LOCK_TTL_SEC = 90;
+
+// ---------------------------------------------------------------------------
 // C5 — TEMPLATE SETTINGS (SOUK/P4 ShopERP). /apps/template accepts an optional
 // `settings` object that customizes the shop/erp templates at CREATION time by
 // substituting four tokens the template files now carry. The DEFAULTS below are
@@ -5658,10 +5687,20 @@ export class ClickDzBridgeController {
     try {
       const built = buildPendingCodEntry(order as CaisseRecord);
       if (!built) return;
-      const existing = await this.erpList(slug, built.collection);
       const ref = caisseStr((built.entry as ErpRecord).orderRef);
-      if (existing && ref && hasPendingCodMarker(existing as CaisseRecord[], ref)) {
-        return; // marker already present — stay idempotent
+      // MONEY-3: check EVERY partition the marker could already be in, not just
+      // the one we are about to write to. Markers are filed by delivery month
+      // now, but a courier poll that ran before anything stamped deliveredAt
+      // filed by placement month — and markers are never cleaned up, so a
+      // single-partition check would let the same COD be counted twice in
+      // pendingCodTotal, permanently.
+      if (ref) {
+        for (const coll of pendingCodMarkerPartitions(order as CaisseRecord)) {
+          const rows = await this.erpList(slug, coll);
+          if (rows && hasPendingCodMarker(rows as CaisseRecord[], ref)) {
+            return; // marker already present somewhere — stay idempotent
+          }
+        }
       }
       const created = await this.erpCreateRecord(
         slug,
@@ -5882,8 +5921,34 @@ export class ClickDzBridgeController {
       this.erpWriteFailed(res, saved.status);
       return;
     }
+    // MONEY-4: a cross-month move must not leave the entry in BOTH partitions.
+    // The PUT above wrote it into the new month; if removing the old copy fails
+    // silently, the same money is counted twice by any report that spans both
+    // months. erpDeleteRecord already logs its own failure, but that is invisible
+    // to the merchant, so retry once and then say so loudly in the log with the
+    // exact ids needed to clean it up by hand.
     if (foundCollection && foundCollection !== targetCollection) {
-      await this.erpDeleteRecord(slug, foundCollection, entryId, token);
+      let dropped = await this.erpDeleteRecord(
+        slug,
+        foundCollection,
+        entryId,
+        token
+      );
+      if (!dropped) {
+        dropped = await this.erpDeleteRecord(
+          slug,
+          foundCollection,
+          entryId,
+          token
+        );
+      }
+      if (!dropped) {
+        this.logger.error(
+          `[erp] caisse-update DOUBLE-COUNT RISK slug=${slug} id=${entryId} ` +
+            `moved ${foundCollection} -> ${targetCollection} but the old copy ` +
+            `could not be deleted; it now exists in BOTH partitions`
+        );
+      }
     }
     this.logger.log(
       `[erp] caisse-update slug=${slug} user=${user.id} id=${entryId} coll=${targetCollection}`
@@ -6703,19 +6768,29 @@ export class ClickDzBridgeController {
     ) {
       throw new BadRequest('Staff record too large');
     }
-    // delete+recreate on the business key (self-heals any duplicates).
-    for (const m of matches) {
-      const recId = erpStr(m.id);
-      if (!recId) continue;
-      if (!(await this.erpDeleteRecord(slug, 'staff', recId, token))) {
-        res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
-        return;
-      }
+    // MONEY-1: upsert IN PLACE, then clean up duplicates (see markOrderPaid).
+    // The delete-then-recreate this replaces destroyed the staff record if the
+    // recreate failed after the deletes landed.
+    const survivorRecId = erpStr(base.id);
+    if (!survivorRecId) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
+      return;
     }
-    const created = await this.erpCreateRecord(slug, 'staff', merged, token);
+    const created = await this.erpPutRecord(
+      slug,
+      'staff',
+      survivorRecId,
+      merged,
+      token
+    );
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
+    }
+    for (const m of matches.slice(1)) {
+      const recId = erpStr(m.id);
+      if (!recId || recId === survivorRecId) continue;
+      await this.erpDeleteRecord(slug, 'staff', recId, token);
     }
     const v = this.erpStaffView(merged);
     this.logger.log(
@@ -6784,18 +6859,29 @@ export class ClickDzBridgeController {
     merged.id = sid;
     merged.nonce = newNonce;
     merged.createdAt = erpStr(base.createdAt) || new Date().toISOString();
-    for (const m of matches) {
-      const recId = erpStr(m.id);
-      if (!recId) continue;
-      if (!(await this.erpDeleteRecord(slug, 'staff', recId, token))) {
-        res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
-        return;
-      }
+    // MONEY-1: upsert IN PLACE, then clean up duplicates (see markOrderPaid).
+    // Losing a staff row here would strand the merchant's team member; the
+    // nonce rotation that revokes their old tokens must not cost the record.
+    const survivorRecId = erpStr(base.id);
+    if (!survivorRecId) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
+      return;
     }
-    const created = await this.erpCreateRecord(slug, 'staff', merged, token);
+    const created = await this.erpPutRecord(
+      slug,
+      'staff',
+      survivorRecId,
+      merged,
+      token
+    );
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
+    }
+    for (const m of matches.slice(1)) {
+      const recId = erpStr(m.id);
+      if (!recId || recId === survivorRecId) continue;
+      await this.erpDeleteRecord(slug, 'staff', recId, token);
     }
     const role = erpStr(merged.role);
     const staffTok = (ERP_STAFF_ROLES as readonly string[]).includes(role)
@@ -7205,25 +7291,51 @@ export class ClickDzBridgeController {
     }
     next.status = status;
     if (!next.orderedAt) next.orderedAt = erpParseDate(base);
-    // Size-check BEFORE deleting: a rejected recreate must never cost the
-    // original record.
+    // MONEY-3: stamp the DELIVERY moment. The pending-COD marker and the caisse
+    // reconcile "expected" side both need to know WHEN a COD order was
+    // delivered, not when it was placed — Algerian COD delivery lags of 2-7 days
+    // mean every order near a month boundary was being filed into the wrong
+    // month's books. Additive field, mirroring the existing paidAt pattern; only
+    // set once so a re-flip to Livrée cannot move an already-recorded delivery.
+    // Only stamp on a genuine transition INTO Livrée, and only once. Re-POSTing
+    // Livrée on an already-delivered order must not move its delivery date (and
+    // therefore must not move which month its COD belongs to) — this route has no
+    // transition gate of its own, so the guard lives here.
+    const wasDelivered = erpStr(base.status) === 'Livrée';
+    if (status === 'Livrée' && !wasDelivered && !next.deliveredAt) {
+      next.deliveredAt = new Date().toISOString();
+    }
+    // Size-check BEFORE writing: a rejected write must never cost the original
+    // record.
     if (Buffer.byteLength(JSON.stringify(next), 'utf8') > ERP_MAX_WRITE_BYTES) {
       throw new BadRequest('Order record too large');
     }
-    for (const m of matches) {
-      const id = erpStr(m.id);
-      if (!id) continue;
-      if (!(await this.erpDeleteRecord(slug, 'orders', id, token))) {
-        res
-          .status(HttpStatus.BAD_GATEWAY)
-          .json({ error: 'data_write_failed' });
-        return;
-      }
+    // MONEY-1: upsert IN PLACE (see markOrderPaid for the full rationale). The
+    // delete-then-recreate this replaces could destroy a merchant's order if the
+    // recreate failed after the deletes landed — on the HUMAN path, where a
+    // merchant advancing an order to Livrée would watch it vanish. The caller
+    // does at least get a 502 here (unlike the webhook path), but there was no
+    // restore, so the record was gone regardless.
+    const survivorId = erpStr(base.id);
+    if (!survivorId) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
+      return;
     }
-    const created = await this.erpCreateRecord(slug, 'orders', next, token);
+    const created = await this.erpPutRecord(
+      slug,
+      'orders',
+      survivorId,
+      next,
+      token
+    );
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
+    }
+    for (const m of matches.slice(1)) {
+      const id = erpStr(m.id);
+      if (!id || id === survivorId) continue;
+      await this.erpDeleteRecord(slug, 'orders', id, token);
     }
     // R2-d (WSE-8): on delivery, write a pending-COD marker so caisse day-close
     // & per-courier reconcile know this order owes its COD. Fail-soft — never
@@ -7364,20 +7476,25 @@ export class ClickDzBridgeController {
     ) {
       throw new BadRequest('Product record too large (8KB cap; use an image URL, not base64)');
     }
-    for (const m of matches) {
-      const id = erpStr(m.id);
-      if (!id) continue;
-      if (!(await this.erpDeleteRecord(slug, 'products', id, token))) {
-        res
-          .status(HttpStatus.BAD_GATEWAY)
-          .json({ error: 'data_write_failed' });
-        return;
-      }
-    }
-    const created = await this.erpCreateRecord(slug, 'products', merged, token);
+    // MONEY-1: upsert IN PLACE when a product already exists (see markOrderPaid
+    // for the full rationale). The delete-then-recreate this replaces would
+    // destroy the merchant's product — title, price, images, stock, reorder
+    // point — if the recreate failed after the deletes had landed. A genuinely
+    // NEW product still goes through create, since there is no id to write to.
+    const survivorId = baseRec ? erpStr(baseRec.id) : '';
+    const created = survivorId
+      ? await this.erpPutRecord(slug, 'products', survivorId, merged, token)
+      : await this.erpCreateRecord(slug, 'products', merged, token);
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
+    }
+    if (survivorId) {
+      for (const m of matches.slice(1)) {
+        const id = erpStr(m.id);
+        if (!id || id === survivorId) continue;
+        await this.erpDeleteRecord(slug, 'products', id, token);
+      }
     }
     this.logger.log(
       `[erp] product upsert slug=${slug} user=${user.id} key=${(sku || titleKey).slice(0, 40)} ${baseRec ? 'replaced' : 'created'}`
@@ -7510,22 +7627,29 @@ export class ClickDzBridgeController {
     ) {
       throw new BadRequest('Settings record too large');
     }
-    // Replace the singleton: drop EVERY existing row first (self-heals
-    // duplicate singletons left by crashed replaces), then recreate.
-    for (const row of rows) {
-      const id = erpStr(row.id);
-      if (!id) continue;
-      if (!(await this.erpDeleteRecord(slug, 'settings', id, token))) {
-        res
-          .status(HttpStatus.BAD_GATEWAY)
-          .json({ error: 'data_write_failed' });
-        return;
-      }
-    }
-    const created = await this.erpCreateRecord(slug, 'settings', merged, token);
+    // MONEY-1: write the singleton IN PLACE, then drop any duplicate rows (see
+    // markOrderPaid). The previous order — delete EVERY row, then recreate —
+    // meant a failed recreate left the shop with NO settings at all: store name,
+    // WhatsApp number, PIN, Chargily keys, all gone. Writing to the surviving
+    // row's id first makes that unreachable; duplicate cleanup after is
+    // best-effort because an extra row is self-healed on the next save, whereas
+    // zero rows is a broken storefront.
+    // Write to the row we MERGED FROM (baseRow), not blindly to rows[0]: when
+    // duplicate singletons exist those can differ, and writing the merged
+    // content to one row while deleting the row it came from would lose the
+    // merge.
+    const survivorId = erpStr(baseRow?.id);
+    const created = survivorId
+      ? await this.erpPutRecord(slug, 'settings', survivorId, merged, token)
+      : await this.erpCreateRecord(slug, 'settings', merged, token);
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
+    }
+    for (const row of rows) {
+      const id = erpStr(row.id);
+      if (!id || id === survivorId) continue;
+      await this.erpDeleteRecord(slug, 'settings', id, token);
     }
     this.logger.log(
       `[erp] settings saved slug=${slug} user=${user.id} fields=${Object.keys(patch).join(',')}`
@@ -7606,19 +7730,23 @@ export class ClickDzBridgeController {
     ) {
       throw new BadRequest('Settings record too large');
     }
-    // Replace the singleton (drop every row first — self-heals dup singletons).
-    for (const row of rows) {
-      const id = erpStr(row.id);
-      if (!id) continue;
-      if (!(await this.erpDeleteRecord(slug, 'settings', id, token))) {
-        res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_write_failed' });
-        return;
-      }
-    }
-    const created = await this.erpCreateRecord(slug, 'settings', merged, token);
+    // MONEY-1: write the singleton IN PLACE, then drop duplicates (see the
+    // sibling erpSaveSettings above — a failed recreate used to leave the shop
+    // with no settings row at all).
+    // Write to the row we MERGED FROM (baseRow), not blindly to rows[0] — see
+    // the sibling erpSaveSettings above.
+    const survivorId = erpStr(baseRow?.id);
+    const created = survivorId
+      ? await this.erpPutRecord(slug, 'settings', survivorId, merged, token)
+      : await this.erpCreateRecord(slug, 'settings', merged, token);
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
+    }
+    for (const row of rows) {
+      const id = erpStr(row.id);
+      if (!id || id === survivorId) continue;
+      await this.erpDeleteRecord(slug, 'settings', id, token);
     }
     // Re-publish only when a runtime:false feature was touched.
     const remint = featuresRequireRemint(parseFeatureCsv(v.patch.features), 'shop');
@@ -7916,15 +8044,31 @@ export class ClickDzBridgeController {
     ) {
       return { applied: false };
     }
-    for (const m of matches) {
+    // MONEY-1: upsert IN PLACE (see markOrderPaid for the full rationale).
+    //
+    // The delete-then-recreate this replaces was the most failure-prone instance
+    // of the pattern in this file: it runs once PER PRODUCT in a loop straight
+    // after a purchase-order receive has already spent writes from the shared
+    // 60/min per-slug budget, so a mid-loop 429 was realistic. When the recreate
+    // failed the product record was destroyed outright — title, price, images,
+    // reorder point, everything — and because the only caller discards this
+    // result, the merchant was never told. Their catalogue silently lost an item.
+    const survivorId = erpStr(baseRec.id);
+    if (!survivorId) return { applied: false };
+    const saved = await this.erpPutRecord(
+      slug,
+      'products',
+      survivorId,
+      merged,
+      token
+    );
+    if (!saved.ok) return { applied: false };
+    for (const m of matches.slice(1)) {
       const id = erpStr(m.id);
-      if (!id) continue;
-      if (!(await this.erpDeleteRecord(slug, 'products', id, token))) {
-        return { applied: false };
-      }
+      if (!id || id === survivorId) continue;
+      await this.erpDeleteRecord(slug, 'products', id, token);
     }
-    const created = await this.erpCreateRecord(slug, 'products', merged, token);
-    return { applied: created.ok };
+    return { applied: true };
   }
 
   /**
@@ -8540,18 +8684,70 @@ export class ClickDzBridgeController {
   }
 
   /**
-   * C6 helper — flip an order's `paid` flag to true via delete+recreate on the
-   * business key `ref` (the SAME mechanism erpOrderStatus uses). Preserves every
-   * field including the exact French `status` string — only ADDS `paid:true` +
-   * `paidAt`. Idempotent: an order already `paid:true` is a no-op ('already').
-   * Returns a short status string for logging; NEVER throws (webhook must ack).
+   * C6 helper — flip an order's `paid` flag to true via an in-place upsert on
+   * the business key `ref` (the SAME mechanism erpOrderStatus uses). Preserves
+   * every field including the exact French `status` string — only ADDS
+   * `paid:true` + `paidAt`. Idempotent: an order already `paid:true` is a no-op
+   * ('already'). Returns a short status string for logging; NEVER throws (the
+   * webhook must ack).
+   *
+   * MONEY-2: serialised per (slug, orderRef) by an NX lock so two concurrent
+   * deliveries of the same payment event cannot both pass the `already` check
+   * and both write a caisse entry. 'in_progress' means another delivery holds
+   * the lock — the caller acks anyway and the provider's next retry sees
+   * 'already'.
    */
   private async markOrderPaid(
     slug: string,
     orderRef: string
-  ): Promise<'paid' | 'already' | 'not_found' | 'write_failed' | 'no_token'> {
+  ): Promise<
+    | 'paid'
+    | 'already'
+    | 'not_found'
+    | 'write_failed'
+    | 'no_token'
+    | 'in_progress'
+  > {
     const token = dataWriteToken(slug);
     if (!token) return 'no_token';
+    // Acquire the settlement lock. FAIL-OPEN: if Redis is unreachable we still
+    // settle the payment (availability over a rare double-count), exactly as the
+    // courier ship lock does.
+    const lockKey = payLockKey(slug, orderRef);
+    let locked = false;
+    try {
+      const acquired = await this.redis.set(
+        lockKey,
+        new Date().toISOString(),
+        'EX',
+        PAY_LOCK_TTL_SEC,
+        'NX'
+      );
+      locked = acquired === 'OK';
+      if (!locked) return 'in_progress';
+    } catch {
+      // Redis down — proceed unlocked rather than dropping a payment.
+      locked = false;
+    }
+    try {
+      return await this.markOrderPaidLocked(slug, orderRef, token);
+    } finally {
+      if (locked) {
+        try {
+          await this.redis.del(lockKey);
+        } catch {
+          // Lock expires on its own; nothing to do.
+        }
+      }
+    }
+  }
+
+  /** MONEY-2: the critical section of markOrderPaid, run under the NX lock. */
+  private async markOrderPaidLocked(
+    slug: string,
+    orderRef: string,
+    token: string
+  ): Promise<'paid' | 'already' | 'not_found' | 'write_failed'> {
     const orders = await this.erpList(slug, 'orders');
     if (!orders) return 'write_failed';
     const matches = orders.filter(o => erpStr(o.ref).trim() === orderRef);
@@ -8570,15 +8766,39 @@ export class ClickDzBridgeController {
     if (Buffer.byteLength(JSON.stringify(next), 'utf8') > ERP_MAX_WRITE_BYTES) {
       return 'write_failed';
     }
-    for (const m of matches) {
+    // MONEY-1: upsert IN PLACE, never delete-then-recreate.
+    //
+    // This used to delete every matching copy and then create a fresh record.
+    // If the create failed after the deletes had landed — a 429 from the shared
+    // per-slug write budget (the deletes themselves consume it), a network blip,
+    // or the collection hitting its record cap — the order was GONE from Redis
+    // and from the PG mirror, with no transaction to roll back and no restore
+    // path. The webhook still answered 200, so Chargily never retried: a paid
+    // order simply ceased to exist, at the exact moment money changed hands.
+    //
+    // Writing to the FIRST match's existing id closes that window. erpPutRecord
+    // is a single atomic HSET, so a concurrent reader sees either the old or the
+    // new document, never a gap — the data controller's own upsert() documents
+    // this as "the primitive the delete+recreate path cannot give". Duplicate
+    // copies (only possible from a pre-fix concurrent write) are cleaned up
+    // AFTER the survivor is safely persisted, and their failure is deliberately
+    // non-fatal: a lingering duplicate is recoverable, a lost order is not.
+    const survivorId = erpStr(matches[0].id);
+    if (!survivorId) return 'write_failed';
+    const saved = await this.erpPutRecord(
+      slug,
+      'orders',
+      survivorId,
+      next,
+      token
+    );
+    if (!saved.ok) return 'write_failed';
+    for (const m of matches.slice(1)) {
       const id = erpStr(m.id);
-      if (!id) continue;
-      if (!(await this.erpDeleteRecord(slug, 'orders', id, token))) {
-        return 'write_failed';
-      }
+      if (!id || id === survivorId) continue;
+      // Best-effort: erpDeleteRecord already logs its own failures.
+      await this.erpDeleteRecord(slug, 'orders', id, token);
     }
-    const created = await this.erpCreateRecord(slug, 'orders', next, token);
-    if (!created.ok) return 'write_failed';
     // R15: mirror the paid order into the caisse ledger (fail-soft, deduped) so
     // online revenue shows up in day-close/reconcile alongside COD + cash.
     await this.erpWriteChargilyCaisse(slug, next, token);

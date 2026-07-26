@@ -652,5 +652,27 @@ export function buildTrackingPatch(
     status: orderStatus,
     trackingAt: str(now),
   };
+  // MONEY-3: stamp the DELIVERY moment here, because this is the patch every
+  // courier-driven delivery flows through — the courier poll (syncOneOrder), the
+  // manual tracking route, and any future provider webhook all call this one
+  // builder. The pending-COD marker and the caisse reconcile "expected" side are
+  // partitioned BY MONTH and must be dated by delivery, not by order placement:
+  // with Algerian COD lags of 2-7 days, an order placed 28 June and delivered
+  // 3 July otherwise lands in June's books, so July never sees the COD it is
+  // owed and June changes retroactively after it may already have been closed.
+  //
+  // Stamping in the builder (rather than only in the studio's order-status
+  // route) is what makes the fix cover the COMMON case. If only the studio
+  // stamped it, courier deliveries would keep the old placement-date behaviour
+  // while manual clicks moved — two paths disagreeing about which month a COD
+  // belongs to, which is worse than the original bug.
+  //
+  // The caller merges this patch onto the stored order, so a `deliveredAt`
+  // already present is overwritten only when this transition is itself a
+  // delivery; callers that must preserve a first-delivery timestamp drop the
+  // field before merging (see erpOrderStatus's !next.deliveredAt guard).
+  if (orderStatus === 'Livrée') {
+    patch.deliveredAt = str(now);
+  }
   return { ok: true, patch, orderStatus };
 }
