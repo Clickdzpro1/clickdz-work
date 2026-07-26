@@ -272,7 +272,18 @@ export const CLICKDZ_THEMES: ClickDzTheme[] = [
   },
 ];
 
-export const DEFAULT_CLICKDZ_THEME_ID = 'midnight';
+/**
+ * Daylight is the default preset. Merchants use ClickDz on mid-range Android
+ * phones, often outdoors or under bright shop lighting, where a light surface
+ * is simply more legible than the dark brand palette. Midnight stays one click
+ * away in Appearance for anyone who prefers it.
+ *
+ * This only selects which preset's CSS variables apply. The light/dark *base*
+ * is enforced by `ClickDzThemeModifier` only once a user has explicitly picked
+ * a preset (`explicitlySet$`), so changing this default never yanks the mode
+ * out from under an existing user who already made a choice.
+ */
+export const DEFAULT_CLICKDZ_THEME_ID = 'daylight';
 
 export const CLICKDZ_THEME_MAP: Record<string, ClickDzTheme> = Object.fromEntries(
   CLICKDZ_THEMES.map(theme => [theme.id, theme])

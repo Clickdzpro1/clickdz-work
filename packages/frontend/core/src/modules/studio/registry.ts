@@ -89,7 +89,7 @@ export interface StudioDef {
  * (a distinct 'create'-group surface, kept last so a flags-off sidebar is
  * untouched).
  *
- * Icons (boot-safe): vdz→FrameIcon, apps(/chat)→AiIcon, shoperp→BlockLinkIcon,
+ * Icons (boot-safe): vdz→FrameIcon, apps(/apps)→AiIcon, shoperp→BlockLinkIcon,
  * voice→VoiceIcon, integrations→BlockLinkIcon, hermes→ChatWithAiIcon,
  * openclaw→KeyboardIcon, agents→ChatWithAiIcon (reused), vpic→FrameIcon
  * (reused). beta: integrations/voice/shoperp/hermes/openclaw/agents/vpic; vdz
@@ -105,9 +105,14 @@ export const STUDIOS: StudioDef[] = [
     testId: 'slider-bar-vdz-studio-button',
   },
   {
+    // Routes to the App Builder's own page, NOT to '/chat'. Pointing this at
+    // '/chat' made it the exact same destination as the sidebar's plain AI
+    // entry, so "ClickDz Apps" opened an empty conversation and the builder
+    // itself was unreachable until after a generation. Keeps AiIcon (boot-safe,
+    // already imported) — the surface is still AI-driven, just its own page.
     id: 'apps',
     label: 'ClickDz Apps',
-    route: '/chat',
+    route: '/apps',
     icon: () => createElement(AiIcon),
     group: 'commerce',
     testId: 'slider-bar-clickdz-apps-button',
@@ -122,8 +127,12 @@ export const STUDIOS: StudioDef[] = [
     beta: true,
   },
   {
+    // Labelled in plain French, not by its internal codename. A merchant
+    // arriving from Facebook selling has no way to guess that "⚡ DzOS" is
+    // where their store lives — and this is the single most important entry
+    // in the whole sidebar for them.
     id: 'shoperp',
-    label: '⚡ DzOS',
+    label: '🛍️ Ma boutique',
     route: '/shoperp',
     icon: () => createElement(BlockLinkIcon),
     group: 'commerce',

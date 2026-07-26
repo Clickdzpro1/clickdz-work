@@ -19,7 +19,17 @@ function ThemeObserver() {
 
 export const ThemeProvider = ({ children }: PropsWithChildren) => {
   return (
-    <NextThemeProvider themes={themes} enableSystem={true}>
+    // ClickDz Work defaults to LIGHT rather than next-themes' built-in
+    // 'system'. Merchants run this on mid-range Android phones — frequently
+    // outdoors or under bright shop lighting — where a light surface is more
+    // legible, and where the OS-level dark mode is often on by default for
+    // battery reasons rather than as a deliberate preference for this app.
+    //
+    // This only sets the value used when NOTHING is persisted yet. next-themes
+    // still writes the user's explicit pick to storage, so 'System' / 'Dark'
+    // remain fully selectable in Settings → Appearance and any existing choice
+    // is honoured untouched.
+    <NextThemeProvider themes={themes} enableSystem={true} defaultTheme="light">
       {children}
       <ThemeObserver />
     </NextThemeProvider>

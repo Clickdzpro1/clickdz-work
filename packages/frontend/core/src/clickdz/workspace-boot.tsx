@@ -1,7 +1,12 @@
 // ClickDz Work — workspace-scoped boot: installs pending onboarding templates
-// once, ensures every workspace has a starter template library, and mounts
-// the floating voice guide. Rendered inside the workspace layout where
-// DocsService is available.
+// once and ensures every workspace has a starter template library. Rendered
+// inside the workspace layout where DocsService is available.
+//
+// The floating voice-guide orb ("call agent") that used to mount here was
+// removed: it captured the Space bar app-wide, streamed the microphone to
+// Deepgram on every workspace, and coached users on AFFiNE doc/edgeless
+// concepts that are irrelevant to a ClickDz merchant. Voice generation and
+// transcription remain available, deliberately, in Voice Studio (/voice).
 import { DocsService } from '@affine/core/modules/doc';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import { useLiveData, useService } from '@toeverything/infra';
@@ -9,7 +14,6 @@ import { useEffect } from 'react';
 
 import { ensureTemplateLibrary, installPendingTemplates } from './installer';
 import { ONBOARDING_CSS_FIX } from './niches';
-import { VoiceGuide } from './voice-guide';
 
 // The seeded AFFiNE onboarding docs are imported from
 // `@affine/templates/onboarding.zip` in `utils/first-app-data.ts`. On import,
@@ -67,5 +71,6 @@ export const ClickDzWorkspaceBoot = () => {
       });
   }, [docsService, workspaceId]);
 
-  return <VoiceGuide />;
+  // Effects only — this component renders nothing.
+  return null;
 };
