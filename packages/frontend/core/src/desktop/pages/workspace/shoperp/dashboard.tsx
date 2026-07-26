@@ -147,6 +147,10 @@ export const ErpDashboard = ({
   onBack: () => void;
 }) => {
   const [section, setSection] = useState<DashboardSection>(initialSection);
+  // Guided tour visibility. Stateful (rather than reading isShopTourDone inline
+  // at render) so the merchant can replay it from the header afterwards —
+  // previously, once finished or skipped, there was no way back to it at all.
+  const [tourOpen, setTourOpen] = useState(() => !isShopTourDone(slug));
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
   const [summary, setSummary] = useState<ErpSummary | null>(null);
   const [errMsg, setErrMsg] = useState('');
@@ -189,6 +193,13 @@ export const ErpDashboard = ({
   useEffect(() => {
     ensureShoperpMotionCss();
   }, []);
+
+  // Tick the checklist's Livraison step once the merchant actually opens that
+  // tab. Done here rather than on the tab's onClick so every route in counts —
+  // the checklist's own "Faire →", a deep link, or the guided tour.
+  useEffect(() => {
+    if (section === 'shipping') markShippingSeen(slug);
+  }, [section, slug]);
 
   // Admin sections call this after a successful mutation so KPIs stay live.
   const refetch = useCallback(() => {
@@ -269,6 +280,17 @@ export const ErpDashboard = ({
         >
           {refreshing ? <Spinner /> : <span aria-hidden>↻</span>} Actualiser
         </button>
+        {/* Replay the guided tour. Without this the tour was strictly one-shot:
+            skip it once (or finish it before you understood a tab) and it was
+            gone for good. */}
+        {!tourOpen ? (
+          <button
+            style={miniBtnStyle('secondary')}
+            onClick={() => setTourOpen(true)}
+          >
+            <span aria-hidden>❓</span> Visite guidée
+          </button>
+        ) : null}
         {url ? (
           <a
             href={url}
@@ -306,16 +328,17 @@ export const ErpDashboard = ({
       {/* Global notices ---------------------------------------------------- */}
       {writesBlocked ? (
         <Banner tone="warn">
-          Admin changes are unavailable on this server right now — the
-          dashboard is <strong>read-only</strong>. KPIs, orders and stock still
-          reflect live data; you can keep managing from the deployed ERP app.
+          Les modifications sont indisponibles sur ce serveur pour le moment —
+          le tableau de bord est en <strong>lecture seule</strong>. Les indicateurs,
+          les commandes et le stock restent à jour ; vous pouvez continuer à gérer
+          depuis l’application ERP publiée.
         </Banner>
       ) : null}
       {refreshFailed ? (
         <Banner tone="warn">
           Actualisation impossible — affichage des dernières données chargées.{' '}
           <button style={linkBtnStyle} onClick={refetch}>
-            Retry
+            Réessayer
           </button>
         </Banner>
       ) : null}
@@ -358,7 +381,7 @@ export const ErpDashboard = ({
         <Banner tone="error">
           {errMsg}{' '}
           <button style={linkBtnStyle} onClick={() => void load()}>
-            Retry
+            Réessayer
           </button>
         </Banner>
       ) : summary ? (
@@ -368,7 +391,12 @@ export const ErpDashboard = ({
         // element itself is never replaced.
         <div key={section} data-cdz-panel="">
         {section === 'overview' ? (
-          <Overview summary={summary} currency={currency} onGoTo={setSection} />
+          <Overview
+            slug={slug}
+            summary={summary}
+            currency={currency}
+            onGoTo={setSection}
+          />
         ) : section === 'orders' ? (
           <OrdersAdmin
             slug={slug}
@@ -443,15 +471,286 @@ export const ErpDashboard = ({
         )}
         </div>
       ) : null}
-      {phase === 'ready' && !isShopTourDone(slug) ? (
+      {phase === 'ready' && tourOpen ? (
         <ShopTour
           slug={slug}
           steps={DEFAULT_SHOP_TOUR_STEPS}
           sections={SECTIONS.map(s => s.id)}
           onGoTo={s => setSection(s as DashboardSection)}
-          onDone={() => {}}
+          onDone={() => setTourOpen(false)}
         />
       ) : null}
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// "Votre boutique en 5 étapes" — the first-run checklist, shown at the top of
+// Aperçu until it is complete (or dismissed).
+//
+// The hub already had a good checklist (StartChecklist in index.tsx), but a
+// single-shop merchant auto-opens straight into this dashboard and never sees
+// the hub again after day one — so in practice it was invisible to exactly the
+// people it was written for.
+//
+// Every "done" signal is DERIVED from the live summary rather than stored.
+// That means it survives a reload, a different browser and a different device
+// by construction, and it can never drift out of sync with the real shop. Only
+// the dismissal is local, because that is a per-person preference.
+// ---------------------------------------------------------------------------
+
+const checklistHideKey = (slug: string) => `cdz.shoperp.checklist.hide.${slug}`;
+/** Marks that the merchant has opened the Livraison tab at least once. */
+const checklistShippingKey = (slug: string) =>
+  `cdz.shoperp.checklist.shipping.${slug}`;
+
+/** Record the Livraison visit (fail-soft — private mode etc.). */
+export function markShippingSeen(slug: string): void {
+  try {
+    globalThis.localStorage?.setItem(checklistShippingKey(slug), '1');
+  } catch {
+    /* storage unavailable — the step just stays unticked; harmless */
+  }
+}
+
+const FiveSteps = ({
+  slug,
+  summary,
+  onGoTo,
+}: {
+  slug: string;
+  summary: ErpSummary;
+  onGoTo: (s: DashboardSection) => void;
+}) => {
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return globalThis.localStorage?.getItem(checklistHideKey(slug)) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const shippingSeen = (() => {
+    try {
+      return (
+        globalThis.localStorage?.getItem(checklistShippingKey(slug)) === '1'
+      );
+    } catch {
+      return false;
+    }
+  })();
+
+  const s = summary.settings;
+  // Any evidence of a catalogue at all. Deliberately generous: a merchant who
+  // has products but no low-stock rows and no orders yet has still done step 1.
+  const hasProducts =
+    summary.kpis.lowStockCount > 0 ||
+    summary.kpis.ordersTotal > 0 ||
+    (summary.topProducts?.length ?? 0) > 0 ||
+    (summary.lowStock?.length ?? 0) > 0;
+
+  const steps: Array<{
+    id: string;
+    label: string;
+    hint: string;
+    section: DashboardSection;
+    done: boolean;
+  }> = [
+    {
+      id: 'product',
+      label: 'Ajoutez votre premier produit',
+      hint: 'Nom, prix, photo — 30 secondes.',
+      section: 'stock',
+      done: hasProducts,
+    },
+    {
+      id: 'style',
+      label: 'Choisissez votre style',
+      hint: 'Thème, couleurs et mise en page de la boutique.',
+      section: 'appearance',
+      done:
+        (!!s.theme && s.theme !== 'classic') ||
+        (!!s.template && s.template !== 'standard') ||
+        (typeof s.accent === 'string' && s.accent.toLowerCase() !== '#0f766e'),
+    },
+    {
+      id: 'shipping',
+      label: 'Configurez la livraison',
+      hint: 'Tarifs des 58 wilayas et transporteurs.',
+      section: 'shipping',
+      // This one cannot be derived from the summary: the server normalizes
+      // `deliveryFee` to a default of 500 whenever it is unset, so the field
+      // is ALWAYS a number and can't distinguish "configured" from "never
+      // touched" — and a shop that deliberately delivers free (0) would look
+      // permanently unconfigured under a `> 0` test. Per-wilaya rates and
+      // courier connections live behind their own endpoints and aren't in the
+      // summary at all.
+      //
+      // So this step is marked done once the merchant has actually opened the
+      // Livraison tab. Local-only, unlike the other four — a nudge to visit
+      // the screen, honestly labelled rather than a fake derivation.
+      done: shippingSeen,
+    },
+    {
+      id: 'whatsapp',
+      label: 'Vérifiez votre WhatsApp',
+      hint: 'C’est là que les commandes arrivent.',
+      section: 'settings',
+      // The old wizard default: a shop still carrying it is not configured.
+      done: !!s.whatsapp && s.whatsapp !== '213600000000',
+    },
+    {
+      id: 'test-order',
+      label: 'Passez une commande test',
+      hint: 'Ouvrez votre boutique et commandez comme un client.',
+      section: 'orders',
+      done: summary.kpis.ordersTotal > 0,
+    },
+  ];
+
+  const doneCount = steps.filter(x => x.done).length;
+  if (hidden || doneCount === steps.length) return null;
+
+  const hide = () => {
+    setHidden(true);
+    try {
+      globalThis.localStorage?.setItem(checklistHideKey(slug), '1');
+    } catch {
+      /* private mode — hidden for this session only, which is fine */
+    }
+  };
+
+  return (
+    <div
+      style={{
+        borderRadius: 14,
+        border: `1px solid ${C.border}`,
+        background: C.panel,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '11px 14px',
+          background: C.panel2,
+          borderBottom: `1px solid ${C.border}`,
+          flexWrap: 'wrap',
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 120 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>
+            Votre boutique en 5 étapes
+          </div>
+          <div style={{ fontSize: 11.5, color: C.muted }}>
+            {doneCount}/5 — plus que {5 - doneCount} !
+          </div>
+        </div>
+        <div
+          aria-hidden
+          style={{
+            width: 90,
+            height: 6,
+            borderRadius: 3,
+            background: C.border,
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              width: `${(doneCount / 5) * 100}%`,
+              height: '100%',
+              background: C.accent,
+              transition: 'width 300ms ease',
+            }}
+          />
+        </div>
+        <button
+          onClick={hide}
+          title="Masquer"
+          style={{
+            appearance: 'none',
+            background: 'none',
+            border: 'none',
+            color: C.muted,
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 700,
+            textDecoration: 'underline',
+          }}
+        >
+          Masquer
+        </button>
+      </div>
+      {steps.map((it, i) => (
+        <button
+          key={it.id}
+          type="button"
+          onClick={() => onGoTo(it.section)}
+          style={{
+            appearance: 'none',
+            textAlign: 'start',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            width: '100%',
+            padding: '11px 14px',
+            background: 'transparent',
+            border: 'none',
+            color: C.text,
+            ...(i > 0 ? { borderTop: `1px solid ${C.border}` } : {}),
+            ...(it.done ? { opacity: 0.6 } : {}),
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 20,
+              height: 20,
+              flexShrink: 0,
+              borderRadius: '50%',
+              display: 'grid',
+              placeItems: 'center',
+              fontSize: 12,
+              fontWeight: 900,
+              ...(it.done
+                ? { color: '#fff', background: C.okText }
+                : { color: C.muted, border: `2px solid ${C.border}` }),
+            }}
+          >
+            {it.done ? '✓' : i + 1}
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                display: 'block',
+                textDecoration: it.done ? 'line-through' : 'none',
+              }}
+            >
+              {it.label}
+            </span>
+            <span style={{ display: 'block', fontSize: 11.5, color: C.muted }}>
+              {it.hint}
+            </span>
+          </span>
+          {!it.done ? (
+            <span
+              style={{
+                fontSize: 12,
+                color: C.accent,
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Faire →
+            </span>
+          ) : null}
+        </button>
+      ))}
     </div>
   );
 };
@@ -461,10 +760,12 @@ export const ErpDashboard = ({
 // ---------------------------------------------------------------------------
 
 const Overview = ({
+  slug,
   summary,
   currency,
   onGoTo,
 }: {
+  slug: string;
   summary: ErpSummary;
   currency: string;
   onGoTo: (s: DashboardSection) => void;
@@ -492,6 +793,9 @@ const Overview = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* First-run checklist — self-hides once complete or dismissed. */}
+      <FiveSteps slug={slug} summary={summary} onGoTo={onGoTo} />
+
       {/* KPI cards — responsive grid */}
       <div
         style={{
