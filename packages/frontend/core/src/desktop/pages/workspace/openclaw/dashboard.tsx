@@ -865,20 +865,28 @@ const CanauxPanel = () => {
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* These chips report whether the PLATFORM offers the channel — not
+            whether THIS agent has a bot linked, which is what the
+            TelegramBoundLine / TelegramChannelCard below show. Labelling the
+            platform state "configuré" read as "you're done", directly above a
+            card saying "NON-LIÉ" with a paste-your-token form: the UI appeared
+            to contradict itself. "disponible" says what is actually true, and
+            the enabled-state hint points at the card that completes the setup. */}
         <ChannelRow
           icon="✈"
           label="Telegram"
           on={telegramOn}
           loading={loading}
-          okLabel="configuré"
+          okLabel="disponible"
           explain="Un bot Telegram doit être configuré par l’admin."
+          onExplain="Canal disponible — liez votre bot ci-dessous pour l’activer."
         />
         <ChannelRow
           icon="💬"
           label="WhatsApp"
           on={whatsappOn}
           loading={loading}
-          okLabel="configuré"
+          okLabel="disponible"
           explain="La passerelle WhatsApp arrive — sera activée automatiquement."
         />
         <ChannelRow
@@ -1027,6 +1035,7 @@ const ChannelRow = ({
   okLabel,
   offLabel = 'non configuré — token requis',
   explain,
+  onExplain,
   explainWhenOn = false,
 }: {
   icon: string;
@@ -1036,13 +1045,18 @@ const ChannelRow = ({
   okLabel: string;
   offLabel?: string;
   explain: string;
+  // Copy to show INSTEAD of `explain` when the channel is enabled. Lets a row
+  // say "available, here's the remaining step" rather than repeating the
+  // how-to-enable hint, which is wrong once the channel is on.
+  onExplain?: string;
   // When true the explain line also shows in the enabled state (used for the
   // web row, whose copy is informational rather than a "how to enable" hint).
   explainWhenOn?: boolean;
 }) => {
   const tone: ChannelTone = on ? 'ok' : 'muted';
   const chipLabel = loading ? '…' : on ? okLabel : offLabel;
-  const showExplain = !loading && (on ? explainWhenOn : true);
+  const shownExplain = on ? (onExplain ?? explain) : explain;
+  const showExplain = !loading && (on ? explainWhenOn || !!onExplain : true);
   return (
     <div
       style={{
@@ -1066,7 +1080,7 @@ const ChannelRow = ({
       </div>
       {showExplain ? (
         <span style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, paddingLeft: 25 }}>
-          {explain}
+          {shownExplain}
         </span>
       ) : null}
     </div>
