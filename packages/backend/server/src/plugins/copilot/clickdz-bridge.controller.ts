@@ -4454,8 +4454,27 @@ export class ClickDzBridgeController {
    * QUERY `month?=YYYY-MM` (or `from`/`to` range), `type?`, `status?`. Fetches
    * the matching monthly partitions server-side, merges, filters + sorts
    * (newest-first) via the pure module. Returns `{ invoices, partitionsRead }`.
+   *
+   * THROTTLE-1 — why this is not a bare @Throttle('strict'), and why every other
+   * read-only GET in this controller now matches:
+   *
+   * CloudThrottlerGuard keys a bare named throttler as `${tracker};strict`, so all
+   * 68 routes here shared ONE bucket of 20 requests per 60 seconds, per session
+   * (see base/throttler: generateKey, plus config.ts where strict = limit 20 /
+   * ttl 60_000). A merchant touring panels legitimately spends 14-16 of those, so
+   * the margin was already thin; when SEC-2 moved the studio's collection reads
+   * through this controller it tipped over, and Facturation and Fournisseurs began
+   * answering "Too many requests" in production.
+   *
+   * Supplying an explicit limit/ttl makes the guard append ';custom' and key the
+   * bucket PER HANDLER, so one read-heavy panel can no longer starve the others —
+   * or, worse, starve the WRITE routes, which is how a read 429 turns into a
+   * merchant who cannot record an order.
+   *
+   * Writes deliberately stay on the shared strict bucket: that is what it exists
+   * to protect, and no human legitimately fires 20 writes a minute by hand.
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/invoices')
   async erpListInvoices(
     @CurrentUser() user: CurrentUser,
@@ -4498,7 +4517,7 @@ export class ClickDzBridgeController {
    * WSE-2 — GET /api/v1/apps/:slug/erp/invoices/:id (auth'd, owner-only).
    * Finds one invoice across the partition window. 404 when absent.
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/invoices/:id')
   async erpGetInvoice(
     @CurrentUser() user: CurrentUser,
@@ -4884,7 +4903,7 @@ export class ClickDzBridgeController {
    * R2-b — GET /api/v1/apps/:slug/erp/suppliers (auth'd, owner-only).
    * Lists the `suppliers` reference collection (newest-first, ≤500).
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/suppliers')
   async erpSuppliers(
     @CurrentUser() user: CurrentUser,
@@ -5020,7 +5039,7 @@ export class ClickDzBridgeController {
    * R2-b — GET /api/v1/apps/:slug/erp/purchase-orders (auth'd, owner-only).
    * Lists the `purchase-orders` collection (newest-first, ≤500).
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/purchase-orders')
   async erpPurchaseOrders(
     @CurrentUser() user: CurrentUser,
@@ -5039,7 +5058,7 @@ export class ClickDzBridgeController {
   /**
    * R2-b — GET /api/v1/apps/:slug/erp/purchase-orders/:id (auth'd, owner-only).
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/purchase-orders/:id')
   async erpPurchaseOrder(
     @CurrentUser() user: CurrentUser,
@@ -5790,7 +5809,7 @@ export class ClickDzBridgeController {
    * `month` is validated to 6 digits (bad → current month). Returns the raw
    * entries newest-first (the data API's own sort) plus the resolved collection.
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/caisse')
   async erpCaisseList(
     @CurrentUser() user: CurrentUser,
@@ -6146,7 +6165,7 @@ export class ClickDzBridgeController {
    * Reads ALL orders + the couriers list + the caisse partitions spanning the
    * range; all math in the sibling helper (integer DZD). `courierId` required.
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 60, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/caisse/reconcile')
   async erpCaisseReconcile(
     @CurrentUser() user: CurrentUser,
@@ -6200,7 +6219,7 @@ export class ClickDzBridgeController {
    * method (cod|cash|chargily) + net, with pending-COD markers reported
    * separately. `date` defaults to today (UTC). All integer DZD.
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 60, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/caisse/day-close')
   async erpCaisseDayClose(
     @CurrentUser() user: CurrentUser,
@@ -6635,7 +6654,7 @@ export class ClickDzBridgeController {
    * Lists staff records (NEVER any secret material — no token, no pinHash).
    * CDZ_ERP_STAFF_AUTH OFF ⇒ typed 404.
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/staff')
   async erpListStaff(
     @CurrentUser() user: CurrentUser,
@@ -7166,7 +7185,7 @@ export class ClickDzBridgeController {
    * oldest→newest, delivered only), recentOrders (≤20, newest-first) and
    * topProducts (≤5 by delivered revenue, title||name tolerant).
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/summary')
   async erpSummary(
     @CurrentUser() user: CurrentUser,
@@ -7917,7 +7936,7 @@ export class ClickDzBridgeController {
    * (fallback to product.stock). `partitionsRead`/`capped` report the read
    * window so the UI can note truncation.
    */
-  @Throttle('strict')
+  @Throttle('default', { limit: 120, ttl: 60_000 })
   @Get('/api/v1/apps/:slug/erp/inventory')
   async erpInventory(
     @CurrentUser() user: CurrentUser,
