@@ -344,7 +344,26 @@ export function buildPendingCodEntry(
 ): { entry: CaisseRecord; collection: string } | null {
   const amount = caisseOrderTotal(order);
   if (!(amount > 0)) return null;
-  const date = caisseParseDate(order);
+  // MONEY-3: date the marker by DELIVERY, not by placement.
+  //
+  // This used to call caisseParseDate(order), which resolves
+  // date || orderedAt || createdAt — and the status handler guarantees orderedAt
+  // is always backfilled, so the marker always landed on the PLACEMENT day.
+  // Since caisse entries are month-partitioned, an Algerian COD order placed on
+  // 28 June and delivered on 3 July was filed into caisse-202606: July's
+  // day-close never saw the COD it was owed, and June's books changed
+  // retroactively after they may already have been closed. With typical 2-7 day
+  // delivery lags that mis-files every order near a month boundary.
+  //
+  // caisseParseDate itself is deliberately NOT changed — it also dates caisse
+  // entries (where `date` is authoritative), online Chargily entries (correctly
+  // dated at payment time, not delivery) and order rows in the stats helpers, so
+  // altering it would shift revenue-by-month semantics everywhere. Only the
+  // pending-COD marker moves, and only when deliveredAt is present: orders
+  // written before the bridge started stamping it keep the old behaviour rather
+  // than silently jumping partitions.
+  const date =
+    caisseStr(order.deliveredAt).slice(0, 10) || caisseParseDate(order);
   const ref = caisseStr(order.ref).trim().slice(0, CAISSE_ORDER_REF_MAX);
   const courierId = caisseStr(order.courierId)
     .trim()
@@ -370,6 +389,33 @@ export function buildPendingCodEntry(
  * 'Livrée' must not stack duplicate markers). Matches an 'in'/'cod' row with
  * `pending===true` and the same orderRef.
  */
+/**
+ * MONEY-3 — every caisse partition a pending-COD marker for this order could
+ * already be sitting in, NEWEST first, de-duplicated.
+ *
+ * The marker is now filed by DELIVERY month (buildPendingCodEntry), but markers
+ * written before that change — and markers written by a courier poll that saw
+ * the order before anything stamped `deliveredAt` — sit in the PLACEMENT month.
+ * The idempotency guard has to look in both, or the same delivered order gets a
+ * marker in two partitions and `pendingCodTotal` counts its COD twice, forever
+ * (markers are never cleaned up).
+ *
+ * Returns 1 partition when placement and delivery fall in the same month, which
+ * is the common case, so the extra read only happens for orders that actually
+ * straddle a month boundary.
+ */
+export function pendingCodMarkerPartitions(order: CaisseRecord): string[] {
+  const delivery = caisseStr(order.deliveredAt).slice(0, 10);
+  const placement = caisseParseDate(order);
+  const out: string[] = [];
+  for (const d of [delivery, placement]) {
+    if (!d) continue;
+    const coll = caisseCollectionForDate(d);
+    if (!out.includes(coll)) out.push(coll);
+  }
+  return out.length ? out : [caisseCollectionFor()];
+}
+
 export function hasPendingCodMarker(
   rows: CaisseRecord[],
   orderRef: string
@@ -552,7 +598,15 @@ export function reconcileCourier(
   for (const o of orders) {
     if (caisseStr(o.status) !== 'Livrée') continue;
     if (caisseStr(o.courierId).trim() !== cid) continue;
-    const day = caisseParseDate(o);
+    // MONEY-3: date a DELIVERED order by its delivery day, matching
+    // buildPendingCodEntry. These two must agree: the marker says "this COD is
+    // expected" and this loop computes what the courier owes over [from,to]. If
+    // one used delivery date and the other placement date, every order spanning
+    // a range boundary would appear on exactly one side — a phantom gap (courier
+    // appears to owe money) in one period and a phantom surplus in the next.
+    // Falls back to the old derivation for orders predating deliveredAt.
+    const day =
+      caisseStr(o.deliveredAt).slice(0, 10) || caisseParseDate(o);
     if (!inRange(day, from, to)) continue;
     const total = caisseOrderTotal(o);
     expectedGross += total;
