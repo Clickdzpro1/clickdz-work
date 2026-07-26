@@ -533,6 +533,34 @@ export interface CourierProvider {
    * SYNC + pure (no network). Unknown ⇒ 'pending'.
    */
   normalizeStatus(raw: string): CourierStatus;
+
+  /**
+   * OPTIONAL — fetch the shipping label as raw bytes.
+   *
+   * Most couriers hand back a label URL, which rides on `ParcelResult.label`
+   * and needs nothing further. Ecotrack instead returns the PDF ITSELF from an
+   * authenticated endpoint, so there is no URL a merchant's browser could
+   * open: without a server-side proxy the label is unreachable and the parcel
+   * cannot be handed to the driver. A provider whose label is bytes implements
+   * this; every other provider omits it and the route answers a typed
+   * `label_not_supported`.
+   *
+   * Returns the bytes plus the upstream content type so the route can stream
+   * them with honest headers. Same fail-soft contract as every other method:
+   * a typed error, never a throw, and never a credential in the payload.
+   */
+  fetchLabel?(
+    creds: CourierCredentials,
+    tracking: string
+  ): Promise<CourierResult<LabelResult>>;
+}
+
+/** Raw label bytes returned by {@link CourierProvider.fetchLabel}. */
+export interface LabelResult {
+  /** The label document itself. */
+  bytes: Uint8Array;
+  /** MIME type as reported upstream; defaults to application/pdf. */
+  contentType: string;
 }
 
 // ---------------------------------------------------------------------------
