@@ -7693,6 +7693,15 @@ export class ClickDzBridgeController {
       if (typeof s.tagline !== 'string') badField = 'tagline';
       else patch.tagline = s.tagline.slice(0, 200);
     }
+    // HERO-1: the storefront template ALREADY honors settings.heroLine (it reads
+    // it in heroLine() and renders it in the standard and boutique heroes,
+    // falling back to the tagline) — there was simply no way to write it, so the
+    // merchant could never change the line above their hero. Same shape and cap
+    // as tagline. Carried through merges by erpSettingsPassthrough.
+    if (!badField && s.heroLine != null) {
+      if (typeof s.heroLine !== 'string') badField = 'heroLine';
+      else patch.heroLine = s.heroLine.slice(0, 200);
+    }
     if (!badField && s.whatsapp != null) {
       if (typeof s.whatsapp !== 'string' || !CDZ_WHATSAPP_RE.test(s.whatsapp)) {
         badField = 'whatsapp';
@@ -7747,7 +7756,7 @@ export class ClickDzBridgeController {
     }
     if (Object.keys(patch).length === 0) {
       throw new BadRequest(
-        '"patch" must include at least one of: shopName, tagline, whatsapp, deliveryFee, accent, adminPin, theme, template, font, sections'
+        '"patch" must include at least one of: shopName, tagline, heroLine, whatsapp, deliveryFee, accent, adminPin, theme, template, font, sections'
       );
     }
     const token = dataWriteToken(slug);
