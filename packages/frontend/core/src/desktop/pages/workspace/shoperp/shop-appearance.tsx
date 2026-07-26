@@ -779,6 +779,11 @@ const THEME_PALETTE: Record<
   dark: { bg: '#0b0f19', card: '#151b2b', ink: '#e8ecf4', sub: '#93a0bd', line: '#26304a', radius: 12 },
   vibrant: { bg: '#fff7ed', card: '#ffffff', ink: '#1f130a', sub: '#8a5a33', line: '#f3d9bf', radius: 16 },
   minimal: { bg: '#ffffff', card: '#ffffff', ink: '#111111', sub: '#777777', line: '#ececec', radius: 4, heroFlat: true },
+  sahara: { bg: '#faf5ec', card: '#fffdf8', ink: '#3b2f23', sub: '#6f5f4b', line: '#eadfcc', radius: 14 },
+  'nuit-doree': { bg: '#101014', card: '#1a1a20', ink: '#ece7db', sub: '#b7ae99', line: '#2a2a31', radius: 16 },
+  olive: { bg: '#f8f7f2', card: '#ffffff', ink: '#26301c', sub: '#5c6650', line: '#e4e4d8', radius: 10 },
+  azur: { bg: '#f1f5f9', card: '#ffffff', ink: '#0c1a2b', sub: '#42566e', line: '#dbe4ee', radius: 8 },
+  flash: { bg: '#0d0d0f', card: '#17171b', ink: '#f4f4f5', sub: '#b9b9c0', line: '#26262c', radius: 18 },
 };
 
 const MockPreview = ({

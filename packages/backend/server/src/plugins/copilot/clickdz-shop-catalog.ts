@@ -38,7 +38,16 @@
  * ------------------------------------------------------------------------- */
 
 /** A shop theme id — must exist in `THEMES` in `clickdz-shop-template.ts`. */
-export type TemplateThemeId = 'classic' | 'dark' | 'vibrant' | 'minimal';
+export type TemplateThemeId =
+  | 'classic'
+  | 'dark'
+  | 'vibrant'
+  | 'minimal'
+  | 'sahara'
+  | 'nuit-doree'
+  | 'olive'
+  | 'azur'
+  | 'flash';
 
 /** A shop font id — must exist in `FONTS` in `clickdz-shop-template.ts`. */
 export type TemplateFontId = 'system' | 'inter' | 'poppins' | 'playfair';
