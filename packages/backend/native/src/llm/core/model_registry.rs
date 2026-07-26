@@ -433,6 +433,45 @@ fn custom_model_registry_variants() -> Vec<llm_adapter::core::ModelRegistryVaria
     behavior_flags: None,
   });
 
+  // CDZIMAGE — gpt-image-2.
+  //
+  // The built-in prompt catalog binds "Generate image", "Convert to sticker",
+  // "Upscale image" and "Remove background" to gpt-image-2, but no registry knew
+  // that id: the llm_adapter crate's default OpenAI catalog carries only
+  // dall-e-3 and gpt-image-1, and this function had no variant for it. Registry
+  // matching is exact (raw_model_id -> canonical -> alias -> legacy_alias), so
+  // the id resolved to nothing and the runtime silently fell back to the
+  // backend's default image model — gpt-image-1, the RETIRED engine. Every paid
+  // image action was therefore executing on the previous-generation model in
+  // production, with no error anywhere to show it.
+  //
+  // Same routing shape as the crate's gpt-image-1 entry: an image-output model
+  // served over the OpenAI images protocol rather than the responses API. The
+  // dormant assertion further down this file (llm_match_model_registry with
+  // model_id "gpt-image-2" expecting protocol/request_layer "openai_images")
+  // has been failing since the prompts were rebound and only never surfaced
+  // because rust-test is path-filtered on **/*.rs; committing this file makes
+  // that test run and validate the fix.
+  variants.push(llm_adapter::core::ModelRegistryVariant {
+    backend_kind: "openai_responses".to_string(),
+    canonical_key: "gpt-image-2".to_string(),
+    raw_model_id: "gpt-image-2".to_string(),
+    display_name: Some("GPT Image 2".to_string()),
+    aliases: vec!["gpt-image-2".to_string()],
+    legacy_aliases: None,
+    capabilities: vec![llm_adapter::core::ModelCapability {
+      input: vec!["text".to_string(), "image".to_string()],
+      output: vec!["image".to_string()],
+      attachments: Some(image_attachment.clone()),
+      structured_attachments: Some(image_attachment.clone()),
+      default_for_output_type: None,
+    }],
+    protocol: Some("openai_images".to_string()),
+    request_layer: Some("openai_images".to_string()),
+    route_overrides: None,
+    behavior_flags: None,
+  });
+
   // Gemini backend variants
   variants.push(llm_adapter::core::ModelRegistryVariant {
     backend_kind: "gemini_api".to_string(),
