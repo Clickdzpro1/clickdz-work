@@ -33,6 +33,7 @@ import {
   Throttle,
   URLHelper,
 } from '../../base';
+import { CacheRedis } from '../../base/redis';
 import { CurrentUser, Public } from '../../core/auth';
 import { PermissionAccess } from '../../core/permission';
 import { WorkspaceBlobStorage } from '../../core/storage';
@@ -113,6 +114,11 @@ const MAX_MANIFEST_BYTES = 4 * 1024 * 1024; // 4 MB
 const PROXY_TIMEOUT_MS = 30_000;
 // The file stream can be large and slow; give it its own longer ceiling.
 const FILE_PROXY_TIMEOUT_MS = 180_000;
+// SEC-3: how long a render job's owner note is kept. Long enough that a user can
+// come back for a finished MP4 later in the day, short enough that the mapping
+// does not accumulate forever. Expiry is safe: an unknown owner fails OPEN, so
+// the worst case for an aged-out job is today's behaviour.
+const VDZ_JOB_OWNER_TTL_SEC = 7 * 24 * 60 * 60;
 // The Remotion worker's enqueue round-trip; 120s matches the track spec —
 // generous for a large manifest POST, bounded against a hung worker. Status and
 // file polling reuse the HTML tier's PROXY_/FILE_PROXY_ timeouts.
@@ -194,8 +200,72 @@ export class ClickDzVdzRenderController {
   constructor(
     private readonly blobStorage: WorkspaceBlobStorage,
     private readonly url: URLHelper,
-    private readonly ac: PermissionAccess
+    private readonly ac: PermissionAccess,
+    // SEC-3: CacheRedis records which user enqueued each render job so the
+    // status/file routes can refuse another tenant's job. Same injection style
+    // as the peer ClickDz controllers (CacheRedis is exported by base/redis).
+    private readonly redis: CacheRedis
   ) {}
+
+  // -------------------------------------------------------------------------
+  // SEC-3 — render job ownership.
+  //
+  // The status and file routes were session-authed but NOT owner-scoped: they
+  // took only the jobId, so ANY logged-in tenant who learned or guessed another
+  // tenant's jobId could read their render status or download the finished MP4 —
+  // which for this product means another merchant's unreleased marketing video.
+  // The jobId is minted by the out-of-repo cdz-render service, and the house
+  // pattern elsewhere in this codebase is `randomUUID().slice(0, 8)` (32 bits),
+  // so guessing cannot be assumed infeasible.
+  //
+  // The sibling routes in this same file already get this right — blobUrls
+  // asserts Workspace.Read, and the @Public blob route requires a signed HMAC —
+  // so the two render routes were the outliers.
+  //
+  // Ownership is recorded when the job is created and checked when it is read.
+  // Fail-soft in both directions: a Redis outage must not break rendering, and a
+  // job with NO recorded owner (in flight at deploy time, or written while Redis
+  // was down) is allowed through rather than 403-ing a legitimate user. That
+  // grace shrinks to nothing as old jobs age out, and it is strictly better than
+  // today's unrestricted access.
+  // -------------------------------------------------------------------------
+  private jobOwnerKey(jobId: string): string {
+    return `clickdz:vdz:job:owner:${jobId.slice(0, 128)}`;
+  }
+
+  /** Record the caller as the owner of a freshly created render job. */
+  private async rememberJobOwner(
+    jobId: string,
+    userId: string
+  ): Promise<void> {
+    if (!jobId || !userId) return;
+    try {
+      await this.redis.set(
+        this.jobOwnerKey(jobId),
+        userId,
+        'EX',
+        VDZ_JOB_OWNER_TTL_SEC
+      );
+    } catch {
+      // Fail-soft: never fail a render because the ownership note did not land.
+    }
+  }
+
+  /**
+   * Throw AccessDenied when this job is known to belong to someone else.
+   * Unknown owner => allowed (see the fail-soft rationale above).
+   */
+  private async assertJobOwner(jobId: string, userId: string): Promise<void> {
+    let owner: string | null = null;
+    try {
+      owner = await this.redis.get(this.jobOwnerKey(jobId));
+    } catch {
+      return; // Redis down — do not lock users out of their own renders.
+    }
+    if (owner && owner !== userId) {
+      throw new AccessDenied('This render job belongs to another account');
+    }
+  }
 
   private assertRenderReady() {
     if (!RENDER_URL || !RENDER_TOKEN) {
@@ -286,7 +356,10 @@ export class ClickDzVdzRenderController {
    * is a plausible manifest object, relay it verbatim, and tag the returned id
    * so the shared status/file routes proxy it back to the worker.
    */
-  private async renderViaRemotion(body: any): Promise<{ jobId: string }> {
+  private async renderViaRemotion(
+    body: any,
+    ownerId: string
+  ): Promise<{ jobId: string }> {
     if (!this.remotionConfigured()) {
       // Same graceful-degrade signal as the HTML tier: a typed 400 the UI reads
       // as "not configured" rather than a 500.
@@ -355,7 +428,11 @@ export class ClickDzVdzRenderController {
       });
     }
     // Tag the id so status/file route it back to the worker (not cdz-render).
-    return { jobId: `${REMOTION_JOB_PREFIX}${data.jobId}` };
+    const taggedId = `${REMOTION_JOB_PREFIX}${data.jobId}`;
+    // SEC-3: bind the job to its creator. Keyed on the TAGGED id, which is what
+    // the client receives and what status/file are later called with.
+    await this.rememberJobOwner(taggedId, ownerId);
+    return { jobId: taggedId };
   }
 
   /**
@@ -370,6 +447,7 @@ export class ClickDzVdzRenderController {
   @Throttle('strict')
   @Post('/api/v1/vdz/render')
   async render(
+    @CurrentUser() user: CurrentUser,
     @Body() body: any,
     @Res({ passthrough: true }) res: Response
   ): Promise<{ jobId: string } | void> {
@@ -379,7 +457,7 @@ export class ClickDzVdzRenderController {
     // lives inside renderViaRemotion (typed 400 when unconfigured). The manifest
     // envelope + relay are unchanged (see renderViaRemotion).
     if (body?.engine === 'remotion') {
-      return this.renderViaRemotion(body);
+      return this.renderViaRemotion(body, user.id);
     }
 
     this.assertRenderReady();
@@ -461,6 +539,8 @@ export class ClickDzVdzRenderController {
         message: 'Render service did not return a job id',
       });
     }
+    // SEC-3: bind the job to its creator so status/file can refuse other tenants.
+    await this.rememberJobOwner(data.jobId, user.id);
     return { jobId: data.jobId };
   }
 
@@ -481,7 +561,12 @@ export class ClickDzVdzRenderController {
   /** GET /render/:jobId — proxy the job status. */
   @Throttle('strict')
   @Get('/api/v1/vdz/render/:jobId')
-  async status(@Param('jobId') jobId: string): Promise<unknown> {
+  async status(
+    @CurrentUser() user: CurrentUser,
+    @Param('jobId') jobId: string
+  ): Promise<unknown> {
+    // SEC-3: refuse a job that belongs to another tenant.
+    await this.assertJobOwner(jobId, user.id);
     const route = this.routeJob(jobId);
 
     // Remotion-tier job: proxy to the worker (same async job contract).
@@ -539,7 +624,13 @@ export class ClickDzVdzRenderController {
    */
   @Throttle('strict')
   @Get('/api/v1/vdz/render/:jobId/file')
-  async file(@Param('jobId') jobId: string, @Res() res: Response): Promise<void> {
+  async file(
+    @CurrentUser() user: CurrentUser,
+    @Param('jobId') jobId: string,
+    @Res() res: Response
+  ): Promise<void> {
+    // SEC-3: refuse to stream another tenant's rendered MP4.
+    await this.assertJobOwner(jobId, user.id);
     const route = this.routeJob(jobId);
     const id = encodeURIComponent(route.id);
 
