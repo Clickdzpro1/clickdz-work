@@ -3695,26 +3695,12 @@ export class ClickDzBridgeController {
     return { slug, html: resolved.html, source: resolved.source };
   }
 
-  @Throttle('strict')
-  @Post('/api/voice/token')
-  async deepgramToken() {
-    if (!DEEPGRAM_API_KEY) {
-      throw new HttpException({ error: 'Deepgram is not configured' }, HttpStatus.SERVICE_UNAVAILABLE);
-    }
-    const response = await fetch('https://api.deepgram.com/v1/auth/grant', {
-      method: 'POST',
-      headers: {
-        Authorization: `Token ${DEEPGRAM_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ ttl: 60 }),
-    });
-    const data = (await response.json()) as any;
-    if (!response.ok) {
-      throw new HttpException(data, response.status);
-    }
-    return data;
-  }
+  // POST /api/voice/token (Deepgram short-lived browser grant) was removed
+  // alongside the floating voice-guide orb, which was its only caller. It
+  // minted a 60s Deepgram key straight to the browser so the orb could open a
+  // client-side STT socket; with the orb gone that is an unused credential
+  // hand-out. Voice Studio's transcription and TTS both proxy through the
+  // server (`/api/voice/tts` below) and never needed this route.
 
   /**
    * GET /api/voice/capabilities — what the Voice Studio can offer right now.

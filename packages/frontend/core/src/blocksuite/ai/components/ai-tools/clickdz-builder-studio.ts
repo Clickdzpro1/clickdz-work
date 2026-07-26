@@ -191,7 +191,19 @@ export class ClickDzBuilderStudio extends LitElement {
       --cdz-accent: #10a37f;
       --cdz-bg: var(--affine-v2-layer-background-primary, #16181c);
       --cdz-bg-2: var(--affine-v2-layer-background-secondary, #1c1f24);
-      --cdz-bg-3: #23272e;
+      /*
+        --cdz-bg-3 is the "raised control" surface: secondary buttons, the
+        segmented pill, steppers. It used to be the literal #23272e while
+        --cdz-text below is var-driven — fine while the app was dark-only, but
+        now that light is the default that pairing renders ~#1a1a1a ink on a
+        near-black pill: roughly 1.2:1, i.e. invisible. Deriving it from the
+        theme's tertiary layer keeps it a step above --cdz-bg-2 in BOTH modes,
+        with the old hex retained as the dark fallback.
+      */
+      --cdz-bg-3: var(--affine-v2-layer-background-tertiary, #23272e);
+      /* Hover states for those same raised controls, for the same reason. */
+      --cdz-bg-3-hover: var(--affine-v2-layer-background-hoverOverlay, #2a2f37);
+      --cdz-border-strong: var(--affine-v2-layer-insideBorder-blackBorder, #3a4048);
       --cdz-border: var(--affine-v2-layer-insideBorder-border, #2b2f36);
       --cdz-text: var(--affine-v2-text-primary, #e8eaed);
       --cdz-text-2: var(--affine-v2-text-secondary, #9aa0a6);
@@ -654,8 +666,8 @@ export class ClickDzBuilderStudio extends LitElement {
 
     button.cdz-btn.secondary:hover:not(:disabled),
     a.cdz-btn.secondary:hover {
-      border-color: #3a4048;
-      background: #2a2f37;
+      border-color: var(--cdz-border-strong);
+      background: var(--cdz-bg-3-hover);
     }
 
     /* ghost — text only, hover bg */
@@ -1004,8 +1016,8 @@ export class ClickDzBuilderStudio extends LitElement {
     }
 
     .cdz-step:hover {
-      border-color: #3a4048;
-      background: #2a2f37;
+      border-color: var(--cdz-border-strong);
+      background: var(--cdz-bg-3-hover);
     }
 
     .cdz-stepper input[type='number'] {
@@ -1270,6 +1282,53 @@ export class ClickDzBuilderStudio extends LitElement {
       justify-content: flex-end;
       gap: 8px;
     }
+    /* Vertical picker inside the Ready-Shop confirm dialog. */
+    .cdz-confirm-label {
+      color: var(--cdz-text-2);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .cdz-confirm-verticals {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+      gap: 6px;
+      max-height: 210px;
+      overflow-y: auto;
+    }
+    .cdz-vertical {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 9px;
+      border-radius: 8px;
+      border: 1px solid var(--cdz-border);
+      background: var(--cdz-bg-2);
+      color: var(--cdz-text);
+      font-size: 11.5px;
+      cursor: pointer;
+      text-align: start;
+      min-width: 0;
+    }
+    .cdz-vertical:hover {
+      border-color: var(--cdz-accent);
+    }
+    .cdz-vertical.on {
+      border-color: var(--cdz-accent);
+      box-shadow: inset 0 0 0 1px var(--cdz-accent);
+    }
+    .cdz-vertical .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex: 0 0 auto;
+    }
+    .cdz-vertical .nm {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   `;
 
   /* ─────────────────── public API ─────────────────── */
@@ -1336,6 +1395,22 @@ export class ClickDzBuilderStudio extends LitElement {
 
   @state()
   private accessor shopNotice = '';
+
+  // The 20-vertical business catalog (GET /api/v1/apps/templates). Fetched
+  // lazily when the Ready-Shop dialog opens; a typed 404 (catalog disabled)
+  // leaves this empty and the picker simply does not render, in which case
+  // createReadyShop mints the generic default exactly as it always did.
+  @state()
+  private accessor shopVerticals: Array<{
+    id: string;
+    name: string;
+    accent?: string;
+    emoji?: string;
+  }> = [];
+
+  // Selected vertical id, or '' for the generic default shop.
+  @state()
+  private accessor shopTemplateId = '';
 
   // AI-dock conversation log (user prompts + system status lines). Renamed
   // from `history` in v1 so the name doesn't collide with the undo/redo
@@ -2814,6 +2889,42 @@ export class ClickDzBuilderStudio extends LitElement {
     if (this.shopBusy) return;
     this.error = '';
     this.showShopConfirm = true;
+    void this.loadShopVerticals();
+  }
+
+  /**
+   * Load the business-vertical catalog for the picker. Fetched once per
+   * element; a typed 404 means CDZ_TEMPLATE_CATALOG is off, in which case the
+   * picker stays hidden and Ready Shop mints the generic default as before.
+   */
+  private async loadShopVerticals() {
+    if (this.shopVerticals.length) return;
+    try {
+      const res = await fetch(cdzApiUrl('/api/v1/apps/templates'));
+      if (!res.ok) return;
+      const data = (await res.json().catch(() => null)) as {
+        templates?: Array<{
+          id?: string;
+          name?: string;
+          accent?: string;
+          emoji?: string;
+        }>;
+      } | null;
+      if (!Array.isArray(data?.templates)) return;
+      this.shopVerticals = data.templates
+        .filter(
+          (t): t is { id: string; name: string; accent?: string; emoji?: string } =>
+            typeof t?.id === 'string' && typeof t?.name === 'string'
+        )
+        .map(t => ({
+          id: t.id,
+          name: t.name,
+          ...(t.accent ? { accent: t.accent } : {}),
+          ...(t.emoji ? { emoji: t.emoji } : {}),
+        }));
+    } catch {
+      /* the picker is additive — a failure just keeps the default shop */
+    }
   }
 
   // Dismiss the confirm mini-dialog without creating anything.
@@ -2836,7 +2947,14 @@ export class ClickDzBuilderStudio extends LitElement {
     this.shopNotice = '';
     try {
       // 1) Storefront (Merchant template) — mints a fresh slug + data token.
-      const shop = await this.fetchTemplate({ kind: 'shop' });
+      // Pass the chosen business vertical when the picker offered one; the
+      // template endpoint honours `templateId` for kind 'shop'. Omitted (not
+      // sent as an empty string) when nothing was picked, so the request stays
+      // byte-identical to the historical generic-default call.
+      const shop = await this.fetchTemplate({
+        kind: 'shop',
+        ...(this.shopTemplateId ? { templateId: this.shopTemplateId } : {}),
+      });
       const shopSlug = shop.slug;
       const storeSlug = shopSlug;
       const shopTitle = shop.title?.trim() || 'Boutique';
@@ -2901,6 +3019,8 @@ export class ClickDzBuilderStudio extends LitElement {
   private async fetchTemplate(body: {
     kind: CdzArtifactKind;
     storeSlug?: string;
+    /** Business vertical from the catalog; honoured for kind 'shop' only. */
+    templateId?: string;
   }): Promise<{ slug: string; html: string; summary?: string; title?: string }> {
     const response = await fetch(cdzApiUrl(CDZ_TEMPLATE_ENDPOINT), {
       method: 'POST',
@@ -3945,13 +4065,48 @@ export class ClickDzBuilderStudio extends LitElement {
           Créer une boutique prête à l'emploi ? Boutique + tableau de bord ERP
           liés.
         </div>
+        ${this.shopVerticals.length
+          ? html`
+              <div class="cdz-confirm-label">Type de commerce</div>
+              <div class="cdz-confirm-verticals">
+                <button
+                  class=${classMap({
+                    'cdz-vertical': true,
+                    on: !this.shopTemplateId,
+                  })}
+                  ?disabled=${this.shopBusy}
+                  @click=${() => (this.shopTemplateId = '')}
+                >
+                  <span class="dot" style="background:#64748b"></span>
+                  <span class="nm">Polyvalent</span>
+                </button>
+                ${this.shopVerticals.map(
+                  v => html`<button
+                    class=${classMap({
+                      'cdz-vertical': true,
+                      on: this.shopTemplateId === v.id,
+                    })}
+                    title=${v.name}
+                    ?disabled=${this.shopBusy}
+                    @click=${() => (this.shopTemplateId = v.id)}
+                  >
+                    <span
+                      class="dot"
+                      style=${`background:${v.accent || '#64748b'}`}
+                    ></span>
+                    <span class="nm">${v.emoji ? v.emoji + ' ' : ''}${v.name}</span>
+                  </button>`
+                )}
+              </div>
+            `
+          : nothing}
         <div class="cdz-confirm-actions">
           <button
             class="cdz-btn secondary"
             ?disabled=${this.shopBusy}
             @click=${() => this.cancelShopConfirm()}
           >
-            Cancel
+            Annuler
           </button>
           <button
             class="cdz-btn primary"
@@ -3960,7 +4115,7 @@ export class ClickDzBuilderStudio extends LitElement {
           >
             ${this.shopBusy
               ? html`<span class="cdz-spinner"></span>Création…`
-              : html`${CDZ_ICONS.shop} Create`}
+              : html`${CDZ_ICONS.shop} Créer`}
           </button>
         </div>
       </div>

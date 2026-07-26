@@ -6,6 +6,13 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/chat/index'),
   },
   {
+    // ClickDz Apps — the App Builder's own front door. Previously the "ClickDz
+    // Apps" studio pointed at '/chat', making it byte-identical to the plain AI
+    // entry and leaving zero-project merchants with no builder in sight.
+    path: '/apps',
+    lazy: () => import('./pages/workspace/apps/index'),
+  },
+  {
     path: '/all',
     lazy: () => import('./pages/workspace/all-page/all-page'),
   },
