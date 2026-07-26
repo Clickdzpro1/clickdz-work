@@ -68,6 +68,10 @@ import { dataWriteToken, safeEqual, verifyDataToken,
 // __CLICKDZ_SLUG__, which /apps/template substitutes with the real minted values.
 import { CLICKDZ_SHOP_TEMPLATE_HTML } from './clickdz-shop-template';
 import { CLICKDZ_ERP_TEMPLATE_HTML } from './clickdz-erp-template';
+// SETTINGS-1: the feature registries, so the settings merge can enumerate every
+// per-feature param key it must preserve rather than hardcoding a list that
+// silently rots as features are added.
+import { ERP_FEATURES, SHOP_FEATURES } from './clickdz-features';
 // R1-d (GATE): pure template-token resolver + feature-settings allowlist +
 // env gates. Logic lives in the sibling file so this controller stays thin.
 import {
@@ -1328,6 +1332,58 @@ function normalizeErpSettings(row: ErpRecord | undefined) {
       : ERP_DEFAULT_FONT,
     sections: sections ?? ERP_DEFAULT_SECTIONS,
   };
+}
+
+// ---------------------------------------------------------------------------
+// SETTINGS-1 — keys the settings singleton carries that this controller does NOT
+// edit, preserved verbatim through every merge.
+//
+// THE BUG THIS FIXES (live data loss): both settings writers rebuild the record as
+// `{ ...normalizeErpSettings(baseRow), ...patch }`. normalizeErpSettings returns
+// only the fields IT owns — appearance ids, seller identity, pin, whatsapp… — so
+// any key it does not name was silently DESTROYED on the next save. Concretely: a
+// merchant who enabled shop features (wishlist, reviews, promo codes, delivery
+// matrix, order tracking, loyalty…) and then changed their theme or font on the
+// Appearance tab lost every one of them, plus onlinePay, the darja/RTL state and
+// every per-feature parameter. Nothing warned them; the storefront just quietly
+// reverted.
+//
+// The deployed storefront's own admin already got this right — it explicitly
+// preserves the fields its form does not edit — so the bridge was the odd one out.
+//
+// Param keys are enumerated from the feature registries rather than hardcoded, so
+// a feature added later cannot silently start getting wiped again. Values are
+// bounded (the caller's 8KB guard still applies) and only scalars are carried, so
+// a malformed stored row cannot smuggle structure through.
+const ERP_FEATURE_PARAM_KEYS: readonly string[] = Array.from(
+  new Set(
+    [...SHOP_FEATURES, ...ERP_FEATURES].flatMap(f =>
+      Array.isArray(f.settingsKeys) ? f.settingsKeys : []
+    )
+  )
+);
+
+function erpSettingsPassthrough(row: ErpRecord | undefined): ErpRecord {
+  const out: ErpRecord = {};
+  if (!row) return out;
+  if (typeof row.features === 'string') {
+    out.features = row.features.slice(0, 500);
+  }
+  if (row.onlinePay === true) out.onlinePay = true;
+  if (row.rtl === true) out.rtl = true;
+  if (typeof row.lang === 'string') out.lang = row.lang.slice(0, 12);
+  if (typeof row.heroLine === 'string') {
+    out.heroLine = row.heroLine.slice(0, 200);
+  }
+  for (const k of ERP_FEATURE_PARAM_KEYS) {
+    // `sections`/`onlinePay` are declared as feature settingsKeys but are owned by
+    // normalizeErpSettings / handled above; the spread order below means the owner
+    // always wins, so carrying them here is harmless.
+    const v = (row as Record<string, unknown>)[k];
+    if (typeof v === 'string') out[k] = v.slice(0, 1000);
+    else if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -7709,7 +7765,12 @@ export class ClickDzBridgeController {
       return;
     }
     const baseRow = rows.find(r => erpStr(r.key) === 'settings') ?? rows[0];
+    // SETTINGS-1: carry the keys this route does not own (features, onlinePay,
+    // rtl/lang, heroLine, per-feature params) FIRST, so normalizeErpSettings and
+    // the incoming patch still win for everything they do own. Without this,
+    // saving the Appearance tab wiped the shop's enabled features.
     const merged: ErpRecord = {
+      ...erpSettingsPassthrough(baseRow),
       ...normalizeErpSettings(baseRow),
       ...patch,
       key: 'settings',
@@ -7811,7 +7872,11 @@ export class ClickDzBridgeController {
     const baseRow = rows.find(r => erpStr(r.key) === 'settings') ?? rows[0];
     // Merge onto the normalized singleton (same base as /erp/settings), then
     // layer the features CSV + per-feature scalar params.
+    // SETTINGS-1: passthrough first for the same reason as /erp/settings — this
+    // route owns `features` and its params, but not rtl/lang/heroLine/onlinePay,
+    // and it must not destroy them.
     const merged: ErpRecord = {
+      ...erpSettingsPassthrough(baseRow),
       ...normalizeErpSettings(baseRow),
       ...v.patch.params,
       features: v.patch.features,

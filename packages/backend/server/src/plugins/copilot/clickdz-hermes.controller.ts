@@ -523,7 +523,7 @@ function buildToolCatalog(): HermesTool[] {
     },
     {
       slug: 'make_agent_run',
-      label: 'Make.com agent',
+      label: 'Assistant (drafting & reasoning)',
       description:
         'Delegate a sub-task to a Make.com AI agent (long-form reasoning, drafting, automation know-how). Buffered text reply. Optional "agent" picks a specialist: default | code | builder | arabic.',
       argsHint: '{"prompt":"<sub-task>","agent":"default"}',
@@ -1748,7 +1748,7 @@ export class ClickDzHermesController {
     }
     if (toolSlug === 'make_agent_run') {
       const which = typeof args.agent === 'string' ? args.agent : 'default';
-      return `Trigger the Make.com "${which}" agent, which may run automation scenarios.`;
+      return `Hand this sub-task to the built-in "${which}" assistant. It may take actions on your behalf.`;
     }
     return `Run ${toolSlug}, which performs a write/send action.`;
   }

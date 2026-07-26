@@ -114,6 +114,15 @@ export function MissionsCard({ triggers, onToggle, onOpen }: MissionsCardProps) 
         background: 'transparent',
         color: P.color.text,
         fontSize: P.font.size.sm,
+        // A <button> does NOT inherit the app font by default, so without this it
+        // renders in the browser's default UI face — and it was observed clipped
+        // to "…rer" in production. No clipping rule exists anywhere in this
+        // repo's CSS for it, so the likely cause is that fallback font metric
+        // (or an injected outer stylesheet) squeezing a fixed-height row.
+        // Inheriting the font and refusing to wrap costs nothing at this size and
+        // removes both possibilities.
+        fontFamily: 'inherit',
+        whiteSpace: 'nowrap',
         fontWeight: 600,
         cursor: 'pointer',
         flex: '0 0 auto',

@@ -103,8 +103,8 @@ const KIND_META: Record<Kind, { icon: string; title: string; blurb: string }> = 
   },
   make: {
     icon: '🤖',
-    title: 'Automations (Make.com)',
-    blurb: 'Delegate longer drafting/reasoning to a Make agent.',
+    title: 'Assistant — drafting & reasoning',
+    blurb: 'Hand longer drafting or reasoning to the built-in assistant. Nothing to connect.',
   },
 };
 const KIND_ORDER: Kind[] = ['internal', 'composio', 'make'];

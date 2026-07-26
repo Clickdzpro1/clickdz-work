@@ -27,7 +27,7 @@
 // Algerian darja in Arabic script (the register the DZ shop pages already use).
 // ---------------------------------------------------------------------------
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 // ---------------------------------------------------------------------------
 // Public types.
@@ -203,8 +203,25 @@ export interface UseAgentLang {
  * React hook exposing `{ lang, setLang, t, dir }`. Provider-free: it seeds from
  * the module-level current language and registers a listener so `setLang` from
  * ANY component (or another tab, via the storage bridge) re-renders every mount.
- * The listener is torn down on unmount. `t` is rebuilt per-render bound to the
- * current language (cheap — it closes over the static table).
+ * The listener is torn down on unmount.
+ *
+ * LOOP-1 — `t` MUST be referentially stable per language. It used to be rebuilt
+ * on every render (`t: tFor(lang)`), which was cheap in isolation but produced a
+ * new function IDENTITY each time. Any consumer that puts `t` in a dependency
+ * array then re-created its callback on every render, and any effect depending on
+ * that callback re-ran on every render.
+ *
+ * That is exactly what happened on the Hermes desk: `loadApprovals` depended on
+ * `[t]`, the mount effect depended on `loadApprovals`, and each pass re-fired all
+ * six dashboard loaders — every one of which synchronously resets its state to
+ * 'loading' and then calls setState again on settle (`setLastSweep(Date.now())`
+ * is a fresh value every time), guaranteeing the next render. A self-sustaining
+ * reload loop: the run lists never held 'ready' or 'error' (so their spinners
+ * looked stuck forever), the pulse card never left its loading skeleton (five
+ * blank tiles), and the backend took an endless volley of requests per second.
+ *
+ * Memoising on `lang` keeps language switching working — `t`'s identity still
+ * changes when the language does, which is the one time consumers SHOULD re-run.
  */
 export function useAgentLang(): UseAgentLang {
   const [lang, setLangState] = useState<AgentLang>(currentLang);
@@ -221,10 +238,13 @@ export function useAgentLang(): UseAgentLang {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // LOOP-1: stable per language (see the note above).
+  const t = useMemo(() => tFor(lang), [lang]);
+
   return {
     lang,
     setLang: setAgentLang,
-    t: tFor(lang),
+    t,
     dir: dirFor(lang),
   };
 }
@@ -336,7 +356,7 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
   'create.archetype.engineer.title': { fr: 'Ingénieur', ar: 'مهندس' },
   'create.archetype.engineer.desc': {
     fr: 'Comme OpenClaw — écrit et exécute du code dans un sandbox. Pour les outils et automatisations.',
-    ar: 'كيما OpenClaw — يكتب و يشغّل الكود ف سandbox. للأدوات و الأتمتة.',
+    ar: 'كيما OpenClaw — يكتب و يشغّل الكود ف ساندبوكس. للأدوات و الأتمتة.',
   },
 
   // step 2 — identity
@@ -484,7 +504,7 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
   },
   'wizard.identity.openclaw.note': {
     fr: 'L’agent développeur écrit et exécute du code dans un sandbox isolé — pas besoin de persona. Vous pourrez ajuster ses préférences après l’embauche.',
-    ar: 'الوكيل المطوّر يكتب و يشغّل الكود ف سandbox معزول — ما يلزمش شخصية. تقدر تبدّل الإعدادات من بعد التوظيف.',
+    ar: 'الوكيل المطوّر يكتب و يشغّل الكود ف ساندبوكس معزول — ما يلزمش شخصية. تقدر تبدّل الإعدادات من بعد التوظيف.',
   },
 
   'wizard.tools.title': { fr: 'Outils & canaux', ar: 'الأدوات و القنوات' },
@@ -519,7 +539,7 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
   },
   'wizard.tools.openclaw.note': {
     fr: 'L’agent développeur travaille dans son sandbox de code — les outils sont l’éditeur, le terminal et l’aperçu en direct.',
-    ar: 'الوكيل المطوّر يخدم ف سandbox الكود تاعو — الأدوات هوما المحرّر، التيرمينال و المعاينة المباشرة.',
+    ar: 'الوكيل المطوّر يخدم ف ساندبوكس الكود تاعو — الأدوات هوما المحرّر، التيرمينال و المعاينة المباشرة.',
   },
 
   'wizard.trigger.title': { fr: 'Quand doit-il travailler ?', ar: 'وقتاش يخدم ؟' },
@@ -600,7 +620,7 @@ export const AGENT_STRINGS: Record<string, AgentStringPair> = {
   'run.loading': { fr: "Attache à l'exécution…", ar: 'كي نربطو بالعملية…' },
   'run.error.load': { fr: 'Impossible de charger cette exécution.', ar: 'ما قدرناش نحمّلو هاد العملية.' },
   'run.error.title': { fr: 'Erreur du run.', ar: 'خطأ ف العملية.' },
-  'run.sandbox.title': { fr: 'Espace de travail · sandbox', ar: 'فضاء الخدمة · سandbox' },
+  'run.sandbox.title': { fr: 'Espace de travail · sandbox', ar: 'فضاء الخدمة · ساندبوكس' },
   'run.openclaw.title': { fr: 'Espace de travail OpenClaw', ar: 'فضاء خدمة OpenClaw' },
   'run.openclaw.body': {
     fr: 'Les fichiers, le terminal et l\'aperçu vivent dans le studio OpenClaw.',
