@@ -23,7 +23,7 @@
 import { Chip } from '@affine/core/modules/agents/components';
 import { AgentPalette } from '@affine/core/modules/agents/components';
 import { type TFunc, useAgentLang } from '@affine/core/modules/agents/i18n';
-import type { AgentName, AgentSummary } from '@affine/core/modules/agents/types';
+import type { AgentSummary } from '@affine/core/modules/agents/types';
 import { ChatWithAiIcon, KeyboardIcon } from '@blocksuite/icons/rc';
 import type { CSSProperties, ReactNode } from 'react';
 
@@ -41,7 +41,10 @@ interface AgentMeta {
   darjaKey: string | null;
 }
 
-const AGENT_META: Record<AgentName, AgentMeta> = {
+// Keyed by string (not AgentName): `AgentSummary.id` is `AgentName | string`
+// (R12 custom agents carry opaque `cz_` ids), so lookups use the same
+// string-indexed + fallback idiom as RUN_STATE_TINT below.
+const AGENT_META: Record<string, AgentMeta> = {
   hermes: {
     icon: <ChatWithAiIcon style={{ fontSize: 22 }} />,
     blurbKey: 'card.hermes.blurb',

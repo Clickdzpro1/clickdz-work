@@ -1,5 +1,5 @@
 import { cssVarV2 } from '@toeverything/theme/v2';
-import { globalStyle, style } from '@vanilla-extract/css';
+import { globalKeyframes, globalStyle, style } from '@vanilla-extract/css';
 
 export const root = style({
   display: 'flex',
@@ -110,8 +110,12 @@ globalStyle(`${content} > ai-chat-content`, {
   width: '100%',
 });
 
-/* ClickDz spinning logo animation for loading state */
-globalStyle('@keyframes clickdz-spin', {
+/* ClickDz spinning logo animation for loading state. `globalKeyframes` is the
+ * vanilla-extract API for @keyframes — `globalStyle` treats its first argument
+ * as a SELECTOR, so the previous `globalStyle('@keyframes …')` form never
+ * produced a valid keyframes rule and the spinner (see `animation:` above)
+ * did not spin. */
+globalKeyframes('clickdz-spin', {
   from: { transform: 'rotate(0deg)' },
   to: { transform: 'rotate(360deg)' },
 });

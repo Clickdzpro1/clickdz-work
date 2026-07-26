@@ -1,5 +1,6 @@
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import {
+  type ReactElement,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -122,7 +123,7 @@ function canvasToDataUrl(
   return canvas.toDataURL(type, quality);
 }
 
-export default function MaskPanel(props: MaskPanelProps): JSX.Element {
+export default function MaskPanel(props: MaskPanelProps): ReactElement {
   const { sourceUrl, sourceWidth, sourceHeight, onApplied, onClose } = props;
   const { lang, t } = useVpicLang();
   const dir = dirFor(lang);

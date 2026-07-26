@@ -7,7 +7,6 @@ import {
   karaokeTokens,
   mergeFilters,
   resolveItemRender,
-  type VdzPreviewItem,
   vignetteOverlayCss,
   visualTransformCss,
 } from '../../desktop/pages/workspace/vdz/anim';

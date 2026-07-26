@@ -216,13 +216,24 @@ export interface AgentRunSummary {
   endedAt?: number;
   /** Failure message when `state === 'failed'`. */
   error?: string;
+  /**
+   * Tool-call/wall-clock budget accounting (loosely read). The backend's
+   * `GET /runs` list route returns FULL records (the normalizer always fills
+   * `budget`), so it rides summary rows too — which is what lets the compact
+   * `<SpendMeter run={summary} />` in runs.tsx read `budget.toolCalls`.
+   */
+  budget?: {
+    maxToolCalls?: number;
+    maxWallMs?: number;
+    toolCalls?: number;
+  };
 }
 
 /**
  * Full background-run record (`GET /runs/:id`). Extends the summary with the
- * step timeline, the final answer, the continued thread, and the run budget —
- * used to seed a live view (an already-finished run renders instantly before
- * the stream re-attaches).
+ * step timeline, the final answer and the continued thread — used to seed a
+ * live view (an already-finished run renders instantly before the stream
+ * re-attaches).
  */
 export interface AgentRunRecord extends AgentRunSummary {
   /** The thread this run continued/created, when known. */
@@ -231,12 +242,6 @@ export interface AgentRunRecord extends AgentRunSummary {
   steps?: AgentStep[];
   /** The final synthesized answer text, when the run has produced one. */
   finalText?: string;
-  /** Tool-call/wall-clock budget accounting (loosely read). */
-  budget?: {
-    maxToolCalls?: number;
-    maxWallMs?: number;
-    toolCalls?: number;
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

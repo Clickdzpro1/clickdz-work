@@ -607,6 +607,10 @@ const VdzStudioPage = () => {
           timeline: layout.timeline.visible,
           transcript: layout.transcript.visible,
           effects: layout.effects.visible,
+          // `shorts` is in GENERATE_HIDDEN too — omitting it here made the
+          // restore loop read `snap.shorts` as undefined and force-hide the
+          // panel on return to Edit instead of restoring the user's choice.
+          shorts: layout.shorts.visible,
         };
         for (const id of GENERATE_HIDDEN) setPanelVisible(id, false);
       } else {

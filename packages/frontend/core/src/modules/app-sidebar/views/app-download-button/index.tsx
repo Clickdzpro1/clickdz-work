@@ -8,11 +8,6 @@ import { useCallback, useState } from 'react';
 
 import * as styles from './index.css';
 
-// Branded desktop download page (served by the ClickDz server, see
-// clickdz-releases.controller.ts). Ultimate fallback for unknown platforms or
-// when the release feed is unreachable.
-const DOWNLOAD_PAGE_FALLBACK = 'https://work.clickdz.ai/download';
-
 // Versionless permalink asset suffixes published on every release (see the
 // artifact naming contract in publish-desktop-release.yml, mirrored by the
 // /download page). Matched by lowercased name suffix, shortest name wins.

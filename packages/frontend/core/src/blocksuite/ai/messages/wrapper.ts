@@ -59,7 +59,7 @@ declare global {
 export const createIframeRenderer: (
   host: EditorHost,
   options?: AIAnswerWrapperOptions
-) => AffineAIPanelWidgetConfig['answerRenderer'] = (host, options) => {
+) => AffineAIPanelWidgetConfig['answerRenderer'] = (_host, options) => {
   return (answer, state) => {
     if (state === 'generating') {
       // Elegant skeleton in the panel — not empty black void

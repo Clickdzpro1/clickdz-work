@@ -452,7 +452,6 @@ const InvoiceEditor = ({
   readOnly,
   onWritesBlocked,
   onFlagOff,
-  onDone,
   onBack,
 }: {
   slug: string;

@@ -14,7 +14,6 @@ import {
   btnStyle,
   C,
   Field,
-  fetchConfig,
   type HermesCaps,
   type HermesConfig,
   type HermesTool,

@@ -295,7 +295,9 @@ export const HermesDashboard = ({
   // feature off) hides it silently.
   const [triggers, setTriggers] = useState<AgentTrigger[]>([]);
   const [missionsOn, setMissionsOn] = useState<boolean | null>(null);
-  const [missionsLoading, setMissionsLoading] = useState(true);
+  // Only the setter is bound: MissionsCard has no loading state to feed the
+  // value into (it renders list/empty faces only), so nothing reads it yet.
+  const [, setMissionsLoading] = useState(true);
   // Timestamp of the last successful pulse sweep (for the greeting bar).
   const [lastSweep, setLastSweep] = useState<number | undefined>(undefined);
 
@@ -706,11 +708,7 @@ export const HermesDashboard = ({
           the full /agents/triggers page. Gated like Exécutions: hidden when the
           triggers feature is off (a 404 on the list). */}
       {showMissions ? (
-        <MissionsCardNav
-          triggers={triggers}
-          onToggle={onToggleMission}
-          loading={missionsLoading}
-        />
+        <MissionsCardNav triggers={triggers} onToggle={onToggleMission} />
       ) : null}
 
       {/* ---- Exécutions (R6 background runs) — hidden unless the feature is on */}
@@ -959,11 +957,9 @@ export const HermesDashboard = ({
 const MissionsCardNav = ({
   triggers,
   onToggle,
-  loading,
 }: {
   triggers: AgentTrigger[];
   onToggle: (id: string) => void;
-  loading?: boolean;
 }) => {
   const linkRef = useRef<HTMLAnchorElement | null>(null);
   // Map the api AgentTrigger[] to the MissionsCard trigger shape (R8 shape:
@@ -987,7 +983,6 @@ const MissionsCardNav = ({
         triggers={missionTriggers}
         onToggle={onToggle}
         onOpen={() => linkRef.current?.click()}
-        loading={loading}
       />
       {/* Hidden in-workbench nav target for MissionsCard's onOpen. */}
       <WorkbenchLink

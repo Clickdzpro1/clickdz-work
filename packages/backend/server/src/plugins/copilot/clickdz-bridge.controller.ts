@@ -86,6 +86,15 @@ import {
   type TemplateMintOpts,
   isStale,
 } from './clickdz-template-mint';
+// APP-CAT — the App Builder template catalog (non-shop business tools). Pure
+// data + self-gated helpers (CDZ_APP_TEMPLATE_CATALOG, default OFF): a def's
+// French generation brief is prepended to the user's prompt on a gallery pick;
+// the list route serves display metadata only. Mirrors the shop catalog split.
+import {
+  appTemplateCatalogEnabled,
+  getAppTemplateDef,
+  listAppTemplateCatalog,
+} from './clickdz-app-catalog';
 // R0-b (WSB-2) — shop source recovery. Pure helpers behind GET /apps/:slug/source:
 // fetchDeployedHtml (recover a published app's HTML from its live Vercel URL,
 // SSRF-guarded/timed/size-capped) + resolveAppSource (template kind → server-render
@@ -3220,6 +3229,257 @@ export class ClickDzBridgeController {
     return html;
   }
 
+  /**
+   * STREAM-GEN — POST /api/v1/apps/generate/stream.
+   *
+   * The same generation as `/apps/generate`, but the merchant watches it happen
+   * instead of staring at a spinner for one to four minutes with no signal that
+   * anything is working. That wait is the single worst moment in the builder,
+   * and it is entirely a feedback problem: the code arrives steadily, we just
+   * never showed it.
+   *
+   * Typed SSE events rather than an OpenAI-shaped chunk stream, because the
+   * client's job here is not "append tokens to a chat bubble" but "paint a live
+   * preview and then hand a finished app to the studio":
+   *
+   *   phase  {phase,label}                 a human step, for the status line
+   *   delta  {text}                        raw model output as it arrives
+   *   done   {slug,html,bytes,seconds}     the finished, token-substituted app
+   *   error  {message}                     a typed, secret-free failure
+   *
+   * TWO PATHS, one client contract. When CDZ_AI_KEY is configured we stream the
+   * `cdz-architect` completion token-by-token, so `delta` carries real
+   * incremental HTML and the client can paint a progressive preview. Otherwise
+   * the Make code agent is the only backend available and it returns ONE buffered
+   * JSON body — no token stream exists to forward — so we emit honest `phase`
+   * heartbeats while it works and a single `done` at the end. The client cannot
+   * tell the difference structurally, and we never fake per-token progress we do
+   * not have.
+   *
+   * Deliberately NOT reusing `streamCdzChat`: that helper speaks the
+   * OpenAI-compatible chunk envelope for `/v1/chat/completions` passthrough. Its
+   * incremental SSE frame parser is the part worth copying, and it is copied
+   * faithfully here (same blank-line framing, same `[DONE]` handling, same
+   * partial-frame tolerance) — but wrapped in this route's own event vocabulary.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/generate/stream')
+  async generateAppStream(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    const startedAt = Date.now();
+    const prompt = String(body?.prompt || '').trim();
+    if (!prompt) {
+      throw new BadRequest('A description of the app is required');
+    }
+    // Same input caps as the buffered route — this runs the same paid agent.
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      throw new PayloadTooLargeException(
+        `Prompt is too long (max ${MAX_PROMPT_CHARS} characters)`
+      );
+    }
+    if (
+      typeof body?.currentHtml === 'string' &&
+      body.currentHtml.length > MAX_HTML_CHARS
+    ) {
+      throw new PayloadTooLargeException(
+        `currentHtml is too large (max ${MAX_HTML_CHARS} characters)`
+      );
+    }
+    const currentHtml =
+      typeof body?.currentHtml === 'string' ? body.currentHtml : undefined;
+    const { history, selection } = this.parseAppEditContext(body);
+    // Identical template resolution to the buffered route: gate-honouring,
+    // new-builds-only, null for unknown ids.
+    const appTemplate =
+      !currentHtml &&
+      typeof body?.templateId === 'string' &&
+      body.templateId.length <= 64
+        ? getAppTemplateDef(body.templateId)
+        : null;
+    const briefedPrompt = appTemplate
+      ? `${appTemplate.brief}\n\nDemande du commerçant : ${prompt}`
+      : prompt;
+    const slug =
+      typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
+        ? body.slug
+        : slugifyAppName(prompt);
+    const isEdit = !!currentHtml && currentHtml.length > 20;
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // Defeat proxy buffering — without this nginx can hold the whole stream and
+    // deliver it at the end, which is exactly the spinner we are removing.
+    res.setHeader('X-Accel-Buffering', 'no');
+    const emit = (event: string, data: unknown) => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    // Abort upstream when the merchant closes the tab or navigates away, so a
+    // cancelled Path-A build stops costing model time.
+    //
+    // `res.on('close')`, NOT `req.on('close')` — this is the same house pattern
+    // used by the chat-completions passthrough above, and the distinction is
+    // load-bearing: since Node 16, `IncomingMessage` emits 'close' when the
+    // REQUEST MESSAGE completes (i.e. once the body parser has drained the POST
+    // body), which here happens in middleware BEFORE this handler even runs. A
+    // listener attached to `req` would therefore never fire at all — not on
+    // completion (already emitted) and not on disconnect (only `res` emits
+    // then). The ServerResponse's 'close' is what actually tracks the socket.
+    //
+    // Path B cannot be cancelled: `runMakeAgent` takes no external signal, only
+    // its own timeout. A disconnect there lets the Make run finish and be
+    // discarded; the heartbeat below is cleared either way.
+    const upstream = new AbortController();
+    res.on('close', () => upstream.abort());
+
+    /** Substitute the per-slug Data API URL + token, then emit `done`. */
+    const finish = (raw: string) => {
+      let html = extractHtmlApp(raw);
+      if (!html) {
+        emit('error', {
+          message:
+            'The model did not return a valid app. Try rephrasing your request.',
+        });
+        res.end();
+        return;
+      }
+      if (html.length > 400_000) html = html.slice(0, 400_000);
+      const externalBase = (
+        process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+      ).replace(/\/+$/, '');
+      html = html
+        .replaceAll(
+          '__CLICKDZ_DATA_URL__',
+          `${externalBase}/api/v2/apps-data/${slug}`
+        )
+        .replaceAll('__CLICKDZ_DATA_TOKEN__', dataWriteToken(slug));
+      const seconds = Math.round((Date.now() - startedAt) / 1000);
+      this.logger.log(
+        `[apps] stream-generated ${html.length} chars in ${seconds}s slug=${slug} user=${user.id}`
+      );
+      emit('done', { slug, html, bytes: html.length, seconds });
+      res.end();
+    };
+
+    const content = isEdit
+      ? buildEditContent({
+          prompt: briefedPrompt,
+          currentHtml: currentHtml as string,
+          history,
+          selection,
+        })
+      : buildNewAppContent(briefedPrompt);
+
+    emit('phase', { phase: 'analyse', label: 'Analyse de votre demande…' });
+
+    // ---- Path A: real token streaming via the CDZ_AI direct path. ----------
+    if (CDZ_AI_KEY) {
+      let upstreamRes: Awaited<ReturnType<typeof fetch>> | null = null;
+      try {
+        upstreamRes = await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+          },
+          body: JSON.stringify({
+            model: 'cdz-architect',
+            messages: [{ role: 'user', content }],
+            stream: true,
+            max_tokens: 16000,
+          }),
+          signal: upstream.signal,
+        });
+      } catch {
+        upstreamRes = null; // never opened — fall through to Make
+      }
+      if (upstreamRes?.ok && upstreamRes.body) {
+        emit('phase', { phase: 'code', label: 'Écriture du code…' });
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let raw = '';
+        try {
+          for await (const bytes of upstreamRes.body as unknown as AsyncIterable<Uint8Array>) {
+            buffer += decoder.decode(bytes, { stream: true });
+            // SSE frames are separated by a blank line; a frame may arrive
+            // split across chunks, so only complete ones are consumed.
+            let sep: number;
+            while ((sep = buffer.indexOf('\n\n')) !== -1) {
+              const frame = buffer.slice(0, sep);
+              buffer = buffer.slice(sep + 2);
+              for (const line of frame.split('\n')) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data:')) continue;
+                const payload = trimmed.slice(5).trim();
+                if (!payload || payload === '[DONE]') continue;
+                try {
+                  const text = JSON.parse(payload)?.choices?.[0]?.delta
+                    ?.content;
+                  if (typeof text === 'string' && text) {
+                    raw += text;
+                    emit('delta', { text });
+                  }
+                } catch {
+                  /* partial/unknown frame — skip it, never break the stream */
+                }
+              }
+            }
+          }
+        } catch {
+          // Mid-stream failure. We have already sent bytes, so falling back to
+          // Make would double-charge and confuse the client; if anything usable
+          // arrived, finish with it, else report.
+          if (!raw) {
+            emit('error', { message: 'The connection was interrupted.' });
+            res.end();
+            return;
+          }
+        }
+        finish(raw);
+        return;
+      }
+      // Non-2xx / no body before any bytes were sent: drain and fall through.
+      try {
+        await upstreamRes?.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // ---- Path B: the Make code agent. ONE buffered body, so no token stream
+    // exists to forward. Emit honest elapsed-time heartbeats instead of
+    // fabricating per-token progress, and keep the same `done` contract. ------
+    const heartbeat = setInterval(() => {
+      emit('phase', {
+        phase: 'code',
+        label: 'Génération en cours…',
+        seconds: Math.round((Date.now() - startedAt) / 1000),
+      });
+    }, 4000);
+    try {
+      const reply = await this.runMakeAgent(
+        [{ role: 'user', content }],
+        'clickdz-apps',
+        MAKE_CODE_AGENT_ID || undefined
+      );
+      clearInterval(heartbeat);
+      finish(reply || '');
+    } catch (err) {
+      clearInterval(heartbeat);
+      emit('error', {
+        message:
+          err instanceof Error && err.message
+            ? err.message
+            : 'Generation failed. Please try again.',
+      });
+      res.end();
+    }
+  }
+
   /** GENERATE ONLY — returns full HTML for instant preview; does NOT deploy */
   @Throttle('strict')
   @Post('/api/v1/apps/generate')
@@ -3255,6 +3515,23 @@ export class ClickDzBridgeController {
     // Validate + bound the optional edit-in-context fields (rejects malformed
     // shapes 400 / oversized inputs 413 per the canonical request bounds).
     const { history, selection } = this.parseAppEditContext(body);
+    // APP-CAT: optional `templateId` — a gallery pick resolves a server-side
+    // generation brief that is PREPENDED to the user's prompt. The brief is
+    // trusted catalog data, so it is deliberately NOT counted against the
+    // MAX_PROMPT_CHARS cap already enforced on `prompt` above. Applies to NEW
+    // builds only (an edit already carries its context via currentHtml).
+    // getAppTemplateDef honors the CDZ_APP_TEMPLATE_CATALOG gate and returns
+    // null for gate-off/unknown ids, so a stale or bad templateId degrades to
+    // a plain generate rather than a 500 (mirrors resolveTemplateDef).
+    const appTemplate =
+      !currentHtml &&
+      typeof body?.templateId === 'string' &&
+      body.templateId.length <= 64
+        ? getAppTemplateDef(body.templateId)
+        : null;
+    const briefedPrompt = appTemplate
+      ? `${appTemplate.brief}\n\nDemande du commerçant : ${prompt}`
+      : prompt;
     const slug =
       typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
         ? body.slug
@@ -3262,7 +3539,12 @@ export class ClickDzBridgeController {
     this.logger.log(
       `[apps] generate (${currentHtml ? 'edit' : 'new'}) user=${user.id} slug=${slug} prompt=${prompt.slice(0, 80)}`
     );
-    let html = await this.buildAppHtml(prompt, currentHtml, history, selection);
+    let html = await this.buildAppHtml(
+      briefedPrompt,
+      currentHtml,
+      history,
+      selection
+    );
     // wire the app to its own Data API namespace so preview + live share state
     const externalBase = (
       process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
@@ -3563,6 +3845,24 @@ export class ClickDzBridgeController {
       throw new NotFound('Template catalog not enabled');
     }
     return { templates: listTemplateCatalog() };
+  }
+
+  /**
+   * APP-CAT — GET /api/v1/apps/app-templates. The APP catalog's display
+   * metadata (id/name/darja/emoji/category/pitch/accent/gradient) for the
+   * builder gallery. Generation briefs are deliberately EXCLUDED — they are
+   * server-side only, reached via `templateId` on POST /apps/generate. Gated by
+   * CDZ_APP_TEMPLATE_CATALOG: OFF ⇒ typed 404 so the gallery hides itself,
+   * never an empty 200 that would render a blank shelf. Mirrors the shop
+   * catalog route above, gate and typed-404 included.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/app-templates')
+  async listAppTemplates(@CurrentUser() _user: CurrentUser) {
+    if (!appTemplateCatalogEnabled()) {
+      throw new NotFound('App template catalog not enabled');
+    }
+    return { templates: listAppTemplateCatalog() };
   }
 
   /**

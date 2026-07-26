@@ -21,7 +21,7 @@ import {
   KeyboardIcon,
   VoiceIcon,
 } from '@blocksuite/icons/rc';
-import { createElement, type ReactNode } from 'react';
+import { createElement, type ReactElement, type SVGAttributes } from 'react';
 
 export type StudioId =
   | 'vdz'
@@ -56,8 +56,14 @@ export interface StudioDef {
   label: string;
   /** Route target for `workbench.open`; also the active-prefix via `startsWith`. */
   route: string;
-  /** Thunk returning a boot-safe rc icon element, e.g. `() => createElement(FrameIcon)`. */
-  icon: () => ReactNode;
+  /**
+   * Thunk returning a boot-safe rc icon element, e.g. `() => createElement(FrameIcon)`.
+   * Typed as an SVG element (not ReactNode) because sidebar consumers
+   * (`MenuItem`/`MenuLinkItem` `icon` prop) `cloneElement` it and require
+   * `ReactElement<SVGAttributes<SVGElement>>` — a non-element ReactNode would
+   * crash cloneElement at runtime, so the loose type was hiding a real hazard.
+   */
+  icon: () => ReactElement<SVGAttributes<SVGElement>>;
   /** Grouping bucket for the switcher dropdown. */
   group: StudioGroup;
   /** Stable e2e selector, e.g. 'slider-bar-vdz-studio-button'. */
