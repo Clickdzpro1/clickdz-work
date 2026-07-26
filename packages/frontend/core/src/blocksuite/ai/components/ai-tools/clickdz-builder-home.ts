@@ -298,6 +298,53 @@ export class ClickDzBuilderHome extends LitElement {
       font-size: 12.5px;
       color: var(--affine-text-secondary-color, #8e8d91);
     }
+    /* Live build preview — only present while a stream is running. */
+    .live {
+      margin-top: 14px;
+      border: 1px solid var(--affine-border-color, #e3e2e4);
+      border-radius: 14px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .live-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--affine-text-secondary-color, #8e8d91);
+      border-bottom: 1px solid var(--affine-border-color, #e3e2e4);
+      background: var(--affine-background-secondary-color, #f4f4f5);
+    }
+    .live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #10a37f;
+      animation: cdz-live-pulse 1.1s ease-in-out infinite;
+    }
+    @keyframes cdz-live-pulse {
+      0%,
+      100% {
+        opacity: 1;
+      }
+      50% {
+        opacity: 0.35;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .live-dot {
+        animation: none;
+      }
+    }
+    .live iframe {
+      display: block;
+      width: 100%;
+      height: 320px;
+      border: 0;
+      background: #fff;
+    }
   `;
 
   /** Optional deep-link: a prompt to prefill the composer with. */
@@ -321,6 +368,14 @@ export class ClickDzBuilderHome extends LitElement {
 
   @state()
   private accessor appTemplates: CdzAppTemplateSummary[] = [];
+
+  /**
+   * Partial app HTML while a streamed build is in flight, painted into a
+   * sandboxed iframe so the merchant watches their app take shape. Empty
+   * except during a stream.
+   */
+  @state()
+  private accessor livePreview = '';
 
   @state()
   private accessor drafts: CdzArtifact[] = [];
@@ -406,6 +461,161 @@ export class ClickDzBuilderHome extends LitElement {
 
   /** Freeform build. Mirrors the composer path's endpoint + error handling. */
   /**
+   * Stream a build over SSE, painting a live preview as the code arrives.
+   *
+   * Returns TRUE when it owned the build (success or a reported error), FALSE
+   * when the caller should fall back to the buffered route — which happens if
+   * the route is absent (older server), the response is not an event-stream (a
+   * proxy rewrote it), or the stream dies before a single byte of app HTML.
+   * That distinction matters: falling back after a partial success would run the
+   * paid code agent twice for one request.
+   *
+   * Deliberately hand-rolled over fetch + a reader rather than EventSource:
+   * EventSource cannot POST, and this needs a request body.
+   */
+  private async generateStreaming(
+    text: string,
+    opts?: { templateId?: string; title?: string }
+  ): Promise<boolean> {
+    let res: Response;
+    try {
+      res = await fetch(cdzApiUrl('/api/v1/apps/generate/stream'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+        },
+        body: JSON.stringify({
+          prompt: text,
+          ...(opts?.templateId ? { templateId: opts.templateId } : {}),
+        }),
+      });
+    } catch {
+      return false; // never opened — let the buffered path try
+    }
+    // 404 = server predates this route; 401 is worth surfacing rather than
+    // retrying, since the buffered route would fail identically.
+    if (res.status === 401) {
+      // Returning true means "handled"; the CALLER clears busy for that case,
+      // so this must not also clear it (one owner for the flag).
+      this.error = 'Connectez-vous pour créer une application.';
+      return true;
+    }
+    const ctype = res.headers.get('content-type') || '';
+    if (!res.ok || !res.body || !ctype.includes('text/event-stream')) {
+      try {
+        await res.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+      return false;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let raw = '';
+    let lastPaint = 0;
+    let settled = false;
+    // Did the server ever send real content, or at least admit it had started?
+    // These decide whether a broken stream is safe to retry (see the catch).
+    let sawDelta = false;
+    let sawPhase = false;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // Same blank-line framing the server writes; a frame can straddle
+        // chunks, so only complete ones are consumed.
+        let sep: number;
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          let event = 'message';
+          let data = '';
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) data += line.slice(5).trim();
+          }
+          if (!data) continue;
+          let payload: any;
+          try {
+            payload = JSON.parse(data);
+          } catch {
+            continue; // unknown frame — never break the stream over it
+          }
+          if (event === 'phase') {
+            sawPhase = true;
+            const secs =
+              typeof payload?.seconds === 'number' ? ` (${payload.seconds}s)` : '';
+            this.busyLabel = `${payload?.label || 'Création…'}${secs}`;
+          } else if (event === 'delta') {
+            sawDelta = true;
+            raw += String(payload?.text ?? '');
+            // Paint from the document start once it appears. Throttled to ~2/s:
+            // browsers render truncated HTML fine, but re-parsing on every token
+            // would burn the phone's CPU for no visible gain.
+            const at = raw.search(/<!doctype html|<html[\s>]/i);
+            const now = Date.now();
+            if (at !== -1 && now - lastPaint > 450) {
+              lastPaint = now;
+              this.livePreview = raw.slice(at);
+            }
+          } else if (event === 'done') {
+            settled = true;
+            if (payload?.slug && payload?.html) {
+              this.openInStudio({
+                slug: payload.slug,
+                title: opts?.title || text.slice(0, 64),
+                html: payload.html,
+              });
+            } else {
+              this.error = 'Réponse invalide du générateur.';
+            }
+          } else if (event === 'error') {
+            settled = true;
+            this.error = String(payload?.message || 'Génération échouée');
+          }
+        }
+      }
+    } catch {
+      // Mid-stream break. `sawDelta` is the honest signal, NOT `raw`:
+      //
+      // On the token-streaming path a break before any delta means the server
+      // produced nothing, so the buffered route is a genuinely clean retry. But
+      // on the heartbeat path (no CDZ_AI_KEY) there are never any deltas — the
+      // server commits the PAID agent run up front and the app arrives only in
+      // the final `done`. Retrying there always starts a second billed
+      // generation while the first is still running and uncancellable. So we
+      // only fall back when we know a stream was really carrying content and
+      // died early; otherwise we report and let the merchant decide.
+      if (!settled && !sawDelta && !sawPhase) return false;
+      if (!settled) {
+        this.error =
+          'La connexion a été interrompue pendant la génération. Vérifiez vos applications avant de relancer — le travail est peut-être déjà terminé.';
+      }
+    } finally {
+      // Deliberately NOT clearing `busy` here. The CALLER owns that flag for
+      // the whole operation, including the buffered fallback that runs after a
+      // `false` return — clearing it here re-enabled every button while a paid
+      // 1-4 minute generation was still in flight, so a merchant seeing an idle
+      // screen could start a second and third concurrent build.
+      this.busyLabel = '';
+      this.livePreview = '';
+    }
+    // Stream ended cleanly but with no done/error frame. Same reasoning as the
+    // catch above: only hand back to the buffered route when we are confident
+    // the server never started billable work.
+    if (!settled && !sawDelta && !sawPhase) return false;
+    if (!settled) {
+      this.error =
+        'La génération s\'est interrompue avant la fin. Vérifiez vos applications avant de relancer.';
+    }
+    return true;
+  }
+
+  /**
    * Freeform build, or a catalog pick when `opts.templateId` is given.
    *
    * One method rather than two: a template pick is the SAME generate call with a
@@ -424,6 +634,19 @@ export class ClickDzBuilderHome extends LitElement {
       ? `Création de « ${opts.title} »…`
       : 'Création de votre application…';
     this.error = '';
+    this.livePreview = '';
+    // Try the streaming route first: the merchant sees their app being written
+    // instead of a spinner. It falls back to the buffered route on ANY failure
+    // (route missing on an older server, a proxy that eats event-streams), so
+    // this can only ever add feedback, never remove the ability to build.
+    // The helper owns the stream but NOT the busy flag (see its finally): when
+    // it handled the build we clear here, and when it hands back we keep busy
+    // true straight through the buffered fallback so no second build can start.
+    if (await this.generateStreaming(text, opts)) {
+      this.busy = false;
+      this.busyLabel = '';
+      return;
+    }
     try {
       const res = await fetch(cdzApiUrl('/api/v1/apps/generate'), {
         method: 'POST',
@@ -747,6 +970,23 @@ export class ClickDzBuilderHome extends LitElement {
           </div>
           ${this.busy && this.busyLabel
             ? html`<div class="busy">${this.busyLabel}</div>`
+            : nothing}
+          ${this.livePreview
+            ? html`<div class="live">
+                <div class="live-head">
+                  <span class="live-dot" aria-hidden></span>
+                  Aperçu en direct — votre application s'écrit
+                </div>
+                <!-- srcdoc + a locked-down sandbox: this is partial, unfinished
+                     model output, so it gets scripts (the app needs them to
+                     render) but no same-origin, no forms, no top-level
+                     navigation. The final app is re-mounted by the studio. -->
+                <iframe
+                  title="Aperçu en direct"
+                  sandbox="allow-scripts"
+                  .srcdoc=${this.livePreview}
+                ></iframe>
+              </div>`
             : nothing}
           ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
         </div>
