@@ -35,6 +35,9 @@ import {
   TEMPLATE_OPTIONS,
   THEME_OPTIONS,
   validateAccent,
+  RADIUS_OPTIONS,
+  DEFAULT_RADIUS,
+  resolveRadius,
 } from './shoperp-shared';
 
 // ---------------------------------------------------------------------------
@@ -171,6 +174,9 @@ export const ShopAppearance = ({
   const [heroLine, setHeroLine] = useState<string>(
     typeof settings.heroLine === 'string' ? settings.heroLine : ''
   );
+  const [radius, setRadius] = useState<string>(
+    resolveRadius(settings.radius).id
+  );
   const [accentErr, setAccentErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false); // a save landed → offer re-publish
@@ -265,6 +271,7 @@ export const ShopAppearance = ({
       if (draftSectionsCsv !== storedSectionsCsv) {
         patch.sections = draftSectionsCsv;
       }
+      if (radius !== resolveRadius(settings.radius).id) patch.radius = radius;
       const storedHero =
         typeof settings.heroLine === 'string' ? settings.heroLine : '';
       if (heroLine !== storedHero) patch.heroLine = heroLine.slice(0, 200);
@@ -479,6 +486,26 @@ export const ShopAppearance = ({
                   hint={t.hint}
                   glyph={TEMPLATE_GLYPHS[t.id] ?? '▤'}
                   isDefault={t.id === DEFAULT_TEMPLATE}
+                />
+              ))}
+            </div>
+          </Panel>
+
+          {/* Corner style — overrides the theme preset's radius. 'Selon le
+              thème' is the default and leaves it untouched, which is what every
+              shop had before this control existed. Also reshapes buttons. */}
+          <Panel title="Coins">
+            <div style={optionGridStyle}>
+              {RADIUS_OPTIONS.map(r => (
+                <ChoiceCard
+                  key={r.id}
+                  active={radius === r.id}
+                  disabled={disabled}
+                  onClick={() => setRadius(r.id)}
+                  title={r.label}
+                  hint={r.hint}
+                  glyph={RADIUS_GLYPHS[r.id] ?? '\u25a2'}
+                  isDefault={r.id === DEFAULT_RADIUS}
                 />
               ))}
             </div>
@@ -764,6 +791,13 @@ export const ShopAppearance = ({
 // One glyph per layout id. Was a binary `id === 'boutique' ? ... : ...`, which
 // silently gave every other layout the Standard glyph — fine while only two
 // layouts were exposed, wrong the moment grid-dense/editorial-split appeared.
+const RADIUS_GLYPHS: Record<string, string> = {
+  auto: '\u25a2',
+  carre: '\u25a0',
+  doux: '\u25a3',
+  arrondi: '\u25cf',
+};
+
 const TEMPLATE_GLYPHS: Record<string, string> = {
   standard: '\u25a4',
   boutique: '\u25a6',

@@ -371,6 +371,8 @@ export interface ErpSettings {
   font?: string;
   /** Compact CSV of enabled section ids, e.g. 'hero,trust,categories'. */
   sections?: string;
+  /** Corner style id; 'auto' (default) keeps the theme preset's radius. */
+  radius?: string;
   // C6 online-payments flag — NON-sensitive (the Chargily SECRET lives in a
   // private Redis store, never here). When true the deployed storefront shows a
   // "Payer en ligne" option (SHOPTPL gates on this); the bridge allowlist
@@ -4332,6 +4334,32 @@ export const TEMPLATE_OPTIONS: TemplateOption[] = [
     hint: 'Hero asymétrique avec une grande photo produit.',
   },
 ];
+
+export interface RadiusOption {
+  id: string;
+  label: string;
+  hint: string;
+}
+
+/** Corner style. 'auto' defers to the theme, which is what every shop had before
+    this control existed. */
+export const RADIUS_OPTIONS: RadiusOption[] = [
+  {
+    id: 'auto',
+    label: 'Selon le thème',
+    hint: 'Garde les coins du thème choisi.',
+  },
+  { id: 'carre', label: 'Carré', hint: 'Coins nets — technique, officiel.' },
+  { id: 'doux', label: 'Doux', hint: 'Légèrement arrondi — équilibré.' },
+  { id: 'arrondi', label: 'Arrondi', hint: 'Coins généreux — chaleureux.' },
+];
+
+export const DEFAULT_RADIUS = 'auto';
+
+export function resolveRadius(id: unknown): RadiusOption {
+  const key = typeof id === 'string' ? id.trim().toLowerCase() : '';
+  return RADIUS_OPTIONS.find(r => r.id === key) ?? RADIUS_OPTIONS[0];
+}
 
 export interface FontOption {
   id: string;

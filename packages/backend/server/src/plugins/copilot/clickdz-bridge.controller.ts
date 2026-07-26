@@ -1187,6 +1187,11 @@ const ERP_DEFAULT_TAGLINE =
 // never trusts a caller-supplied style string.
 // ---------------------------------------------------------------------------
 // Theme presets (≥4). 'classic' == today's teal look (the default).
+// Corner style. 'auto' = keep the theme preset's radius (the default, and what
+// every existing shop implicitly has), so adding this key changes nothing until a
+// merchant picks otherwise.
+const ERP_RADIUS_IDS = ['auto', 'carre', 'doux', 'arrondi'] as const;
+const ERP_DEFAULT_RADIUS = 'auto';
 const ERP_THEME_IDS = [
   'classic',
   'dark',
@@ -1300,6 +1305,7 @@ function normalizeErpSettings(row: ErpRecord | undefined) {
   const theme = erpStr(row?.theme).trim().toLowerCase();
   const template = erpStr(row?.template).trim().toLowerCase();
   const font = erpStr(row?.font).trim().toLowerCase();
+  const radius = erpStr(row?.radius).trim().toLowerCase();
   // sections: accept a stored CSV (or legacy array), re-validate to a canonical
   // CSV; anything invalid → the default (all sections on).
   const sections = normalizeErpSections(
@@ -1343,6 +1349,9 @@ function normalizeErpSettings(row: ErpRecord | undefined) {
       ? font
       : ERP_DEFAULT_FONT,
     sections: sections ?? ERP_DEFAULT_SECTIONS,
+    radius: (ERP_RADIUS_IDS as readonly string[]).includes(radius)
+      ? radius
+      : ERP_DEFAULT_RADIUS,
   };
 }
 
@@ -7753,6 +7762,11 @@ export class ClickDzBridgeController {
       if (!(ERP_FONT_IDS as readonly string[]).includes(id)) badField = 'font';
       else patch.font = id;
     }
+    if (!badField && s.radius != null) {
+      const id = typeof s.radius === 'string' ? s.radius.trim().toLowerCase() : '';
+      if (!(ERP_RADIUS_IDS as readonly string[]).includes(id)) badField = 'radius';
+      else patch.radius = id;
+    }
     // C7: sections — a CSV/array of allowed section ids, normalized to a
     // canonical CSV. Malformed / unknown id → 400. Empty selection is valid.
     if (!badField && s.sections != null) {
@@ -7768,7 +7782,7 @@ export class ClickDzBridgeController {
     }
     if (Object.keys(patch).length === 0) {
       throw new BadRequest(
-        '"patch" must include at least one of: shopName, tagline, heroLine, whatsapp, deliveryFee, accent, adminPin, theme, template, font, sections'
+        '"patch" must include at least one of: shopName, tagline, heroLine, whatsapp, deliveryFee, accent, adminPin, theme, template, font, radius, sections'
       );
     }
     const token = dataWriteToken(slug);

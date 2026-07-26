@@ -1919,6 +1919,21 @@ var LAYOUTS = {
   'editorial-split': { label: 'Éditorial' }
 };
 
+/* Corner style — an OPTIONAL override of the theme preset's radius. Ids only
+   (settings.radius). 'auto' (the default) leaves the preset untouched, so a shop
+   with no radius setting renders byte-identically to before this seam. Also
+   reshapes buttons, since .btn uses --r-sm. */
+var RADII = {
+  auto: null,
+  carre: { r: '4px', rSm: '3px' },
+  doux: { r: '12px', rSm: '8px' },
+  arrondi: { r: '22px', rSm: '14px' }
+};
+function radiusId() {
+  var r = store.settings && store.settings.radius;
+  return (r && Object.prototype.hasOwnProperty.call(RADII, r)) ? r : 'auto';
+}
+
 function themeId() {
   var t = store.settings && store.settings.theme;
   return (t && THEMES[t]) ? t : 'classic';
@@ -1946,6 +1961,9 @@ function applyTheme() {
   var root = document.documentElement.style;
   var vars = preset.vars || {};
   for (var k in vars) { if (Object.prototype.hasOwnProperty.call(vars, k)) root.setProperty(k, vars[k]); }
+  /* Corner override AFTER the preset loop so it wins, in the same repaint. */
+  var rad = RADII[radiusId()];
+  if (rad) { root.setProperty('--r', rad.r); root.setProperty('--r-sm', rad.rSm); }
   if (preset.accent && accentIsDefault()) {
     var a = preset.accent;
     root.setProperty('--accent', a);
