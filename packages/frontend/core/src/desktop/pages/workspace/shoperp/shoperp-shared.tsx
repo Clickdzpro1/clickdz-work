@@ -5029,27 +5029,24 @@ export const WHATSAPP_RE = /^[0-9]{8,15}$/;
 export const ACCENT_RE = /^#[0-9a-fA-F]{6}$/;
 export const PIN_RE = /^[0-9]{4,8}$/;
 
-// These are shown to the merchant in the wizard, whose every other string is
-// French — and now that WhatsApp and the PIN seed EMPTY rather than to a
-// placeholder, they are reached routinely rather than only on a typo.
 export function validateStoreName(v: string): string | null {
   const name = v.trim();
-  if (name.length === 0) return 'Donnez un nom à votre boutique.';
-  if (name.length > 60) return '60 caractères maximum.';
+  if (name.length === 0) return 'Enter a store name.';
+  if (name.length > 60) return 'Keep the name under 60 characters.';
   return null;
 }
 export function validateWhatsapp(v: string): string | null {
   if (!WHATSAPP_RE.test(v)) {
-    return 'Chiffres uniquement, 8 à 15, sans « + ». Ex. : 213661234567.';
+    return 'Digits only, 8–15, no “+” (e.g. 213600000000).';
   }
   return null;
 }
 export function validateAccent(v: string): string | null {
-  if (!ACCENT_RE.test(v)) return 'Couleur hexadécimale, ex. : #0f766e.';
+  if (!ACCENT_RE.test(v)) return 'Use a hex color like #0f766e.';
   return null;
 }
 export function validatePin(v: string): string | null {
-  if (!PIN_RE.test(v)) return '4 à 8 chiffres.';
+  if (!PIN_RE.test(v)) return 'Use 4–8 digits.';
   return null;
 }
 
@@ -5220,6 +5217,45 @@ export const Spinner = ({ dark = false }: { dark?: boolean }) => (
   >
     <style>{'@keyframes cdz-shoperp-spin{to{transform:rotate(360deg)}}'}</style>
   </span>
+);
+
+/**
+ * A loading placeholder shaped like the content that is coming.
+ *
+ * A spinner tells the merchant "wait"; a skeleton tells them "a table of five
+ * rows is arriving, here is where it will be". The second reads as faster even
+ * at identical latency, because the layout stops jumping when the data lands.
+ *
+ * The shimmer itself lives in the injected shoperp motion stylesheet, keyed off
+ * `data-cdz-skeleton`, so it honours prefers-reduced-motion for free. Purely
+ * decorative, hence aria-hidden — the surrounding panel owns the live region.
+ */
+export const Skeleton = ({
+  rows = 4,
+  height = 34,
+  gap = 8,
+}: {
+  rows?: number;
+  height?: number;
+  gap?: number;
+}) => (
+  <div
+    aria-hidden
+    style={{ display: 'flex', flexDirection: 'column', gap }}
+  >
+    {Array.from({ length: Math.max(1, rows) }, (_, i) => (
+      <div
+        key={i}
+        data-cdz-skeleton=""
+        style={{
+          height,
+          // Taper the last row so the block reads as text, not as a solid slab.
+          width: i === rows - 1 ? '62%' : '100%',
+          color: C.text,
+        }}
+      />
+    ))}
+  </div>
 );
 
 // A labeled kind badge (Shop / ERP / App) used in the management list.

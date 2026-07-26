@@ -18,7 +18,6 @@ import {
   hintStyle,
   inputStyle,
   labelStyle,
-  Panel,
   type RepublishOutcome,
   republishShop,
   Spinner,
@@ -207,7 +206,7 @@ export const ShopFeatures = ({
   // Enabled feature ids, seeded from the stored CSV. parseFeatures applies the
   // registry defaults (defaultOn) for a legacy singleton that predates features.
   const [enabled, setEnabled] = useState<string[]>(() =>
-    normalizeEnabled(parseFeatures(settings.features), catalog)
+    normalizeEnabled(parseFeatures(settings.features, scope), catalog)
   );
   // Per-feature scalar params, seeded from the singleton keys each feature owns.
   const [params, setParams] = useState<Record<string, string>>(() =>
@@ -233,8 +232,8 @@ export const ShopFeatures = ({
 
   // ---- Dirty tracking ------------------------------------------------------
   const storedEnabled = useMemo(
-    () => normalizeEnabled(parseFeatures(settings.features), catalog),
-    [settings.features, catalog]
+    () => normalizeEnabled(parseFeatures(settings.features, scope), catalog),
+    [settings.features, scope, catalog]
   );
   const storedParams = useMemo(
     () => seedParams(catalog, settings),
@@ -941,12 +940,17 @@ const Toggle = ({
       style={{
         position: 'absolute',
         top: 2,
-        left: on ? 20 : 2,
+        // `transform`, not `left`: animating `left` re-runs layout on every
+        // frame, which stutters on the mid-range Android phones merchants use.
+        // `translateX` stays on the compositor and looks identical.
+        left: 2,
+        transform: on ? 'translateX(18px)' : 'translateX(0)',
         width: 18,
         height: 18,
         borderRadius: '50%',
         background: on ? '#fff' : C.muted,
-        transition: 'left 160ms ease, background 160ms ease',
+        transition:
+          'transform 160ms cubic-bezier(0.2, 0, 0, 1), background 160ms ease',
       }}
     />
   </button>
