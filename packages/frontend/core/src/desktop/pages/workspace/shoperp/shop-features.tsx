@@ -18,7 +18,6 @@ import {
   hintStyle,
   inputStyle,
   labelStyle,
-  Panel,
   type RepublishOutcome,
   republishShop,
   Spinner,
@@ -207,7 +206,7 @@ export const ShopFeatures = ({
   // Enabled feature ids, seeded from the stored CSV. parseFeatures applies the
   // registry defaults (defaultOn) for a legacy singleton that predates features.
   const [enabled, setEnabled] = useState<string[]>(() =>
-    normalizeEnabled(parseFeatures(settings.features), catalog)
+    normalizeEnabled(parseFeatures(settings.features, scope), catalog)
   );
   // Per-feature scalar params, seeded from the singleton keys each feature owns.
   const [params, setParams] = useState<Record<string, string>>(() =>
@@ -233,8 +232,8 @@ export const ShopFeatures = ({
 
   // ---- Dirty tracking ------------------------------------------------------
   const storedEnabled = useMemo(
-    () => normalizeEnabled(parseFeatures(settings.features), catalog),
-    [settings.features, catalog]
+    () => normalizeEnabled(parseFeatures(settings.features, scope), catalog),
+    [settings.features, scope, catalog]
   );
   const storedParams = useMemo(
     () => seedParams(catalog, settings),
