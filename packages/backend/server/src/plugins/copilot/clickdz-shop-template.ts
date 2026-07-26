@@ -24,6 +24,7 @@
 //   __CLICKDZ_LAYOUT__       → LAYOUTS id  (default "standard")
 //   __CLICKDZ_TAGLINE__      → hero/settings tagline (default the FR line below)
 //   __CLICKDZ_HERO__         → hero headline override (default "" → uses shopName)
+//   __CLICKDZ_TRUST__        → vertical reassurance line (default "" → generic strip)
 //   __CLICKDZ_RTL__          → <html dir> value: "ltr" [default] | "rtl"
 //   __CLICKDZ_CATEGORIES__   → reserved category hint CSV (default "" → derived)
 //   __CLICKDZ_SEED__         → first-run seed products JSON array (default the
@@ -553,6 +554,7 @@ var SLUG = '__CLICKDZ_SLUG__';
    so a mint WITHOUT a templateId substitutes the same bytes (byte-identical). */
 var TPL_RTL_DIR = '__CLICKDZ_RTL__';        // 'ltr' (default) | 'rtl'
 var TPL_HERO_LINE = '__CLICKDZ_HERO__';     // '' (default) → hero uses the shop name
+var TPL_TRUST_LINE = '__CLICKDZ_TRUST__';   // '' (default) → generic trust strip
 var TPL_SEED_JSON = '__CLICKDZ_SEED__';     // '' (default) → the six demoProducts below
 var TPL_CATEGORIES = '__CLICKDZ_CATEGORIES__'; // '' (default) — reserved category hint CSV; categories() still derives from products
 
@@ -1655,6 +1657,21 @@ function heroLine() {
   if (h) return h;
   return (s.tagline != null) ? String(s.tagline) : defaultSettings().tagline;
 }
+/* The vertical's reassurance line, shown FIRST in the trust strip when present.
+   settings.trustLine (merchant-editable, once a control exists) overrides the
+   minted TPL_TRUST_LINE; empty → the strip renders exactly its previous five
+   generic items, so an un-templated shop is byte-identical to before. */
+function trustLine() {
+  var s = store.settings || {};
+  var t = (s.trustLine != null ? String(s.trustLine) : String(TPL_TRUST_LINE || '')).trim();
+  return t.slice(0, 80);
+}
+/* The leading trust chip, or '' when there is no vertical line to show. */
+function trustLead() {
+  var t = trustLine();
+  if (!t) return '';
+  return '<span class="trust-item"><span class="ic">\u2b50</span> ' + esc(t) + '</span>';
+}
 /* The published-app base URL, derived from the SAME wiring the Data API uses.
    DATA_URL is '<appBase>/api/v2/apps-data/<slug>'; strip that suffix to recover
    '<appBase>', then the pay endpoint lives at '<appBase>/api/v1/apps/<slug>/...'.
@@ -2181,6 +2198,7 @@ function viewHome() {
 
   var trust = sectionOn('trust') ? ('' +
     '<div class="trust"><div class="wrap"><div class="trust-inner">' +
+      trustLead() +
       '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
       '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
       '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +
@@ -2349,6 +2367,7 @@ function viewHomeGridDense() {
 
   var trust = sectionOn('trust') ? ('' +
     '<div class="trust"><div class="wrap"><div class="trust-inner">' +
+      trustLead() +
       '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
       '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
       '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +
@@ -2431,6 +2450,7 @@ function viewHomeEditorial() {
 
   var trust = sectionOn('trust') ? ('' +
     '<div class="trust"><div class="wrap"><div class="trust-inner">' +
+      trustLead() +
       '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
       '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
       '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +

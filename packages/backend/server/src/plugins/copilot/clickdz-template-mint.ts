@@ -154,6 +154,8 @@ export interface ResolvedTokenMap {
   __CLICKDZ_LAYOUT__: string;
   __CLICKDZ_TAGLINE__: string;
   __CLICKDZ_HERO__: string;
+  /** The vertical's reassurance line; '' for the no-template mint. */
+  __CLICKDZ_TRUST__: string;
   __CLICKDZ_CATEGORIES__: string;
   __CLICKDZ_RTL__: string;
   __CLICKDZ_SEED__: string;
@@ -211,6 +213,11 @@ export function buildTemplateTokenMap(
     // Content tokens — def copy or today's defaults.
     __CLICKDZ_TAGLINE__: (def && def.tagline) || DEFAULT_TAGLINE,
     __CLICKDZ_HERO__: (def && def.heroLine) || DEFAULT_HERO,
+    // The vertical's own reassurance line (e.g. pharmacie: 'Produits
+    // authentiques et controles'). Every TemplateDef has carried one since the
+    // catalog shipped; until now nothing consumed it. Empty for the
+    // no-template mint, which keeps that output byte-identical.
+    __CLICKDZ_TRUST__: (def && def.trustLine) || '',
     __CLICKDZ_CATEGORIES__: def ? categoriesToCsv(def.categories) : DEFAULT_CATEGORIES,
     // RTL: a def may opt in (droguerie/supérette); default keeps LTR.
     __CLICKDZ_RTL__: def && (def as { rtl?: boolean }).rtl ? '1' : DEFAULT_RTL,
