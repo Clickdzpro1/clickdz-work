@@ -371,6 +371,15 @@ export interface ErpSettings {
   font?: string;
   /** Compact CSV of enabled section ids, e.g. 'hero,trust,categories'. */
   sections?: string;
+  /**
+   * Compact CSV of enabled FEATURE ids — the same shape as `sections`.
+   *
+   * The backend has always stored and returned this (its settings normalizer
+   * carries `row.features` through as a <=500-char string, and /customize
+   * writes it), but the type never declared the field — so `shop-features.tsx`
+   * read `settings.features` and failed to typecheck.
+   */
+  features?: string;
   /** Corner style id; 'auto' (default) keeps the theme preset's radius. */
   radius?: string;
   // C6 online-payments flag — NON-sensitive (the Chargily SECRET lives in a

@@ -12,7 +12,6 @@ import {
   fetchTemplate,
   hintStyle,
   inputStyle,
-  type MineApp,
   type PublishCapInfo,
   type ShopSettings,
   Spinner,

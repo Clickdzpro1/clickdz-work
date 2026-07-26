@@ -199,7 +199,9 @@ const ShopErpPage = () => {
   // bare wizard, so first-time users get the framed CTA + preview first.
   const showWizard = state === 'ready' && forceWizard;
   const showDashboard = state === 'ready' && !showWizard && dashboard !== null;
-  const showHome = state === 'ready' && !showWizard && !showDashboard;
+  // (No `showHome` constant: the render below is an if/else chain, so "home"
+  // is simply its final branch. A derived flag for it was dead code and
+  // tripped noUnusedLocals.)
 
   const primary = useMemo(() => primaryShop(apps), [apps]);
 
