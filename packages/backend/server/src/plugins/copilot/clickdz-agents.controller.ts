@@ -53,6 +53,17 @@ import {
 // is safe on the caps hot path (no I/O). The orchestrator merges R8 files, so
 // this static import resolves at boot; flags-off it just returns false.
 import { waCapsEnabled } from './clickdz-wa-client';
+// The reset key builders live in a PURE module (no imports, no framework) so the
+// fast guards spec can import them directly — importing THIS controller pulls in
+// the Rust native addon, which that job does not build. See the module header for
+// why the reset is index-driven rather than glob-driven.
+import {
+  isResetSafeKey,
+  RESET_MAX_IDS,
+  resetRunKeys,
+  resetSingletonKeys,
+  resetThreadKey,
+} from './clickdz-agent-reset-keys';
 // Horloge's trigger helpers (clickdz-agent-triggers.ts). The reset route uses
 // `deleteTrigger` rather than deleting trigger keys directly, because it also
 // ZREMs the caller's members from the GLOBAL cross-user due zset — the one thing
@@ -145,61 +156,6 @@ const dailyRunCountKey = (userId: string, day: string) =>
 // tg-binding lifetime so a settings toggle sticks.
 const STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
-// ---------------------------------------------------------------------------
-// RESET — the exact keys POST /agents/:agent/reset removes.
-//
-// This is deliberately INDEX-DRIVEN rather than glob-driven, and that choice is
-// the whole safety story.
-//
-// Threads and runs are keyed per-USER, with the agent stored INSIDE the record:
-//
-//   clickdz:agent:<userId>:<threadId>       (thread.agent says which agent)
-//   clickdz:agentrun:<userId>:<runId>       (record.agentId says which agent)
-//
-// So the intuitive patterns — `clickdz:agent:<userId>:*` and
-// `clickdz:agentrun:<userId>:*` — would sweep up the OTHER agent's threads and
-// run history as well. Resetting Hermes would silently destroy OpenClaw. Redis
-// `*` also spans `:`, so those globs are far broader than they look.
-//
-// Instead we read each agent's OWN index (a thread-id list and a run-id zset,
-// both already keyed per-agent) and delete only those ids. Nothing is guessed.
-//
-// Two neighbours share this Redis DB and the `clickdz:` prefix and must never be
-// touched: `clickdz:appdata:<slug>:<collection>` (the live shop — orders,
-// products, customers, settings; Hermes only READS these) and
-// `clickdz:apps:published:<ownerId>`. Because we never glob, they are
-// unreachable by construction rather than by careful pattern-writing.
-//
-// The fixed, per-agent singletons that CAN be named exactly:
-export function resetSingletonKeys(userId: string, agent: AgentName): string[] {
-  return [
-    // The thread-id index for this agent.
-    `clickdz:agent:index:${userId}:${agent}`,
-    // The provisioning record. Removing it is what returns the merchant to the
-    // setup wizard — there is no other way to un-provision, since every config
-    // PUT forces provisioned:true.
-    `clickdz:agent:config:${userId}:${agent}`,
-    // The run-id index (zset) for this agent.
-    `clickdz:agentruns:${userId}:${agent}`,
-    // Long-term memory: facts, preferences, summaries.
-    `clickdz:agentmem:${userId}:${agent}`,
-    // The informational enable flag.
-    `clickdz:agentstate:${userId}:${agent}`,
-  ];
-}
-
-/** The per-thread key — agent-scoped only via the index we read the id from. */
-export const resetThreadKey = (userId: string, threadId: string) =>
-  `clickdz:agent:${userId}:${threadId}`;
-
-/** The per-run record + its SSE replay list. */
-export const resetRunKeys = (userId: string, runId: string) => [
-  `clickdz:agentrun:${userId}:${runId}`,
-  `clickdz:agentrun:${userId}:${runId}:events`,
-];
-
-/** Upper bound on ids pulled from an index, so a reset is always bounded. */
-const RESET_MAX_IDS = 500;
 
 // ---------------------------------------------------------------------------
 // R11 — SHOP PULSE (WS11-9, Pouls). The PulseCard hero on the Bureau reads the
@@ -989,7 +945,7 @@ export class ClickDzAgentsController {
   private async unlinkKeys(keys: string[], userId: string): Promise<number> {
     const safe = Array.from(
       new Set(
-        keys.filter(k => k.startsWith('clickdz:agent') && k.includes(userId))
+        keys.filter(k => isResetSafeKey(k, userId))
       )
     );
     if (!safe.length) return 0;

@@ -1,10 +1,11 @@
 import ava, { type TestFn } from 'ava';
 
 import {
+  isResetSafeKey,
   resetRunKeys,
   resetSingletonKeys,
   resetThreadKey,
-} from '../../plugins/copilot/clickdz-agents.controller';
+} from '../../plugins/copilot/clickdz-agent-reset-keys';
 
 // ---------------------------------------------------------------------------
 // Agent-reset blast-radius guards.
@@ -154,5 +155,26 @@ test('no reset key can ever reach the appdata namespace', t => {
       key.startsWith('clickdz:appdata'),
       `${key} reached the shop namespace`
     );
+  }
+});
+
+test('isResetSafeKey rejects every non-agent and non-owner key', t => {
+  const USER_ID = USER;
+  // The predicate is the last line of defence before UNLINK, so it is asserted
+  // directly rather than only through the builders.
+  for (const key of MUST_SURVIVE.filter(k => !k.startsWith('clickdz:agent'))) {
+    t.false(isResetSafeKey(key, USER_ID), `${key} must be rejected`);
+  }
+  t.false(
+    isResetSafeKey(resetThreadKey(OTHER, 't1'), USER_ID),
+    'another user’s thread must be rejected'
+  );
+  t.false(isResetSafeKey('clickdz:appdata:fatehshop:orders', USER_ID));
+  // An empty user id must never make everything "safe".
+  t.false(isResetSafeKey(resetThreadKey(USER_ID, 't1'), ''));
+  // And the caller's own agent keys pass.
+  t.true(isResetSafeKey(resetThreadKey(USER_ID, 't1'), USER_ID));
+  for (const key of resetSingletonKeys(USER_ID, 'hermes')) {
+    t.true(isResetSafeKey(key, USER_ID), `${key} must be accepted`);
   }
 });
