@@ -118,14 +118,14 @@ export const DEFAULT_SHOP_TOUR_STEPS: ShopTourStep[] = [
   },
   {
     section: 'ai-edit',
-    title: 'Modifier avec l’IA',
+    title: "Modifier avec l'IA",
     body: 'Décrivez ce que vous voulez et l’IA modifie votre boutique — mise en page, textes, style.',
     darja: 'قول برك واش تحب، و الذكاء الاصطناعي يبدّلهالك.',
   },
   {
     section: 'team',
     title: 'Équipe',
-    body: 'Ajoutez vos employés avec des rôles (vendeur, gérant) et gérez leurs accès.',
+    body: 'Ajoutez vos employés avec des rôles (gérant, employé) et gérez leurs accès.',
     darja: 'زيد العمّال تاعك و أعطي لكل واحد الدور تاعه.',
   },
 ];

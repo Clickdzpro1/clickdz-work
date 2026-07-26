@@ -1,7 +1,7 @@
 // ClickDz HERMES — tools & connections status panel.
 //
 // Renders the agent's live tool catalog grouped by kind (internal reads /
-// Composio app actions / Make.com automations), each marked available (green)
+// Composio app actions / the built-in assistant), each marked available (green)
 // or needs-setup (muted, with a hint), plus the planner readiness state. All
 // data arrives via the `capabilities` prop (fetched by the page from
 // GET /api/v1/hermes/capabilities) — this panel never fetches. When
@@ -77,9 +77,13 @@ const KIND_META: Record<Kind, KindMeta> = {
   make: {
     key: 'make',
     icon: '🤖',
-    title: 'Make.com — automations',
-    blurb: 'Delegate drafting and long-form reasoning to a Make agent.',
-    hint: 'needs Make API key & agent setup',
+    title: 'Assistant — drafting & reasoning',
+    blurb: 'Built-in helper for longer drafting and reasoning. Runs inside ClickDz — nothing to connect.',
+    // NOT a merchant prerequisite: availability is server-side env config
+    // (clickdz-hermes.controller.ts makeAvailable), so the merchant cannot act on
+    // it and there is no Make surface on /integrations to act on it WITH. The old
+    // hint ('needs Make API key & agent setup') sent them to a dead end.
+    hint: 'temporarily unavailable',
   },
 };
 

@@ -2,7 +2,7 @@
 //
 // A curated, self-contained library of REAL operations workflows the Hermes
 // agent can run given its actual tool catalog (shop/ERP reads, Composio app
-// actions — Gmail/Sheets/Slack/Notion, Make.com specialist agents, and
+// actions — Gmail/Sheets/Slack/Notion, the built-in assistant, and
 // reporting/digest compositions). Each card carries a concrete, ready-to-run
 // goal string; clicking a card injects that goal into the console composer via
 // `onPick`. No fetching — purely presentational + inline styles, matching the
@@ -140,23 +140,23 @@ const CATEGORIES: WorkflowCategory[] = [
   {
     key: 'automation',
     icon: '🤖',
-    title: 'Automations & drafting (Make)',
-    blurb: 'Hand longer reasoning or drafting to a Make.com agent.',
+    title: 'Automations & drafting',
+    blurb: 'Hand longer reasoning or drafting to your agent — it runs right here.',
     cards: [
       {
         title: 'Draft a customer reply',
-        desc: 'Let a Make agent write a polished response.',
-        goal: 'Ask a Make agent to draft a warm, professional reply to a customer asking where their order is, leaving placeholders for the order number and expected date.',
+        desc: 'Have a polished response drafted for you.',
+        goal: 'Draft a warm, professional reply to a customer asking where their order is, leaving placeholders for the order number and expected date.',
       },
       {
         title: 'Write product descriptions',
         desc: 'Generate copy for items that need it.',
-        goal: 'List products in my shop that are missing a description, then ask a Make agent to draft a short, persuasive description for each one.',
+        goal: 'List products in my shop that are missing a description, then draft a short, persuasive description for each one.',
       },
       {
         title: 'Plan a promotion',
         desc: 'Turn your numbers into a campaign outline.',
-        goal: 'Look at my recent order and product data, then ask a Make agent to outline a one-week promotion — which products to feature, a discount idea, and a WhatsApp broadcast message.',
+        goal: 'Look at my recent order and product data, then outline a one-week promotion — which products to feature, a discount idea, and a WhatsApp broadcast message.',
       },
     ],
   },

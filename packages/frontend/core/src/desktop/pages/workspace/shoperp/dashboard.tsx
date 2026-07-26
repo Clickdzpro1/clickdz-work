@@ -90,13 +90,20 @@ export type DashboardSection =
   | 'reports'
   | 'team';
 
+// The tab bar is the merchant's map of their own shop, and this surface is
+// French — 7 of these labels were still the upstream English, which is why the
+// guided tour (shop-tour.tsx) appeared to name tabs that "did not exist": the
+// tour said « Aperçu » while the tab read "Overview". Translating the labels
+// fixes the tour AND the interface, rather than making a French tour speak
+// English. Ids are untouched, so routing, the tour's data-cdz-tour anchors and
+// every deep link keep working.
 const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
-  { id: 'overview', label: 'Overview', icon: '📊' },
-  { id: 'orders', label: 'Orders', icon: '📦' },
+  { id: 'overview', label: 'Aperçu', icon: '📊' },
+  { id: 'orders', label: 'Commandes', icon: '📦' },
   { id: 'stock', label: 'Stock', icon: '🏷️' },
-  { id: 'inventory', label: 'Inventory', icon: '🏬' },
+  { id: 'inventory', label: 'Inventaire', icon: '🏬' },
   { id: 'clients', label: 'Clients', icon: '👥' },
-  { id: 'appearance', label: 'Appearance', icon: '🎨' },
+  { id: 'appearance', label: 'Apparence', icon: '🎨' },
   { id: 'features', label: 'Fonctionnalités', icon: '🧩' },
   { id: 'ai-edit', label: "Modifier avec l'IA", icon: '✨' },
   { id: 'invoicing', label: 'Facturation', icon: '🧾' },
@@ -105,7 +112,7 @@ const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'caisse', label: 'Caisse', icon: '💰' },
   { id: 'reports', label: 'Rapports', icon: '📈' },
   { id: 'team', label: 'Équipe', icon: '👥' },
-  { id: 'settings', label: 'Settings', icon: '⚙️' },
+  { id: 'settings', label: 'Réglages', icon: '⚙️' },
 ];
 
 const tabStyle = (active: boolean): CSSProperties => ({

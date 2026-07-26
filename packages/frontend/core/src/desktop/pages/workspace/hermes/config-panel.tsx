@@ -47,12 +47,12 @@ import {
 // the slug prefix here and feed them to Trame's <ToolPermissions> grouped grid:
 //   • internal  → shops & data reads (safe, non-consequential)
 //   • composio  → connected third-party apps (act on the outside world)
-//   • make      → Make.com automations (act on the outside world)
+//   • make      → the built-in drafting/reasoning assistant (server-side)
 type Kind = 'internal' | 'composio' | 'make';
 const KIND_TITLE: Record<Kind, string> = {
   internal: '🧾 Internal — shops & data',
   composio: '🔗 Connected apps (Composio)',
-  make: '🤖 Automations (Make.com)',
+  make: '🤖 Assistant — drafting & reasoning',
 };
 function classify(slug: string): Kind {
   const s = slug.toLowerCase();
