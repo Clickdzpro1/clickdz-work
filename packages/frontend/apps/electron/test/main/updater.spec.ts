@@ -39,7 +39,7 @@ describe('testing for client update', () => {
   ];
 
   const basicRequestHandlers = [
-    http.get('https://affine.pro/api/worker/releases', async ({ request }) => {
+    http.get('https://work.clickdz.ai/api/releases', async ({ request }) => {
       const url = new URL(request.url);
       const buffer = await fs.readFile(
         path.join(
@@ -120,7 +120,7 @@ describe('testing for client update', () => {
         const files = parseUpdateInfo(
           data,
           '',
-          new URL('https://affine.pro')
+          new URL('https://work.clickdz.ai')
         ).files.map(file => file.url);
 
         it(`filter for platform [${platform}] arch [${arch}]`, () => {

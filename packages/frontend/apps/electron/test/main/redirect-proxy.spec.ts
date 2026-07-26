@@ -62,11 +62,11 @@ describe('redirect proxy allowlist', () => {
       await import('../../src/main/security/redirect-proxy');
     expect(
       validateRedirectProxyUrl(
-        'assets://./redirect-proxy?redirect_uri=https%3A%2F%2Faffine.fail%2Fpricing'
+        'assets://./redirect-proxy?redirect_uri=https%3A%2F%2Fwork.clickdz.ai%2Fpricing'
       )
     ).toEqual({
       allow: true,
-      redirectTarget: 'https://affine.fail/pricing',
+      redirectTarget: 'https://work.clickdz.ai/pricing',
     });
   });
 

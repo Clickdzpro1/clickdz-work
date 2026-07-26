@@ -49,16 +49,16 @@ describe('redirect allowlist', () => {
     ).toBe(true);
 
     expect(
-      isAllowedRedirectTarget('https://affine.pro./', {
+      isAllowedRedirectTarget('https://clickdz.ai./', {
         currentHostname: 'self.example.com',
       })
     ).toBe(true);
   });
 
   test('blocks punycode homograph', () => {
-    // "а" is Cyrillic small a (U+0430), different from Latin "a"
+    // "с" is Cyrillic small es (U+0441), different from Latin "c"
     expect(
-      isAllowedRedirectTarget('https://аffine.pro', {
+      isAllowedRedirectTarget('https://сlickdz.ai', {
         currentHostname: 'self.example.com',
       })
     ).toBe(false);
