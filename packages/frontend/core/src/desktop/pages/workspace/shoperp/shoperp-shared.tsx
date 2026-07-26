@@ -350,6 +350,12 @@ export interface ErpSettings {
   key?: string;
   shopName?: string;
   tagline?: string;
+  /**
+   * HERO-1 — the line under the shop name in the storefront hero. The deployed
+   * template has always read this (falling back to `tagline`); it only became
+   * writable when the bridge grew a validation branch for it.
+   */
+  heroLine?: string;
   whatsapp?: string;
   deliveryFee?: number;
   adminPin?: string;
@@ -4277,6 +4283,20 @@ export const TEMPLATE_OPTIONS: TemplateOption[] = [
     id: 'boutique',
     label: 'Boutique',
     hint: 'Compact editorial header, larger cards, no hero band.',
+  },
+  // These two were already fully implemented in the storefront template AND
+  // allowlisted server-side (ERP_TEMPLATE_IDS) — they were simply missing from
+  // this list, so no merchant could ever pick them. Reachable before only if a
+  // wizard vertical preset happened to set them.
+  {
+    id: 'grid-dense',
+    label: 'Grille dense',
+    hint: 'En-tête compact, grille serrée — pour les gros catalogues.',
+  },
+  {
+    id: 'editorial-split',
+    label: 'Éditorial',
+    hint: 'Hero asymétrique avec une grande photo produit.',
   },
 ];
 

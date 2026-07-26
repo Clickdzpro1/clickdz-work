@@ -165,6 +165,12 @@ export const ShopAppearance = ({
     parseSections(settings.sections)
   );
 
+  // HERO-1: the line under the shop name in the storefront hero. The template
+  // already honored settings.heroLine (falling back to the tagline) — there was
+  // just no way to set it, so every shop showed its tagline there forever.
+  const [heroLine, setHeroLine] = useState<string>(
+    typeof settings.heroLine === 'string' ? settings.heroLine : ''
+  );
   const [accentErr, setAccentErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false); // a save landed → offer re-publish
@@ -259,6 +265,9 @@ export const ShopAppearance = ({
       if (draftSectionsCsv !== storedSectionsCsv) {
         patch.sections = draftSectionsCsv;
       }
+      const storedHero =
+        typeof settings.heroLine === 'string' ? settings.heroLine : '';
+      if (heroLine !== storedHero) patch.heroLine = heroLine.slice(0, 200);
 
       if (Object.keys(patch).length === 0) {
         setNotice({ tone: 'info', text: 'Nothing to save — no changes.' });
@@ -468,7 +477,7 @@ export const ShopAppearance = ({
                   onClick={() => setTemplate(t.id)}
                   title={t.label}
                   hint={t.hint}
-                  glyph={t.id === 'boutique' ? '▦' : '▤'}
+                  glyph={TEMPLATE_GLYPHS[t.id] ?? '▤'}
                   isDefault={t.id === DEFAULT_TEMPLATE}
                 />
               ))}
@@ -543,6 +552,24 @@ export const ShopAppearance = ({
                   }}
                 />
               </div>
+            </Field>
+          </Panel>
+
+          {/* HERO-1 — the storefront template already rendered settings.heroLine
+              (falling back to the tagline); this is the first way to set it. */}
+          <Panel title="Phrase d'accroche">
+            <Field
+              label="Hero"
+              hint="La ligne sous le nom de la boutique, dans le hero. Vide = votre slogan."
+            >
+              <input
+                style={inputStyle}
+                value={heroLine}
+                maxLength={200}
+                placeholder="Livraison 58 wilayas &middot; paiement &agrave; la livraison"
+                disabled={disabled}
+                onChange={e => setHeroLine(e.target.value.slice(0, 200))}
+              />
             </Field>
           </Panel>
 
@@ -734,6 +761,16 @@ export const ShopAppearance = ({
 // read truthfully, WITHOUT depending on SHOP-TEMPLATE internals.
 // ---------------------------------------------------------------------------
 
+// One glyph per layout id. Was a binary `id === 'boutique' ? ... : ...`, which
+// silently gave every other layout the Standard glyph — fine while only two
+// layouts were exposed, wrong the moment grid-dense/editorial-split appeared.
+const TEMPLATE_GLYPHS: Record<string, string> = {
+  standard: '\u25a4',
+  boutique: '\u25a6',
+  'grid-dense': '\u25a9',
+  'editorial-split': '\u25eb',
+};
+
 const THEME_PALETTE: Record<
   string,
   { bg: string; card: string; ink: string; sub: string; line: string; radius: number; heroFlat?: boolean }
@@ -762,12 +799,22 @@ const MockPreview = ({
   const pal = THEME_PALETTE[theme] ?? THEME_PALETTE.classic;
   const fontStack = resolveFont(font).stack;
   const accentD = shadeHex(accent, -0.22);
-  const boutique = template === 'boutique';
-  const showHero = sections.includes('hero');
+  // The mock approximates each layout by card count + whether the hero band is
+  // drawn. `boutique` used to be the only branch, so grid-dense and
+  // editorial-split would both have previewed as Standard.
+  const boutique = template === 'boutique' || template === 'editorial-split';
+  const showHero = sections.includes('hero') && template !== 'grid-dense';
   const showTrust = sections.includes('trust');
   const showCats = sections.includes('categories');
 
-  const cardCount = boutique ? 3 : 6;
+  const cardCount =
+    template === 'grid-dense'
+      ? 9
+      : template === 'editorial-split'
+        ? 4
+        : boutique
+          ? 3
+          : 6;
   const cards = useMemo(
     () => Array.from({ length: cardCount }, (_, i) => i),
     [cardCount]
