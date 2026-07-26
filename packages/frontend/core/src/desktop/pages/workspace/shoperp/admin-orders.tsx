@@ -173,14 +173,14 @@ export const OrdersAdmin = ({
           color: C.muted,
         }}
       >
-        <Spinner /> Loading orders…
+        <Spinner /> Chargement des commandes…
       </div>
     );
   }
   if (phase === 'error') {
     return (
       <Banner tone="error">
-        Couldn&apos;t load the orders.{' '}
+        Impossible de charger les commandes.{' '}
         <button style={linkBtnStyle} onClick={() => void load()}>
           Retry
         </button>
@@ -225,8 +225,8 @@ export const OrdersAdmin = ({
         {visible.length === 0 ? (
           <EmptyNote>
             {orders.length === 0
-              ? 'No orders yet — share your shop link to start selling.'
-              : 'No orders match this filter.'}
+              ? 'Aucune commande pour le moment — partagez le lien de votre boutique pour commencer à vendre.'
+              : 'Aucune commande ne correspond à ce filtre.'}
           </EmptyNote>
         ) : (
           <div className="cdz-orders-list">
@@ -238,14 +238,14 @@ export const OrdersAdmin = ({
               aria-hidden
             >
               {[
-                'Ref',
+                'Réf',
                 'Date',
-                'Customer',
+                'Client',
                 'Wilaya',
-                'Items',
+                'Articles',
                 'Total',
-                'Status',
-                'Advance',
+                'Statut',
+                'Action',
               ].map(h => (
                 <div key={h} style={orderHeadCellStyle}>
                   {h}
@@ -309,7 +309,7 @@ const OrderRow = ({
   return (
     <div className="cdz-order-row" style={{ ...orderRowGrid, ...orderRowStyle }}>
       <div
-        data-col="Ref"
+        data-col="Réf"
         style={{
           ...orderCellStyle,
           fontFamily: 'var(--affine-font-code-family, monospace)',
@@ -322,7 +322,7 @@ const OrderRow = ({
       <div data-col="Date" style={{ ...orderCellStyle, whiteSpace: 'nowrap' }}>
         {orderDate(o) || '—'}
       </div>
-      <div data-col="Customer" style={orderCellStyle}>
+      <div data-col="Client" style={orderCellStyle}>
         <div style={{ fontWeight: 600 }}>{o.customer || '—'}</div>
         {o.phone ? (
           <div style={{ fontSize: 11, color: C.muted }}>{o.phone}</div>
@@ -331,7 +331,7 @@ const OrderRow = ({
       <div data-col="Wilaya" style={orderCellStyle}>
         {o.wilaya || '—'}
       </div>
-      <div data-col="Items" style={{ ...orderCellStyle, whiteSpace: 'nowrap' }}>
+      <div data-col="Articles" style={{ ...orderCellStyle, whiteSpace: 'nowrap' }}>
         {itemCount || '—'}
       </div>
       <div
@@ -340,11 +340,11 @@ const OrderRow = ({
       >
         {fmtDZD(orderTotal(o), currency)}
       </div>
-      <div data-col="Status" style={orderCellStyle}>
+      <div data-col="Statut" style={orderCellStyle}>
         <StatusBadge status={o.status} />
       </div>
       <div
-        data-col="Advance"
+        data-col="Action"
         style={{ ...orderCellStyle, whiteSpace: 'nowrap' }}
       >
         {busyRef === o.ref ? (
@@ -357,10 +357,10 @@ const OrderRow = ({
               fontSize: 11.5,
             }}
           >
-            <Spinner /> Saving…
+            <Spinner /> Enregistrement…
           </span>
         ) : readOnly ? (
-          <span style={{ fontSize: 11.5, color: C.muted }}>read-only</span>
+          <span style={{ fontSize: 11.5, color: C.muted }}>lecture seule</span>
         ) : targets.length === 0 ? (
           <span style={{ fontSize: 11.5, color: C.muted }}>final</span>
         ) : (
@@ -380,7 +380,7 @@ const OrderRow = ({
                 style={miniBtnStyle('secondary', anyBusy)}
                 disabled={anyBusy}
                 onClick={() => void onAdvance(o, 'Retournée')}
-                title="Mark as returned"
+                title="Marquer comme retournée"
               >
                 ↩ Retournée
               </button>
@@ -450,6 +450,6 @@ const ORDERS_LIST_CSS = `
     text-transform:uppercase;
     color:var(--affine-text-secondary-color, #9aa0a6);
   }
-  .cdz-order-row > [data-col="Advance"]::before{content:none;}
+  .cdz-order-row > [data-col="Action"]::before{content:none;}
 }
 `;
