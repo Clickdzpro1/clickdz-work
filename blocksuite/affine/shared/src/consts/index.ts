@@ -73,11 +73,11 @@ export const EMBED_BLOCK_MODEL_LIST = [
 ] as const;
 
 export const DEFAULT_IMAGE_PROXY_ENDPOINT =
-  'https://ClickDz Work-worker.toeverything.workers.dev/api/worker/image-proxy';
+  'https://affine-worker.toeverything.workers.dev/api/worker/image-proxy';
 
 // https://github.com/toeverything/ClickDz Work-workers/tree/main/packages/link-preview
 export const DEFAULT_LINK_PREVIEW_ENDPOINT =
-  'https://ClickDz Work-worker.toeverything.workers.dev/api/worker/link-preview';
+  'https://affine-worker.toeverything.workers.dev/api/worker/link-preview';
 
 // This constant is used to ignore tags when exporting using html2canvas
 export const CANVAS_EXPORT_IGNORE_TAGS = [
