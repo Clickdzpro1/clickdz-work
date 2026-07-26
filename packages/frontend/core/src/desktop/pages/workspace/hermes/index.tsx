@@ -196,7 +196,9 @@ const HermesConsole = ({
       if (ev.type === 'thread') {
         // Adopt the server-minted thread id as the active selection.
         setActiveId(ev.threadId);
-      } else if (ev.type === 'final' || ev.type === 'done') {
+      } else if (ev.type === 'final') {
+        // NOTE: the `done` sentinel never reaches onEvent — use-agent-stream
+        // consumes it internally and closes the stream without dispatching.
         void reloadThreads();
       }
     },

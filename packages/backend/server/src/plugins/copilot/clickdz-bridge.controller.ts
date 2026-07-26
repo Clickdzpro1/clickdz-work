@@ -86,6 +86,15 @@ import {
   type TemplateMintOpts,
   isStale,
 } from './clickdz-template-mint';
+// APP-CAT — the App Builder template catalog (non-shop business tools). Pure
+// data + self-gated helpers (CDZ_APP_TEMPLATE_CATALOG, default OFF): a def's
+// French generation brief is prepended to the user's prompt on a gallery pick;
+// the list route serves display metadata only. Mirrors the shop catalog split.
+import {
+  appTemplateCatalogEnabled,
+  getAppTemplateDef,
+  listAppTemplateCatalog,
+} from './clickdz-app-catalog';
 // R0-b (WSB-2) — shop source recovery. Pure helpers behind GET /apps/:slug/source:
 // fetchDeployedHtml (recover a published app's HTML from its live Vercel URL,
 // SSRF-guarded/timed/size-capped) + resolveAppSource (template kind → server-render
@@ -3255,6 +3264,23 @@ export class ClickDzBridgeController {
     // Validate + bound the optional edit-in-context fields (rejects malformed
     // shapes 400 / oversized inputs 413 per the canonical request bounds).
     const { history, selection } = this.parseAppEditContext(body);
+    // APP-CAT: optional `templateId` — a gallery pick resolves a server-side
+    // generation brief that is PREPENDED to the user's prompt. The brief is
+    // trusted catalog data, so it is deliberately NOT counted against the
+    // MAX_PROMPT_CHARS cap already enforced on `prompt` above. Applies to NEW
+    // builds only (an edit already carries its context via currentHtml).
+    // getAppTemplateDef honors the CDZ_APP_TEMPLATE_CATALOG gate and returns
+    // null for gate-off/unknown ids, so a stale or bad templateId degrades to
+    // a plain generate rather than a 500 (mirrors resolveTemplateDef).
+    const appTemplate =
+      !currentHtml &&
+      typeof body?.templateId === 'string' &&
+      body.templateId.length <= 64
+        ? getAppTemplateDef(body.templateId)
+        : null;
+    const briefedPrompt = appTemplate
+      ? `${appTemplate.brief}\n\nDemande du commerçant : ${prompt}`
+      : prompt;
     const slug =
       typeof body?.slug === 'string' && /^[a-z0-9-]{3,50}$/.test(body.slug)
         ? body.slug
@@ -3262,7 +3288,12 @@ export class ClickDzBridgeController {
     this.logger.log(
       `[apps] generate (${currentHtml ? 'edit' : 'new'}) user=${user.id} slug=${slug} prompt=${prompt.slice(0, 80)}`
     );
-    let html = await this.buildAppHtml(prompt, currentHtml, history, selection);
+    let html = await this.buildAppHtml(
+      briefedPrompt,
+      currentHtml,
+      history,
+      selection
+    );
     // wire the app to its own Data API namespace so preview + live share state
     const externalBase = (
       process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
@@ -3563,6 +3594,24 @@ export class ClickDzBridgeController {
       throw new NotFound('Template catalog not enabled');
     }
     return { templates: listTemplateCatalog() };
+  }
+
+  /**
+   * APP-CAT — GET /api/v1/apps/app-templates. The APP catalog's display
+   * metadata (id/name/darja/emoji/category/pitch/accent/gradient) for the
+   * builder gallery. Generation briefs are deliberately EXCLUDED — they are
+   * server-side only, reached via `templateId` on POST /apps/generate. Gated by
+   * CDZ_APP_TEMPLATE_CATALOG: OFF ⇒ typed 404 so the gallery hides itself,
+   * never an empty 200 that would render a blank shelf. Mirrors the shop
+   * catalog route above, gate and typed-404 included.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/app-templates')
+  async listAppTemplates(@CurrentUser() _user: CurrentUser) {
+    if (!appTemplateCatalogEnabled()) {
+      throw new NotFound('App template catalog not enabled');
+    }
+    return { templates: listAppTemplateCatalog() };
   }
 
   /**

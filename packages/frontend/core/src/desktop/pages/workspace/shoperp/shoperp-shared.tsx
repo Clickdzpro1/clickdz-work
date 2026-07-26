@@ -3973,11 +3973,13 @@ export async function fetchShopStateVersion(
   };
 }
 
+// NOTE: no `unavailable` member — rollbackShopState never produces one (every
+// non-ok path maps to not-found / writes-blocked / error), and a phantom member
+// breaks the caller's `not-found ? … : out.message` narrowing in shop-ai-edit.
 export type RollbackOutcome =
   | { status: 'ok'; url: string; rolledBackTo: string }
   | { status: 'not-found' }
   | { status: 'writes-blocked' }
-  | { status: 'unavailable' }
   | { status: 'error'; message: string };
 
 /**

@@ -27,14 +27,6 @@ import { AgentPalette as P, ensureAgentKeyframes } from './palette';
 import { Spinner } from './primitives';
 import { ToolCallCard } from './tool-call-card';
 
-// Coarse lifecycle states that mean the run has stopped moving. Used to decide
-// whether the last step should pulse and which banner (if any) to show.
-const TERMINAL_STATES: ReadonlySet<AgentRunState> = new Set([
-  'done',
-  'failed',
-  'stopped',
-]);
-
 interface BannerMeta {
   icon: string;
   label: string;
@@ -177,7 +169,6 @@ export function RunTimeline({
   const { t, dir } = useAgentLang();
 
   const running = state === 'running' || state === 'queued';
-  const terminal = TERMINAL_STATES.has(state);
   const banner = bannerFor(state, t);
   const hasSteps = Array.isArray(steps) && steps.length > 0;
 

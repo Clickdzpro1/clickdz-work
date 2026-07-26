@@ -184,7 +184,9 @@ export async function getThreads(): Promise<AgentThreadSummary[]> {
   if (!Array.isArray(rows)) return [];
   return rows
     .filter((r): r is AgentThreadSummary => !!r && typeof r === 'object')
-    .map(r => ({
+    // Annotated so `agent: 'openclaw'` keeps its literal type (an
+    // uncontextualized map callback widens it to `string`).
+    .map((r): AgentThreadSummary => ({
       id: String((r as AgentThreadSummary).id ?? ''),
       agent: 'openclaw',
       title: String((r as AgentThreadSummary).title ?? 'Untitled task'),

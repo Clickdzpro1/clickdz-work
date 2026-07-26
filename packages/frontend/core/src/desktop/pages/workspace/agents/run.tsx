@@ -434,7 +434,6 @@ const AgentRunPage = () => {
                   isLive={isLive}
                   prompt={record?.prompt}
                   record={record}
-                  steps={steps}
                   onStop={stream.stop}
                 />
 
@@ -551,7 +550,6 @@ const RunHeader = ({
   isLive,
   prompt,
   record,
-  steps,
   onStop,
 }: {
   t: TFunc;
@@ -560,7 +558,6 @@ const RunHeader = ({
   isLive: boolean;
   prompt?: string;
   record: AgentRunRecord | null;
-  steps: AgentStep[];
   onStop: () => void;
 }) => {
   const tint = RUN_STATE_TINT[state];
@@ -616,9 +613,9 @@ const RunHeader = ({
           </div>
         </div>
 
-        {/* Spend estimate (Jauge). Reads the record's budget/step counts and
-            labels itself an estimate; never gates the run. */}
-        <SpendMeter run={record ?? undefined} steps={steps} />
+        {/* Spend estimate (Jauge). Reads the record's budget tool-call count
+            and labels itself an estimate; never gates the run. */}
+        <SpendMeter run={record ?? undefined} />
 
         {/* State chip */}
         <span

@@ -284,13 +284,10 @@ export function TelegramChannelCard({ agent }: TelegramChannelCardProps) {
           connectedAt?: number;
           dark?: boolean;
         };
-        connect?: (
-          token: string
-        ) => Promise<{
-          ok?: boolean;
-          botUsername?: string | null;
-          error?: string;
-        }>;
+        // Matches the hook contract: `connect` resolves void on success and
+        // REJECTS (typed AgentApiError) on failure — it never resolves an
+        // `{ ok:false }` envelope (see use-channels.ts `UseTelegramChannel`).
+        connect?: (token: string) => Promise<void>;
         disconnect?: () => Promise<void>;
         test?: () => Promise<{ ok?: boolean; sent?: boolean }>;
         loading?: boolean;
@@ -322,13 +319,9 @@ export function TelegramChannelCard({ agent }: TelegramChannelCardProps) {
     setTestResult(null);
     void (async () => {
       try {
-        const res = await channel.connect!(trimmed);
-        // A well-formed failure comes back as { ok:false, error } instead of a
-        // throw — surface it as the invalid-token message either way.
-        if (res && res.ok === false) {
-          setError(res.error || t('channels.byot.invalidToken'));
-          return;
-        }
+        // Failures REJECT with a typed AgentApiError (handled below); a
+        // resolved connect IS success — the hook never resolves `{ ok:false }`.
+        await channel.connect!(trimmed);
         // Success: clear the secret from the input; the hook flips status.
         setToken('');
       } catch (err) {

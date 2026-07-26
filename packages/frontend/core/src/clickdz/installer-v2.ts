@@ -4,7 +4,6 @@
 // Guard keys bumped to v2 to enable upgrades without v1 duplication.
 import { DebugLogger } from '@affine/debug';
 import type { DocsService } from '@affine/core/modules/doc';
-import { Text } from '@blocksuite/affine/store';
 
 import { insertFromMarkdown } from '../blocksuite/utils/markdown-utils';
 import { NICHES, PENDING_KEY, type PendingSelection } from './niches';

@@ -51,13 +51,16 @@ import { FlowRunsView } from './flow-runs';
 // per house rules — small new UI prefers inline styles), boot-safe emoji icons.
 // ---------------------------------------------------------------------------
 
-interface CdzToolkit {
+// A `type` alias (not an interface) on purpose: type aliases get an implicit
+// index signature, which lets CdzToolkit[] flow into FlowCanvas's permissive
+// `Toolkit[]` catalog prop (`[key: string]: unknown` — see flow-nodes.tsx).
+type CdzToolkit = {
   slug: string;
   name: string;
   logo?: string;
   categories?: string[];
   connected?: boolean;
-}
+};
 
 interface ToolkitsResponse {
   enabled: boolean;

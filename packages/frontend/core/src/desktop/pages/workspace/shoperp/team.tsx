@@ -516,7 +516,6 @@ export const TeamPanel = ({
       {/* ---- One-time token modal --------------------------------------- */}
       {tokenModal ? (
         <TokenModal
-          slug={slug}
           storeName={settings.shopName || slug}
           member={tokenModal.member}
           token={tokenModal.token}
@@ -537,7 +536,6 @@ export const TeamPanel = ({
 // copying + sharing frictionless and warn that it won't be shown again.
 // ---------------------------------------------------------------------------
 const TokenModal = ({
-  slug,
   storeName,
   member,
   token,
@@ -546,7 +544,6 @@ const TokenModal = ({
   onCopied,
   onClose,
 }: {
-  slug: string;
   storeName: string;
   member: StaffMember;
   token: string;

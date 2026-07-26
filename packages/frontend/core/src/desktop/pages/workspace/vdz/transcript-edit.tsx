@@ -185,7 +185,6 @@ export interface TranscriptEditProps {
  */
 export function TranscriptEdit({
   clip,
-  trackId,
   timeline,
   playheadSeconds,
   onSeek,

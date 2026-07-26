@@ -407,7 +407,7 @@ const OpenClawConsole = ({
 
   // The stream hook needs to adopt a minted thread id + refresh the sidebar on
   // completion. `onEvent` is a PARAM (not a return) — it fires for every raw
-  // SSE frame. We only tap `thread` (mint) and final/done (reload). Kept in a
+  // SSE frame. We only tap `thread` (mint) and `final` (reload). Kept in a
   // ref so the callback identity is stable while still seeing fresh state.
   const activeIdRef = useRef<string | null>(activeId ?? null);
   useEffect(() => {
@@ -425,8 +425,9 @@ const OpenClawConsole = ({
           }
           break;
         }
-        case 'final':
-        case 'done': {
+        // NOTE: the `done` sentinel never reaches onEvent — use-agent-stream
+        // consumes it internally and closes the stream without dispatching.
+        case 'final': {
           void reloadThreads();
           break;
         }
@@ -1053,8 +1054,12 @@ const OpenClawConsole = ({
                 messages={messages}
                 streamingMessage={streamingMessage}
                 style={conversationInnerStyle}
-                renderExtras={
-                  pendingApproval ? (
+                renderExtras={(_message, isStreaming) =>
+                  // renderExtras is a RENDER CALLBACK (ConversationThread calls
+                  // it per bubble) — passing a bare element here used to make
+                  // `renderExtras?.(m, false)` throw. Mirror hermes: render the
+                  // approval prompt beneath the streaming assistant message.
+                  isStreaming && pendingApproval ? (
                     <div style={{ marginTop: 12 }}>
                       <ApprovalPrompt
                         request={pendingApproval}
@@ -1062,7 +1067,7 @@ const OpenClawConsole = ({
                         disabled={!running}
                       />
                     </div>
-                  ) : undefined
+                  ) : null
                 }
               />
             ) : (

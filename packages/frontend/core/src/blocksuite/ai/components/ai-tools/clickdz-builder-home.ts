@@ -50,6 +50,23 @@ interface CdzTemplateSummary {
   gradient?: [string, string];
 }
 
+/**
+ * One row of GET /api/v1/apps/app-templates — the APP catalog (business tools,
+ * not storefronts). Display metadata only: the generation brief stays
+ * server-side and is reached by sending this `id` as `templateId` to
+ * POST /apps/generate.
+ */
+interface CdzAppTemplateSummary {
+  id: string;
+  name: string;
+  nameDarja?: string;
+  emoji?: string;
+  category?: string;
+  pitch?: string;
+  accent?: string;
+  gradient?: [string, string];
+}
+
 /** The app currently open in the studio overlay. */
 interface CdzOpenApp {
   slug: string;
@@ -303,6 +320,9 @@ export class ClickDzBuilderHome extends LitElement {
   private accessor templates: CdzTemplateSummary[] = [];
 
   @state()
+  private accessor appTemplates: CdzAppTemplateSummary[] = [];
+
+  @state()
   private accessor drafts: CdzArtifact[] = [];
 
   @state()
@@ -325,6 +345,7 @@ export class ClickDzBuilderHome extends LitElement {
       this.drafts = items.filter(a => a.type === 'app');
     });
     void this.loadTemplates();
+    void this.loadAppTemplates();
     void this.loadMine();
   }
 
@@ -351,6 +372,25 @@ export class ClickDzBuilderHome extends LitElement {
     }
   }
 
+  /**
+   * The APP catalog — business tools rather than storefronts (rendez-vous,
+   * suivi COD, facturier, inventaire…). Same fail-soft stance as the shop
+   * gallery: a typed 404 means CDZ_APP_TEMPLATE_CATALOG is off, so the section
+   * hides itself rather than rendering an empty shelf.
+   */
+  private async loadAppTemplates() {
+    try {
+      const res = await fetch(cdzApiUrl('/api/v1/apps/app-templates'));
+      if (!res.ok) return;
+      const data = (await res.json().catch(() => null)) as {
+        templates?: CdzAppTemplateSummary[];
+      } | null;
+      if (Array.isArray(data?.templates)) this.appTemplates = data.templates;
+    } catch {
+      /* additive — a failure just hides the section */
+    }
+  }
+
   private async loadMine() {
     try {
       const res = await fetch(cdzApiUrl('/api/v1/apps/mine'));
@@ -365,17 +405,35 @@ export class ClickDzBuilderHome extends LitElement {
   }
 
   /** Freeform build. Mirrors the composer path's endpoint + error handling. */
-  private async generate(prompt: string) {
+  /**
+   * Freeform build, or a catalog pick when `opts.templateId` is given.
+   *
+   * One method rather than two: a template pick is the SAME generate call with a
+   * server-side brief prepended (the backend resolves `templateId` and prepends
+   * it — the brief never travels to the browser), so duplicating the error
+   * handling and studio hand-off would only invite the two paths to drift.
+   */
+  private async generate(
+    prompt: string,
+    opts?: { templateId?: string; title?: string }
+  ) {
     const text = prompt.trim();
     if (!text || this.busy) return;
     this.busy = true;
-    this.busyLabel = 'Création de votre application…';
+    this.busyLabel = opts?.title
+      ? `Création de « ${opts.title} »…`
+      : 'Création de votre application…';
     this.error = '';
     try {
       const res = await fetch(cdzApiUrl('/api/v1/apps/generate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: text }),
+        body: JSON.stringify({
+          prompt: text,
+          // Omitted (not sent empty) when there is no pick, so a freeform
+          // request stays byte-identical to what it has always been.
+          ...(opts?.templateId ? { templateId: opts.templateId } : {}),
+        }),
       });
       const data = (await res.json().catch(() => null)) as {
         slug?: string;
@@ -398,7 +456,7 @@ export class ClickDzBuilderHome extends LitElement {
       }
       this.openInStudio({
         slug: data.slug,
-        title: text.slice(0, 64),
+        title: opts?.title || text.slice(0, 64),
         html: data.html,
       });
     } catch (err) {
@@ -484,6 +542,50 @@ export class ClickDzBuilderHome extends LitElement {
     });
     this.app = app;
     this.studioOpen = true;
+  }
+
+  /**
+   * The APP gallery — business tools rather than storefronts. A pick calls the
+   * same generate route with `templateId`, so the server prepends the brief and
+   * the studio hand-off is identical to a freeform build.
+   */
+  private renderAppTemplates() {
+    if (!this.appTemplates.length) return nothing;
+    return html`
+      <h2>Modèles d'application</h2>
+      <p class="section-sub">
+        Des outils pour votre métier : rendez-vous, livraisons, factures,
+        inventaire… Choisissez, puis ajustez comme vous voulez.
+      </p>
+      <div class="grid">
+        ${this.appTemplates.map(t => {
+          const from = t.gradient?.[0] ?? t.accent ?? '#1e96eb';
+          const to = t.gradient?.[1] ?? t.accent ?? '#1e96eb';
+          return html`<button
+            class="card"
+            ?disabled=${this.busy}
+            title=${t.pitch ?? t.name}
+            @click=${() =>
+              void this.generate(t.pitch || t.name, {
+                templateId: t.id,
+                title: t.name,
+              })}
+          >
+            <div
+              class="thumb"
+              style=${`background:linear-gradient(135deg, ${from}, ${to})`}
+            >
+              ${t.emoji ?? '🧩'}
+            </div>
+            <div class="name">${t.name}</div>
+            ${t.pitch ? html`<div class="sub">${t.pitch}</div>` : nothing}
+            ${t.category
+              ? html`<span class="badge">${t.category}</span>`
+              : nothing}
+          </button>`;
+        })}
+      </div>
+    `;
   }
 
   private renderTemplates() {
@@ -649,7 +751,8 @@ export class ClickDzBuilderHome extends LitElement {
           ${this.error ? html`<div class="err">${this.error}</div>` : nothing}
         </div>
 
-        ${this.renderMine()} ${this.renderTemplates()}
+        ${this.renderMine()} ${this.renderAppTemplates()}
+        ${this.renderTemplates()}
       </div>
 
       ${app

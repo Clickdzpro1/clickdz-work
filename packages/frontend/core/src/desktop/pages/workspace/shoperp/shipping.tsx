@@ -400,8 +400,9 @@ const TransporteursTab = ({
   // Fan-out phase: while 'resolving' we haven't picked the active provider yet.
   const [resolvePhase, setResolvePhase] = useState<'resolving' | 'ready'>('resolving');
   // Whether the user has manually picked a provider (so a late fan-out result
-  // doesn't yank the selection out from under them).
-  const [userPicked, setUserPicked] = useState(false);
+  // doesn't yank the selection out from under them). Only the setter is bound:
+  // the current value is read via the functional-updater form below.
+  const [, setUserPicked] = useState(false);
 
   // Resolve the active provider once on mount via a status fan-out. We never
   // surface an error here: a failed/dark probe just means "not this one" and we

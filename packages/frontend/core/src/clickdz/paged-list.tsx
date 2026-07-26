@@ -30,6 +30,7 @@
 import {
   type CSSProperties,
   type KeyboardEvent,
+  type ReactElement,
   type ReactNode,
   useEffect,
   useMemo,
@@ -133,7 +134,7 @@ export function pagerSlots(current: number, total: number): Slot[] {
 // ---------------------------------------------------------------------------
 // Component.
 // ---------------------------------------------------------------------------
-export function PagedList<T>(props: PagedListProps<T>): JSX.Element {
+export function PagedList<T>(props: PagedListProps<T>): ReactElement {
   const {
     items,
     pageSize = 12,
@@ -326,7 +327,7 @@ export function PagedList<T>(props: PagedListProps<T>): JSX.Element {
 // Item wrapper — a thin cell so each row/card carries a stable key without
 // forcing the caller's renderItem output to be a single element.
 // ---------------------------------------------------------------------------
-const PagedListRow = ({ render }: { render: () => ReactNode }): JSX.Element => {
+const PagedListRow = ({ render }: { render: () => ReactNode }): ReactElement => {
   return <>{render()}</>;
 };
 
@@ -344,7 +345,7 @@ const EdgeBtn = ({
   label: string;
   disabled: boolean;
   onClick: () => void;
-}): JSX.Element => (
+}): ReactElement => (
   <button
     type="button"
     aria-disabled={disabled || undefined}
@@ -386,7 +387,7 @@ const PageDot = ({
   active: boolean;
   ariaLabel: string;
   onClick: () => void;
-}): JSX.Element => (
+}): ReactElement => (
   <button
     type="button"
     aria-label={ariaLabel}
