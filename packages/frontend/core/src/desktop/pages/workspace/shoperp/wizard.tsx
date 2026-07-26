@@ -1,6 +1,7 @@
 import { artifactStore } from '@affine/core/modules/ai-artifacts/store';
 import { type ReactNode, useCallback, useMemo, useRef, useState } from 'react';
 
+import { PENDING_SHOP_KEY, type PendingShop } from '../../clickdz-welcome';
 import {
   Banner,
   btnStyle,
@@ -11,7 +12,6 @@ import {
   fetchTemplate,
   hintStyle,
   inputStyle,
-  type MineApp,
   type PublishCapInfo,
   type ShopSettings,
   Spinner,
@@ -25,6 +25,23 @@ import {
   TemplatePickerLoading,
   useShopTemplates,
 } from './template-picker';
+
+/**
+ * Read and CONSUME the /welcome handoff (shop name + WhatsApp). One-shot: the
+ * key is removed on read so a later visit to the wizard starts clean rather
+ * than silently resurrecting a stale name. Fail-soft in private mode.
+ */
+function readPendingShop(): PendingShop | null {
+  try {
+    const raw = localStorage.getItem(PENDING_SHOP_KEY);
+    if (!raw) return null;
+    localStorage.removeItem(PENDING_SHOP_KEY);
+    const parsed = JSON.parse(raw) as PendingShop;
+    return parsed && typeof parsed.shopName === 'string' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // ShopERP onboarding wizard. Walks a first-time user through a per-store
@@ -185,13 +202,30 @@ export const ShopWizard = ({
   // same logical step and never index out of bounds.
   const step = FLOW[Math.min(stepIdx, FLOW.length - 1)];
 
-  // Settings model — seeded with the template defaults so a user who clicks
-  // straight through gets a valid, byte-default shop.
-  const [storeName, setStoreName] = useState('Ma Boutique');
-  const [whatsapp, setWhatsapp] = useState('213600000000');
+  // Settings model. Name and colour keep a sensible default; WhatsApp and the
+  // PIN deliberately start EMPTY.
+  //
+  // They used to be seeded '213600000000' and '1234', which both PASS
+  // validation — so a merchant could click straight through and publish a live
+  // shop whose orders were routed to a placeholder number and whose back
+  // office was protected by the most-guessed PIN in existence. They would then
+  // reasonably conclude the product does not work. These are the two fields a
+  // real shop cannot fake, so the wizard now insists on them.
+  //
+  // Name and WhatsApp are prefilled from the /welcome handoff when the merchant
+  // just came through onboarding, so asking twice never happens.
+  // Read the handoff inside a lazy state initializer rather than in the render
+  // body. readPendingShop() REMOVES the key, and a render that React discards
+  // (concurrent mode, an interrupted transition) would consume it without ever
+  // committing the prefilled state — silently losing the merchant's answers.
+  // A state initializer runs exactly once per mounted component.
+  const [pending] = useState<PendingShop | null>(readPendingShop);
+
+  const [storeName, setStoreName] = useState(pending?.shopName || 'Ma Boutique');
+  const [whatsapp, setWhatsapp] = useState(pending?.whatsapp || '');
   const [accent, setAccent] = useState<string>('#0f766e');
-  const [pin, setPin] = useState('1234');
-  const [pinConfirm, setPinConfirm] = useState('1234');
+  const [pin, setPin] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
 
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
 
@@ -520,7 +554,7 @@ export const ShopWizard = ({
           <Field
             label="Numéro WhatsApp"
             hint="Format international, chiffres uniquement, sans « + ». Exemple : 213600000000 (Algérie)."
-            error={touchedErr(whatsapp, waErr, '213600000000')}
+            error={touchedErr(whatsapp, waErr, '')}
           >
             <input
               style={inputStyle}
@@ -601,7 +635,7 @@ export const ShopWizard = ({
       {step === 'pin' ? (
         <StepShell emoji="🔑" title="PIN du gérant" subtitle="Il déverrouille l’espace admin de votre boutique. Choisissez un code facile à retenir.">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Field label="PIN" hint="4–8 chiffres." error={touchedErr(pin, pinErr, '1234')}>
+            <Field label="PIN" hint="4–8 chiffres." error={touchedErr(pin, pinErr, '')}>
               <input
                 style={inputStyle}
                 value={pin}
@@ -655,8 +689,8 @@ export const ShopWizard = ({
             <ReviewRow label="PIN du gérant" value={'•'.repeat(settings.adminPin.length)} onEdit={() => goToStep('pin')} />
           </div>
           <Banner tone="info">
-            We’ll publish your storefront live and prepare a matching ERP
-            dashboard in your Studio.
+            Votre boutique sera publiée en ligne et son tableau de bord ERP
+            sera prêt dans votre Studio.
           </Banner>
         </StepShell>
       ) : null}
@@ -673,7 +707,7 @@ export const ShopWizard = ({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 22 }}>
         {stepIdx > 0 ? (
           <button style={btnStyle('secondary')} onClick={back}>
-            ← Back
+            ← Retour
           </button>
         ) : hasExistingApps && onCancel ? (
           <button style={btnStyle('secondary')} onClick={onCancel}>
@@ -708,6 +742,9 @@ export const ShopWizard = ({
 
 // Show a field error only once the user has diverged from the seeded default
 // (so the wizard doesn't scream red at first paint on the pre-filled defaults).
+// WhatsApp and the PIN now seed to '' — an untouched empty field is therefore
+// quiet here, and the Continue gate is what stops the merchant from advancing
+// with it blank (with an inline reason, see blockReason).
 function touchedErr(value: string, err: string | null, seed: string): string | null {
   if (!err) return null;
   return value === seed ? null : err;
@@ -907,7 +944,7 @@ const ReplaceCap = ({
       </StepShell>
       <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
         <button style={btnStyle('secondary')} onClick={onCancel}>
-          ← Back
+          ← Retour
         </button>
         <div style={{ flex: 1 }} />
         {!confirming ? (
@@ -985,7 +1022,7 @@ const DoneCard = ({
           🎉
         </div>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: C.text }}>
-          {result.storeName} is ready
+          {result.storeName} est en ligne !
         </h2>
         <p style={{ margin: 0, fontSize: 13.5, color: C.muted }}>
           Votre boutique est en ligne et son ERP vous attend dans votre Studio.
@@ -997,7 +1034,7 @@ const DoneCard = ({
         <ResultTile
           emoji="🛍️"
           title="Boutique en ligne"
-          subtitle={result.shopUrl || 'Published'}
+          subtitle={result.shopUrl || 'Publiée'}
           accent={settings.accentColor}
         >
           {result.shopUrl ? (

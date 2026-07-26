@@ -36,7 +36,11 @@ import { AppContainer } from '../../components/app-container';
  * - initCloud: boolean, if true, when user is logged in, create a cloud workspace
  */
 export const Component = ({
-  defaultIndexRoute = 'all',
+  // ClickDz Work: a merchant's home is their shop, not the AFFiNE doc list.
+  // Landing on 'all' meant every session opened on an empty documents page,
+  // with the store itself buried behind a sidebar entry they had no reason to
+  // click. The mobile index still passes its own 'home' explicitly.
+  defaultIndexRoute = 'shoperp',
   children,
   fallback,
 }: {
@@ -81,7 +85,15 @@ export const Component = ({
     if (createOnceRef.current) return;
     createOnceRef.current = true;
     // TODO: support selfhosted
-    buildShowcaseWorkspace(workspacesService, 'affine-cloud', 'AFFiNE Cloud')
+    // ClickDz Work: named for the merchant ("Ma Boutique", not "AFFiNE Cloud")
+    // and seeded EMPTY — see buildShowcaseWorkspace's seedShowcase param for
+    // why the English tutorial docs are not imported for cloud workspaces.
+    buildShowcaseWorkspace(
+      workspacesService,
+      'affine-cloud',
+      'Ma Boutique',
+      false
+    )
       .then(({ meta, defaultDocId }) => {
         if (defaultDocId) {
           jumpToPage(meta.id, defaultDocId);
@@ -89,7 +101,18 @@ export const Component = ({
           openPage(meta.id, defaultIndexRoute);
         }
       })
-      .catch(err => console.error('Failed to create cloud workspace', err));
+      .catch(err => {
+        console.error('Failed to create cloud workspace', err);
+        // Recover rather than stranding the user. This path now runs
+        // automatically for every signed-in account with no workspace, so a
+        // transient failure (500, quota, offline right after signup, expired
+        // session) must not leave them staring at the loading skeleton
+        // forever. Release the latch so a retry is possible, and stop
+        // "navigating" so the WorkspaceNavigator fallback renders and they
+        // have a working manual create button — exactly what they used to get.
+        createOnceRef.current = false;
+        setNavigating(false);
+      });
   }, [defaultIndexRoute, jumpToPage, openPage, workspacesService]);
 
   useLayoutEffect(() => {
@@ -135,6 +158,22 @@ export const Component = ({
       }
     } else {
       if (list.length === 0) {
+        // ClickDz Work: a signed-in merchant with no workspace must never be
+        // dropped on the bare WorkspaceNavigator fallback below. That screen
+        // asks a non-technical shop owner to understand the word "workspace"
+        // and name one in an English dialog before they can reach anything —
+        // it was a full-funnel dead end for every new account. Create their
+        // cloud workspace silently and land them on `defaultIndexRoute`.
+        //
+        // `!enableLocalWorkspace` keeps this to WEB. On Electron that flag is
+        // on and the local-workspace effect below already creates a "Demo
+        // Workspace" for this same state; running both would create two
+        // workspaces and race two navigations against each other. Desktop
+        // keeps its existing behaviour untouched.
+        if (loggedIn && !enableLocalWorkspace) {
+          createCloudWorkspace();
+          return;
+        }
         setNavigating(false);
         return;
       }

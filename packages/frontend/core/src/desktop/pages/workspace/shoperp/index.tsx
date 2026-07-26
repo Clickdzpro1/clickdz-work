@@ -13,6 +13,7 @@ import {
   useState,
 } from 'react';
 
+import { PENDING_SHOP_KEY } from '../../clickdz-welcome';
 import { type DashboardSection, ErpDashboard } from './dashboard';
 import { ManageView } from './manage';
 import {
@@ -121,7 +122,23 @@ const ShopErpPage = () => {
   }, []);
 
   useEffect(() => {
-    void load();
+    void (async () => {
+      const list = await load();
+      // Straight from /welcome: the merchant already gave us their shop name
+      // and WhatsApp number, so skip the hub's "Créer ma boutique" detour and
+      // open the wizard prefilled. The handoff key is consumed by the wizard
+      // itself (readPendingShop), so this only ever fires on the real first run.
+      try {
+        if (
+          list.length === 0 &&
+          globalThis.localStorage?.getItem(PENDING_SHOP_KEY)
+        ) {
+          setForceWizard(true);
+        }
+      } catch {
+        /* storage unavailable — the hub CTA is a perfectly good fallback */
+      }
+    })();
   }, [load]);
 
   // Enter/leave the in-app dashboard (mutually exclusive with the wizard).
@@ -182,7 +199,9 @@ const ShopErpPage = () => {
   // bare wizard, so first-time users get the framed CTA + preview first.
   const showWizard = state === 'ready' && forceWizard;
   const showDashboard = state === 'ready' && !showWizard && dashboard !== null;
-  const showHome = state === 'ready' && !showWizard && !showDashboard;
+  // (No `showHome` constant: the render below is an if/else chain, so "home"
+  // is simply its final branch. A derived flag for it was dead code and
+  // tripped noUnusedLocals.)
 
   const primary = useMemo(() => primaryShop(apps), [apps]);
 

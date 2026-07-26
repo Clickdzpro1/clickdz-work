@@ -13,14 +13,28 @@ import {
   type WorkspacesService,
 } from '../modules/workspace';
 
+/**
+ * Create a workspace for a new user.
+ *
+ * `seedShowcase` controls whether AFFiNE's onboarding.zip is imported. ClickDz
+ * CLOUD workspaces pass false: those docs are the upstream "Getting Started" /
+ * "How to use folder and Tags" tutorials, in English, about doc and edgeless
+ * concepts a merchant never touches — and `ClickDzWorkspaceBoot` trashes them
+ * by title at first paint anyway. Importing then immediately binning them made
+ * a new merchant's very first screen an English tutorial flickering into the
+ * trash. Local/electron workspaces keep the showcase, so the desktop app's
+ * offline first-run is unchanged.
+ */
 export async function buildShowcaseWorkspace(
   workspacesService: WorkspacesService,
   flavour: string,
-  workspaceName: string
+  workspaceName: string,
+  seedShowcase = true
 ) {
   const meta = await workspacesService.create(flavour, async docCollection => {
     docCollection.meta.initialize();
     docCollection.doc.getMap('meta').set('name', workspaceName);
+    if (!seedShowcase) return;
     const blob = await (await fetch(onboardingUrl)).blob();
 
     await ZipTransformer.importDocs(
@@ -29,6 +43,13 @@ export async function buildShowcaseWorkspace(
       blob
     );
   });
+
+  // Nothing was seeded ⇒ nothing to look up, and no default doc to land on.
+  // Skip the open/waitForDocReady round-trip entirely: it is pure latency in
+  // front of a merchant who is waiting to see their shop.
+  if (!seedShowcase) {
+    return { meta, defaultDocId: undefined };
+  }
 
   const { workspace, dispose } = workspacesService.open({ metadata: meta });
 

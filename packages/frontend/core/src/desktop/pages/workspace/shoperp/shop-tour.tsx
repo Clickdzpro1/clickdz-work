@@ -59,6 +59,16 @@ export function markShopTourDone(slug: string): void {
   }
 }
 
+/**
+ * Where the merchant got to, so a reload resumes mid-tour instead of dragging
+ * them back through steps they already read. Only completion was persisted
+ * before, which on a flaky mobile connection meant restarting from step 0
+ * every time the page reloaded.
+ */
+function tourStepKey(slug: string): string {
+  return `cdz.shoperp.tour.step.${slug}`;
+}
+
 /** One tour step. `section` matches a dashboard tab id + its data-cdz-tour attr. */
 export interface ShopTourStep {
   /** The dashboard section/tab id this step points at (spotlight target). */
@@ -91,6 +101,17 @@ export const DEFAULT_SHOP_TOUR_STEPS: ShopTourStep[] = [
     title: 'Commandes',
     body: 'Gérez chaque commande — de « Nouvelle » à « Livrée ». Confirmez, expédiez et suivez vos clients.',
     darja: 'الكوموندات تع الزبائن، تأكدها و تبعتها من هنا.',
+  },
+  {
+    // Third, right after Commandes: this is where a merchant adds their first
+    // product, which is the one thing they must do before anything else in the
+    // tour matters. The tour used to skip Stock entirely and walk from orders
+    // straight to invoicing, AI and team — day-30 features shown ahead of the
+    // day-1 job.
+    section: 'stock',
+    title: 'Stock',
+    body: 'Ajoutez vos produits ici — nom, prix, photo et quantité. C’est la première étape pour vendre.',
+    darja: 'زيد السلعة تاعك هنا — الاسم، السومة و التصويرة.',
   },
   {
     section: 'appearance',
@@ -178,18 +199,45 @@ export const ShopTour = ({
     return source.filter(s => set.has(s.section));
   }, [steps, sections]);
 
-  const [idx, setIdx] = useState(0);
+  // Resume where the merchant left off (see tourStepKey). Clamped below against
+  // the present-steps list, so a stale index from a server with more tabs
+  // enabled can never point past the end.
+  const [idx, setIdx] = useState(() => {
+    try {
+      const raw = globalThis.localStorage?.getItem(tourStepKey(slug));
+      const n = raw ? parseInt(raw, 10) : 0;
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  });
   const [rect, setRect] = useState<Rect | null>(null);
   const [closed, setClosed] = useState(false);
 
   const total = present.length;
   const step = present[Math.min(idx, Math.max(0, total - 1))];
 
+  // Persist progress so a reload picks the tour back up mid-way.
+  useEffect(() => {
+    if (closed) return;
+    try {
+      globalThis.localStorage?.setItem(tourStepKey(slug), String(idx));
+    } catch {
+      /* storage unavailable — the tour just restarts; harmless */
+    }
+  }, [slug, idx, closed]);
+
   // Finish (complete or skip): persist, notify the parent once, unmount.
   const finish = useCallback(() => {
     if (closed) return;
     setClosed(true);
     markShopTourDone(slug);
+    // Drop the resume marker: a replay should start at the beginning.
+    try {
+      globalThis.localStorage?.removeItem(tourStepKey(slug));
+    } catch {
+      /* ignore */
+    }
     onDone();
   }, [closed, slug, onDone]);
 
@@ -206,7 +254,19 @@ export const ShopTour = ({
   useLayoutEffect(() => {
     if (closed || !step) return;
     let raf = 0;
-    const measure = () => setRect(readTargetRect(step.section));
+    const measure = () => {
+      // Bring the target into view before measuring. On a phone the 15 tabs
+      // wrap over several rows, so a later step's tab can sit below the fold —
+      // the spotlight would then frame something the merchant cannot see.
+      try {
+        document
+          .querySelector(`[data-cdz-tour="${CSS.escape(step.section)}"]`)
+          ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      } catch {
+        /* CSS.escape is unsupported on very old browsers — measuring still works */
+      }
+      setRect(readTargetRect(step.section));
+    };
     raf = requestAnimationFrame(() => {
       measure();
       // A second tick catches late layout (fonts, wrapping tab row).
@@ -256,13 +316,21 @@ export const ShopTour = ({
 
   // Position the tooltip just below the spotlight (or centered when unmeasured),
   // clamped into the viewport so it never overflows on a narrow phone.
-  const vw =
-    typeof window !== 'undefined' ? window.innerWidth : 360;
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 360;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 640;
   const cardW = Math.min(320, vw - 24);
   const cardLeft = hasRect
     ? Math.max(12, Math.min(spot.left, vw - cardW - 12))
     : Math.max(12, (vw - cardW) / 2);
-  const cardTop = hasRect ? spot.top + spot.height + 10 : 90;
+  // Clamp vertically too. A target low in the wrapped tab row — which is most
+  // of them on a 360px phone, where 15 tabs wrap to four or five lines — put
+  // the card below the fold with its Suivant button unreachable. CARD_EST_H is
+  // a deliberate over-estimate: pushing the card slightly high is harmless,
+  // pushing it off-screen is not.
+  const CARD_EST_H = 240;
+  const cardTop = hasRect
+    ? Math.min(spot.top + spot.height + 10, Math.max(12, vh - CARD_EST_H - 12))
+    : 90;
 
   const next = () => (isLast ? finish() : setIdx(i => i + 1));
   const back = () => setIdx(i => Math.max(0, i - 1));
