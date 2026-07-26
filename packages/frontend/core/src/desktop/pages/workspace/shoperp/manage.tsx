@@ -61,14 +61,14 @@ export const ManageView = ({
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
-            Your shops &amp; apps
+            Vos boutiques &amp; applications
           </div>
           <div style={{ fontSize: 12.5, color: C.muted }}>
             {apps.length} published {apps.length === 1 ? 'app' : 'apps'}
           </div>
         </div>
         <button style={btnStyle('primary')} onClick={onNewShop}>
-          + New shop
+          + Nouvelle boutique
         </button>
       </div>
 
@@ -117,18 +117,18 @@ export const ManageView = ({
                   onClick={() =>
                     onOpenDashboard(storeSlug, 'overview', pickShopUrl(group))
                   }
-                  title="Open the in-app ERP dashboard"
+                  title="Ouvrir le tableau de bord ERP intégré"
                 >
-                  📊 Dashboard
+                  📊 Tableau de bord
                 </button>
                 <button
                   style={miniBtnStyle('secondary')}
                   onClick={() =>
                     onOpenDashboard(storeSlug, 'orders', pickShopUrl(group))
                   }
-                  title="Manage orders, stock and settings in-app"
+                  title="Gérer commandes, stock et réglages ici"
                 >
-                  Manage
+                  Gérer
                 </button>
               </div>
             </div>
@@ -196,11 +196,11 @@ const AppRow = ({
       if (ok) {
         onChanged();
       } else {
-        setError('Could not delete this app. Please try again.');
+        setError('Impossible de supprimer cette application. Réessayez.');
         setDeleting(false);
       }
     } catch {
-      setError('Network error while deleting.');
+      setError('Erreur réseau pendant la suppression.');
       setDeleting(false);
     }
   }, [app.slug, onChanged]);
@@ -246,16 +246,16 @@ const AppRow = ({
             }}
             title={app.url}
           >
-            {app.url || '(no URL)'}
+            {app.url || '(pas d’URL)'}
           </a>
         </div>
         {onOpenDashboard ? (
           <button
             style={btnStyle('secondary')}
             onClick={onOpenDashboard}
-            title="Open the in-app ERP dashboard"
+            title="Ouvrir le tableau de bord ERP intégré"
           >
-            📊 Dashboard
+            📊 Tableau de bord
           </button>
         ) : null}
         {app.url ? (
@@ -265,7 +265,7 @@ const AppRow = ({
             rel="noopener noreferrer"
             style={{ ...btnStyle('secondary'), textDecoration: 'none' }}
           >
-            Open ↗
+            Ouvrir ↗
           </a>
         ) : null}
         {!confirming ? (
@@ -273,7 +273,7 @@ const AppRow = ({
             style={btnStyle('secondary')}
             onClick={() => setConfirming(true)}
             aria-label={`Delete ${app.slug}`}
-            title="Delete"
+            title="Supprimer"
           >
             🗑
           </button>
@@ -294,10 +294,10 @@ const AppRow = ({
             >
               {deleting ? (
                 <>
-                  <Spinner /> Deleting…
+                  <Spinner /> Suppression…
                 </>
               ) : (
-                'Yes, delete'
+                'Oui, supprimer'
               )}
             </button>
             <button
@@ -308,7 +308,7 @@ const AppRow = ({
                 setError(null);
               }}
             >
-              Cancel
+              Annuler
             </button>
           </div>
         </div>

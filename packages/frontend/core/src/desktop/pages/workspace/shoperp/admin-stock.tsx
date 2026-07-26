@@ -235,14 +235,14 @@ export const StockAdmin = ({
           color: C.muted,
         }}
       >
-        <Spinner /> Loading products…
+        <Spinner /> Chargement des produits…
       </div>
     );
   }
   if (phase === 'error') {
     return (
       <Banner tone="error">
-        Couldn&apos;t load the products.{' '}
+        Impossible de charger les produits.{' '}
         <button style={linkBtnStyle} onClick={() => void load()}>
           Retry
         </button>
@@ -270,7 +270,7 @@ export const StockAdmin = ({
             disabled={readOnly}
             onClick={() => setShowAdd(true)}
           >
-            + Add product
+            + Ajouter un produit
           </button>
         ) : null}
       </div>
@@ -293,7 +293,7 @@ export const StockAdmin = ({
       <Panel title={`Catalogue · ${products.length}`}>
         {products.length === 0 ? (
           <EmptyNote>
-            No products yet — add your first product to start selling.
+            Aucun produit pour le moment — ajoutez votre premier produit pour commencer à vendre.
           </EmptyNote>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -306,7 +306,7 @@ export const StockAdmin = ({
             >
               <thead>
                 <tr>
-                  {['Product', 'Price', 'Stock', 'Reorder at', 'State', ''].map(
+                  {['Produit', 'Prix', 'Stock', 'Seuil réappro', 'État', ''].map(
                     (h, i) => (
                       <th key={`${h}-${i}`} style={thStyle}>
                         {h}
@@ -451,11 +451,11 @@ const ProductRow = ({
       <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
         {inactive ? (
           <span style={{ fontSize: 11.5, fontWeight: 700, color: C.muted }}>
-            Inactive
+            Inactif
           </span>
         ) : isLowStock(p) ? (
           <span style={{ fontSize: 11.5, fontWeight: 700, color: '#e8a33d' }}>
-            ⚠ Low
+            ⚠ Bas
           </span>
         ) : (
           <span style={{ fontSize: 11.5, fontWeight: 700, color: C.okText }}>
@@ -474,7 +474,7 @@ const ProductRow = ({
               fontSize: 11.5,
             }}
           >
-            <Spinner /> Saving…
+            <Spinner /> Enregistrement…
           </span>
         ) : (
           <div
@@ -489,10 +489,10 @@ const ProductRow = ({
               <button
                 style={miniBtnStyle('secondary', anyBusy)}
                 disabled={anyBusy}
-                title="Generate an AI product description"
+                title="Générer une description produit avec l’IA"
                 onClick={onDescribe}
               >
-                ✨ Describe
+                ✨ Décrire
               </button>
             ) : null}
             {dirty && !readOnly ? (
@@ -501,7 +501,7 @@ const ProductRow = ({
                 disabled={anyBusy}
                 onClick={() => void onSave(p, stockN, reorderN)}
               >
-                Save
+                Enregistrer
               </button>
             ) : null}
           </div>
@@ -540,7 +540,7 @@ const AddProductForm = ({
   const submit = useCallback(async () => {
     const name = title.trim().slice(0, 120);
     if (!name) {
-      setTitleErr('Enter a product title.');
+      setTitleErr('Entrez un nom de produit.');
       return;
     }
     setTitleErr(null);
@@ -565,7 +565,7 @@ const AddProductForm = ({
       }}
     >
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-        New product
+        Nouveau produit
       </div>
       <div
         style={{
@@ -579,7 +579,7 @@ const AddProductForm = ({
             style={inputStyle}
             value={title}
             maxLength={120}
-            placeholder="e.g. Casque Bluetooth"
+            placeholder="Ex : Casque Bluetooth"
             onChange={e => setTitle(e.target.value)}
             disabled={busy}
           />
@@ -596,7 +596,7 @@ const AddProductForm = ({
             disabled={busy}
           />
         </Field>
-        <Field label="Initial stock">
+        <Field label="Stock initial">
           <input
             type="number"
             min={0}
@@ -607,7 +607,7 @@ const AddProductForm = ({
             disabled={busy}
           />
         </Field>
-        <Field label="Reorder at" hint="Low-stock alert threshold.">
+        <Field label="Seuil réappro" hint="Seuil d’alerte de stock bas.">
           <input
             type="number"
             min={0}
@@ -627,10 +627,10 @@ const AddProductForm = ({
         >
           {busy ? (
             <>
-              <Spinner dark /> Adding…
+              <Spinner dark /> Ajout…
             </>
           ) : (
-            'Add product'
+            'Ajouter le produit'
           )}
         </button>
         <button
@@ -638,7 +638,7 @@ const AddProductForm = ({
           disabled={busy}
           onClick={onCancel}
         >
-          Cancel
+          Annuler
         </button>
       </div>
     </div>
@@ -657,10 +657,10 @@ const AddProductForm = ({
 // ---------------------------------------------------------------------------
 
 const TONES: Array<{ id: string; label: string }> = [
-  { id: 'friendly', label: 'Friendly' },
-  { id: 'professional', label: 'Professional' },
-  { id: 'punchy', label: 'Punchy' },
-  { id: 'luxury', label: 'Luxury' },
+  { id: 'friendly', label: 'Amical' },
+  { id: 'professional', label: 'Professionnel' },
+  { id: 'punchy', label: 'Percutant' },
+  { id: 'luxury', label: 'Luxe' },
 ];
 
 const LANGS: Array<{ id: string; label: string }> = [
@@ -778,7 +778,7 @@ const DescribeModal = ({
           <span aria-hidden>✨</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>
-              AI description
+              Description IA
             </div>
             <div
               style={{
@@ -821,7 +821,7 @@ const DescribeModal = ({
               gap: 10,
             }}
           >
-            <Field label="Tone">
+            <Field label="Ton">
               <select
                 style={selectStyle}
                 value={tone}
@@ -835,7 +835,7 @@ const DescribeModal = ({
                 ))}
               </select>
             </Field>
-            <Field label="Language">
+            <Field label="Langue">
               <select
                 style={selectStyle}
                 value={lang}
@@ -867,7 +867,7 @@ const DescribeModal = ({
                 color: C.muted,
               }}
             >
-              <Spinner /> Generating a description…
+              <Spinner /> Génération de la description…
             </div>
           ) : phase === 'error' ? (
             <Banner tone="error">
@@ -879,7 +879,7 @@ const DescribeModal = ({
           ) : result ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
-                <div style={{ ...hintStyle, marginBottom: 4 }}>Preview</div>
+                <div style={{ ...hintStyle, marginBottom: 4 }}>Aperçu</div>
                 <div
                   style={{
                     whiteSpace: 'pre-wrap',
@@ -898,7 +898,7 @@ const DescribeModal = ({
               {result.bullets && result.bullets.length > 0 ? (
                 <div>
                   <div style={{ ...hintStyle, marginBottom: 4 }}>
-                    Key points
+                    Points clés
                   </div>
                   <ul
                     style={{
@@ -927,7 +927,7 @@ const DescribeModal = ({
                       userSelect: 'none',
                     }}
                   >
-                    Current description
+                    Description actuelle
                   </summary>
                   <div
                     style={{
@@ -968,26 +968,26 @@ const DescribeModal = ({
           >
             {applying ? (
               <>
-                <Spinner dark /> Applying…
+                <Spinner dark /> Application…
               </>
             ) : (
-              'Apply to product'
+              'Appliquer au produit'
             )}
           </button>
           <button
             style={btnStyle('secondary', busy)}
             disabled={busy}
             onClick={() => void generate()}
-            title="Generate a new variation"
+            title="Générer une nouvelle variante"
           >
-            ↻ Regenerate
+            ↻ Régénérer
           </button>
           <button
             style={{ ...btnStyle('secondary', applying), marginLeft: 'auto' }}
             disabled={applying}
             onClick={onClose}
           >
-            Cancel
+            Annuler
           </button>
         </div>
       </div>

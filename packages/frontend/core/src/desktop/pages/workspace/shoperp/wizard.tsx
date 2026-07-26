@@ -206,7 +206,7 @@ export const ShopWizard = ({
   const accentErr = validateAccent(accent);
   const pinErr = validatePin(pin);
   const pinMatchErr =
-    !pinErr && pin !== pinConfirm ? 'The two PINs don’t match.' : null;
+    !pinErr && pin !== pinConfirm ? 'Les deux PIN ne correspondent pas.' : null;
 
   const settings: ShopSettings = useMemo(
     () => ({
@@ -297,7 +297,7 @@ export const ShopWizard = ({
   // retry the shop deploy with replaceSlug.
   const create = useCallback(
     async (replaceSlug?: string) => {
-      setPhase({ kind: 'creating', label: 'Creating your storefront…' });
+      setPhase({ kind: 'creating', label: 'Création de votre boutique…' });
       try {
         // 1) Storefront template with the chosen settings. WS4-5: forward
         // the chosen templateId ONLY when set — an absent templateId keeps the
@@ -317,7 +317,7 @@ export const ShopWizard = ({
         });
 
         // 2) Paired ERP (same storeSlug + same settings so name/accent match).
-        setPhase({ kind: 'creating', label: 'Preparing the paired ERP…' });
+        setPhase({ kind: 'creating', label: 'Préparation de l’ERP associé…' });
         let erpSlug = '';
         try {
           const erp = await fetchTemplate({
@@ -341,7 +341,7 @@ export const ShopWizard = ({
         // 3) Publish the storefront (this is what returns a live URL + counts
         // toward the publish cap). The ERP is staged, not auto-published, to
         // avoid tripping a cap of 1 on the very first run (mirrors Ready Shop).
-        setPhase({ kind: 'creating', label: 'Publishing your storefront…' });
+        setPhase({ kind: 'creating', label: 'Publication de votre boutique…' });
         const outcome = await deployApp({
           html: shop.html,
           slug: shop.slug,
@@ -358,7 +358,7 @@ export const ShopWizard = ({
           setPhase({
             kind: 'error',
             message:
-              'Publishing needs a Pro plan on this workspace. Your shop is saved in your Studio — upgrade to publish it live.',
+              'La publication demande un plan Pro sur cet espace de travail. Votre boutique est enregistrée dans votre Studio — passez au plan Pro pour la mettre en ligne.',
           });
           return;
         }
@@ -393,7 +393,7 @@ export const ShopWizard = ({
         setPhase({
           kind: 'error',
           message:
-            err instanceof Error ? err.message : 'Something went wrong. Please try again.',
+            err instanceof Error ? err.message : 'Une erreur est survenue. Réessayez.',
         });
       }
     },
@@ -417,7 +417,7 @@ export const ShopWizard = ({
           <div style={{ fontSize: 15, fontWeight: 600, color: C.text }}>
             {phase.label}
           </div>
-          <div style={hintStyle}>This usually takes a few seconds.</div>
+          <div style={hintStyle}>Cela prend quelques secondes en général.</div>
         </div>
       </Card>
     );
@@ -439,10 +439,10 @@ export const ShopWizard = ({
         <Banner tone="error">{phase.message}</Banner>
         <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
           <button style={btnStyle('primary')} onClick={() => void create()}>
-            Try again
+            Réessayer
           </button>
           <button style={btnStyle('secondary')} onClick={() => setPhase({ kind: 'idle' })}>
-            Back to review
+            Retour au récapitulatif
           </button>
         </div>
       </Card>
@@ -468,13 +468,13 @@ export const ShopWizard = ({
       {step === 'welcome' ? (
         <StepShell
           emoji="🛍️"
-          title="Create your shop"
-          subtitle="Let’s set up your online storefront — cash-on-delivery, WhatsApp checkout, and a matching back-office ERP. A few quick questions and you’re live."
+          title="Créez votre boutique"
+          subtitle="On prépare votre boutique en ligne — paiement à la livraison, commande par WhatsApp et un ERP de gestion assorti. Quelques questions rapides et vous êtes en ligne."
         >
           <ul style={{ margin: '4px 0 0', paddingInlineStart: 18, color: C.muted, fontSize: 13, lineHeight: 1.7 }}>
-            <li>Your store name &amp; brand color</li>
-            <li>A WhatsApp number for orders</li>
-            <li>A manager PIN to protect the admin</li>
+            <li>Le nom de votre boutique &amp; sa couleur</li>
+            <li>Un numéro WhatsApp pour les commandes</li>
+            <li>Un PIN gérant pour protéger l’espace admin</li>
           </ul>
         </StepShell>
       ) : null}
@@ -498,8 +498,8 @@ export const ShopWizard = ({
       ) : null}
 
       {step === 'name' ? (
-        <StepShell emoji="🏷️" title="Store name" subtitle="What should customers see at the top of your shop?">
-          <Field label="Store name" hint="Up to 60 characters." error={touchedErr(storeName, nameErr, 'Ma Boutique')}>
+        <StepShell emoji="🏷️" title="Nom de la boutique" subtitle="Quel nom vos clients verront-ils en haut de votre boutique ?">
+          <Field label="Nom de la boutique" hint="Jusqu’à 60 caractères." error={touchedErr(storeName, nameErr, 'Ma Boutique')}>
             <input
               style={inputStyle}
               value={storeName}
@@ -516,10 +516,10 @@ export const ShopWizard = ({
       ) : null}
 
       {step === 'whatsapp' ? (
-        <StepShell emoji="💬" title="WhatsApp number" subtitle="Orders are sent to this number as a WhatsApp message. Customers also use it to reach you.">
+        <StepShell emoji="💬" title="Numéro WhatsApp" subtitle="Les commandes arrivent sur ce numéro en message WhatsApp. Vos clients l’utilisent aussi pour vous joindre.">
           <Field
-            label="WhatsApp number"
-            hint="International format, digits only, no “+”. Example: 213600000000 (Algeria)."
+            label="Numéro WhatsApp"
+            hint="Format international, chiffres uniquement, sans « + ». Exemple : 213600000000 (Algérie)."
             error={touchedErr(whatsapp, waErr, '213600000000')}
           >
             <input
@@ -538,7 +538,7 @@ export const ShopWizard = ({
       ) : null}
 
       {step === 'accent' ? (
-        <StepShell emoji="🎨" title="Accent color" subtitle="Your buttons, highlights and header use this color.">
+        <StepShell emoji="🎨" title="Couleur d’accent" subtitle="Vos boutons, vos accents et l’en-tête utilisent cette couleur.">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
               {SWATCHES.map(sw => {
@@ -567,7 +567,7 @@ export const ShopWizard = ({
                 );
               })}
             </div>
-            <Field label="Custom hex" hint="Or type your own, like #0f766e." error={accentErr}>
+            <Field label="Hex personnalisé" hint="Ou saisissez la vôtre, comme #0f766e." error={accentErr}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span
                   aria-hidden
@@ -599,15 +599,15 @@ export const ShopWizard = ({
       ) : null}
 
       {step === 'pin' ? (
-        <StepShell emoji="🔑" title="Manager PIN" subtitle="This unlocks the admin area of your shop. Pick something you’ll remember.">
+        <StepShell emoji="🔑" title="PIN du gérant" subtitle="Il déverrouille l’espace admin de votre boutique. Choisissez un code facile à retenir.">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Field label="PIN" hint="4–8 digits." error={touchedErr(pin, pinErr, '1234')}>
+            <Field label="PIN" hint="4–8 chiffres." error={touchedErr(pin, pinErr, '1234')}>
               <input
                 style={inputStyle}
                 value={pin}
                 inputMode="numeric"
                 type="password"
-                placeholder="4–8 digits"
+                placeholder="4–8 chiffres"
                 onChange={e => {
                   setPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
                   setBlockReason(null);
@@ -615,13 +615,13 @@ export const ShopWizard = ({
                 autoFocus
               />
             </Field>
-            <Field label="Confirm PIN" error={pinConfirm.length > 0 ? pinMatchErr : null}>
+            <Field label="Confirmez le PIN" error={pinConfirm.length > 0 ? pinMatchErr : null}>
               <input
                 style={inputStyle}
                 value={pinConfirm}
                 inputMode="numeric"
                 type="password"
-                placeholder="Re-enter your PIN"
+                placeholder="Saisissez le PIN à nouveau"
                 onChange={e => {
                   setPinConfirm(e.target.value.replace(/[^0-9]/g, '').slice(0, 8));
                   setBlockReason(null);
@@ -633,7 +633,7 @@ export const ShopWizard = ({
       ) : null}
 
       {step === 'review' ? (
-        <StepShell emoji="✅" title="Review" subtitle="Here’s your shop. You can change any of this later from the shop’s admin area.">
+        <StepShell emoji="✅" title="Récapitulatif" subtitle="Voici votre boutique. Vous pourrez tout changer plus tard depuis l’espace admin.">
           <div
             style={{
               display: 'flex',
@@ -644,15 +644,15 @@ export const ShopWizard = ({
               border: `1px solid ${C.border}`,
             }}
           >
-            <ReviewRow label="Store name" value={settings.storeName} onEdit={() => goToStep('name')} />
+            <ReviewRow label="Nom de la boutique" value={settings.storeName} onEdit={() => goToStep('name')} />
             <ReviewRow label="WhatsApp" value={settings.whatsapp} onEdit={() => goToStep('whatsapp')} />
             <ReviewRow
-              label="Accent"
+              label="Couleur"
               value={settings.accentColor}
               swatch={settings.accentColor}
               onEdit={() => goToStep('accent')}
             />
-            <ReviewRow label="Manager PIN" value={'•'.repeat(settings.adminPin.length)} onEdit={() => goToStep('pin')} />
+            <ReviewRow label="PIN du gérant" value={'•'.repeat(settings.adminPin.length)} onEdit={() => goToStep('pin')} />
           </div>
           <Banner tone="info">
             We’ll publish your storefront live and prepare a matching ERP
@@ -677,7 +677,7 @@ export const ShopWizard = ({
           </button>
         ) : hasExistingApps && onCancel ? (
           <button style={btnStyle('secondary')} onClick={onCancel}>
-            Cancel
+            Annuler
           </button>
         ) : (
           <span />
@@ -685,7 +685,7 @@ export const ShopWizard = ({
         <div style={{ flex: 1 }} />
         {step === 'review' ? (
           <button style={btnStyle('primary')} onClick={() => void create()}>
-            🚀 Create my shop
+            🚀 Créer ma boutique
           </button>
         ) : (
           // NOTE: the button is intentionally NOT `disabled`. A disabled button
@@ -698,7 +698,7 @@ export const ShopWizard = ({
             aria-disabled={!canAdvance}
             onClick={next}
           >
-            {step === 'welcome' ? 'Get started' : 'Continue'} →
+            {step === 'welcome' ? 'Commencer' : 'Continuer'} →
           </button>
         )}
       </div>
@@ -837,7 +837,7 @@ const ReplaceCap = ({
     <Card>
       <StepShell
         emoji="⚠️"
-        title="Publish limit reached"
+        title="Limite de publication atteinte"
         subtitle={`Your workspace can keep ${info.limit} published app${info.limit === 1 ? '' : 's'} at a time. To publish your new shop, pick one to replace — it will be unpublished.`}
       >
         {info.existing.length === 0 ? (
@@ -900,7 +900,7 @@ const ReplaceCap = ({
         )}
         {confirming && chosen ? (
           <Banner tone="error">
-            This permanently unpublishes <strong>{chosen}</strong>. This can’t be
+            Cette action dépublie définitivement <strong>{chosen}</strong>. This can’t be
             undone. Continue?
           </Banner>
         ) : null}
@@ -916,7 +916,7 @@ const ReplaceCap = ({
             disabled={!chosen}
             onClick={() => setConfirming(true)}
           >
-            Replace &amp; publish
+            Remplacer &amp; publier
           </button>
         ) : (
           <button style={btnStyle('danger')} onClick={() => onReplace(chosen)}>
@@ -954,7 +954,7 @@ const DoneCard = ({
     const art = artifactStore.get(`app_${result.erpSlug}`);
     const html = art?.payload;
     if (!html) {
-      setErpState({ kind: 'error', message: 'ERP source not found — open it from Manage.' });
+      setErpState({ kind: 'error', message: 'Source de l’ERP introuvable — ouvrez-le depuis « Gérer ».' });
       return;
     }
     const outcome = await deployApp({
@@ -972,7 +972,7 @@ const DoneCard = ({
     } else if (outcome.status === 'cap') {
       setErpState({ kind: 'cap' });
     } else if (outcome.status === 'upgrade') {
-      setErpState({ kind: 'error', message: 'Publishing the ERP needs a Pro plan.' });
+      setErpState({ kind: 'error', message: 'La publication de l’ERP demande un plan Pro.' });
     } else {
       setErpState({ kind: 'error', message: outcome.message });
     }
@@ -988,7 +988,7 @@ const DoneCard = ({
           {result.storeName} is ready
         </h2>
         <p style={{ margin: 0, fontSize: 13.5, color: C.muted }}>
-          Your storefront is live and a matching ERP is waiting in your Studio.
+          Votre boutique est en ligne et son ERP vous attend dans votre Studio.
         </p>
       </div>
 
@@ -996,7 +996,7 @@ const DoneCard = ({
         {/* Shop */}
         <ResultTile
           emoji="🛍️"
-          title="Storefront"
+          title="Boutique en ligne"
           subtitle={result.shopUrl || 'Published'}
           accent={settings.accentColor}
         >
@@ -1007,7 +1007,7 @@ const DoneCard = ({
               rel="noopener noreferrer"
               style={{ ...btnStyle('primary'), textDecoration: 'none' }}
             >
-              Open shop ↗
+              Voir la boutique ↗
             </a>
           ) : null}
         </ResultTile>
@@ -1015,13 +1015,13 @@ const DoneCard = ({
         {/* ERP */}
         <ResultTile
           emoji="📊"
-          title="ERP dashboard"
+          title="Tableau de bord ERP"
           subtitle={
             erpState.kind === 'published'
               ? erpState.url
               : result.erpSlug
-                ? 'Staged in your Studio — publish to get a live link'
-                : 'Not created — add it from Manage'
+                ? 'Préparé dans votre Studio — publiez-le pour obtenir un lien en ligne'
+                : 'Non créé — ajoutez-le depuis « Gérer »'
           }
           accent="#2f6bff"
         >
@@ -1042,10 +1042,10 @@ const DoneCard = ({
             >
               {erpState.kind === 'publishing' ? (
                 <>
-                  <Spinner /> Publishing…
+                  <Spinner /> Publication…
                 </>
               ) : (
-                'Publish ERP'
+                'Publier l’ERP'
               )}
             </button>
           ) : null}
@@ -1054,7 +1054,7 @@ const DoneCard = ({
         {erpState.kind === 'cap' ? (
           <Banner tone="warn">
             You’re at the publish limit. Free a slot from{' '}
-            <strong>Manage</strong>, then publish the ERP.
+            <strong>Gérer</strong>, puis publiez l’ERP.
           </Banner>
         ) : erpState.kind === 'error' ? (
           <Banner tone="error">{erpState.message}</Banner>
@@ -1069,7 +1069,7 @@ const DoneCard = ({
       <div style={{ display: 'flex', marginTop: 22 }}>
         <div style={{ flex: 1 }} />
         <button style={btnStyle('primary')} onClick={onFinish}>
-          Go to my shops →
+          Voir mes boutiques →
         </button>
       </div>
     </Card>

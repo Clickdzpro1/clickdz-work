@@ -281,7 +281,7 @@ export const Inventory = ({
           color: C.muted,
         }}
       >
-        <Spinner /> Loading inventory…
+        <Spinner /> Chargement de l’inventaire…
       </div>
     );
   }
@@ -319,7 +319,7 @@ export const Inventory = ({
           disabled={busy}
           onClick={() => void load(true)}
         >
-          {busy ? <Spinner /> : <span aria-hidden>↻</span>} Refresh
+          {busy ? <Spinner /> : <span aria-hidden>↻</span>} Actualiser
         </button>
       </div>
 
@@ -348,7 +348,7 @@ export const Inventory = ({
                 disabled={readOnly || busy}
                 onClick={() => setShowAddWh(true)}
               >
-                + Add warehouse
+                + Ajouter un dépôt
               </button>
             ) : null
           }
@@ -406,7 +406,7 @@ export const Inventory = ({
                     }}
                     disabled={readOnly || busy}
                     aria-label={`Remove ${w.name}`}
-                    title="Remove warehouse"
+                    title="Supprimer le dépôt"
                     onClick={() => void removeWarehouse(w)}
                   >
                     ×
@@ -436,7 +436,7 @@ export const Inventory = ({
             >
               <thead>
                 <tr>
-                  <th style={thStyle}>Product</th>
+                  <th style={thStyle}>Produit</th>
                   {warehouses.map(w => (
                     <th
                       key={w.id}
@@ -447,7 +447,7 @@ export const Inventory = ({
                     </th>
                   ))}
                   <th style={{ ...thStyle, textAlign: 'right' }}>Total</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>State</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>État</th>
                   {!fallback ? <th style={thStyle} /> : null}
                 </tr>
               </thead>
@@ -530,7 +530,7 @@ export const Inventory = ({
                               color: C.muted,
                             }}
                           >
-                            Inactive
+                            Inactif
                           </span>
                         ) : low ? (
                           <span
@@ -540,7 +540,7 @@ export const Inventory = ({
                               color: '#e8a33d',
                             }}
                           >
-                            ⚠ Low
+                            ⚠ Bas
                           </span>
                         ) : (
                           <span
@@ -570,12 +570,12 @@ export const Inventory = ({
                             disabled={readOnly || busy || noWarehouses}
                             title={
                               noWarehouses
-                                ? 'Add a warehouse first'
-                                : 'Record a stock movement'
+                                ? 'Ajoutez d’abord un dépôt'
+                                : 'Enregistrer un mouvement de stock'
                             }
                             onClick={() => setMovementFor(p)}
                           >
-                            ± Move
+                            ± Mouvement
                           </button>
                         </td>
                       ) : null}
@@ -623,7 +623,7 @@ const AddWarehouseForm = ({
   const submit = useCallback(async () => {
     const n = name.trim().slice(0, 60);
     if (!n) {
-      setNameErr('Enter a warehouse name.');
+      setNameErr('Entrez un nom de dépôt.');
       return;
     }
     setNameErr(null);
@@ -645,22 +645,22 @@ const AddWarehouseForm = ({
           gap: 10,
         }}
       >
-        <Field label="Warehouse name" error={nameErr}>
+        <Field label="Nom du dépôt" error={nameErr}>
           <input
             style={inputStyle}
             value={name}
             maxLength={60}
-            placeholder="e.g. Dépôt principal"
+            placeholder="Ex : Dépôt principal"
             onChange={e => setName(e.target.value)}
             disabled={busy}
           />
         </Field>
-        <Field label="Location" hint="Optional — city / address.">
+        <Field label="Lieu" hint="Facultatif — ville / adresse.">
           <input
             style={inputStyle}
             value={location}
             maxLength={80}
-            placeholder="e.g. Alger"
+            placeholder="Ex : Alger"
             onChange={e => setLocation(e.target.value)}
             disabled={busy}
           />
@@ -674,10 +674,10 @@ const AddWarehouseForm = ({
         >
           {busy ? (
             <>
-              <Spinner dark /> Adding…
+              <Spinner dark /> Ajout…
             </>
           ) : (
-            'Add warehouse'
+            'Ajouter le dépôt'
           )}
         </button>
         <button
@@ -685,7 +685,7 @@ const AddWarehouseForm = ({
           disabled={busy}
           onClick={onCancel}
         >
-          Cancel
+          Annuler
         </button>
       </div>
     </div>
@@ -765,7 +765,7 @@ const MovementModal = ({
   const submit = useCallback(async () => {
     if (!warehouseId) return;
     if (amountN <= 0) {
-      setAmountErr('Enter a quantity of 1 or more.');
+      setAmountErr('Entrez une quantité de 1 ou plus.');
       return;
     }
     setAmountErr(null);
@@ -805,7 +805,7 @@ const MovementModal = ({
           <span aria-hidden>±</span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>
-              Stock movement
+              Mouvement de stock
             </div>
             <div
               style={{
@@ -842,7 +842,7 @@ const MovementModal = ({
             gap: 14,
           }}
         >
-          <Field label="Warehouse">
+          <Field label="Dépôt">
             <select
               style={selectStyle}
               value={warehouseId}
@@ -858,7 +858,7 @@ const MovementModal = ({
             </select>
           </Field>
 
-          <Field label="Reason">
+          <Field label="Motif">
             <select
               style={selectStyle}
               value={reason}
@@ -881,7 +881,7 @@ const MovementModal = ({
               alignItems: 'end',
             }}
           >
-            <Field label="Direction">
+            <Field label="Sens">
               <div style={{ display: 'flex', gap: 6 }}>
                 <button
                   type="button"
@@ -892,7 +892,7 @@ const MovementModal = ({
                     flex: 1,
                   }}
                 >
-                  + In
+                  + Entrée
                 </button>
                 <button
                   type="button"
@@ -903,11 +903,11 @@ const MovementModal = ({
                     flex: 1,
                   }}
                 >
-                  − Out
+                  − Sortie
                 </button>
               </div>
             </Field>
-            <Field label="Quantity" error={amountErr}>
+            <Field label="Quantité" error={amountErr}>
               <input
                 type="number"
                 min={1}
@@ -921,14 +921,14 @@ const MovementModal = ({
           </div>
 
           <Field
-            label="Reference"
-            hint="Optional — a PO / invoice / order ref for the ledger."
+            label="Référence"
+            hint="Facultatif — une réf. de bon de commande, de facture ou de commande pour le journal."
           >
             <input
               style={inputStyle}
               value={ref}
               maxLength={60}
-              placeholder="e.g. PO-2026-014"
+              placeholder="Ex : PO-2026-014"
               disabled={busy}
               onChange={e => setRef(e.target.value)}
             />
@@ -983,10 +983,10 @@ const MovementModal = ({
           >
             {busy ? (
               <>
-                <Spinner dark /> Recording…
+                <Spinner dark /> Enregistrement…
               </>
             ) : (
-              'Record movement'
+              'Enregistrer le mouvement'
             )}
           </button>
           <button
@@ -994,7 +994,7 @@ const MovementModal = ({
             disabled={busy}
             onClick={onClose}
           >
-            Cancel
+            Annuler
           </button>
         </div>
       </div>

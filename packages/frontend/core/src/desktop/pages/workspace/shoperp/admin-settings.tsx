@@ -73,11 +73,11 @@ export const SettingsAdmin = ({
     const errs: Record<string, string | null> = {
       shopName: validateStoreName(shopName),
       tagline:
-        tagline.length > 140 ? 'Keep the tagline under 140 characters.' : null,
+        tagline.length > 140 ? 'Gardez le slogan sous 140 caractères.' : null,
       whatsapp: validateWhatsapp(whatsapp.trim()),
       deliveryFee:
         feeStr === '' || !Number.isFinite(feeN) || feeN < 0
-          ? 'Enter a delivery fee of 0 or more.'
+          ? 'Entrez des frais de livraison de 0 ou plus.'
           : null,
       accent: validateAccent(accent.trim()),
       adminPin: validatePin(adminPin.trim()),
@@ -106,7 +106,7 @@ export const SettingsAdmin = ({
       patch.adminPin = adminPin.trim();
     }
     if (Object.keys(patch).length === 0) {
-      setNotice({ tone: 'info', text: 'Nothing to save — no changes.' });
+      setNotice({ tone: 'info', text: 'Rien à enregistrer — aucun changement.' });
       return;
     }
 
@@ -115,7 +115,7 @@ export const SettingsAdmin = ({
     if (out.status === 'ok') {
       setNotice({
         tone: 'ok',
-        text: 'Settings saved — the live shop picks them up on next load.',
+        text: 'Réglages enregistrés — la boutique en ligne les applique au prochain chargement.',
       });
       onMutated(); // refresh the summary so the header/name stay in sync
     } else if (out.status === 'unavailable') {
@@ -158,7 +158,7 @@ export const SettingsAdmin = ({
         </Banner>
       ) : null}
 
-      <Panel title="Store settings">
+      <Panel title="Réglages de la boutique">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div
             style={{
@@ -167,7 +167,7 @@ export const SettingsAdmin = ({
               gap: 14,
             }}
           >
-            <Field label="Store name" error={errors.shopName}>
+            <Field label="Nom de la boutique" error={errors.shopName}>
               <input
                 style={inputStyle}
                 value={shopName}
@@ -177,8 +177,8 @@ export const SettingsAdmin = ({
               />
             </Field>
             <Field
-              label="Tagline"
-              hint="Short line under the store name."
+              label="Slogan"
+              hint="Petite phrase sous le nom de la boutique."
               error={errors.tagline}
             >
               <input
@@ -207,8 +207,8 @@ export const SettingsAdmin = ({
               />
             </Field>
             <Field
-              label="Delivery fee (DZD)"
-              hint="Added to every cash-on-delivery order."
+              label="Frais de livraison (DZD)"
+              hint="Ajoutés à chaque commande en paiement à la livraison."
               error={errors.deliveryFee}
             >
               <input
@@ -222,8 +222,8 @@ export const SettingsAdmin = ({
               />
             </Field>
             <Field
-              label="Accent color"
-              hint="Hex color, e.g. #0f766e."
+              label="Couleur d’accent"
+              hint="Couleur hex, ex : #0f766e."
               error={errors.accent}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -252,8 +252,8 @@ export const SettingsAdmin = ({
               </div>
             </Field>
             <Field
-              label="Admin PIN"
-              hint="4–8 digits — gates the deployed shop’s admin page."
+              label="PIN admin"
+              hint="4–8 chiffres — protège la page admin de votre boutique en ligne."
               error={errors.adminPin}
             >
               <input
@@ -278,15 +278,15 @@ export const SettingsAdmin = ({
             >
               {saving ? (
                 <>
-                  <Spinner dark /> Saving…
+                  <Spinner dark /> Enregistrement…
                 </>
               ) : (
-                'Save settings'
+                'Enregistrer les réglages'
               )}
             </button>
             {readOnly ? (
               <span style={{ fontSize: 12, color: C.muted }}>
-                Read-only — admin changes are unavailable right now.
+                Lecture seule — les modifications admin sont indisponibles pour le moment.
               </span>
             ) : null}
           </div>
@@ -311,7 +311,7 @@ export const SettingsAdmin = ({
 //     ever sends it (PUT /pay/chargily) and reads a MASKED view
 //     (GET /pay/chargily → {configured, mode, enabled, maskedKey}). The secret
 //     is never echoed back in full.
-//   • The "Accept online payments" flag is NON-sensitive → it rides the
+//   • The "Accepter le paiement en ligne" flag is NON-sensitive → it rides the
 //     EXISTING erp/settings route as settings.onlinePay (postErpSettings).
 // Degrades gracefully:
 //   • Route not present on the server → a quiet "not available" note (the shop
@@ -441,7 +441,7 @@ const PaymentsSection = ({
     if (!chargily?.configured && !trimmed) {
       setNotice({
         tone: 'error',
-        text: 'Enter your Chargily API secret to enable online payments.',
+        text: 'Entrez votre clé secrète API Chargily pour activer le paiement en ligne.',
       });
       return;
     }
@@ -455,7 +455,7 @@ const PaymentsSection = ({
     if (out.status === 'ok') {
       setChargily(out.chargily);
       setSecret(''); // never keep the raw secret around after a successful save
-      setNotice({ tone: 'ok', text: 'Payment settings saved.' });
+      setNotice({ tone: 'ok', text: 'Réglages de paiement enregistrés.' });
     } else if (out.status === 'unavailable') {
       setPhase('unavailable');
     } else {
@@ -493,7 +493,7 @@ const PaymentsSection = ({
   );
 
   return (
-    <Panel title="Online payments (Chargily)">
+    <Panel title="Paiement en ligne (Chargily)">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {notice ? (
           <Banner tone={notice.tone === 'ok' ? 'ok' : 'error'}>
@@ -511,7 +511,7 @@ const PaymentsSection = ({
               color: C.muted,
             }}
           >
-            <Spinner /> Loading payment settings…
+            <Spinner /> Chargement des réglages de paiement…
           </div>
         ) : phase === 'unavailable' ? (
           <EmptyNote>
@@ -551,10 +551,10 @@ const PaymentsSection = ({
                     background: chargily.enabled ? C.accent : C.muted,
                   }}
                 >
-                  {chargily.enabled ? 'Enabled' : 'Disabled'}
+                  {chargily.enabled ? 'Activé' : 'Désactivé'}
                 </span>
                 <span>
-                  Key on file:{' '}
+                  Clé enregistrée :{' '}
                   <span
                     style={{
                       fontFamily: 'var(--affine-font-code-family, monospace)',
@@ -577,8 +577,8 @@ const PaymentsSection = ({
             <Field
               label={
                 chargily?.configured
-                  ? 'Replace API secret (optional)'
-                  : 'Chargily API secret'
+                  ? 'Remplacer la clé secrète (facultatif)'
+                  : 'Clé secrète API Chargily'
               }
               hint={
                 chargily?.configured
@@ -595,7 +595,7 @@ const PaymentsSection = ({
                 autoComplete="off"
                 value={secret}
                 placeholder={
-                  chargily?.configured ? '•••••••••••••••' : 'live_sk_… or test_sk_…'
+                  chargily?.configured ? '•••••••••••••••' : 'live_sk_… ou test_sk_…'
                 }
                 onChange={e => setSecret(e.target.value)}
                 disabled={readOnly || saving}
@@ -633,10 +633,10 @@ const PaymentsSection = ({
                   on={enabled}
                   disabled={readOnly || saving}
                   onChange={setEnabled}
-                  label="Enable Chargily checkout"
+                  label="Activer le paiement Chargily"
                 />
                 <span style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>
-                  Enable Chargily checkout
+                  Activer le paiement Chargily
                 </span>
               </div>
             </div>
@@ -649,15 +649,15 @@ const PaymentsSection = ({
               >
                 {saving ? (
                   <>
-                    <Spinner dark /> Saving…
+                    <Spinner dark /> Enregistrement…
                   </>
                 ) : (
-                  'Save payment settings'
+                  'Enregistrer les réglages de paiement'
                 )}
               </button>
               {readOnly ? (
                 <span style={{ fontSize: 12, color: C.muted }}>
-                  Read-only — admin changes are unavailable right now.
+                  Lecture seule — les modifications admin sont indisponibles pour le moment.
                 </span>
               ) : null}
             </div>
@@ -678,7 +678,7 @@ const PaymentsSection = ({
                 on={onlinePay}
                 disabled={readOnly || payToggling}
                 onChange={next => void toggleOnlinePay(next)}
-                label="Accept online payments on the storefront"
+                label="Accepter le paiement en ligne on the storefront"
               />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
@@ -691,7 +691,7 @@ const PaymentsSection = ({
                     gap: 8,
                   }}
                 >
-                  Accept online payments
+                  Accepter le paiement en ligne
                   {payToggling ? <Spinner /> : null}
                 </div>
                 <div style={{ ...hintStyle, marginTop: 2 }}>

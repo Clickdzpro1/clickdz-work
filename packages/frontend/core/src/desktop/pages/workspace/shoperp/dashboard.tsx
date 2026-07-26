@@ -214,7 +214,7 @@ export const ErpDashboard = ({
           }}
           onClick={onBack}
         >
-          ← Shops
+          ← Boutiques
         </button>
         <div style={{ flex: 1, minWidth: 200 }}>
           <div
@@ -244,7 +244,7 @@ export const ErpDashboard = ({
             {tagline ? `${tagline} · ` : ''}
             {summary
               ? `${summary.kpis.ordersTotal} ${summary.kpis.ordersTotal === 1 ? 'order' : 'orders'} total`
-              : 'Live shop data'}
+              : 'Données de la boutique en direct'}
           </div>
         </div>
         <button
@@ -252,7 +252,7 @@ export const ErpDashboard = ({
           disabled={refreshing}
           onClick={() => void load(phase === 'ready')}
         >
-          {refreshing ? <Spinner /> : <span aria-hidden>↻</span>} Refresh
+          {refreshing ? <Spinner /> : <span aria-hidden>↻</span>} Actualiser
         </button>
         {url ? (
           <a
@@ -261,7 +261,7 @@ export const ErpDashboard = ({
             rel="noopener noreferrer"
             style={{ ...miniBtnStyle('secondary'), textDecoration: 'none' }}
           >
-            Open live ↗
+            Voir la boutique ↗
           </a>
         ) : null}
       </div>
@@ -298,7 +298,7 @@ export const ErpDashboard = ({
       ) : null}
       {refreshFailed ? (
         <Banner tone="warn">
-          Couldn’t refresh — showing the last loaded data.{' '}
+          Actualisation impossible — affichage des dernières données chargées.{' '}
           <button style={linkBtnStyle} onClick={refetch}>
             Retry
           </button>
@@ -316,7 +316,7 @@ export const ErpDashboard = ({
             color: C.muted,
           }}
         >
-          <Spinner /> Loading live shop data…
+          <Spinner /> Chargement des données de la boutique…
         </div>
       ) : phase === 'error' ? (
         <Banner tone="error">
@@ -460,33 +460,33 @@ const Overview = ({
       >
         <KpiCard
           icon="💰"
-          label="Revenue (CA)"
+          label="CA du mois"
           value={fmtDZD(k.revenueMonth, currency)}
-          hint="Delivered this month"
+          hint="Commandes livrées uniquement"
           color={C.okText}
         />
         <KpiCard
           icon="⏳"
-          label="Pending orders"
+          label="Commandes en attente"
           value={String(k.pendingCount)}
           hint="Nouvelle + Confirmée"
         />
         <KpiCard
           icon="🧺"
-          label="Avg basket"
+          label="Panier moyen"
           value={fmtDZD(k.avgBasket, currency)}
-          hint="Per delivered order"
+          hint="Sur commandes livrées"
         />
         <KpiCard
           icon="💸"
-          label="Expenses"
+          label="Dépenses"
           value={fmtDZD(k.expensesMonth, currency)}
-          hint="This month"
+          hint="Ce mois-ci"
           color="#e8a33d"
         />
         <KpiCard
           icon="📈"
-          label="Margin"
+          label="Marge"
           value={fmtDZD(k.margin, currency)}
           hint="Revenue − expenses"
           color={
@@ -495,9 +495,9 @@ const Overview = ({
         />
         <KpiCard
           icon="📦"
-          label="Low stock"
+          label="Stock bas"
           value={String(k.lowStockCount)}
-          hint="At or below reorder point"
+          hint="Au seuil de réappro ou en dessous"
           color={k.lowStockCount > 0 ? '#e8a33d' : undefined}
         />
       </div>
@@ -510,7 +510,7 @@ const Overview = ({
           gap: 12,
         }}
       >
-        <Panel title="Delivered revenue — last 14 days">
+        <Panel title="CA livré — 14 derniers jours">
           {revenueData.length === 0 ? (
             <EmptyNote>
               No data yet — the curve appears with your first delivered
@@ -582,16 +582,16 @@ const Overview = ({
                     marginTop: 4,
                   }}
                 >
-                  Nothing delivered in the last 14 days yet.
+                  Rien de livré sur les 14 derniers jours pour le moment.
                 </div>
               ) : null}
             </>
           )}
         </Panel>
-        <Panel title="Orders by status">
+        <Panel title="Commandes par statut">
           {!hasAnyOrder ? (
             <EmptyNote>
-              No orders yet — share your shop link to start selling.
+              Aucune commande pour le moment — partagez le lien de votre boutique pour commencer à vendre.
             </EmptyNote>
           ) : (
             <ResponsiveContainer width="100%" height={220}>
@@ -649,13 +649,13 @@ const Overview = ({
                 style={miniBtnStyle('secondary')}
                 onClick={() => onGoTo('orders')}
               >
-                Manage →
+                Gérer →
               </button>
             }
           >
             {summary.recentOrders.length === 0 ? (
               <EmptyNote>
-                No orders yet — share your shop link to start selling.
+                Aucune commande pour le moment — partagez le lien de votre boutique pour commencer à vendre.
               </EmptyNote>
             ) : (
               <div style={{ overflowX: 'auto' }}>
@@ -668,7 +668,7 @@ const Overview = ({
                 >
                   <thead>
                     <tr>
-                      {['Ref', 'Date', 'Customer', 'Wilaya', 'Total', 'Status'].map(
+                      {['Réf', 'Date', 'Client', 'Wilaya', 'Total', 'Statut'].map(
                         h => (
                           <th key={h} style={thStyle}>
                             {h}
@@ -733,13 +733,13 @@ const Overview = ({
                 style={miniBtnStyle('secondary')}
                 onClick={() => onGoTo('stock')}
               >
-                Manage →
+                Gérer →
               </button>
             }
           >
             {summary.lowStock.length === 0 ? (
               <EmptyNote>
-                All products are above their reorder threshold.
+                Tous les produits sont au-dessus de leur seuil de réappro.
               </EmptyNote>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -783,9 +783,9 @@ const Overview = ({
             )}
           </Panel>
 
-          <Panel title="Top products">
+          <Panel title="Top produits">
             {summary.topProducts.length === 0 ? (
-              <EmptyNote>No delivered sales yet.</EmptyNote>
+              <EmptyNote>Aucune vente livrée pour le moment.</EmptyNote>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {summary.topProducts.map((t, i) => (
