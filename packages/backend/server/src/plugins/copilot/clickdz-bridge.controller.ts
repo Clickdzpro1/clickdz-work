@@ -1208,7 +1208,13 @@ const ERP_THEME_IDS = [
 const ERP_DEFAULT_THEME = 'classic';
 // Layout templates (≥2, ids owned by clickdz-shop-template.ts). 'standard' ==
 // today's hero + product grid (default); 'boutique' == editorial layout.
-const ERP_TEMPLATE_IDS = ['standard', 'boutique', 'grid-dense', 'editorial-split'] as const;
+const ERP_TEMPLATE_IDS = [
+  'standard',
+  'boutique',
+  'grid-dense',
+  'editorial-split',
+  'landing',
+] as const;
 const ERP_DEFAULT_TEMPLATE = 'standard';
 // Font ids map to a --font stack in the template (mirrors the studio's
 // cdz-style-editor font choices). 'system' == today's stack (the default).

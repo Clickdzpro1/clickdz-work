@@ -60,7 +60,7 @@ export type TemplateFontId = 'system' | 'inter' | 'poppins' | 'playfair';
  * `layoutId()` fallback resolves any unknown id to `standard` (a safe no-op),
  * so referencing them here never breaks a mint.
  */
-export type TemplateLayoutId = 'standard' | 'boutique' | 'grid-dense' | 'editorial-split';
+export type TemplateLayoutId = 'standard' | 'boutique' | 'grid-dense' | 'editorial-split' | 'landing';
 
 /**
  * A single seed product. Field-for-field identical to the objects returned by

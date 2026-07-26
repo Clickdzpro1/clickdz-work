@@ -453,6 +453,23 @@ export const CLICKDZ_SHOP_TEMPLATE_HTML: string = String.raw`<!doctype html>
   .hero-split .hs-media .hs-cap .t{font-weight:800;font-size:17px}
   .hero-split .hs-media .hs-cap .p{font-weight:900;font-size:15px;margin-top:2px}
 
+  /* ---------- layout: landing (settings.template='landing') ----------
+     One hero product, oversized COD call-to-action, trust strip, then the rest
+     of the catalogue. The DZ social-selling pattern: a single item pushed via
+     Facebook/Instagram ads. Opt-in only — no other layout is affected. */
+  .landing-hero{background:linear-gradient(180deg,var(--card),var(--bg))}
+  .landing-hero .lh-inner{display:grid;gap:22px;padding:36px 0 30px;align-items:center}
+  @media(min-width:820px){.landing-hero .lh-inner{grid-template-columns:1fr 1fr;gap:44px;padding:52px 0 44px}}
+  .landing-hero .lh-media{position:relative;border-radius:calc(var(--r) + 6px);overflow:hidden;min-height:280px;background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow-lg)}
+  .landing-hero .lh-media img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+  .landing-hero .lh-media .lh-ph{position:absolute;inset:0;display:grid;place-items:center;font-size:84px;color:var(--ink-mute);background:linear-gradient(135deg,#eef1f4,#e2e7ec)}
+  .landing-hero .lh-copy{display:flex;flex-direction:column;gap:14px;align-items:flex-start;text-align:start;min-width:0}
+  .landing-hero .lh-copy h1{font-size:clamp(26px,5.2vw,44px);font-weight:900;letter-spacing:-.03em;line-height:1.06;color:var(--ink)}
+  .landing-hero .lh-copy .lh-desc{margin:0;color:var(--ink-soft);font-size:clamp(15px,2.2vw,17.5px);max-width:520px}
+  .landing-hero .lh-price{font-size:clamp(24px,4.4vw,34px);font-weight:900;color:var(--accent-d)}
+  .landing-hero .btn.xl{padding:16px 26px;font-size:17px;border-radius:var(--r-sm);width:100%;max-width:420px}
+  .landing-more{margin-top:26px}
+
   /* ---------- WSF-4 features: wishlist / reviews / promo / variants ---------- */
   .wish-btn{border:1px solid var(--line);background:#fff;border-radius:999px;width:38px;height:38px;display:inline-grid;place-items:center;font-size:17px;line-height:1;cursor:pointer;transition:.15s;padding:0}
   .wish-btn:hover{border-color:var(--danger);background:var(--danger-bg)}
@@ -1916,7 +1933,8 @@ var LAYOUTS = {
   standard: { label: 'Standard' },
   boutique: { label: 'Boutique' },
   'grid-dense': { label: 'Grille dense' },
-  'editorial-split': { label: 'Éditorial' }
+  'editorial-split': { label: 'Éditorial' },
+  landing: { label: 'Page produit' }
 };
 
 /* Corner style — an OPTIONAL override of the theme preset's radius. Ids only
@@ -2197,6 +2215,7 @@ function viewHome() {
   if (lid === 'boutique') return viewHomeBoutique();
   if (lid === 'grid-dense') return viewHomeGridDense();
   if (lid === 'editorial-split') return viewHomeEditorial();
+  if (lid === 'landing') return viewHomeLanding();
   var s = store.settings || defaultSettings();
   var wa = digitsOnly(s.whatsapp);
   var errBanner = store.error ? '<div class="wrap"><div class="callout" style="margin-top:16px"><span class="ic">⚠️</span><div>Certaines données n\'ont pas pu être chargées. Réessayez plus tard.</div></div></div>' : '';
@@ -2252,6 +2271,65 @@ function viewHome() {
       chipsHtml +
       gridHtml +
     '</div>';
+}
+
+/* ---- Landing layout home (settings.template='landing') ----
+   One hero product with an oversized COD call-to-action, the trust strip, then
+   the rest of the catalogue as a compact grid. The hero item is the FIRST active
+   product, so the merchant picks it by reordering products — no new setting and
+   nothing extra to store. 'hero' gates the product band and 'trust' the
+   reassurance row; 'categories'/'featured' do not apply to a one-product page. */
+function viewHomeLanding() {
+  var s = store.settings || defaultSettings();
+  var wa = digitsOnly(s.whatsapp);
+  var errBanner = store.error ? '<div class="wrap"><div class="callout" style="margin-top:16px"><span class="ic">WARN</span><div>Certaines donnees n\'ont pas pu etre chargees. Reessayez plus tard.</div></div></div>' : '';
+
+  var prods = activeProducts();
+  if (!prods.length) {
+    return errBanner + '<div class="wrap">' +
+      emptyState('PKG', 'Aucun produit pour le moment', 'Revenez bientot — le catalogue arrive !', wa ? '<a class="btn soft" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">Nous contacter</a>' : '') +
+    '</div>';
+  }
+  var p = prods[0];
+  var out = (Number(p.stock) || 0) <= 0;
+  var media = p.imageUrl
+    ? '<img loading="lazy" src="' + attr(p.imageUrl) + '" alt="' + attr(p.title) + '" onerror="this.style.display=\'none\'" />'
+    : '<div class="lh-ph">SHOP</div>';
+
+  var hero = sectionOn('hero') ? ('' +
+    '<section class="landing-hero"><div class="wrap"><div class="lh-inner">' +
+      '<div class="lh-media">' + media + '</div>' +
+      '<div class="lh-copy">' +
+        '<span class="cod-pill">Paiement a la livraison</span>' +
+        '<h1>' + esc(p.title) + '</h1>' +
+        (p.description ? '<p class="lh-desc">' + esc(p.description) + '</p>' : '') +
+        (featureOn('reviews') ? reviewMini(p) : '') +
+        '<div class="lh-price">' + money(p.price) + ' DZD</div>' +
+        (out
+          ? '<button class="btn ghost xl" disabled>Rupture de stock</button>'
+          : '<button class="btn primary xl" data-buy="' + attr(p.id) + '">Commander maintenant — paiement a la livraison</button>') +
+        (wa ? '<a class="btn ghost" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">Commander par WhatsApp</a>' : '') +
+      '</div>' +
+    '</div></div></section>') : '';
+
+  var trust = sectionOn('trust') ? ('' +
+    '<div class="trust"><div class="wrap"><div class="trust-inner">' +
+      trustLead() +
+      '<span class="trust-item"><span class="ic">DZD</span> Paiement a la livraison</span>' +
+      '<span class="trust-item"><span class="ic">TRK</span> Livraison 58 wilayas</span>' +
+      '<span class="trust-item"><span class="ic">RET</span> Retour facile</span>' +
+      '<span class="trust-item"><span class="ic">TEL</span> Support WhatsApp</span>' +
+    '</div></div></div>') : '';
+
+  var rest = prods.slice(1);
+  var moreHtml = rest.length
+    ? '<div class="wrap landing-more" id="products">' +
+        '<div class="section-head"><h2>Nos autres produits</h2><span class="muted">' + rest.length + ' article' + (rest.length > 1 ? 's' : '') + '</span></div>' +
+        '<div class="grid-dense">' + rest.map(productCard).join('') + '</div>' +
+      '</div>'
+    : '';
+
+  return errBanner + hero + trust + moreHtml;
 }
 
 function productCard(p) {
@@ -2924,6 +3002,14 @@ function bindStorefront(route) {
   if (!app) return;
 
   app.addEventListener('click', function (e) {
+    /* Landing layout buy-now: add the hero item and go straight to checkout.
+       Checked before [data-add] because a buy button is not an add button. */
+    var buy = e.target.closest('[data-buy]');
+    if (buy) {
+      addToCart(buy.getAttribute('data-buy'), 1, '');
+      go('#/checkout');
+      return;
+    }
     var t = e.target.closest('[data-add]');
     if (t) {
       var id = t.getAttribute('data-add');

@@ -4333,6 +4333,11 @@ export const TEMPLATE_OPTIONS: TemplateOption[] = [
     label: 'Éditorial',
     hint: 'Hero asymétrique avec une grande photo produit.',
   },
+  {
+    id: 'landing',
+    label: 'Page produit',
+    hint: 'Un seul produit en vedette, gros bouton commander — idéal pub Facebook.',
+  },
 ];
 
 export interface RadiusOption {
