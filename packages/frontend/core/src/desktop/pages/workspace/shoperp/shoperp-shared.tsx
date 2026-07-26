@@ -5210,6 +5210,45 @@ export const Spinner = ({ dark = false }: { dark?: boolean }) => (
   </span>
 );
 
+/**
+ * A loading placeholder shaped like the content that is coming.
+ *
+ * A spinner tells the merchant "wait"; a skeleton tells them "a table of five
+ * rows is arriving, here is where it will be". The second reads as faster even
+ * at identical latency, because the layout stops jumping when the data lands.
+ *
+ * The shimmer itself lives in the injected shoperp motion stylesheet, keyed off
+ * `data-cdz-skeleton`, so it honours prefers-reduced-motion for free. Purely
+ * decorative, hence aria-hidden — the surrounding panel owns the live region.
+ */
+export const Skeleton = ({
+  rows = 4,
+  height = 34,
+  gap = 8,
+}: {
+  rows?: number;
+  height?: number;
+  gap?: number;
+}) => (
+  <div
+    aria-hidden
+    style={{ display: 'flex', flexDirection: 'column', gap }}
+  >
+    {Array.from({ length: Math.max(1, rows) }, (_, i) => (
+      <div
+        key={i}
+        data-cdz-skeleton=""
+        style={{
+          height,
+          // Taper the last row so the block reads as text, not as a solid slab.
+          width: i === rows - 1 ? '62%' : '100%',
+          color: C.text,
+        }}
+      />
+    ))}
+  </div>
+);
+
 // A labeled kind badge (Shop / ERP / App) used in the management list.
 export const KindBadge = ({ kind }: { kind?: AppKind }) => {
   const label = kind === 'shop' ? 'Shop' : kind === 'erp' ? 'ERP' : 'App';

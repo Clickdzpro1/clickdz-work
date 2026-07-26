@@ -34,6 +34,7 @@ import { ShippingPanel } from './shipping';
 import { CaissePanel } from './caisse';
 import { ReportsPanel } from './reports';
 import { TeamPanel } from './team';
+import { ensureShoperpMotionCss } from './motion';
 import {
   Banner,
   C,
@@ -50,6 +51,7 @@ import {
   orderTotal,
   Panel,
   productTitle,
+  Skeleton,
   Spinner,
   STATUS_COLORS,
   StatusBadge,
@@ -182,6 +184,12 @@ export const ErpDashboard = ({
     void load();
   }, [load]);
 
+  // Install the shared motion stylesheet once. Idempotent, so mounting several
+  // dashboards (or remounting after a tab switch) costs nothing.
+  useEffect(() => {
+    ensureShoperpMotionCss();
+  }, []);
+
   // Admin sections call this after a successful mutation so KPIs stay live.
   const refetch = useCallback(() => {
     void load(true);
@@ -194,7 +202,14 @@ export const ErpDashboard = ({
   const currency = summary?.currency || 'DZD';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    // data-cdz-motion scopes the shared motion stylesheet to this surface:
+    // press feedback on every control, a fade-up on each panel, and the
+    // skeleton shimmer — none of which inline styles can express, and none of
+    // which may leak into the surrounding AFFiNE chrome.
+    <div
+      data-cdz-motion=""
+      style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+    >
       {/* Header ------------------------------------------------------------ */}
       <div
         style={{
@@ -307,16 +322,37 @@ export const ErpDashboard = ({
 
       {/* Body -------------------------------------------------------------- */}
       {phase === 'loading' ? (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '28px 4px',
-            color: C.muted,
-          }}
-        >
-          <Spinner /> Chargement des données de la boutique…
+        // Skeleton rather than a bare spinner: the merchant sees the shape of
+        // what is arriving (four KPI cards, then a chart), the layout does not
+        // jump when the data lands, and the wait reads as shorter at identical
+        // latency. The text line stays for screen readers and for the case
+        // where the load is genuinely slow.
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))',
+              gap: 12,
+            }}
+          >
+            <Skeleton rows={1} height={78} />
+            <Skeleton rows={1} height={78} />
+            <Skeleton rows={1} height={78} />
+            <Skeleton rows={1} height={78} />
+          </div>
+          <Skeleton rows={1} height={190} />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              color: C.muted,
+              fontSize: 12.5,
+            }}
+            role="status"
+          >
+            <Spinner /> Chargement des données de la boutique…
+          </div>
         </div>
       ) : phase === 'error' ? (
         <Banner tone="error">
@@ -326,7 +362,12 @@ export const ErpDashboard = ({
           </button>
         </Banner>
       ) : summary ? (
-        section === 'overview' ? (
+        // `key={section}` restarts the fade-up animation on every tab change,
+        // and data-cdz-panel is what the motion stylesheet targets. Without the
+        // key the CSS animation only ever plays once, because the wrapper
+        // element itself is never replaced.
+        <div key={section} data-cdz-panel="">
+        {section === 'overview' ? (
           <Overview summary={summary} currency={currency} onGoTo={setSection} />
         ) : section === 'orders' ? (
           <OrdersAdmin
@@ -399,7 +440,8 @@ export const ErpDashboard = ({
             onWritesBlocked={handleWritesBlocked}
             onMutated={refetch}
           />
-        )
+        )}
+        </div>
       ) : null}
       {phase === 'ready' && !isShopTourDone(slug) ? (
         <ShopTour
