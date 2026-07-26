@@ -221,7 +221,11 @@ const ZREXPRESS_WILAYA_NAMES: Readonly<Record<number, string>> = Object.freeze({
   54: 'In Guezzam',
   55: 'Touggourt',
   56: 'Djanet',
-  57: "M'Ghair",
+  // "El M'Ghair", matching the canonical WILAYAS table in clickdz-erp-shipping.
+  // It read "M'Ghair" here, so `wilayaIdFromName` — which normalizes and
+  // compares against THIS map — could not resolve the name the rest of the ERP
+  // emits, and wilaya 57 silently failed name→id resolution.
+  57: "El M'Ghair",
   58: 'El Meniaa',
 });
 

@@ -116,6 +116,10 @@ import {
   type TrackResult,
   type WilayaRef,
 } from './clickdz-courier';
+// The canonical 58-wilaya table. `clickdz-erp-shipping` is a pure, zero-import
+// module (same purity contract as `clickdz-courier`), so importing it here is
+// boot-safe and keeps ONE source of truth for wilaya names.
+import * as Shipping from './clickdz-erp-shipping';
 
 // --- Config (module-load constants; the base is env-overridable for NOEST-clones
 // e.g. Guepex/Yalitec/Easy&Speed which share the identical shape under their own
@@ -169,6 +173,42 @@ function sid(v: unknown): string {
 function wilayaOfStationCode(code: string): number {
   const digits = s(code).replace(/\D+/g, '');
   return digits ? n(digits) : 0;
+}
+
+/**
+ * Resolve a destination wilaya NAME (or a numeric-looking value) to its 1..58
+ * canonical code, using the same table the rest of the ERP emits from.
+ *
+ * WHY this exists: `createParcel` previously derived `wilaya_id` ONLY from a
+ * desk's alphanumeric station_code ("16A" → 16). For HOME delivery there is no
+ * station_code, so `wilaya_id` was never sent at all — and NOEST requires it.
+ * Every home-delivery create therefore failed upstream validation. The comment
+ * there said the caller must resolve name→id "before calling", but nothing in
+ * the pipeline did, and ParcelInput only ever carries names.
+ *
+ * Accent/case/punctuation-insensitive via the shared `normalizeStatusRaw` fold,
+ * which is what makes "Béjaïa" match "bejaia" and "El M'Ghair" match "el
+ * mghair". Returns 0 when unresolvable, in which case the caller omits the
+ * field and lets NOEST answer with its own typed validation error rather than
+ * inventing a wrong destination.
+ */
+function noestWilayaIdFromName(value: unknown): number {
+  const raw = s(value);
+  if (!raw) return 0;
+  // A bare number (or "16 - Alger") resolves directly when it is in range.
+  const direct = Shipping.wilayaCodeFrom(raw);
+  if (direct >= 1 && direct <= 58 && Shipping.isValidWilaya(direct)) {
+    // Guard against a pure-name string whose first digits are incidental
+    // (e.g. a street number leaking in) by requiring the value to START with
+    // the digits we matched.
+    if (/^\s*\d/.test(raw)) return direct;
+  }
+  const key = normalizeStatusRaw(raw);
+  if (!key) return 0;
+  for (const w of Shipping.WILAYAS) {
+    if (normalizeStatusRaw(w.name) === key) return w.code;
+  }
+  return 0;
 }
 
 /**
@@ -421,12 +461,8 @@ class NoestProvider implements CourierProvider {
       client,
       phone: phoneOf(parcel?.contactPhone as unknown as string),
       adresse: s(parcel?.address).slice(0, 255),
-      // Destination wilaya is a NUMERIC id (1–69). The caller resolves the name
-      // to an id upstream; `stopdeskId` carries a code, wilaya does not — so we
-      // read a numeric wilaya from the commune/name resolution the caller did.
-      // NOEST wants the wilaya id here; the ParcelInput carries names, so we send
-      // what we have and let NOEST validate (see note: name→id mapping is the
-      // caller's job via listWilayas). We DO send the commune NAME verbatim.
+      // Destination wilaya rides in `wilaya_id` below (resolved from the name);
+      // the commune NAME is sent verbatim, which is what NOEST routes on.
       commune: s(parcel?.toCommuneName),
       montant: n(parcel?.price), // COD = product subtotal (NOT total-with-shipping)
       produit: s(parcel?.productList),
@@ -435,16 +471,18 @@ class NoestProvider implements CourierProvider {
     };
     // reference is optional but min:5 when present — only send a non-empty one.
     if (reference) createBody.reference = reference;
-    // NOEST expects a numeric wilaya_id (1–69). ParcelInput gives names; when the
-    // caller has resolved a numeric-looking wilaya into the name field we cannot
-    // recover it, so we omit wilaya_id unless a numeric id is discoverable. The
-    // commune NAME is authoritative for routing at NOEST; wilaya_id is required by
-    // the rule, so PR-B must resolve name→id (via listWilayas) before calling.
-    // To stay defensive we DERIVE a wilaya id from a desk station_code when in
-    // desk mode (e.g. "16A" → 16); otherwise leave it for the caller-provided
-    // toWilayaName path (NOEST validation surfaces a typed bad_request if absent).
-    const wilayaFromCode = isDesk ? wilayaOfStationCode(stationCode) : 0;
-    if (wilayaFromCode) createBody.wilaya_id = wilayaFromCode;
+    // NOEST REQUIRES a numeric wilaya_id. This used to be derived ONLY from a
+    // desk's station_code ("16A" → 16), which meant HOME delivery — where there
+    // is no station_code — never sent the field at all and every such create
+    // was rejected upstream. Resolve it from the destination name (the only
+    // wilaya ParcelInput actually carries), and keep the station_code
+    // derivation as a desk-mode fallback for the case where a desk was picked
+    // but the name did not resolve. Unresolvable ⇒ omit, and let NOEST answer
+    // with its own typed validation error rather than routing to a guess.
+    const wilayaFromName = noestWilayaIdFromName(parcel?.toWilayaName);
+    const wilayaId =
+      wilayaFromName || (isDesk ? wilayaOfStationCode(stationCode) : 0);
+    if (wilayaId) createBody.wilaya_id = wilayaId;
     // station_code is REQUIRED IF stop_desk=1 — send it as a STRING, never coerced.
     if (isDesk && stationCode) createBody.station_code = stationCode;
     // weight is optional (kg).

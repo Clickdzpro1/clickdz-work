@@ -90,6 +90,7 @@ import {
   type CourierResult,
   type CourierStatus,
   type FeeResult,
+  type LabelResult,
   type ParcelInput,
   type ParcelResult,
   type TrackEvent,
@@ -803,6 +804,91 @@ class EcotrackProvider implements CourierProvider {
   /** SYNC + pure: delegate to the Ecotrack slug→sub-state map. */
   normalizeStatus(raw: string): CourierStatus {
     return normalizeEcotrackStatus(raw);
+  }
+
+  // -------------------------------------------------------------------------
+  // fetchLabel — GET api/v1/get/order/label?tracking=… → RAW PDF BYTES (G1).
+  //
+  // Ecotrack is the one provider whose label is the document itself rather
+  // than a URL, behind a Bearer-authenticated tenant endpoint. That is why
+  // `createParcel` leaves ParcelResult.label undefined: there is no link a
+  // merchant's browser could open. Until this existed the label was simply
+  // unreachable — a merchant could create a parcel and then had no way to
+  // print the slip the driver needs.
+  //
+  // Deliberately NOT routed through `request()`: that helper reads the body as
+  // TEXT and JSON-parses it, which would corrupt binary PDF bytes. Same
+  // fail-soft shape though — typed errors, never a throw, no creds in any
+  // payload — and the same timeout.
+  // -------------------------------------------------------------------------
+  async fetchLabel(
+    creds: CourierCredentials,
+    tracking: string
+  ): Promise<CourierResult<LabelResult>> {
+    const t = s(tracking);
+    if (!t) return courierErr('bad_request', { message: 'missing_tracking' });
+    if (!s(creds?.apiToken)) {
+      return courierErr('unauthorized', { message: 'missing_credentials' });
+    }
+    const base = baseFromApiId(creds?.apiId);
+    if (!base) {
+      return courierErr('unauthorized', { message: 'invalid_tenant_host' });
+    }
+    let res: Response;
+    try {
+      res = await fetch(
+        // `base` has NO trailing slash (baseFromApiId returns `https://host`),
+        // so the path must carry its own leading slash — same convention as
+        // every `this.request(..., '/api/v1/...')` call in this file.
+        `${base}/api/v1/get/order/label?tracking=${encodeURIComponent(t)}`,
+        {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${s(creds?.apiToken)}`,
+            // The endpoint returns a PDF; accept anything so a tenant that
+            // answers image/* or octet-stream still works.
+            Accept: 'application/pdf,*/*',
+          },
+          signal: AbortSignal.timeout(ECOTRACK_TIMEOUT_MS),
+        }
+      );
+    } catch {
+      return courierErr('unreachable');
+    }
+    if (!res.ok) {
+      // An error body IS text/JSON — safe to read for a secret-free message.
+      const text = await res.text().catch(() => '');
+      let json: unknown = null;
+      if (text) {
+        try {
+          json = JSON.parse(text);
+        } catch {
+          json = null;
+        }
+      }
+      return errorFromStatus(
+        res.status,
+        this.messageOf(json),
+        parseRetryAfter(res)
+      );
+    }
+    let buf: ArrayBuffer;
+    try {
+      buf = await res.arrayBuffer();
+    } catch {
+      return courierErr('malformed', { message: 'label_body_unreadable' });
+    }
+    const bytes = new Uint8Array(buf);
+    if (!bytes.byteLength) {
+      return courierErr('malformed', { message: 'label_empty' });
+    }
+    // Trust the upstream type when present, default to PDF (what the endpoint
+    // documents). Strip any charset parameter — meaningless for binary.
+    const upstream = s(res.headers.get('content-type')).split(';')[0].trim();
+    return courierOk({
+      bytes,
+      contentType: upstream || 'application/pdf',
+    });
   }
 
   /**

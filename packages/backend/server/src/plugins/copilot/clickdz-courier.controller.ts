@@ -1702,4 +1702,101 @@ export class ClickDzCourierController {
       ...(r.delivered ? { delivered: true } : {}),
     };
   }
+
+  // =========================================================================
+  // GET /api/v1/apps/:slug/courier/:provider/ship/:orderId/label
+  //   → the shipping label, streamed as bytes (application/pdf)
+  //
+  // Most couriers return a label URL on ParcelResult.label, which the merchant
+  // opens directly. Ecotrack returns the PDF ITSELF from a Bearer-authenticated
+  // tenant endpoint — there is no URL a browser can follow, and the merchant's
+  // browser must never hold the courier token. Without this route an Ecotrack
+  // parcel could be created and then never printed, so the driver could not
+  // take it.
+  //
+  // Owner-gated and flag-gated like every sibling route. The provider must
+  // implement the optional `fetchLabel`; the rest answer a typed
+  // `label_not_supported` rather than a confusing 404, so the client can say
+  // "use the label link" instead of "something went wrong".
+  // =========================================================================
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/courier/:provider/ship/:orderId/label')
+  async label(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('provider') providerParam: string,
+    @Param('orderId') orderId: string,
+    @Res() res: Response
+  ) {
+    this.assertEnabled();
+    const provider = this.resolveProviderOr404(providerParam);
+    await this.assertOwnsErpApp(user, slug);
+
+    if (typeof provider.fetchLabel !== 'function') {
+      // Not an error condition — this courier simply hands back a URL.
+      res.status(400).json({ error: 'label_not_supported' });
+      return;
+    }
+    const creds = await this.resolveCreds(slug, provider);
+    if (!creds) {
+      throw new BadRequest('not_connected');
+    }
+    const orders = await this.erpListOrders(slug);
+    if (!orders) {
+      res.status(502).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const wantId = str(orderId).trim();
+    const order = orders.find(
+      o => str(o.id) === wantId || str(o.ref).trim() === wantId
+    );
+    if (!order) {
+      throw new NotFound('Order not found');
+    }
+    const tracking = str(order.trackingNumber).trim();
+    if (!tracking) {
+      res.status(400).json({ error: 'not_shipped' });
+      return;
+    }
+    // Same cross-provider guard as refresh(): never ask courier B for a label
+    // that belongs to courier A.
+    const cp = str(order.courierProvider).trim();
+    if (cp && cp !== provider.id) {
+      res.status(400).json({ error: 'provider_mismatch' });
+      return;
+    }
+    const out = await provider.fetchLabel(creds, tracking);
+    if (!out.ok) {
+      // Map the provider's typed error onto an honest status, mirroring how
+      // the ship route surfaces upstream failures. Never leak credentials.
+      const status =
+        out.error === 'rate_limited'
+          ? 429
+          : out.error === 'bad_request'
+            ? 400
+            : out.error === 'not_found'
+              ? 404
+              : // unauthorized / unreachable / upstream_error / malformed are
+                // all "the courier failed us", not "the merchant did something
+                // wrong" — 502 keeps that distinction honest. In particular a
+                // credential problem is OUR stored secret, not the caller's
+                // session, so it must never surface as a 401.
+                502;
+      res.status(status).json({
+        error: out.error,
+        ...(out.message ? { message: out.message } : {}),
+      });
+      return;
+    }
+    res.setHeader('Content-Type', out.value.contentType);
+    // `inline` so it previews in the browser's PDF viewer; the merchant prints
+    // from there. The tracking number makes a saved file self-identifying.
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="label-${tracking.replace(/[^A-Za-z0-9_-]/g, '')}.pdf"`
+    );
+    // A label is per-parcel and credential-derived — never cache it anywhere.
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(Buffer.from(out.value.bytes));
+  }
 }
