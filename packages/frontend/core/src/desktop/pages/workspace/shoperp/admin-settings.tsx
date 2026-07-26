@@ -333,16 +333,22 @@ const toggleTrackStyle = (on: boolean, disabled: boolean): CSSProperties => ({
   transition: 'background 160ms ease',
 });
 
+// The knob slides via `transform`, never `left`. Animating `left` forces the
+// browser through layout on every frame of every toggle, whereas `translateX`
+// is a pure compositor operation. On the mid-range Android phones merchants
+// actually use, that is the difference between a smooth slide and a visible
+// stutter — and the rendered result is pixel-identical.
 const toggleKnobStyle = (on: boolean): CSSProperties => ({
   position: 'absolute',
   top: 2,
-  left: on ? 20 : 2,
+  left: 2,
+  transform: on ? 'translateX(18px)' : 'translateX(0)',
   width: 20,
   height: 20,
   borderRadius: '50%',
   background: '#fff',
   boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
-  transition: 'left 160ms ease',
+  transition: 'transform 160ms cubic-bezier(0.2, 0, 0, 1)',
 });
 
 const Toggle = ({
