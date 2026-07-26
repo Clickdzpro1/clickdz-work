@@ -5020,24 +5020,27 @@ export const WHATSAPP_RE = /^[0-9]{8,15}$/;
 export const ACCENT_RE = /^#[0-9a-fA-F]{6}$/;
 export const PIN_RE = /^[0-9]{4,8}$/;
 
+// These are shown to the merchant in the wizard, whose every other string is
+// French — and now that WhatsApp and the PIN seed EMPTY rather than to a
+// placeholder, they are reached routinely rather than only on a typo.
 export function validateStoreName(v: string): string | null {
   const name = v.trim();
-  if (name.length === 0) return 'Enter a store name.';
-  if (name.length > 60) return 'Keep the name under 60 characters.';
+  if (name.length === 0) return 'Donnez un nom à votre boutique.';
+  if (name.length > 60) return '60 caractères maximum.';
   return null;
 }
 export function validateWhatsapp(v: string): string | null {
   if (!WHATSAPP_RE.test(v)) {
-    return 'Digits only, 8–15, no “+” (e.g. 213600000000).';
+    return 'Chiffres uniquement, 8 à 15, sans « + ». Ex. : 213661234567.';
   }
   return null;
 }
 export function validateAccent(v: string): string | null {
-  if (!ACCENT_RE.test(v)) return 'Use a hex color like #0f766e.';
+  if (!ACCENT_RE.test(v)) return 'Couleur hexadécimale, ex. : #0f766e.';
   return null;
 }
 export function validatePin(v: string): string | null {
-  if (!PIN_RE.test(v)) return 'Use 4–8 digits.';
+  if (!PIN_RE.test(v)) return '4 à 8 chiffres.';
   return null;
 }
 

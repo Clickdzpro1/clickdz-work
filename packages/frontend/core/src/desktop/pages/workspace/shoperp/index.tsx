@@ -121,7 +121,23 @@ const ShopErpPage = () => {
   }, []);
 
   useEffect(() => {
-    void load();
+    void (async () => {
+      const list = await load();
+      // Straight from /welcome: the merchant already gave us their shop name
+      // and WhatsApp number, so skip the hub's "Créer ma boutique" detour and
+      // open the wizard prefilled. The handoff key is consumed by the wizard
+      // itself (readPendingShop), so this only ever fires on the real first run.
+      try {
+        if (
+          list.length === 0 &&
+          globalThis.localStorage?.getItem('clickdz:pending-shop:v1')
+        ) {
+          setForceWizard(true);
+        }
+      } catch {
+        /* storage unavailable — the hub CTA is a perfectly good fallback */
+      }
+    })();
   }, [load]);
 
   // Enter/leave the in-app dashboard (mutually exclusive with the wizard).
