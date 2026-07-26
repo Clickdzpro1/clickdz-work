@@ -35,11 +35,6 @@ export const buildDocSearchGetter = (
         'Missing workspace, user, or query for doc_semantic_search.'
       );
     }
-    if (!context.canEmbedding) {
-      // embeddings are unavailable (disabled or no embedding provider):
-      // return no results so the model falls back to keyword-based search
-      return [];
-    }
     const workspace = await models.workspace.get(options.workspace);
     if (!workspace) {
       return workspaceSyncRequiredError();
@@ -53,6 +48,18 @@ export const buildDocSearchGetter = (
         'Doc Semantic Search Failed',
         'You do not have permission to access this workspace.'
       );
+    // Graceful degradation, but AFTER validation. This guard used to run BEFORE
+    // the workspace-existence check, so a local/unsynced workspace got a silent
+    // empty result instead of the actionable "Workspace Sync Required" error —
+    // the user was told nothing was found rather than that their workspace needs
+    // syncing. Validation errors must win over degradation; the keyword-search
+    // sibling (doc-keyword-search.ts) already orders it this way, and upstream
+    // has no such early return at all.
+    if (!context.canEmbedding) {
+      // embeddings are unavailable (disabled or no embedding provider):
+      // return no results so the model falls back to keyword-based search
+      return [];
+    }
     const routeContext = getEmbeddingRouteContext(options);
     const [chunks, contextChunks] = await Promise.all([
       context.matchWorkspaceAll(

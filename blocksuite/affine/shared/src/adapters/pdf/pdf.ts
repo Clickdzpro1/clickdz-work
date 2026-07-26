@@ -52,16 +52,16 @@ import {
 
 pdfMake.fonts = {
   Inter: {
-    normal: 'https://cdn.ClickDz Work.pro/fonts/Inter-Regular.woff',
-    bold: 'https://cdn.ClickDz Work.pro/fonts/Inter-SemiBold.woff',
-    italics: 'https://cdn.ClickDz Work.pro/fonts/Inter-Italic.woff',
-    bolditalics: 'https://cdn.ClickDz Work.pro/fonts/Inter-SemiBoldItalic.woff',
+    normal: 'https://cdn.affine.pro/fonts/Inter-Regular.woff',
+    bold: 'https://cdn.affine.pro/fonts/Inter-SemiBold.woff',
+    italics: 'https://cdn.affine.pro/fonts/Inter-Italic.woff',
+    bolditalics: 'https://cdn.affine.pro/fonts/Inter-SemiBoldItalic.woff',
   },
   SarasaGothicCL: {
-    normal: 'https://cdn.ClickDz Work.pro/fonts/SarasaGothicCL-Regular.ttf',
-    bold: 'https://cdn.ClickDz Work.pro/fonts/SarasaGothicCL-Regular.ttf',
-    italics: 'https://cdn.ClickDz Work.pro/fonts/SarasaGothicCL-Regular.ttf',
-    bolditalics: 'https://cdn.ClickDz Work.pro/fonts/SarasaGothicCL-Regular.ttf',
+    normal: 'https://cdn.affine.pro/fonts/SarasaGothicCL-Regular.ttf',
+    bold: 'https://cdn.affine.pro/fonts/SarasaGothicCL-Regular.ttf',
+    italics: 'https://cdn.affine.pro/fonts/SarasaGothicCL-Regular.ttf',
+    bolditalics: 'https://cdn.affine.pro/fonts/SarasaGothicCL-Regular.ttf',
   },
 };
 
