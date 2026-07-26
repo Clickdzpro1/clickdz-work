@@ -1,0 +1,65 @@
+name: clickdz server guards
+
+# Fast, path-filtered regression tests for the fork's own money/auth server code.
+#
+# Context: there are 55 clickdz-*/cdz-* modules under plugins/copilot handling
+# couriers, COD reconciliation, invoicing, secrets and webhooks, and until now not
+# one of them had a single test — none of the 15 existing copilot specs imports
+# any clickdz module. That is why money bugs (orders destroyed on a failed write,
+# duplicate caisse entries, COD filed in the wrong month) reached production
+# undetected.
+#
+# These specs are deliberately PURE unit tests: they exercise date/partition
+# derivation and patch builders directly, with no app bootstrap, no Postgres and
+# no Redis. So this job needs only an install and runs in well under a minute,
+# unlike the sharded Server Test job. Modeled on cdz-ai-guards.yml's trigger
+# shape.
+#
+# Note the specs are also named copilot-clickdz-*.spec.ts, which means the
+# existing sharded Server Test job and the path-filtered copilot-api-test job
+# pick them up too, at no extra configuration cost.
+
+on:
+  push:
+    paths:
+      - 'packages/backend/server/src/plugins/copilot/clickdz-*.ts'
+      - 'packages/backend/server/src/plugins/copilot/cdz-*.ts'
+      - 'packages/backend/server/src/__tests__/copilot/copilot-clickdz-*.spec.ts'
+      - '.github/workflows/clickdz-server-guards.yml'
+  pull_request:
+    paths:
+      - 'packages/backend/server/src/plugins/copilot/clickdz-*.ts'
+      - 'packages/backend/server/src/plugins/copilot/cdz-*.ts'
+      - 'packages/backend/server/src/__tests__/copilot/copilot-clickdz-*.spec.ts'
+      - '.github/workflows/clickdz-server-guards.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clickdz-money-guards:
+    name: clickdz money guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODE_ENV: test
+      DEPLOYMENT_TYPE: affine
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Node.js
+        uses: ./.github/actions/setup-node
+        with:
+          extra-flags: workspaces focus @affine/monorepo @affine/server
+          electron-install: false
+          full-cache: true
+      - name: Run clickdz money guards
+        # Must go through `yarn affine @affine/server <script>` from the repo
+        # ROOT, the way every other test job in this repo does. Running `yarn ava`
+        # inside packages/backend/server breaks ava's prelude resolution —
+        # it looks for node_modules/.cache/ava/src/prelude.ts and fails with
+        # ERR_MODULE_NOT_FOUND before any test executes.
+        #
+        # test:clickdz is scoped to copilot-clickdz-*.spec.ts, so this job stays
+        # fast and cannot be broken by unrelated server-test failures.
+        run: yarn affine @affine/server test:clickdz --forbid-only
