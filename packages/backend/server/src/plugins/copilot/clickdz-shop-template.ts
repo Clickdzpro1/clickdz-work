@@ -1785,6 +1785,86 @@ var THEMES = {
       '--shadow-lg': '0 8px 24px rgba(17,24,39,.10)',
       '--r': '6px', '--r-sm': '4px'
     }
+  },
+  sahara: {
+    label: 'Sahara',
+    accent: '#c2410c',
+    themeColor: '#faf5ec',
+    vars: {
+      '--ink': '#3b2f23', '--ink-soft': '#6f5f4b', '--ink-mute': '#a89880',
+      '--line': '#eadfcc', '--bg': '#faf5ec', '--card': '#fffdf8',
+      '--ok': '#3f6212', '--ok-bg': '#ecfccb',
+      '--warn': '#92400e', '--warn-bg': '#fef3c7',
+      '--danger': '#b91c1c', '--danger-bg': '#fee2e2',
+      '--info': '#0369a1', '--info-bg': '#e0f2fe',
+      '--shadow': '0 1px 2px rgba(120,72,20,.08),0 10px 26px rgba(120,72,20,.10)',
+      '--shadow-lg': '0 16px 44px rgba(120,72,20,.20)',
+      '--r': '16px', '--r-sm': '12px'
+    }
+  },
+  'nuit-doree': {
+    label: 'Nuit doree',
+    accent: '#d4af37',
+    themeColor: '#101014',
+    vars: {
+      '--ink': '#ece7db', '--ink-soft': '#b7ae99', '--ink-mute': '#7d7666',
+      '--line': '#2a2a31', '--bg': '#101014', '--card': '#1a1a20',
+      '--ok': '#4ade80', '--ok-bg': '#052e16',
+      '--warn': '#fbbf24', '--warn-bg': '#3a2c07',
+      '--danger': '#f87171', '--danger-bg': '#3b0d0d',
+      '--info': '#93c5fd', '--info-bg': '#12233f',
+      '--shadow': '0 1px 2px rgba(0,0,0,.5),0 10px 30px rgba(0,0,0,.55)',
+      '--shadow-lg': '0 18px 52px rgba(0,0,0,.7)',
+      '--r': '18px', '--r-sm': '12px'
+    }
+  },
+  olive: {
+    label: 'Olive',
+    accent: '#4d7c0f',
+    themeColor: '#f8f7f2',
+    vars: {
+      '--ink': '#26301c', '--ink-soft': '#5c6650', '--ink-mute': '#99a18c',
+      '--line': '#e4e4d8', '--bg': '#f8f7f2', '--card': '#ffffff',
+      '--ok': '#3f6212', '--ok-bg': '#ecfccb',
+      '--warn': '#92400e', '--warn-bg': '#fef3c7',
+      '--danger': '#b91c1c', '--danger-bg': '#fee2e2',
+      '--info': '#155e75', '--info-bg': '#e0f7fa',
+      '--shadow': '0 1px 2px rgba(38,48,28,.06),0 8px 22px rgba(38,48,28,.08)',
+      '--shadow-lg': '0 12px 38px rgba(38,48,28,.16)',
+      '--r': '12px', '--r-sm': '8px'
+    }
+  },
+  azur: {
+    label: 'Azur',
+    accent: '#0369a1',
+    themeColor: '#f1f5f9',
+    vars: {
+      '--ink': '#0c1a2b', '--ink-soft': '#42566e', '--ink-mute': '#8ba0b8',
+      '--line': '#dbe4ee', '--bg': '#f1f5f9', '--card': '#ffffff',
+      '--ok': '#15803d', '--ok-bg': '#dcfce7',
+      '--warn': '#b45309', '--warn-bg': '#fef3c7',
+      '--danger': '#dc2626', '--danger-bg': '#fee2e2',
+      '--info': '#1d4ed8', '--info-bg': '#dbeafe',
+      '--shadow': '0 1px 2px rgba(12,26,43,.06),0 8px 24px rgba(12,26,43,.08)',
+      '--shadow-lg': '0 14px 42px rgba(12,26,43,.18)',
+      '--r': '10px', '--r-sm': '7px'
+    }
+  },
+  flash: {
+    label: 'Flash',
+    accent: '#e11d48',
+    themeColor: '#0d0d0f',
+    vars: {
+      '--ink': '#f4f4f5', '--ink-soft': '#b9b9c0', '--ink-mute': '#77777f',
+      '--line': '#26262c', '--bg': '#0d0d0f', '--card': '#17171b',
+      '--ok': '#4ade80', '--ok-bg': '#052e16',
+      '--warn': '#facc15', '--warn-bg': '#3a2c07',
+      '--danger': '#f87171', '--danger-bg': '#3b0d0d',
+      '--info': '#60a5fa', '--info-bg': '#0b2447',
+      '--shadow': '0 2px 6px rgba(225,29,72,.14),0 12px 32px rgba(0,0,0,.6)',
+      '--shadow-lg': '0 20px 56px rgba(0,0,0,.75)',
+      '--r': '20px', '--r-sm': '14px'
+    }
   }
 };
 

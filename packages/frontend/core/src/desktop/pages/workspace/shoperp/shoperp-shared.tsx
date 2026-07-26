@@ -4264,6 +4264,39 @@ export const THEME_OPTIONS: ThemeOption[] = [
     hint: 'Flat, monochrome, thin lines — content first.',
     preview: { bg: '#ffffff', card: '#ffffff', ink: '#111111', line: '#ececec' },
   },
+  // Market themes — each one is a distinct design (surfaces, ink, status
+  // colours, shadow depth AND corner radius), aimed at a real DZ merchant
+  // segment rather than being a palette swap of the four above.
+  {
+    id: 'sahara',
+    label: 'Sahara',
+    hint: 'Sable chaud et terracotta — pâtisserie, épicerie, produits du terroir.',
+    preview: { bg: '#faf5ec', card: '#fffdf8', ink: '#3b2f23', line: '#eadfcc' },
+  },
+  {
+    id: 'nuit-doree',
+    label: 'Nuit dorée',
+    hint: 'Noir profond et or — bijouterie, parfumerie, cosmétique premium.',
+    preview: { bg: '#101014', card: '#1a1a20', ink: '#ece7db', line: '#2a2a31' },
+  },
+  {
+    id: 'olive',
+    label: 'Olive',
+    hint: 'Crème et olive — élégant et calme, mode modeste.',
+    preview: { bg: '#f8f7f2', card: '#ffffff', ink: '#26301c', line: '#e4e4d8' },
+  },
+  {
+    id: 'azur',
+    label: 'Azur',
+    hint: 'Bleu ardoise net — électronique, téléphonie, revendeur officiel.',
+    preview: { bg: '#f1f5f9', card: '#ffffff', ink: '#0c1a2b', line: '#dbe4ee' },
+  },
+  {
+    id: 'flash',
+    label: 'Flash',
+    hint: 'Noir et rouge vif — promos, arrivages, énergie des ventes flash.',
+    preview: { bg: '#0d0d0f', card: '#17171b', ink: '#f4f4f5', line: '#26262c' },
+  },
 ];
 
 export interface TemplateOption {

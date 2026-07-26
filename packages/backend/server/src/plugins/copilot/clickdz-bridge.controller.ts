@@ -1187,7 +1187,19 @@ const ERP_DEFAULT_TAGLINE =
 // never trusts a caller-supplied style string.
 // ---------------------------------------------------------------------------
 // Theme presets (≥4). 'classic' == today's teal look (the default).
-const ERP_THEME_IDS = ['classic', 'dark', 'vibrant', 'minimal'] as const;
+const ERP_THEME_IDS = [
+  'classic',
+  'dark',
+  'vibrant',
+  'minimal',
+  // Added with the five market themes; each must ALSO exist in the storefront
+  // template's THEMES map or the runtime guard falls back to classic.
+  'sahara',
+  'nuit-doree',
+  'olive',
+  'azur',
+  'flash',
+] as const;
 const ERP_DEFAULT_THEME = 'classic';
 // Layout templates (≥2, ids owned by clickdz-shop-template.ts). 'standard' ==
 // today's hero + product grid (default); 'boutique' == editorial layout.
