@@ -803,6 +803,7 @@ const TEMPLATE_GLYPHS: Record<string, string> = {
   boutique: '\u25a6',
   'grid-dense': '\u25a9',
   'editorial-split': '\u25eb',
+  landing: '\u25ad',
 };
 
 const THEME_PALETTE: Record<
@@ -847,13 +848,15 @@ const MockPreview = ({
   const showCats = sections.includes('categories');
 
   const cardCount =
-    template === 'grid-dense'
-      ? 9
-      : template === 'editorial-split'
-        ? 4
-        : boutique
-          ? 3
-          : 6;
+    template === 'landing'
+      ? 1
+      : template === 'grid-dense'
+        ? 9
+        : template === 'editorial-split'
+          ? 4
+          : boutique
+            ? 3
+            : 6;
   const cards = useMemo(
     () => Array.from({ length: cardCount }, (_, i) => i),
     [cardCount]
