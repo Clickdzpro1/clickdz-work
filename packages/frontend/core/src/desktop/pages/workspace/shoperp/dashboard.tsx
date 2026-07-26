@@ -186,6 +186,13 @@ export const ErpDashboard = ({
     void load();
   }, [load]);
 
+  // Tick the checklist's Livraison step once the merchant actually opens that
+  // tab. Done here rather than on the tab's onClick so every route in counts —
+  // the checklist's own "Faire →", a deep link, or the guided tour.
+  useEffect(() => {
+    if (section === 'shipping') markShippingSeen(slug);
+  }, [section, slug]);
+
   // Admin sections call this after a successful mutation so KPIs stay live.
   const refetch = useCallback(() => {
     void load(true);
@@ -451,6 +458,18 @@ export const ErpDashboard = ({
 // ---------------------------------------------------------------------------
 
 const checklistHideKey = (slug: string) => `cdz.shoperp.checklist.hide.${slug}`;
+/** Marks that the merchant has opened the Livraison tab at least once. */
+const checklistShippingKey = (slug: string) =>
+  `cdz.shoperp.checklist.shipping.${slug}`;
+
+/** Record the Livraison visit (fail-soft — private mode etc.). */
+export function markShippingSeen(slug: string): void {
+  try {
+    globalThis.localStorage?.setItem(checklistShippingKey(slug), '1');
+  } catch {
+    /* storage unavailable — the step just stays unticked; harmless */
+  }
+}
 
 const FiveSteps = ({
   slug,
@@ -468,6 +487,15 @@ const FiveSteps = ({
       return false;
     }
   });
+  const shippingSeen = (() => {
+    try {
+      return (
+        globalThis.localStorage?.getItem(checklistShippingKey(slug)) === '1'
+      );
+    } catch {
+      return false;
+    }
+  })();
 
   const s = summary.settings;
   // Any evidence of a catalogue at all. Deliberately generous: a merchant who
@@ -507,7 +535,18 @@ const FiveSteps = ({
       label: 'Configurez la livraison',
       hint: 'Tarifs des 58 wilayas et transporteurs.',
       section: 'shipping',
-      done: typeof s.deliveryFee === 'number' && s.deliveryFee > 0,
+      // This one cannot be derived from the summary: the server normalizes
+      // `deliveryFee` to a default of 500 whenever it is unset, so the field
+      // is ALWAYS a number and can't distinguish "configured" from "never
+      // touched" — and a shop that deliberately delivers free (0) would look
+      // permanently unconfigured under a `> 0` test. Per-wilaya rates and
+      // courier connections live behind their own endpoints and aren't in the
+      // summary at all.
+      //
+      // So this step is marked done once the merchant has actually opened the
+      // Livraison tab. Local-only, unlike the other four — a nudge to visit
+      // the screen, honestly labelled rather than a fake derivation.
+      done: shippingSeen,
     },
     {
       id: 'whatsapp',

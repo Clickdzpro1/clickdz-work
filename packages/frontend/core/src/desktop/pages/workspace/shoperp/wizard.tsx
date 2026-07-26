@@ -215,9 +215,12 @@ export const ShopWizard = ({
   //
   // Name and WhatsApp are prefilled from the /welcome handoff when the merchant
   // just came through onboarding, so asking twice never happens.
-  const pendingRef = useRef<PendingShop | null | undefined>(undefined);
-  if (pendingRef.current === undefined) pendingRef.current = readPendingShop();
-  const pending = pendingRef.current;
+  // Read the handoff inside a lazy state initializer rather than in the render
+  // body. readPendingShop() REMOVES the key, and a render that React discards
+  // (concurrent mode, an interrupted transition) would consume it without ever
+  // committing the prefilled state — silently losing the merchant's answers.
+  // A state initializer runs exactly once per mounted component.
+  const [pending] = useState<PendingShop | null>(readPendingShop);
 
   const [storeName, setStoreName] = useState(pending?.shopName || 'Ma Boutique');
   const [whatsapp, setWhatsapp] = useState(pending?.whatsapp || '');

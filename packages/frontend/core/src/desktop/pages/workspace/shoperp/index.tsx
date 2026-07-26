@@ -13,6 +13,7 @@ import {
   useState,
 } from 'react';
 
+import { PENDING_SHOP_KEY } from '../../clickdz-welcome';
 import { type DashboardSection, ErpDashboard } from './dashboard';
 import { ManageView } from './manage';
 import {
@@ -130,7 +131,7 @@ const ShopErpPage = () => {
       try {
         if (
           list.length === 0 &&
-          globalThis.localStorage?.getItem('clickdz:pending-shop:v1')
+          globalThis.localStorage?.getItem(PENDING_SHOP_KEY)
         ) {
           setForceWizard(true);
         }

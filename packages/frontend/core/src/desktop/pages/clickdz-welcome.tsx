@@ -153,6 +153,12 @@ export const Component = () => {
 
   const finish = useCallback(
     (withShop: boolean) => {
+      // Commit the language on the way out, not only when a pill is tapped.
+      // 'fr' is pre-selected and the whole page is already French, so a
+      // merchant who simply accepts it never clicks anything — and would
+      // otherwise land in an app whose chrome is English, because i18next's
+      // own default is 'en'. applyLang is idempotent.
+      applyLang(lang);
       try {
         if (withShop) {
           const pending: PendingShop = {
@@ -168,7 +174,7 @@ export const Component = () => {
       }
       navigate('/', { replace: true });
     },
-    [shopName, whatsapp, lang, navigate]
+    [shopName, whatsapp, lang, applyLang, navigate]
   );
 
   const submit = useCallback(() => {

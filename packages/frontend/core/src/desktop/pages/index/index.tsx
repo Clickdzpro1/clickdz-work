@@ -101,7 +101,18 @@ export const Component = ({
           openPage(meta.id, defaultIndexRoute);
         }
       })
-      .catch(err => console.error('Failed to create cloud workspace', err));
+      .catch(err => {
+        console.error('Failed to create cloud workspace', err);
+        // Recover rather than stranding the user. This path now runs
+        // automatically for every signed-in account with no workspace, so a
+        // transient failure (500, quota, offline right after signup, expired
+        // session) must not leave them staring at the loading skeleton
+        // forever. Release the latch so a retry is possible, and stop
+        // "navigating" so the WorkspaceNavigator fallback renders and they
+        // have a working manual create button — exactly what they used to get.
+        createOnceRef.current = false;
+        setNavigating(false);
+      });
   }, [defaultIndexRoute, jumpToPage, openPage, workspacesService]);
 
   useLayoutEffect(() => {
@@ -153,7 +164,13 @@ export const Component = ({
         // and name one in an English dialog before they can reach anything —
         // it was a full-funnel dead end for every new account. Create their
         // cloud workspace silently and land them on `defaultIndexRoute`.
-        if (loggedIn) {
+        //
+        // `!enableLocalWorkspace` keeps this to WEB. On Electron that flag is
+        // on and the local-workspace effect below already creates a "Demo
+        // Workspace" for this same state; running both would create two
+        // workspaces and race two navigations against each other. Desktop
+        // keeps its existing behaviour untouched.
+        if (loggedIn && !enableLocalWorkspace) {
           createCloudWorkspace();
           return;
         }
