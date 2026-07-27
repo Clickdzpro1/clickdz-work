@@ -1,7 +1,8 @@
+import { LogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
-import graphqlUploadExpress from 'graphql-upload/graphqlUploadExpress.mjs';
+import graphqlUploadExpress from 'graphql-upload/graphql-uploadExpress.mjs';
 
 import {
   AFFiNELogger,
@@ -23,6 +24,12 @@ import { serverTimingAndCache } from './middleware/timing';
 
 const OneMB = 1024 * 1024;
 
+// In production, suppress VERBOSE and DEBUG logs to stay under Railway's
+// 500 logs/sec rate limit. NestJS LogLevel order: verbose > debug > log >
+// warn > error > fatal. Keeping [log, warn, error, fatal] drops the two
+// noisiest levels; all operational messages and errors are preserved.
+const PROD_LOG_LEVELS: LogLevel[] = ['log', 'warn', 'error', 'fatal'];
+
 export async function run() {
   const { AppModule } = await import('./app.module');
 
@@ -42,6 +49,12 @@ export async function run() {
   app.useBodyParser('json', { limit: 20 * OneMB });
 
   const logger = app.get(AFFiNELogger);
+  // Suppress VERBOSE/DEBUG in production to avoid Railway's 500 logs/sec
+  // rate limit (which drops messages during startup and WebSocket bursts).
+  // Dev/test keeps all levels for full visibility.
+  if (env.prod) {
+    logger.logLevels = PROD_LOG_LEVELS;
+  }
   app.useLogger(logger);
   const config = app.get(Config);
   const url = app.get(URLHelper);
