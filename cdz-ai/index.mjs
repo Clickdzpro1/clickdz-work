@@ -366,7 +366,7 @@ function flattenMessages(messages) {
 /** ultra router: pick the best vendor for the request */
 function ultraRoute(prompt) {
   const p = prompt || '';
-  if (/[؀-ۿ]/.test(p)) return { ...V.gpt54, persona: SUPERMODELS['cdz-polyglot'].system };
+  if (/[\u0600-\u06ff]/.test(p)) return { ...V.gpt54, persona: SUPERMODELS['cdz-polyglot'].system };
   if (/```|\bfunction\b|\bimport\b|\bclass\b|\bAPI\b|\bcode\b|\bbug\b|\bdeploy\b|\bSQL\b/i.test(p))
     return { ...V.gpt55, persona: SUPERMODELS['cdz-architect'].system };
   if (/\banalyze\b|\bwhy\b|\bshould (i|we)\b|\brisk\b|\bdecide\b|\bstrategy\b|\bethic/i.test(p) || p.length > 1200)
@@ -592,8 +592,23 @@ async function handleMcp(req, res, body) {
 // without booting a listening server. The whole body is wrapped in a
 // try/catch so a single throwing request can never crash the process.
 async function requestHandler(req, res) {
+ // Guard the request URL up front: a malformed/empty req.url (health probes,
+ // bad clients, proxy oddities) makes `new URL()` throw TypeError: Invalid URL,
+ // which previously fell through to the catch-all and logged a scary 500 +
+ // stack trace on every such request. Reject it cleanly here instead.
+ const rawUrl = typeof req.url === 'string' ? req.url : '';
+ if (!rawUrl || !/^(?:\/[^?#]*|[A-Za-z][A-Za-z0-9+.-]*:\/\/)/.test(rawUrl)) {
+  if (!res.headersSent) {
+   res.writeHead(400, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+   });
+   res.end(JSON.stringify({ error: { message: 'invalid request target', type: 'invalid_request_error' } }));
+  }
+  return;
+ }
  try {
-  const url = new URL(req.url, 'http://x');
+  const url = new URL(rawUrl, 'http://x');
   const path = url.pathname;
 
   if (req.method === 'OPTIONS') {
