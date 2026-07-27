@@ -38,6 +38,13 @@ export async function run() {
     rawBody: true,
     bodyParser: true,
     bufferLogs: true,
+    // Pass log levels to NestFactory.create() so ALL NestJS loggers (including
+    // child loggers created with `new Logger(ServiceName)`) respect the level
+    // filter — not just the root AFFiNELogger instance. Setting logLevels on
+    // the instance alone only filters the root; child loggers maintain their
+    // own levels. This is the documented NestJS approach for global log-level
+    // control.
+    logger: env.prod ? PROD_LOG_LEVELS : undefined,
   });
 
   app.useBodyParser('raw', { limit: 100 * OneMB });
@@ -49,12 +56,6 @@ export async function run() {
   app.useBodyParser('json', { limit: 20 * OneMB });
 
   const logger = app.get(AFFiNELogger);
-  // Suppress VERBOSE/DEBUG in production to avoid Railway's 500 logs/sec
-  // rate limit (which drops messages during startup and WebSocket bursts).
-  // Dev/test keeps all levels for full visibility.
-  if (env.prod) {
-    logger.logLevels = PROD_LOG_LEVELS;
-  }
   app.useLogger(logger);
   const config = app.get(Config);
   const url = app.get(URLHelper);
