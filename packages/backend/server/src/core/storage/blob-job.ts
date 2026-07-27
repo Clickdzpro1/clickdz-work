@@ -123,8 +123,10 @@ export class StorageBlobJob {
           sid: workspace.sid,
         });
       } catch (err) {
-        this.logger.error(
-          `blob metadata backfill failed workspace=${workspace.id} sid=${workspace.sid}`,
+        await this.handleSweepFailure(
+          'blob metadata backfill',
+          workspace.id,
+          workspace.sid,
           err
         );
       }
@@ -277,8 +279,10 @@ export class StorageBlobJob {
           sid: workspace.sid,
         });
       } catch (err) {
-        this.logger.error(
-          `doc blob refs rebuild failed workspace=${workspace.id} sid=${workspace.sid}`,
+        await this.handleSweepFailure(
+          'doc blob refs rebuild',
+          workspace.id,
+          workspace.sid,
           err
         );
       }
@@ -343,8 +347,10 @@ export class StorageBlobJob {
           { sid: workspace.sid }
         );
       } catch (err) {
-        this.logger.error(
-          `blob cleanup planning failed workspace=${workspace.id} sid=${workspace.sid}`,
+        await this.handleSweepFailure(
+          'blob cleanup planning',
+          workspace.id,
+          workspace.sid,
           err
         );
       }
@@ -409,7 +415,15 @@ export class StorageBlobJob {
         );
       } catch (err) {
         hadDrainError = true;
-        this.logger.error(`blob cleanup execution failed run=${runId}`, err);
+        if (this.isPoolTimeoutError(err)) {
+          this.logger.warn(
+            `blob cleanup execution stalled on pool timeout run=${runId} — will retry on next sweep`,
+            err
+          );
+          await this.recoverFromPoolPressure();
+        } else {
+          this.logger.error(`blob cleanup execution failed run=${runId}`, err);
+        }
       }
     }
 
@@ -553,5 +567,70 @@ export class StorageBlobJob {
       `skip ${operation}: StorageRuntime provider is not configured`
     );
     return false;
+  }
+
+  // ── Pool-pressure resilience ───────────────────────────────────────────
+  // The nightly blob sweeps iterate workspaces sequentially and open Prisma
+  // transactions per workspace. When the connection pool is undersized (or a
+  // transaction holds a connection too long), Prisma throws
+  // "pool timed out while waiting for an open connection" (code P1004). That
+  // is a transient, non-fatal condition: the sweep catches it per-workspace
+  // and moves on, and the job re-enqueues itself for the next day. Logging it
+  // at `error` with a full stack per workspace (sid=3, 4, 5, 6, 7, 8...) was
+  // noisy and alarmed without cause. These helpers detect pool timeouts,
+  // downgrade them to `warn`, and pause briefly so the pool can release the
+  // stuck connection before the next workspace is attempted — preventing one
+  // slow workspace from immediately starving the next.
+
+  /**
+   * True when an error is a Prisma/DB connection-pool timeout (P1004 or the
+   * "pool timed out while waiting for an open connection" message). Matches
+   * loosely so it also catches wrapped/driver-level variants.
+   */
+  private isPoolTimeoutError(err: unknown): boolean {
+    if (!err) return false;
+    const anyErr = err as { code?: string; message?: string };
+    const code = String(anyErr.code ?? '').toUpperCase();
+    const message = String(anyErr.message ?? err ?? '').toLowerCase();
+    if (code === 'P1004') return true;
+    return (
+      message.includes('pool timed out') ||
+      (message.includes('timed out') && message.includes('pool'))
+    );
+  }
+
+  /**
+   * Brief pause after a pool-timeout so the connection can be released before
+   * the next workspace/run is attempted. Keeps the sweep sequential (no extra
+   * concurrency) and is a no-op on non-timeout failures.
+   */
+  private async recoverFromPoolPressure(): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+
+  /**
+   * Shared per-workspace failure handler for the BySid sweep loops. Downgrades
+   * pool timeouts to `warn` (with a short backoff so the next workspace isn't
+   * immediately starved) and keeps all other failures as `error` exactly as
+   * before, preserving the original log shape for non-pool errors.
+   */
+  private async handleSweepFailure(
+    operation: string,
+    workspaceId: string,
+    workspaceSid: number,
+    err: unknown
+  ): Promise<void> {
+    if (this.isPoolTimeoutError(err)) {
+      this.logger.warn(
+        `${operation} stalled on pool timeout workspace=${workspaceId} sid=${workspaceSid} — will retry on next sweep`,
+        err
+      );
+      await this.recoverFromPoolPressure();
+    } else {
+      this.logger.error(
+        `${operation} failed workspace=${workspaceId} sid=${workspaceSid}`,
+        err
+      );
+    }
   }
 }
