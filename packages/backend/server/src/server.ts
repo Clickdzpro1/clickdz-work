@@ -2,7 +2,7 @@ import { LogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import cookieParser from 'cookie-parser';
-import graphqlUploadExpress from 'graphql-upload/graphql-uploadExpress.mjs';
+import { graphqlUploadExpress } from 'graphql-upload';
 
 import {
   AFFiNELogger,
