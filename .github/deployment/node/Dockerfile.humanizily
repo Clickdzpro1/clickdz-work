@@ -10,43 +10,26 @@
 #       (0, eP.graphqlUploadExpress)({ maxFileSize, maxFiles })
 #   but `graphql-upload/graphqlUploadExpress.mjs` only provides a DEFAULT
 #   export — there is NO named `graphqlUploadExpress` export. Under Node 22's
-#   stricter ESM named-export / exports-map enforcement the import resolves to
-#   `undefined`, so calling it throws:
+#   stricter ESM named-export enforcement the named import resolves to
+#   `undefined`, so calling it throws at boot:
 #       TypeError: (0 , eP.graphqlUploadExpress) is not a function
 #
 # Fix: rewrite the .mjs entry to capture the default export into a binding and
 # re-export it as BOTH a named export (`graphqlUploadExpress`) and the default
-# export, and normalize the package "exports" map so `.` resolves to the
-# patched entry. This is exactly the patch the old `app` service applied via a
-# preDeployCommand — but a pre-deploy runs in an EPHEMERAL container and does
-# NOT persist into the running image. Baking it into the image here is what
-# actually fixes the runtime.
+# export, then point the package "exports" map at the patched entry. This is
+# the same transformation the old `app` service used in its preDeployCommand —
+# but a pre-deploy runs in an EPHEMERAL container and never persists into the
+# running image. Baking it into the image is what actually fixes the runtime.
 #
-# We START from the known-good CI image (rather than rebuild the monorepo from
-# source, which needs the custom `affine` CLI, native .node modules, prisma
-# engine resolution, and the frontend dist/ artifacts CI already produced).
+# Implementation note: we use plain string replace (not a regex) because the
+# node -e one-liner goes through several escaping layers (Dockerfile -> shell
+# -> node) that mangled a `\s` regex into a literal-backslash match. String
+# matching on "export default" is escaping-safe.
 
 ARG BASE_IMAGE=ghcr.io/clickdzpro1/clickdz-work:stable-f28f6e8be
 FROM ${BASE_IMAGE}
 
-RUN node -e '\
-const fs=require("fs");\
-const m="/app/node_modules/graphql-upload/graphqlUploadExpress.mjs";\
-if(!fs.existsSync(m)){console.error("[patch] missing "+m);process.exit(1);}\
-let s=fs.readFileSync(m,"utf8");\
-if(!s.includes("export const graphqlUploadExpress")){\
-  if(!/export\\s+default/.test(s)){console.error("[patch] no default export found");process.exit(1);}\
-  s=s.replace(/export\\s+default/,"const _g=")+\
-     "\\nexport const graphqlUploadExpress=_g;\\nexport default _g;\\n";\
-  fs.writeFileSync(m,s);\
-}\
-const pkgPath="/app/node_modules/graphql-upload/package.json";\
-const p=JSON.parse(fs.readFileSync(pkgPath,"utf8"));\
-p.exports=p.exports||{};\
-p.exports["."]={import:"./graphqlUploadExpress.mjs",default:"./graphqlUploadExpress.mjs"};\
-fs.writeFileSync(pkgPath,JSON.stringify(p));\
-console.log("[patch] graphql-upload named+default export baked in");\
-'
+RUN node -e "const f=require('fs');const m='/app/node_modules/graphql-upload/graphqlUploadExpress.mjs';if(!f.existsSync(m)){console.error('[patch] missing '+m);process.exit(1)}let s=f.readFileSync(m,'utf8');if(!s.includes('export const graphqlUploadExpress')){const i=s.indexOf('export default');if(i<0){console.error('[patch] no default export found');process.exit(1)}s=s.slice(0,i)+'const _g='+s.slice(i+14);s+='\nexport const graphqlUploadExpress=_g;\nexport default _g;\n';f.writeFileSync(m,s)}const pp='/app/node_modules/graphql-upload/package.json';const p=JSON.parse(f.readFileSync(pp,'utf8'));p.exports=p.exports||{};p.exports['.']={import:'./graphqlUploadExpress.mjs',default:'./graphqlUploadExpress.mjs'};f.writeFileSync(pp,JSON.stringify(p));console.log('[patch] graphql-upload named+default export baked in')"
 
 # Inherit the base image's WORKDIR (/app), ENV (LD_PRELOAD), EXPOSE (3010) and
 # CMD (`node ./scripts/cdz-ai-config.mjs; exec node ./dist/main.js`).
