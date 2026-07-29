@@ -3,52 +3,49 @@
 # humanizily-backend — minimal replacement image for the broken `app` service.
 #
 # The static CI image ghcr.io/clickdzpro1/clickdz-work:stable-f28f6e8be is a
-# complete, working artifact EXCEPT for one defect: the compiled server imports
-# `graphql-upload/graphql-uploadExpress.mjs` (hyphenated filename), but the
-# installed `graphql-upload` package ships the file as `graphqlUploadExpress.mjs`
-# (camelCase). Node.js < 22 silently resolved the wrong subpath via filesystem
-# fallback; Node 22 enforces the package.json "exports" map strictly and throws
-# ERR_PACKAGE_PATH_NOT_EXPORTED at import time, crashing the server on boot.
+# complete, working artifact EXCEPT for one defect in the bundled
+# `graphql-upload` package under Node 22:
 #
-# Rather than rebuild the whole monorepo from source on Railway (which needs the
-# custom `affine` CLI, native .node modules, prisma engine resolution, and the
-# frontend dist/ artifacts — all of which CI already produced), we START from
-# the known-good CI image and fix the import at image-build time.
+#   The compiled server bundle calls a NAMED export:
+#       (0, eP.graphqlUploadExpress)({ maxFileSize, maxFiles })
+#   but `graphql-upload/graphqlUploadExpress.mjs` only provides a DEFAULT
+#   export — there is NO named `graphqlUploadExpress` export. Under Node 22's
+#   stricter ESM named-export / exports-map enforcement the import resolves to
+#   `undefined`, so calling it throws:
+#       TypeError: (0 , eP.graphqlUploadExpress) is not a function
 #
-# Fix strategy (minimal + non-destructive): add a tiny shim file at the exact
-# subpath the code imports (`graphql-uploadExpress.mjs`) that re-exports the
-# real camelCase implementation, and add a wildcard to the package "exports" map
-# so Node 22 resolves it. We never rewrite the original module, so its internal
-# ESM syntax stays intact. The old service tried patching this via a
-# preDeployCommand, but a pre-deploy runs in an ephemeral container and does NOT
-# persist into the running image — baking it into the image fixes that.
+# Fix: rewrite the .mjs entry to capture the default export into a binding and
+# re-export it as BOTH a named export (`graphqlUploadExpress`) and the default
+# export, and normalize the package "exports" map so `.` resolves to the
+# patched entry. This is exactly the patch the old `app` service applied via a
+# preDeployCommand — but a pre-deploy runs in an EPHEMERAL container and does
+# NOT persist into the running image. Baking it into the image here is what
+# actually fixes the runtime.
+#
+# We START from the known-good CI image (rather than rebuild the monorepo from
+# source, which needs the custom `affine` CLI, native .node modules, prisma
+# engine resolution, and the frontend dist/ artifacts CI already produced).
 
 ARG BASE_IMAGE=ghcr.io/clickdzpro1/clickdz-work:stable-f28f6e8be
 FROM ${BASE_IMAGE}
 
 RUN node -e '\
 const fs=require("fs");\
-const path=require("path");\
-const dir="/app/node_modules/graphql-upload";\
-const real=path.join(dir,"graphqlUploadExpress.mjs");\
-if(!fs.existsSync(real)){console.error("[patch] missing "+real);process.exit(1);}\
-const shim=path.join(dir,"graphql-uploadExpress.mjs");\
-if(!fs.existsSync(shim)){\
-  fs.writeFileSync(shim,\
-    "// Shim: re-export the real camelCase implementation from the hyphenated\n"+\
-    "// subpath some compiled code imports. Node 22 enforces exports strictly.\n"+\
-    "export * from \x27./graphqlUploadExpress.mjs\x27;\n"+\
-    "export { default } from \x27./graphqlUploadExpress.mjs\x27;\n");\
+const m="/app/node_modules/graphql-upload/graphqlUploadExpress.mjs";\
+if(!fs.existsSync(m)){console.error("[patch] missing "+m);process.exit(1);}\
+let s=fs.readFileSync(m,"utf8");\
+if(!s.includes("export const graphqlUploadExpress")){\
+  if(!/export\\s+default/.test(s)){console.error("[patch] no default export found");process.exit(1);}\
+  s=s.replace(/export\\s+default/,"const _g=")+\
+     "\\nexport const graphqlUploadExpress=_g;\\nexport default _g;\\n";\
+  fs.writeFileSync(m,s);\
 }\
-const pkgPath=path.join(dir,"package.json");\
+const pkgPath="/app/node_modules/graphql-upload/package.json";\
 const p=JSON.parse(fs.readFileSync(pkgPath,"utf8"));\
 p.exports=p.exports||{};\
 p.exports["."]={import:"./graphqlUploadExpress.mjs",default:"./graphqlUploadExpress.mjs"};\
-p.exports["./graphql-uploadExpress.mjs"]={import:"./graphql-uploadExpress.mjs",default:"./graphql-uploadExpress.mjs"};\
-p.exports["./graphqlUploadExpress.mjs"]={import:"./graphqlUploadExpress.mjs",default:"./graphqlUploadExpress.mjs"};\
-p.exports["./*"]="./*";\
 fs.writeFileSync(pkgPath,JSON.stringify(p));\
-console.log("[patch] graphql-upload shim installed (hyphen+camelCase subpaths resolvable)");\
+console.log("[patch] graphql-upload named+default export baked in");\
 '
 
 # Inherit the base image's WORKDIR (/app), ENV (LD_PRELOAD), EXPOSE (3010) and
