@@ -5,7 +5,7 @@ import { useCallback } from 'react';
 // the <clickdz-builder-studio> overlay it hosts.
 import '@affine/core/blocksuite/ai/components/ai-tools/clickdz-builder-home';
 
-import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 
 const CdzResponsive = () => {
   ensureClickDzResponsiveCss();

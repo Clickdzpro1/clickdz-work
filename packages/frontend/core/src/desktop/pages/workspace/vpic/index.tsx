@@ -7,7 +7,7 @@ import {
 import { lazy, Suspense } from 'react';
 
 import { dirFor, useVpicLang } from '../../../../modules/vpic/i18n';
-import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 
 const CdzResponsive = () => {
   ensureClickDzResponsiveCss();

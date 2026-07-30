@@ -6,7 +6,7 @@ import {
 } from '@affine/core/modules/workbench';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 
-import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 import { GenerateTab } from './generate-tab';
 import { StudioTab } from './studio-tab';
 import { TranscribeTab } from './transcribe-tab';

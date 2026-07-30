@@ -15,7 +15,7 @@ import {
   useState,
 } from 'react';
 
-import { ensureClickDzResponsiveCss } from '../../../../clickdz/responsive';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 
 import {
   computeTimelineDuration,

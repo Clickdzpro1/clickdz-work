@@ -1,5 +1,5 @@
 import { AgentPalette } from '@affine/core/modules/agents/components';
-import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 import {
   ApprovalPrompt,
   Composer,
