@@ -244,6 +244,31 @@
           "type": "number",
           "description": "Application auth time to refresh in seconds.\n@default 604800",
           "default": 604800
+        },
+        "token.accessTokenTtl": {
+          "type": "number",
+          "description": "Access JWT expiration time in seconds.\n@default 900",
+          "default": 900
+        },
+        "token.refreshIdleTtl": {
+          "type": "number",
+          "description": "Auth refresh session inactivity expiration in seconds.\n@default 2592000",
+          "default": 2592000
+        },
+        "token.refreshAbsoluteTtl": {
+          "type": "number",
+          "description": "Auth refresh session absolute expiration in seconds.\n@default 15552000",
+          "default": 15552000
+        },
+        "token.refreshGracePeriod": {
+          "type": "number",
+          "description": "One-use refresh rotation concurrency grace period in seconds.\n@default 30",
+          "default": 30
+        },
+        "token.refreshRetention": {
+          "type": "number",
+          "description": "Retention for expired auth refresh generations in seconds.\n@default 2592000",
+          "default": 2592000
         }
       }
     },
@@ -356,22 +381,6 @@
           "type": "number",
           "description": "The minimum time interval in milliseconds of creating a new history snapshot when doc get updated.\n@default 600000",
           "default": 600000
-        }
-      }
-    },
-    "permission": {
-      "type": "object",
-      "description": "Configuration for permission module",
-      "properties": {
-        "readModel": {
-          "type": "string",
-          "description": "Permission data source for Rust evaluation\n@default \"projection\"\n@environment `AFFINE_PERMISSION_READ_MODEL`",
-          "default": "projection"
-        },
-        "fallbackLegacyLoader": {
-          "type": "boolean",
-          "description": "Fallback from projection loader to legacy loader when projection input loading fails\n@default false\n@environment `AFFINE_PERMISSION_FALLBACK_LEGACY_LOADER`",
-          "default": false
         }
       }
     },
@@ -1111,10 +1120,12 @@
         },
         "config": {
           "type": "object",
-          "description": "The config for the captcha plugin.\n@default {\"turnstile\":{\"secret\":\"\"},\"challenge\":{\"bits\":20}}",
+          "description": "The config for the captcha plugin.\n@default {\"turnstile\":{\"secret\":\"\",\"siteKey\":\"\",\"action\":\"auth-sign-in\"},\"challenge\":{\"bits\":20}}",
           "default": {
             "turnstile": {
-              "secret": ""
+              "secret": "",
+              "siteKey": "",
+              "action": "auth-sign-in"
             },
             "challenge": {
               "bits": 20
@@ -1150,6 +1161,11 @@
         "byok.allowCustomEndpoint": {
           "type": "boolean",
           "description": "Whether workspace BYOK custom endpoints are accepted.\n@default false",
+          "default": false
+        },
+        "byok.allowPrivateEndpoint": {
+          "type": "boolean",
+          "description": "Whether workspace BYOK custom endpoints may resolve to private network targets. Enabling this allows workspace owners and admins to send provider probe requests to the private network.\n@default false",
           "default": false
         },
         "providers.profiles": {
@@ -1601,7 +1617,7 @@
         },
         "providers.oidc": {
           "type": "object",
-          "description": "OIDC OAuth provider config\n@default {\"clientId\":\"\",\"clientSecret\":\"\",\"issuer\":\"\",\"args\":{}}\n@link https://openid.net/specs/openid-connect-core-1_0.html",
+          "description": "OIDC OAuth provider config. Private network access requires allowPrivateNetwork: true\n@default {\"clientId\":\"\",\"clientSecret\":\"\",\"issuer\":\"\",\"allowPrivateNetwork\":false,\"args\":{}}\n@link https://openid.net/specs/openid-connect-core-1_0.html",
           "properties": {
             "clientId": {
               "type": "string"
@@ -1611,12 +1627,21 @@
             },
             "args": {
               "type": "object"
+            },
+            "issuer": {
+              "type": "string",
+              "description": "OIDC issuer URL"
+            },
+            "allowPrivateNetwork": {
+              "type": "boolean",
+              "description": "Allow the OIDC issuer origin to resolve to private network addresses"
             }
           },
           "default": {
             "clientId": "",
             "clientSecret": "",
             "issuer": "",
+            "allowPrivateNetwork": false,
             "args": {}
           }
         },

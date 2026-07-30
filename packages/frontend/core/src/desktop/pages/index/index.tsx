@@ -43,14 +43,18 @@ export const Component = ({
   defaultIndexRoute = 'shoperp',
   children,
   fallback,
+  createErrorFallback,
 }: {
   defaultIndexRoute?: string;
   children?: ReactNode;
   fallback?: ReactNode;
+  createErrorFallback?: (retry: () => void) => ReactNode;
 }) => {
   // navigating and creating may be slow, to avoid flickering, we show workspace fallback
   const [navigating, setNavigating] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState(false);
+  const [createAttempt, setCreateAttempt] = useState(0);
   const authService = useService(AuthService);
   const defaultServerService = useService(DefaultServerService);
 
@@ -158,6 +162,13 @@ export const Component = ({
       }
     } else {
       if (list.length === 0) {
+        // upstream 0.27.3: on mobile editions with local workspaces enabled the
+        // local-workspace effect further down creates the first workspace, so
+        // bail out here rather than racing it. Mutually exclusive with the
+        // ClickDz branch below (that one requires !enableLocalWorkspace).
+        if (BUILD_CONFIG.isMobileEdition && enableLocalWorkspace) {
+          return;
+        }
         // ClickDz Work: a signed-in merchant with no workspace must never be
         // dropped on the bare WorkspaceNavigator fallback below. That screen
         // asks a non-technical shop owner to understand the word "workspace"
@@ -211,7 +222,12 @@ export const Component = ({
       return;
     }
 
-    createFirstAppData(workspacesService)
+    const creation = createFirstAppData(workspacesService);
+    if (!creation) return;
+
+    setCreateError(false);
+    setCreating(true);
+    creation
       .then(createdWorkspace => {
         if (createdWorkspace) {
           if (createdWorkspace.defaultPageId) {
@@ -226,20 +242,28 @@ export const Component = ({
       })
       .catch(err => {
         console.error('Failed to create first app data', err);
+        setCreateError(true);
       })
       .finally(() => {
         setCreating(false);
       });
   }, [
     jumpToPage,
-    jumpToSignIn,
     openPage,
     workspacesService,
-    loggedIn,
     listIsLoading,
     list,
     enableLocalWorkspace,
+    createAttempt,
   ]);
+
+  const retryCreate = useCallback(() => {
+    setCreateAttempt(attempt => attempt + 1);
+  }, []);
+
+  if (createError && createErrorFallback) {
+    return createErrorFallback(retryCreate);
+  }
 
   if (navigating || creating) {
     return fallback ?? <AppContainer fallback />;

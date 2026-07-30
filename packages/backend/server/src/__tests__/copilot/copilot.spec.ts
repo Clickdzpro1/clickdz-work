@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 
 import { ProjectRoot } from '@affine-tools/utils/path';
-import { PrismaClient } from '@prisma/client';
+import { McpAccessMode, PrismaClient } from '@prisma/client';
 import type { TestFn } from 'ava';
 import ava from 'ava';
 import { nanoid } from 'nanoid';
@@ -28,7 +28,7 @@ import {
   WorkspaceModel,
   WorkspaceRole,
 } from '../../models';
-import type { LlmToolCallbackRequest } from '../../native';
+import { addDocToRootDoc, type LlmToolCallbackRequest } from '../../native';
 import { CopilotModule } from '../../plugins/copilot';
 import { CopilotContextService } from '../../plugins/copilot/context';
 import { CopilotContextResolver } from '../../plugins/copilot/context/resolver';
@@ -42,6 +42,8 @@ import {
   CopilotEmbeddingJob,
   MockEmbeddingClient,
 } from '../../plugins/copilot/embedding';
+import { McpCredentialService } from '../../plugins/copilot/mcp/credential';
+import { WorkspaceMcpProvider } from '../../plugins/copilot/mcp/provider';
 import { PromptService } from '../../plugins/copilot/prompt';
 import {
   CopilotProviderFactory,
@@ -80,12 +82,12 @@ import { SubscriptionService } from '../../plugins/payment/service';
 import { SubscriptionStatus } from '../../plugins/payment/types';
 import { installMockCopilotRuntime, MockCopilotProvider } from '../mocks';
 import { TestingPromptService } from '../mocks/prompt-service.mock';
-import { createTestingModule, TestingModule } from '../utils';
+import { createTestingApp, TestingApp } from '../utils';
 import { singleUserPromptMessages, systemPrompt } from './prompt-test-helper';
 
 type Context = {
   auth: AuthService;
-  module: TestingModule;
+  module: TestingApp;
   db: PrismaClient;
   event: EventBus;
   models: Models;
@@ -110,6 +112,8 @@ type Context = {
   cronJobs: CopilotCronJobs;
   subscription: SubscriptionService;
   quotaState: QuotaStateService;
+  mcpCredentials: McpCredentialService;
+  mcpProvider: WorkspaceMcpProvider;
 };
 
 const buildTurn = (
@@ -137,7 +141,7 @@ let restoreMockCopilotNativeRuntime: (() => void) | undefined;
 
 test.before(async t => {
   restoreMockCopilotNativeRuntime = installMockCopilotRuntime();
-  const module = await createTestingModule({
+  const module = await createTestingApp({
     imports: [
       ConfigModule.override({
         copilot: {
@@ -234,6 +238,8 @@ test.before(async t => {
   t.context.cronJobs = cronJobs;
   t.context.subscription = subscription;
   t.context.quotaState = quotaState;
+  t.context.mcpCredentials = module.get(McpCredentialService);
+  t.context.mcpProvider = module.get(WorkspaceMcpProvider);
 
   await module.initTestingDB();
 });
@@ -252,6 +258,144 @@ test.beforeEach(async t => {
 test.after.always(async t => {
   restoreMockCopilotNativeRuntime?.();
   await t.context.module?.close();
+});
+
+test('document cleanup reconciles missing and restored copilot state before ack', async t => {
+  const { db, jobs, models, module, workspace } = t.context;
+  const queue = module.get(JobQueue);
+  const deleteEmbedding = Sinon.spy(
+    models.copilotContext,
+    'purgeWorkspaceEmbedding'
+  );
+  const scheduleEmbedding = Sinon.stub(
+    jobs,
+    'addDocEmbeddingQueueFromEvent'
+  ).resolves();
+
+  for (const [docId, restored, cleanupVersion] of [
+    ['missing-doc', false, 'missing-version'],
+    ['restored-doc', true, 'restored-version'],
+  ] as const) {
+    const ws = await workspace.create(userId);
+    const root = addDocToRootDoc(Buffer.from([0, 0]), docId, docId);
+    const missingRoot = addDocToRootDoc(
+      Buffer.from([0, 0]),
+      'live-doc',
+      'Live'
+    );
+    await db.snapshot.create({
+      data: {
+        workspaceId: ws.id,
+        id: ws.id,
+        blob: restored ? root : missingRoot,
+        state: Buffer.from([0, 0]),
+        updatedAt: new Date(),
+        createdAt: new Date(),
+      },
+    });
+    if (restored) {
+      await db.snapshot.create({
+        data: {
+          workspaceId: ws.id,
+          id: docId,
+          blob: addDocToRootDoc(Buffer.from([0, 0]), 'content', 'Content'),
+          state: Buffer.from([0, 0]),
+          updatedAt: new Date(),
+          createdAt: new Date(),
+        },
+      });
+    }
+
+    await jobs.reconcileDocumentCleanup({
+      workspaceId: ws.id,
+      docId,
+      cleanupVersion,
+    });
+
+    if (restored) {
+      t.true(scheduleEmbedding.calledOnceWith({ workspaceId: ws.id, docId }));
+      t.false(deleteEmbedding.called);
+    } else {
+      t.true(deleteEmbedding.calledOnceWith(ws.id, docId));
+      t.false(scheduleEmbedding.called);
+    }
+    const { payload } = await module.queue.waitFor(
+      'backendRuntime.ackDocumentCleanupEffect'
+    );
+    t.deepEqual(payload, {
+      workspaceId: ws.id,
+      docId,
+      cleanupVersion,
+      effect: 'copilot',
+    });
+    deleteEmbedding.resetHistory();
+    scheduleEmbedding.resetHistory();
+    (queue.add as Sinon.SinonStub).resetHistory();
+  }
+});
+
+test('MCP credentials stay bound to their endpoint, workspace, and profile', async t => {
+  const { db, mcpCredentials, mcpProvider, models, workspace } = t.context;
+  const ws = await workspace.create(userId);
+  const other = await workspace.create(userId);
+  const issued = await mcpCredentials.create({
+    userId,
+    workspaceId: ws.id,
+    name: 'Claude Desktop',
+    accessMode: McpAccessMode.READ_ONLY,
+    expirationDays: 90,
+  });
+
+  const authenticated = await mcpCredentials.authenticate(issued.token, ws.id);
+  t.is(authenticated.userId, userId);
+  await t.throwsAsync(mcpCredentials.authenticate(issued.token, other.id));
+
+  const response = await t.context.module
+    .POST(`/api/workspaces/${ws.id}/mcp`)
+    .set('Authorization', `Bearer ${issued.token}`)
+    .send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+    .expect(200);
+  t.like(response.body, {
+    jsonrpc: '2.0',
+    id: 1,
+  });
+
+  const server = await mcpProvider.for(userId, ws.id, McpAccessMode.READ_ONLY);
+  t.deepEqual(
+    server.tools.map(tool => tool.name),
+    ['read_document', 'semantic_search', 'keyword_search']
+  );
+
+  const rotated = await mcpCredentials.rotate(
+    issued.credential.id,
+    userId,
+    ws.id,
+    30
+  );
+  const listed = await mcpCredentials.list(userId, ws.id);
+  t.is(listed.length, 1);
+  t.is(listed[0].status, 'ROTATING');
+  await mcpCredentials.authenticate(issued.token, ws.id);
+  await mcpCredentials.revoke(rotated.credential.id, userId, ws.id);
+  await t.throwsAsync(mcpCredentials.authenticate(issued.token, ws.id));
+  await t.throwsAsync(mcpCredentials.authenticate(rotated.token, ws.id));
+
+  const disabled = await mcpCredentials.create({
+    userId,
+    workspaceId: ws.id,
+    name: 'Disabled user',
+    accessMode: McpAccessMode.READ_ONLY,
+    expirationDays: 30,
+  });
+  await models.user.update(userId, { disabled: true });
+  await t.throwsAsync(mcpCredentials.authenticate(disabled.token, ws.id));
+
+  await models.user.update(userId, { disabled: false });
+  await db.mcpCredential.update({
+    where: { id: disabled.credential.id },
+    data: { expiresAt: new Date(0) },
+  });
+  await t.throwsAsync(mcpCredentials.authenticate(disabled.token, ws.id));
 });
 
 test('should reject context file uploads after workspace write access is revoked', async t => {

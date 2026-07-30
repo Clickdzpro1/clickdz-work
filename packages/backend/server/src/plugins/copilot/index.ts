@@ -30,6 +30,8 @@ import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
 import { ClickDzVpicController } from './clickdz-vpic.controller';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
+import { McpCredentialService } from './mcp/credential';
+import { McpCredentialResolver } from './mcp/resolver';
 import {
   COPILOT_API_PROVIDERS,
   COPILOT_CONTEXT_REALTIME_PROVIDERS,
@@ -88,12 +90,17 @@ export class CopilotApiModule {}
 
 @Module({
   imports: [
+    PermissionModule,
     CopilotKernelModule,
     CopilotFeatureModule,
     CopilotApiModule,
+    // CDZ: retained from our side — upstream dropped StorageModule from this
+    // module's imports, but the ClickDz controllers below (vdz render/blob
+    // serving, pix, bridge uploads) resolve storage services from it.
     StorageModule,
-    PermissionModule,
   ],
+  // upstream 0.27.3 added the MCP credential providers
+  providers: [McpCredentialService, McpCredentialResolver],
   controllers: [
     CopilotController,
     ClickDzBridgeController,
