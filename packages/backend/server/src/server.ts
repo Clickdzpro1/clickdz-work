@@ -37,7 +37,15 @@ export async function run() {
     cors: false,
     rawBody: true,
     bodyParser: true,
-    bufferLogs: true,
+    // DIAGNOSTIC (2026-07-30): keep this false. With buffering ON, every log
+    // emitted during NestFactory.create() is held in memory until
+    // app.useLogger() runs below — so a HANG during module initialization
+    // yields a container with ZERO output. That is exactly how the 2026-07-29
+    // deploy failures presented: container starts, cdz-ai-config writes its
+    // config, then nothing binds the port, healthcheck reports "service
+    // unavailable" 11x over 5m, and no error surfaces anywhere. Unbuffered
+    // costs some log volume but makes bootstrap progress observable.
+    bufferLogs: false,
     // Pass log levels to NestFactory.create() so ALL NestJS loggers (including
     // child loggers created with `new Logger(ServiceName)`) respect the level
     // filter — not just the root AFFiNELogger instance. Setting logLevels on
