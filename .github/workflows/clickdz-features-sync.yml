@@ -1,0 +1,66 @@
+name: clickdz features sync
+
+# Drift guard for the ONE deliberately-duplicated module in the fork.
+#
+# Context: packages/backend/server/src/plugins/copilot/clickdz-features.ts is
+# the SINGLE SOURCE OF TRUTH for every feature/section/module id (binding
+# decision C2), and packages/frontend/core/src/clickdz/features.ts is its
+# byte-identical MIRROR — duplicated, not imported, because in this
+# yarn-workspace layout packages/frontend/core has no dependency on
+# packages/backend/server. The files' own headers say "WHEN YOU EDIT ONE, EDIT
+# BOTH" and recommend exactly this CI lint; until now nothing enforced it, and
+# a silent divergence is how the original FE 3-id vs BE 4-id SECTION drift
+# happened.
+#
+# The check strips each file's leading `//` header comment block (the ONLY
+# part allowed to differ — one says "SINGLE SOURCE OF TRUTH", the other
+# "FRONTEND MIRROR") and requires the remaining bodies to be byte-identical.
+# Pure shell: no install, no node — it finishes in seconds. Modeled on
+# clickdz-server-guards.yml's trigger shape.
+
+on:
+  push:
+    paths:
+      - 'packages/backend/server/src/plugins/copilot/clickdz-features.ts'
+      - 'packages/frontend/core/src/clickdz/features.ts'
+      - '.github/workflows/clickdz-features-sync.yml'
+  pull_request:
+    paths:
+      - 'packages/backend/server/src/plugins/copilot/clickdz-features.ts'
+      - 'packages/frontend/core/src/clickdz/features.ts'
+      - '.github/workflows/clickdz-features-sync.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clickdz-features-sync:
+    name: clickdz features mirror is in sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Diff the two registries (headers stripped)
+        run: |
+          set -euo pipefail
+          BE=packages/backend/server/src/plugins/copilot/clickdz-features.ts
+          FE=packages/frontend/core/src/clickdz/features.ts
+          # Drop the leading header: consecutive `//` comment and blank lines
+          # at the very top of the file. Everything from the first real code
+          # line on is the body, which must match byte-for-byte.
+          strip_header() {
+            awk 'body { print; next } /^\/\// || /^[[:space:]]*$/ { next } { body = 1; print }' "$1"
+          }
+          strip_header "$BE" > /tmp/features-backend.ts
+          strip_header "$FE" > /tmp/features-frontend.ts
+          if ! diff -u /tmp/features-backend.ts /tmp/features-frontend.ts; then
+            echo ''
+            echo "::error::clickdz-features drift: $FE no longer mirrors $BE."
+            echo 'The two files must stay byte-identical below their headers'
+            echo '(see the SYNC note in each header). Copy the body of the'
+            echo 'backend file (single source of truth) into the frontend'
+            echo 'mirror, keeping each file'"'"'s own header comment.'
+            exit 1
+          fi
+          echo 'clickdz-features mirror is in sync.'
