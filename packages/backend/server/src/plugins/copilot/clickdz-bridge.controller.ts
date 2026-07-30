@@ -42,6 +42,7 @@ import { ActionForbidden, AuthenticationRequired, BadRequest, NotFound, Throttle
 import { CacheRedis } from '../../base/redis';
 // WS4 premium gate (env-gated OFF by default): ModelsModule is @Global, so
 // `models.userFeature.has(userId, 'pro_plan_v1')` needs no module wiring.
+import { EntitlementService } from '../../core/entitlement';
 import { Models } from '../../models';
 import {
   buildEditContent,
@@ -1563,11 +1564,18 @@ export class ClickDzBridgeController {
   private readonly logger = new Logger(ClickDzBridgeController.name);
 
   // WS4: CacheRedis for the per-owner published-apps set (same injection style
-  // as clickdz-vdz.controller.ts), and Models for the optional premium gate.
-  // Both providers are @Global, so this adds no module wiring.
+  // as clickdz-vdz.controller.ts). Models is still needed for cdzErpSeq (the
+  // gap-less invoice sequence floor).
+  //
+  // EntitlementService replaces the old Models.userFeature premium lookup:
+  // AFFiNE 0.27.3 narrowed UserFeatureName to 'administrator' and deleted
+  // pro_plan_v1 / lifetime_pro_plan_v1, moving paid state to the entitlement
+  // table. CacheRedis and Models are @Global; EntitlementModule is NOT, so it
+  // is imported explicitly by CopilotModule.
   constructor(
     private readonly redis: CacheRedis,
-    private readonly models: Models
+    private readonly models: Models,
+    private readonly entitlement: EntitlementService
   ) {}
 
   // WS4 — per-owner published-apps set (Redis). Mirrors the vdz controller's
@@ -1669,16 +1677,19 @@ export class ClickDzBridgeController {
     const email = (user.email || '').toLowerCase();
     if (email && CDZ_PUBLISH_ADMIN_EMAILS.includes(email)) return true;
     try {
-      const [pro, lifetime] = await Promise.all([
-        this.models.userFeature.has(user.id, 'pro_plan_v1'),
-        this.models.userFeature.has(user.id, 'lifetime_pro_plan_v1'),
-      ]);
-      if (pro || lifetime) return true;
+      // getBestEntitlement already restricts to entitlements that are valid
+      // right now (status/starts_at/expires_at/grace, plus self-host license
+      // verification) and excludes the 'ai' plan for user targets, so a hit
+      // here means a genuinely active paid entitlement. 'pro' and
+      // 'lifetime_pro' are the successors of the removed pro_plan_v1 and
+      // lifetime_pro_plan_v1 features.
+      const ent = await this.entitlement.getBestEntitlement('user', user.id);
+      if (ent?.plan === 'pro' || ent?.plan === 'lifetime_pro') return true;
     } catch (e) {
-      // On a feature-store hiccup, fail CLOSED for the paid gate (deny) — the
-      // gate exists to protect publishing. Log and treat as not-entitled.
+      // On an entitlement-store hiccup, fail CLOSED for the paid gate (deny) —
+      // the gate exists to protect publishing. Log and treat as not-entitled.
       this.logger.warn(
-        `[apps] premium-gate feature lookup failed for user=${user.id}: ${String(e)}`
+        `[apps] premium-gate entitlement lookup failed for user=${user.id}: ${String(e)}`
       );
     }
     res.status(HttpStatus.PAYMENT_REQUIRED).json({ error: 'upgrade_required' });
@@ -2235,7 +2246,10 @@ export class ClickDzBridgeController {
 
   @Public()
   @Get(['/api/v1/models', '/v1/models'])
-  models(@Req() req: Request) {
+  // NOTE: must NOT be named `models` — that collides with the injected
+  // `private readonly models: Models` property (TS2300), which shadows this
+  // method on the instance. Route paths are unchanged.
+  listModels(@Req() req: Request) {
     this.assertBridgeToken(req);
     return {
       object: 'list',

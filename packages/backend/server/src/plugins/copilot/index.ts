@@ -7,6 +7,7 @@ import { DocStorageModule } from '../../core/doc';
 import { FeatureModule } from '../../core/features';
 import { PermissionModule } from '../../core/permission';
 import { QuotaModule } from '../../core/quota';
+import { EntitlementModule } from '../../core/entitlement';
 import { StorageModule } from '../../core/storage';
 import { WorkspaceModule } from '../../core/workspaces';
 import { IndexerModule } from '../indexer';
@@ -91,6 +92,9 @@ export class CopilotApiModule {}
 @Module({
   imports: [
     PermissionModule,
+    // EntitlementModule is not @Global — the bridge controller's premium
+    // gate resolves paid plans through EntitlementService.
+    EntitlementModule,
     CopilotKernelModule,
     CopilotFeatureModule,
     CopilotApiModule,
