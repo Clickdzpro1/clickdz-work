@@ -5064,6 +5064,11 @@ export const codeStyle: CSSProperties = {
   background:
     'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 14%, transparent)',
   color: 'var(--affine-text-primary-color, #ececec)',
+  // Prevent the slug badge from wrapping its own text onto a second line on
+  // narrow viewports — the outer title row already handles overflow via
+  // textOverflow on the shop-name span.
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
 };
 
 export const linkBtnStyle: CSSProperties = {
@@ -5400,3 +5405,109 @@ export const Field = ({
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Mobile-responsive CSS — injected once, scoped under [data-cdz-motion] so it
+// can only affect the ERP dashboard surface, never the surrounding AFFiNE
+// chrome. Uses the established motion.ts pattern (single <style> tag, id-
+// guarded idempotent inject). The tab buttons each carry data-cdz-tour so we
+// can target their containing flex row via :has() without touching dashboard.tsx.
+// ---------------------------------------------------------------------------
+
+/**
+ * CSS injected to make the ERP dashboard tab bar and header usable on narrow
+ * phone viewports (breakpoint ≤600 px). Desktop (>600 px) is unaffected.
+ *
+ * What it does at ≤600 px:
+ *  • Tab bar  — switches from a wrapping flex grid to a single-row strip with
+ *    overflow-x:auto (momentum scrolling, hidden scrollbar) and scroll-snap so
+ *    the active tab snaps into view. Tabs stay at least 44 px tall (touch
+ *    target). Wrapping is disabled so all 15 tabs fit in one scrollable row.
+ *  • Dashboard header — converts the single flat flexbox row into a two-step
+ *    layout: the title block (shop name + slug badge) spans the full width on
+ *    its own line so the name never truncates; the action buttons (Actualiser /
+ *    Visite guidée / Voir la boutique) scroll horizontally in their own row.
+ *  • Outer container — swaps the 24 px side padding for 12 px on small screens
+ *    so content doesn't feel caged on a 360 px device.
+ *
+ * Selectors explained:
+ *  [data-cdz-motion]                   — root of ErpDashboard (always present)
+ *  div:has(>[data-cdz-tour])           — the tab-bar wrapper (identified by
+ *                                        the data-cdz-tour attrs on each tab)
+ *  [data-cdz-motion]>div:first-child   — the header row (first child of root)
+ */
+const SHOPERP_RESPONSIVE_CSS = `
+/* ── Outer container: tighter horizontal padding on phones ─────────────── */
+@media (max-width: 600px) {
+  .cdz-page-wrap {
+    padding-inline: 12px !important;
+  }
+}
+
+/* ── Tab bar: single scrollable row, no wrapping ───────────────────────── */
+@media (max-width: 600px) {
+  [data-cdz-motion] [data-cdz-tabbar] {
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    /* Hide scrollbar on Webkit/Blink without losing function */
+    scrollbar-width: none;
+  }
+  [data-cdz-motion] [data-cdz-tabbar]::-webkit-scrollbar {
+    display: none;
+  }
+  /* Each tab: minimum 44 px touch target, no shrinking */
+  [data-cdz-motion] [data-cdz-tour] {
+    flex-shrink: 0;
+    min-height: 44px;
+    scroll-snap-align: start;
+    white-space: nowrap;
+  }
+}
+
+/* ── Dashboard header: full-width title row, then scrollable actions ───── */
+@media (max-width: 600px) {
+  /* The header is the first direct child of [data-cdz-motion]. Convert it to
+     a column so the title block always gets its own full-width row. */
+  [data-cdz-motion]>div:first-child {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 8px !important;
+  }
+  /* The title block (flex:1 div) should span full width in column layout */
+  [data-cdz-motion]>div:first-child>div[style*="flex: 1"],
+  [data-cdz-motion]>div:first-child>div[style*="flex:1"] {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  /* The shop name span must be allowed to wrap (no truncation at full width) */
+  [data-cdz-motion]>div:first-child span[style*="ellipsis"] {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: unset !important;
+  }
+  /* Action buttons cluster: row, scrollable, wraps cleanly */
+  [data-cdz-motion]>div:first-child>button,
+  [data-cdz-motion]>div:first-child>a {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+}
+`;
+
+const RESPONSIVE_STYLE_ID = 'cdz-shoperp-responsive';
+
+/**
+ * Inject {@link SHOPERP_RESPONSIVE_CSS} once per document. Idempotent.
+ * Call from a useEffect in any shoperp component that mounts the dashboard.
+ */
+export function ensureShoperpResponsiveCss(): void {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(RESPONSIVE_STYLE_ID)) return;
+  const el = document.createElement('style');
+  el.id = RESPONSIVE_STYLE_ID;
+  el.textContent = SHOPERP_RESPONSIVE_CSS;
+  document.head.appendChild(el);
+}

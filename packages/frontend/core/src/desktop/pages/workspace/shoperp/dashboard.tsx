@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import {
@@ -102,8 +103,8 @@ export type DashboardSection =
 const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'overview', label: 'Aperçu', icon: '📊' },
   { id: 'orders', label: 'Commandes', icon: '📦' },
-  { id: 'stock', label: 'Stock', icon: '🏷️' },
-  { id: 'inventory', label: 'Inventaire', icon: '🏬' },
+  { id: 'stock', label: 'Produits', icon: '🏷️' },
+  { id: 'inventory', label: 'Entrepôts', icon: '🏬' },
   { id: 'clients', label: 'Clients', icon: '👥' },
   { id: 'appearance', label: 'Apparence', icon: '🎨' },
   { id: 'features', label: 'Fonctionnalités', icon: '🧩' },
@@ -147,6 +148,17 @@ export const ErpDashboard = ({
   onBack: () => void;
 }) => {
   const [section, setSection] = useState<DashboardSection>(initialSection);
+  // On narrow viewports the tab bar becomes a horizontal scroll strip, so the
+  // active tab can sit off-screen after a section change or a deep link. Pull
+  // it into view. Guarded so it is a no-op on the desktop wrapped layout.
+  const tabBarRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const bar = tabBarRef.current;
+    if (!bar || bar.scrollWidth <= bar.clientWidth) return;
+    bar
+      .querySelector(`[data-cdz-tour="${section}"]`)
+      ?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
+  }, [section]);
   // Guided tour visibility. Stateful (rather than reading isShopTourDone inline
   // at render) so the merchant can replay it from the header afterwards —
   // previously, once finished or skipped, there was no way back to it at all.
@@ -269,7 +281,7 @@ export const ErpDashboard = ({
           <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
             {tagline ? `${tagline} · ` : ''}
             {summary
-              ? `${summary.kpis.ordersTotal} ${summary.kpis.ordersTotal === 1 ? 'order' : 'orders'} total`
+              ? `${summary.kpis.ordersTotal} ${summary.kpis.ordersTotal === 1 ? 'commande' : 'commandes'} au total`
               : 'Données de la boutique en direct'}
           </div>
         </div>
@@ -304,7 +316,12 @@ export const ErpDashboard = ({
       </div>
 
       {/* Section tabs ------------------------------------------------------ */}
+      {/* data-cdz-tabbar is the stable hook the responsive stylesheet targets.
+          Without it the mobile CSS had to match on inline-style substrings,
+          which React can reformat between builds. */}
       <div
+        ref={tabBarRef}
+        data-cdz-tabbar=""
         style={{
           display: 'flex',
           gap: 4,

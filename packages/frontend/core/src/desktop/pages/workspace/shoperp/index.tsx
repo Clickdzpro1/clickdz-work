@@ -20,6 +20,7 @@ import {
   Banner,
   btnStyle,
   C,
+  ensureShoperpResponsiveCss,
   fetchAppFeatures,
   fetchErpSummary,
   fetchMyApps,
@@ -119,6 +120,11 @@ const ShopErpPage = () => {
       setState('error');
       return [] as MineApp[];
     }
+  }, []);
+
+  // Inject the mobile-responsive stylesheet once per document mount. Idempotent.
+  useEffect(() => {
+    ensureShoperpResponsiveCss();
   }, []);
 
   useEffect(() => {
@@ -253,7 +259,10 @@ const ShopErpPage = () => {
             lineHeight: 1.5,
           }}
         >
+          {/* cdz-page-wrap: targeted by the responsive stylesheet (12 px side
+               padding at ≤600 px, 24 px above — see ensureShoperpResponsiveCss). */}
           <div
+            className="cdz-page-wrap"
             style={{
               // The dashboard benefits from a wider canvas; the wizard and hub
               // keep their original measure.

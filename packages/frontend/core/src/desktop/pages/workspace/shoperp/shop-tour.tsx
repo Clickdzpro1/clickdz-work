@@ -77,6 +77,14 @@ export interface ShopTourStep {
   title: string;
   /** One or two FR sentences of guidance. */
   body: string;
+  /** Short EN heading (falls back to `title` if absent). */
+  titleEn?: string;
+  /** One or two EN sentences of guidance (falls back to `body` if absent). */
+  bodyEn?: string;
+  /** Short AR heading (falls back to `title` if absent). */
+  titleAr?: string;
+  /** One or two AR sentences of guidance (falls back to `body` if absent). */
+  bodyAr?: string;
   /** A short darja one-liner shown under the body (optional, RTL-friendly). */
   darja?: string;
 }
@@ -93,13 +101,21 @@ export const DEFAULT_SHOP_TOUR_STEPS: ShopTourStep[] = [
   {
     section: 'overview',
     title: 'Aperçu',
-    body: 'Votre tableau de bord : chiffre d’affaires, commandes en attente et stock faible, en direct.',
+    body: "Votre tableau de bord : chiffre d'affaires, commandes en attente et stock faible, en direct.",
+    titleEn: 'Overview',
+    bodyEn: 'Your dashboard: live revenue, pending orders and low-stock alerts all in one place.',
+    titleAr: 'نظرة عامة',
+    bodyAr: 'لوحة التحكم: الإيرادات، الطلبات المعلقة والمخزون المنخفض دفعةً واحدة.',
     darja: 'هنا تشوف كلش على بلاصة — الفلوس، الكوموندات و الستوك.',
   },
   {
     section: 'orders',
     title: 'Commandes',
     body: 'Gérez chaque commande — de « Nouvelle » à « Livrée ». Confirmez, expédiez et suivez vos clients.',
+    titleEn: 'Orders',
+    bodyEn: 'Manage every order from New to Delivered — confirm, ship, and keep your customers updated.',
+    titleAr: 'الطلبات',
+    bodyAr: 'تابع كل طلب من "جديد" حتى "تم التسليم" — تأكيد، شحن، ومتابعة الزبائن.',
     darja: 'الكوموندات تع الزبائن، تأكدها و تبعتها من هنا.',
   },
   {
@@ -110,43 +126,71 @@ export const DEFAULT_SHOP_TOUR_STEPS: ShopTourStep[] = [
     // day-1 job.
     section: 'stock',
     title: 'Stock',
-    body: 'Ajoutez vos produits ici — nom, prix, photo et quantité. C’est la première étape pour vendre.',
+    body: "Ajoutez vos produits ici — nom, prix, photo et quantité. C'est la première étape pour vendre.",
+    titleEn: 'Inventory',
+    bodyEn: 'Add your products here — name, price, photo and quantity. This is your first step to start selling.',
+    titleAr: 'المخزون',
+    bodyAr: 'أضف منتجاتك هنا — الاسم والسعر والصورة والكمية. هذه هي خطوتك الأولى للبيع.',
     darja: 'زيد السلعة تاعك هنا — الاسم، السومة و التصويرة.',
   },
   {
     section: 'appearance',
     title: 'Apparence',
     body: 'Changez le thème, les couleurs, la police et les sections de votre boutique, puis republiez.',
+    titleEn: 'Appearance',
+    bodyEn: 'Change your shop\'s theme, colours, fonts and sections, then republish in one click.',
+    titleAr: 'المظهر',
+    bodyAr: 'غيّر ثيم متجرك، الألوان، الخطوط والأقسام، ثم انشر التغييرات بنقرة.',
     darja: 'بدّل الألوان و الستيل تع الحانوت كيما يعجبك.',
   },
   {
     section: 'features',
     title: 'Fonctionnalités',
     body: 'Activez ou désactivez des modules — livraison, paiement en ligne, avis clients… en un clic.',
+    titleEn: 'Features',
+    bodyEn: 'Turn modules on or off — delivery, online payment, customer reviews… with a single click.',
+    titleAr: 'الميزات',
+    bodyAr: 'شغّل أو أوقف الوحدات — التوصيل، الدفع الإلكتروني، آراء الزبائن… بنقرة واحدة.',
     darja: 'زيد ولا نقّص الخدمات تع الحانوت بضغطة وحدة.',
   },
   {
     section: 'shipping',
     title: 'Livraison',
     body: 'Configurez vos transporteurs et vos tarifs pour les 58 wilayas.',
+    titleEn: 'Shipping',
+    bodyEn: 'Set up your delivery partners and rates for all 58 wilayas.',
+    titleAr: 'التوصيل',
+    bodyAr: 'هيّئ شركات التوصيل وأسعارها لجميع الـ58 ولاية.',
     darja: '58 ولاية — حضّر التوصيل و الأثمنة تاعهم.',
   },
   {
     section: 'invoicing',
     title: 'Facturation',
     body: 'Devis, bons de livraison et factures conformes — prêts à imprimer en A4.',
+    titleEn: 'Invoicing',
+    bodyEn: 'Quotes, delivery notes and compliant invoices — ready to print on A4.',
+    titleAr: 'الفوترة',
+    bodyAr: 'عروض الأسعار وبوالص التسليم والفواتير القانونية — جاهزة للطباعة على A4.',
     darja: 'فاتورات و بونات بالقانون، تطبعهم كي تحب.',
   },
   {
     section: 'ai-edit',
     title: "Modifier avec l'IA",
-    body: 'Décrivez ce que vous voulez et l’IA modifie votre boutique — mise en page, textes, style.',
+    body: "Décrivez ce que vous voulez et l'IA modifie votre boutique — mise en page, textes, style.",
+    titleEn: 'Edit with AI',
+    bodyEn: 'Describe what you want and the AI updates your shop — layout, text, style.',
+    titleAr: 'التعديل بالذكاء الاصطناعي',
+    bodyAr: 'صف ما تريد والذكاء الاصطناعي يعدّل متجرك — التخطيط، النصوص، الأسلوب.',
     darja: 'قول برك واش تحب، و الذكاء الاصطناعي يبدّلهالك.',
   },
   {
     section: 'team',
     title: 'Équipe',
     body: 'Ajoutez vos employés avec des rôles (gérant, employé) et gérez leurs accès.',
+    titleEn: 'Team',
+    bodyEn: 'Add your staff with roles (manager, employee) and control what each person can access.',
+    titleAr: 'الفريق',
+    bodyAr: 'أضف موظفيك بأدوارهم (مدير، موظف) وتحكّم في صلاحية كل شخص.',
     darja: 'زيد العمّال تاعك و أعطي لكل واحد الدور تاعه.',
   },
 ];
@@ -177,6 +221,7 @@ export const ShopTour = ({
   slug,
   steps,
   sections,
+  lang,
   onGoTo,
   onDone,
 }: {
@@ -186,11 +231,17 @@ export const ShopTour = ({
   steps?: ShopTourStep[];
   /** The section ids actually rendered as tabs right now (present-tab filter). */
   sections: string[];
+  /**
+   * Display language for the tour card. Defaults to 'fr' when omitted so
+   * existing callers that don't pass lang are unaffected.
+   */
+  lang?: 'fr' | 'en' | 'ar';
   /** Switch the dashboard's active tab to `section` (called as the tour moves). */
   onGoTo: (section: string) => void;
   /** Fired exactly once when the tour finishes or is skipped. */
   onDone: () => void;
 }) => {
+  const activeLang = lang ?? 'fr';
   // Keep only steps whose tab is actually present on this server, preserving the
   // authored order. This is what makes the script a safe superset across flags.
   const present = useMemo(() => {
@@ -335,8 +386,31 @@ export const ShopTour = ({
   const next = () => (isLast ? finish() : setIdx(i => i + 1));
   const back = () => setIdx(i => Math.max(0, i - 1));
 
+  // Derive the displayed title/body for the current step and language.
+  const stepTitle =
+    activeLang === 'en'
+      ? (step.titleEn ?? step.title)
+      : activeLang === 'ar'
+        ? (step.titleAr ?? step.title)
+        : step.title;
+  const stepBody =
+    activeLang === 'en'
+      ? (step.bodyEn ?? step.body)
+      : activeLang === 'ar'
+        ? (step.bodyAr ?? step.body)
+        : step.body;
+
+  // Tour UI labels keyed by language.
+  const tourLabels = {
+    fr: { badge: 'Visite', skip: 'Passer', skipAria: 'Passer la visite', back: '← Retour', next: 'Suivant →', finish: 'Terminer' },
+    en: { badge: 'Tour', skip: 'Skip', skipAria: 'Skip the tour', back: '← Back', next: 'Next →', finish: 'Done' },
+    ar: { badge: 'جولة', skip: 'تخطي', skipAria: 'تخطي الجولة', back: 'رجوع →', next: '← التالي', finish: 'إنهاء' },
+  } as const;
+  const lbl = tourLabels[activeLang];
+  const isRtl = activeLang === 'ar';
+
   return (
-    <div style={rootStyle} role="dialog" aria-modal="true" aria-label="Visite guidée">
+    <div style={rootStyle} role="dialog" aria-modal="true" aria-label={lbl.skipAria}>
       {/* Backdrop — four dark panels framing the spotlight (a cut-out effect
           without SVG masks). Clicking any panel advances (fast-forward feel);
           the underlying UI is covered so no accidental tab clicks leak. When
@@ -384,6 +458,7 @@ export const ShopTour = ({
 
       {/* Tooltip card */}
       <div
+        dir={isRtl ? 'rtl' : 'ltr'}
         style={{
           position: 'fixed',
           top: cardTop,
@@ -412,21 +487,22 @@ export const ShopTour = ({
               textTransform: 'uppercase',
             }}
           >
-            Visite · {idx + 1}/{total}
+            {lbl.badge} · {idx + 1}/{total}
           </span>
           <div style={{ flex: 1 }} />
-          <button style={skipStyle} onClick={finish} aria-label="Passer la visite">
-            Passer
+          <button style={skipStyle} onClick={finish} aria-label={lbl.skipAria}>
+            {lbl.skip}
           </button>
         </div>
 
         <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>
-          {step.title}
+          {stepTitle}
         </div>
         <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.55 }}>
-          {step.body}
+          {stepBody}
         </div>
-        {step.darja ? (
+        {/* Darja one-liner: shown for FR and AR only (not for EN). Always RTL. */}
+        {step.darja && activeLang !== 'en' ? (
           <div
             dir="rtl"
             style={{
@@ -462,14 +538,14 @@ export const ShopTour = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
           {idx > 0 ? (
             <button style={btnStyle('secondary')} onClick={back}>
-              ← Retour
+              {lbl.back}
             </button>
           ) : (
             <span />
           )}
           <div style={{ flex: 1 }} />
           <button style={btnStyle('primary')} onClick={next}>
-            {isLast ? 'Terminer' : 'Suivant →'}
+            {isLast ? lbl.finish : lbl.next}
           </button>
         </div>
       </div>

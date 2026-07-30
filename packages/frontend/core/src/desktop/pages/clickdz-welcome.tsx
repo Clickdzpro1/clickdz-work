@@ -31,7 +31,7 @@ export interface PendingShop {
   shopName: string;
   /** Digits only, international, no '+'. */
   whatsapp: string;
-  lang: 'fr' | 'ar';
+  lang: 'fr' | 'en' | 'ar';
 }
 
 const C = {
@@ -61,6 +61,23 @@ const T = {
     go: 'Ouvrir ma boutique →',
     later: "Je veux d'abord explorer l'espace de travail",
     darja: 'دير حانوتك فـ3 دقايق — الدفع عند الاستلام و الطلبات على واتساب.',
+  },
+  en: {
+    badge: 'Your online shop — by clickdz.ai',
+    title: 'Welcome! Let\'s open your shop',
+    subtitle:
+      'Three minutes, that\'s all: your online shop with cash-on-delivery and WhatsApp orders. You can adjust everything else later at your own pace.',
+    nameLabel: 'Your shop name',
+    namePh: 'e.g. Amina\'s Boutique',
+    nameErr: 'Give your shop a name (60 characters max).',
+    waLabel: 'Your WhatsApp number',
+    waHint:
+      'Your customers\' orders go straight to this number. Digits only, no "+". e.g. 213661234567.',
+    waErr: 'Invalid number — 8 to 15 digits, no "+".',
+    langLabel: 'Language',
+    go: 'Open my shop →',
+    later: 'I want to explore the workspace first',
+    darja: '',
   },
   ar: {
     badge: 'متجرك على الإنترنت — من clickdz.ai',
@@ -130,7 +147,7 @@ const labelStyle: React.CSSProperties = {
 
 export const Component = () => {
   const navigate = useNavigate();
-  const [lang, setLang] = useState<'fr' | 'ar'>('fr');
+  const [lang, setLang] = useState<'fr' | 'en' | 'ar'>('fr');
   const [shopName, setShopName] = useState('');
   const [whatsapp, setWhatsapp] = useState('');
   const [touched, setTouched] = useState(false);
@@ -139,7 +156,7 @@ export const Component = () => {
   const nameOk = shopName.trim().length > 0 && shopName.trim().length <= 60;
   const waOk = WA_RE.test(whatsapp);
 
-  const applyLang = useCallback((next: 'fr' | 'ar') => {
+  const applyLang = useCallback((next: 'fr' | 'en' | 'ar') => {
     setLang(next);
     // A real language switch: the I18n entity listens for 'languageChanged'
     // and persists to GlobalCache 'i18n_lng', so the choice sticks for the
@@ -183,7 +200,7 @@ export const Component = () => {
   }, [nameOk, waOk, finish]);
 
   return (
-    <div style={pageStyle} dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+    <div style={pageStyle} dir={lang === 'ar' ? 'rtl' : 'ltr'} lang={lang === 'ar' ? 'ar' : lang === 'en' ? 'en' : 'fr'}>
       <div style={cardStyle} className="clickdz-welcome-page">
         <div
           style={{
@@ -307,7 +324,7 @@ export const Component = () => {
 
         <div style={{ ...labelStyle, marginTop: 18 }}>{t.langLabel}</div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {(['fr', 'ar'] as const).map(l => (
+          {(['fr', 'en', 'ar'] as const).map(l => (
             <button
               key={l}
               type="button"
@@ -324,7 +341,7 @@ export const Component = () => {
                 fontWeight: lang === l ? 700 : 500,
               }}
             >
-              {l === 'fr' ? '🇫🇷 Français' : '🇩🇿 العربية'}
+              {l === 'fr' ? '🇫🇷 Français' : l === 'en' ? '🇬🇧 English' : '🇩🇿 العربية'}
             </button>
           ))}
         </div>

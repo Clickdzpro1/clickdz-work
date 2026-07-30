@@ -66,6 +66,20 @@ export async function run() {
 
   const logger = app.get(AFFiNELogger);
   app.useLogger(logger);
+  // CDZ perf/cost fix: passing `logger: PROD_LOG_LEVELS` to NestFactory.create()
+  // above is NOT sufficient. `useLogger(instance)` REPLACES the level-filtered
+  // logger with this AFFiNELogger instance, and AFFiNELogger extends
+  // ConsoleLogger and is provided with no levels — so ConsoleLogger's default
+  // (every level, including verbose and debug) wins and production floods.
+  //
+  // Observed effect: VERBOSE/DEBUG for every cron job on a 30s cycle, against
+  // Railway's 500 logs/sec ceiling, burning CPU on message building and CLS
+  // request-id lookups per line and burying real errors.
+  //
+  // Re-apply the filter to the instance that actually does the logging.
+  if (env.prod) {
+    logger.setLogLevels(PROD_LOG_LEVELS);
+  }
   const config = app.get(Config);
   const url = app.get(URLHelper);
   let telemetry: TelemetryService | null = null;
