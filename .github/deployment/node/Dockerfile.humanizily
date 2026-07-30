@@ -44,7 +44,7 @@
 # Editing server source and pushing changes NOTHING in the running container.
 # To ship a code change you must rebuild the base image (push an `image-*` tag
 # to run build-clickdz-image.yml) and then bump this ARG to the new tag.
-ARG BASE_IMAGE=ghcr.io/clickdzpro1/clickdz-work:stable-496209f90
+ARG BASE_IMAGE=ghcr.io/clickdzpro1/clickdz-work:stable-01a9fe55d
 FROM ${BASE_IMAGE}
 
 RUN node -e "const f=require('fs');const m='/app/node_modules/graphql-upload/graphqlUploadExpress.mjs';if(!f.existsSync(m)){console.error('[patch] missing '+m);process.exit(1)}let s=f.readFileSync(m,'utf8');if(!s.includes('export const graphqlUploadExpress')){const i=s.indexOf('export default');if(i<0){console.error('[patch] no default export found');process.exit(1)}s=s.slice(0,i)+'const _g='+s.slice(i+14);s+='\nexport const graphqlUploadExpress=_g;\nexport default _g;\n';f.writeFileSync(m,s)}const pp='/app/node_modules/graphql-upload/package.json';const p=JSON.parse(f.readFileSync(pp,'utf8'));p.exports=p.exports||{};p.exports['.']={import:'./graphqlUploadExpress.mjs',default:'./graphqlUploadExpress.mjs'};f.writeFileSync(pp,JSON.stringify(p));console.log('[patch] graphql-upload named+default export baked in')"
