@@ -5,9 +5,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  *
  * Stateless HMAC so there is no storage to manage: the bridge mints the token
  * when it injects the Data URL into a generated app, and the data controller
- * re-derives + verifies it on writes/deletes. The secret falls back to the
- * existing bridge token so this works in production without provisioning a new
- * env var (set CDZ_DATA_SECRET to rotate independently later).
+ * re-derives + verifies it on writes/deletes. SEC-4: the secret is
+ * CDZ_DATA_SECRET, required in production (the old CLICKDZ_BRIDGE_TOKEN
+ * fallback is gone — see the block below).
  *
  * NOTE: the token is embedded in the generated app's client JS, so it is
  * per-app (not a cross-app master key) and gates casual/anonymous tampering +
@@ -16,8 +16,60 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * static apps; this is the pragmatic P0 that stops "wipe any app by guessing
  * its slug" and cross-app writes.
  */
-const DATA_SECRET =
-  process.env.CDZ_DATA_SECRET || process.env.CLICKDZ_BRIDGE_TOKEN || '';
+// SEC-4: CDZ_DATA_SECRET is now REQUIRED and must be its own value.
+//
+// The old fallback (`|| process.env.CLICKDZ_BRIDGE_TOKEN`) collapsed four
+// trust domains into one secret: data tokens, blob tokens, ERP staff tokens
+// AND (via clickdz-secret-box.ts) the AES key sealing tenant courier API keys
+// at rest. A leak of the bridge token — a value that is compared against
+// inbound Authorization headers — would have handed an attacker all four.
+//
+// Rules (enforced at module load, i.e. at boot):
+//   • production: missing CDZ_DATA_SECRET, or CDZ_DATA_SECRET equal to
+//     CLICKDZ_BRIDGE_TOKEN, is FATAL — the process refuses to start with a
+//     loud, actionable error. Better one failed deploy than a shared secret.
+//   • dev/test: a loud console warning only (local runs and CI never carried
+//     these env vars; every helper below still fails closed on '').
+//
+// MIGRATION (deployments that ran on the fallback): mint a fresh random
+// CDZ_DATA_SECRET, and set CDZ_DATA_SECRET_LEGACY to the old
+// CLICKDZ_BRIDGE_TOKEN value — legacy tokens already embedded in published
+// storefront HTML keep verifying against it (verifyDataToken tries both) until
+// those apps are re-minted, at which point CDZ_DATA_SECRET_LEGACY can be
+// dropped. NOTE: outstanding blob URLs (≤45 min) and ERP staff tokens (≤90 d)
+// are signed with the CURRENT secret only — rotating it invalidates them
+// (staff simply log in again); that trade keeps this module small.
+const DATA_SECRET = process.env.CDZ_DATA_SECRET || '';
+
+/** Old secret accepted for LEGACY (slug-only) token verification only. */
+const LEGACY_VERIFY_SECRET = process.env.CDZ_DATA_SECRET_LEGACY || '';
+
+{
+  const bridgeToken = process.env.CLICKDZ_BRIDGE_TOKEN || '';
+  // Mirrors Env: an unset NODE_ENV is treated as production (see src/env.ts).
+  const prod = (process.env.NODE_ENV ?? 'production') === 'production';
+  let fatal = '';
+  if (!DATA_SECRET) {
+    fatal =
+      '[cdz-data-token] CDZ_DATA_SECRET is not set. It is required: it signs ' +
+      'data/blob/staff tokens and seals courier secrets. Set it to a fresh ' +
+      'random value (e.g. `openssl rand -base64 48`). If this deployment ' +
+      'previously ran on the CLICKDZ_BRIDGE_TOKEN fallback, ALSO set ' +
+      'CDZ_DATA_SECRET_LEGACY to that old value so already-published apps ' +
+      'keep working until they are re-minted.';
+  } else if (bridgeToken && DATA_SECRET === bridgeToken) {
+    fatal =
+      '[cdz-data-token] CDZ_DATA_SECRET must NOT equal CLICKDZ_BRIDGE_TOKEN ' +
+      '(one secret would back four trust domains). Mint a fresh random ' +
+      'CDZ_DATA_SECRET and move the old shared value to ' +
+      'CDZ_DATA_SECRET_LEGACY for the re-mint window.';
+  }
+  if (fatal) {
+    if (prod) throw new Error(fatal);
+    // eslint-disable-next-line no-console
+    console.warn(fatal);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // SEC-3 — SCOPED data tokens (collection + action + expiry).
@@ -84,10 +136,14 @@ const LEGACY_TOKENS_OK = process.env.CDZ_DATA_TOKEN_LEGACY !== '0';
 /** Monthly partition suffix (`invoices-202607`) — matches the data controller. */
 const DATA_PARTITION_SUFFIX_RE = /-\d{6}$/;
 
-/** The legacy slug-only mint (kept verbatim for the back-compat verify path). */
-function legacyDataToken(slug: string): string {
-  if (!DATA_SECRET) return '';
-  return createHmac('sha256', DATA_SECRET)
+/**
+ * The legacy slug-only mint (kept verbatim for the back-compat verify path).
+ * SEC-4: parameterized on the secret so verification can ALSO try
+ * CDZ_DATA_SECRET_LEGACY during a secret rotation (see the header above).
+ */
+function legacyDataToken(slug: string, secret: string = DATA_SECRET): string {
+  if (!secret) return '';
+  return createHmac('sha256', secret)
     .update(`appdata:${slug}`)
     .digest('base64url')
     .slice(0, 32);
@@ -272,8 +328,15 @@ export function verifyDataToken(
   }
   if (!LEGACY_TOKENS_OK) return false;
   const expected = legacyDataToken(slug);
-  if (!expected) return false;
-  return safeEqual(expected, token);
+  if (expected && safeEqual(expected, token)) return true;
+  // SEC-4 rotation window: tokens minted under the pre-rotation secret (e.g.
+  // the retired CLICKDZ_BRIDGE_TOKEN fallback) still verify while
+  // CDZ_DATA_SECRET_LEGACY carries that old value.
+  if (LEGACY_VERIFY_SECRET) {
+    const old = legacyDataToken(slug, LEGACY_VERIFY_SECRET);
+    if (old && safeEqual(old, token)) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
