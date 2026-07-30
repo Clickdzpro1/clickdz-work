@@ -55,8 +55,11 @@ jobs:
 
       # @prisma/client types are generated, not checked in. Without this every
       # model reference is an error and the count is meaningless.
+      # NOTE: the vendored yarn path must be absolute here — it is relative to the
+      # repo root, and this step runs with working-directory set, so a relative
+      # ".yarn/releases/..." would resolve under packages/backend/server and fail.
       - name: Generate Prisma client
-        run: node .yarn/releases/yarn-4.13.0.cjs prisma generate
+        run: node "$GITHUB_WORKSPACE/.yarn/releases/yarn-4.13.0.cjs" prisma generate
         working-directory: packages/backend/server
 
       - name: Typecheck and compare against baseline
