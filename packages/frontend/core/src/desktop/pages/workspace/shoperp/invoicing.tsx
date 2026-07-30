@@ -140,6 +140,8 @@ const REASON_FR: Record<string, string> = {
   line_tva_invalid: 'Taux de TVA invalide sur une ligne.',
   order_has_no_lines: 'La commande ne contient aucun article.',
   not_a_draft: 'Ce document n’est plus un brouillon.',
+  seller_identity_incomplete:
+    'Identité vendeur incomplète — renseignez raison sociale, RC, NIF, NIS et ART dans Réglages avant de valider une facture (obligatoire légalement).',
   already_void: 'Ce document est déjà annulé.',
   illegal_conversion: 'Conversion non autorisée.',
   source_void: 'Le document source est annulé.',

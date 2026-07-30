@@ -501,6 +501,47 @@ export function buildDraftInvoice(
 }
 
 // ===========================================================================
+// SELLER IDENTITY (SEC-5) — the fields Algerian law requires on an emitted
+// facture. The settings singleton carries them (sellerName + RC/NIF/NIS/ART —
+// the studio labels them "obligatoire légalement"), but until now NOTHING
+// server-side refused to legally number a facture while they were blank. This
+// pure check is that gate: the controller runs it on the settings row BEFORE
+// reserving the gap-less number, so a refusal never burns a sequence value.
+// ===========================================================================
+
+/** Settings-singleton keys that must be non-empty to emit a facture. */
+export const SELLER_IDENTITY_FIELDS = [
+  'sellerName',
+  'sellerRc',
+  'sellerNif',
+  'sellerNis',
+  'sellerArt',
+] as const;
+
+/**
+ * Check the seller's fiscal identity on the (raw or normalized) settings row.
+ * Returns `{ ok: true }` when every mandatory field is non-blank, else a
+ * ValidationError with the stable reason `seller_identity_incomplete` and the
+ * first missing field (`settings.sellerNif` style) — the frontend renders the
+ * FR label. A missing/unreadable row fails closed (everything is blank).
+ */
+export function checkSellerIdentity(
+  row: Record<string, unknown> | null | undefined
+): { ok: true } | ValidationError {
+  const r = row ?? {};
+  for (const f of SELLER_IDENTITY_FIELDS) {
+    if (!str(r[f]).trim()) {
+      return {
+        ok: false,
+        reason: 'seller_identity_incomplete',
+        field: `settings.${f}`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+// ===========================================================================
 // VALIDATE (assign gap-less number) — the legal transition brouillon → valide.
 // The number is reserved HERE, at validation, never at draft creation. The
 // caller reserves via the bridge's erpReserveSeq() (PG-floored), then stamps here.

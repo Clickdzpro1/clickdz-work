@@ -22,7 +22,7 @@ import { AuthenticationRequired, BadRequest, Throttle } from '../../base';
 import { CacheRedis } from '../../base/redis';
 import { Public } from '../../core/auth';
 import { Models } from '../../models';
-import { verifyDataToken } from './cdz-data-token';
+import { type DataAction, verifyDataToken } from './cdz-data-token';
 
 /**
  * ClickDz Data API — a tiny shared collections store that gives every
@@ -176,11 +176,20 @@ export class ClickDzDataController {
   // dependent auth path left to reason about. The v1 route aliases are kept
   // (removing them would 404 rather than 401, which is a worse error for any
   // stale client) but they now require the same per-slug token as v2.
-  private requireWriteToken(req: Request, slug: string) {
+  // SEC-3: the collection + action of the attempted write are passed through
+  // to verifyDataToken so a SCOPED (d1.) token is checked against its embedded
+  // scope. Legacy slug-only tokens keep authorizing everything while
+  // CDZ_DATA_TOKEN_LEGACY is on — see cdz-data-token.ts.
+  private requireWriteToken(
+    req: Request,
+    slug: string,
+    collection: string,
+    action: DataAction
+  ) {
     const auth = String(req.headers['authorization'] || '');
     const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
     const token = bearer || String((req.query?.t as string) || '');
-    if (!verifyDataToken(slug, token)) {
+    if (!verifyDataToken(slug, token, collection, action)) {
       throw new AuthenticationRequired('A valid write token is required');
     }
   }
@@ -192,11 +201,11 @@ export class ClickDzDataController {
   // filter emits the same 401 (not a raw 500) on a missing/bad token. When the
   // secret is unset, verifyDataToken returns false → sensitive reads fail
   // CLOSED, exactly as writes already do.
-  private requireReadToken(req: Request, slug: string) {
+  private requireReadToken(req: Request, slug: string, collection: string) {
     const auth = String(req.headers['authorization'] || '');
     const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
     const token = bearer || String((req.query?.t as string) || '');
-    if (!verifyDataToken(slug, token)) {
+    if (!verifyDataToken(slug, token, collection, 'read')) {
       throw new AuthenticationRequired(
         'A valid token is required for this collection'
       );
@@ -306,7 +315,7 @@ export class ClickDzDataController {
     // slug/collection still gets its precise 400 first (mirrors the write path,
     // which validates names before requiring the token).
     if (CDZ_DATA_READ_GATE && isSensitive(collection)) {
-      this.requireReadToken(req, slug);
+      this.requireReadToken(req, slug, collection);
     }
     const key = dataKey(slug, collection);
     const raw = await this.redis.hgetall(key);
@@ -346,7 +355,7 @@ export class ClickDzDataController {
     setCors(res);
     this.assertNames(slug, collection);
     // SEC-1: gated on BOTH v1 and v2 (was: v2 only — see requireWriteToken).
-    this.requireWriteToken(req, slug);
+    this.requireWriteToken(req, slug, collection, 'create');
     // Per-slug write throttle (typed 429, never a raw HttpException). Applied
     // after name/token checks so bad input still gets its precise 4xx.
     if (await this.isRateLimited(slug)) {
@@ -404,7 +413,7 @@ export class ClickDzDataController {
   ) {
     setCors(res);
     this.assertNames(slug, collection);
-    this.requireWriteToken(req, slug);
+    this.requireWriteToken(req, slug, collection, 'upsert');
     // Per-slug write throttle (typed 429 via passthrough — never raw). Applied
     // after name/token checks so bad input still gets its precise 4xx.
     if (await this.isRateLimited(slug)) {
@@ -479,7 +488,7 @@ export class ClickDzDataController {
     setCors(res);
     this.assertNames(slug, collection);
     // SEC-1: gated on BOTH v1 and v2 (was: v2 only — see requireWriteToken).
-    this.requireWriteToken(req, slug);
+    this.requireWriteToken(req, slug, collection, 'delete');
     // Per-slug write throttle (typed 429 via passthrough — never raw).
     if (await this.isRateLimited(slug)) {
       res.status(HttpStatus.TOO_MANY_REQUESTS).json({ error: 'rate_limited' });
@@ -511,8 +520,9 @@ export class ClickDzDataController {
     this.assertNames(slug, collection);
     // Destructive collection-wide wipe is gated on BOTH v1 and v2 — generated
     // apps never call it, so this closes the "wipe any app by slug" vector at
-    // no back-compat cost.
-    this.requireWriteToken(req, slug);
+    // no back-compat cost. SEC-3: `clear` is additionally OUTSIDE the scope of
+    // every publicDataToken, so an HTML-embedded token can never wipe.
+    this.requireWriteToken(req, slug, collection, 'clear');
     await this.redis.del(dataKey(slug, collection));
     // R15 Phase A: mirror the collection wipe to PG (best-effort, never throws).
     await this.mirrorToPg(() =>

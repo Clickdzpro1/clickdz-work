@@ -41,8 +41,37 @@ import {
  * GCM auth tag; ct is the AES-256-GCM ciphertext of the UTF-8 plaintext.
  */
 
-/** MASTER key material. Reused from the already-provisioned data secret. */
-const MASTER = process.env.CDZ_DATA_SECRET || '';
+// SEC-4: the box now prefers its OWN key env var, CDZ_SECRETBOX_KEY, so the
+// key that decrypts courier API keys / bot tokens at rest is no longer the
+// same value that signs HMAC tokens handed to browsers. Back-compat is
+// preserved in both directions:
+//   • CDZ_SECRETBOX_KEY unset → MASTER falls back to CDZ_DATA_SECRET, i.e.
+//     byte-identical behaviour to before this change (nothing to re-seal).
+//   • CDZ_SECRETBOX_KEY set  → NEW seals use it, while openSecret() ALSO tries
+//     the legacy key (CDZ_SECRETBOX_LEGACY_KEY, defaulting to CDZ_DATA_SECRET)
+//     so every value sealed before the switch still opens. GCM's auth tag
+//     makes the two-key try safe: a wrong key fails authentication, it never
+//     yields garbage plaintext.
+// RE-SEAL / ROTATION PATH: after setting CDZ_SECRETBOX_KEY, existing sealed
+// values keep opening via the legacy key indefinitely; to finish the rotation,
+// re-save each connection (re-connect couriers / re-submit bot tokens — every
+// save calls sealSecret with the new key), then drop CDZ_SECRETBOX_LEGACY_KEY
+// (or, if it was implicit, rotate CDZ_DATA_SECRET). Never delete the old key
+// before re-sealing — sealed values it protects would become unreadable.
+
+/** PRIMARY key material: dedicated var, falling back to the data secret. */
+const MASTER =
+  process.env.CDZ_SECRETBOX_KEY || process.env.CDZ_DATA_SECRET || '';
+
+/**
+ * LEGACY key material, tried on open() only. Explicit CDZ_SECRETBOX_LEGACY_KEY
+ * wins; otherwise, when a dedicated primary is set, the previous implicit
+ * master (CDZ_DATA_SECRET) is the natural legacy. Empty/same-as-primary ⇒ no
+ * legacy attempt.
+ */
+const LEGACY_MASTER =
+  process.env.CDZ_SECRETBOX_LEGACY_KEY ||
+  (process.env.CDZ_SECRETBOX_KEY ? process.env.CDZ_DATA_SECRET || '' : '');
 
 /** Static salt — domain-separates + versions the derived key (bump to rotate). */
 const KEY_SALT = 'cdz-secretbox-v1';
@@ -62,6 +91,8 @@ const TAG_LEN = 16;
  * public function fails soft.
  */
 let cachedKey: Buffer | null = null;
+/** Same derive-once cache for the LEGACY key (open()-only, see SEC-4 above). */
+let cachedLegacyKey: Buffer | null = null;
 
 /**
  * Return the cached 32-byte AES key, deriving it once via scrypt. Returns null
@@ -75,6 +106,21 @@ function getKey(): Buffer | null {
     return cachedKey;
   } catch {
     // scrypt can throw only on absurd params; treat as "no key" (fail soft).
+    return null;
+  }
+}
+
+/**
+ * The legacy decrypt-only key (SEC-4 rotation). null when no distinct legacy
+ * secret is configured — the common case. Never throws.
+ */
+function getLegacyKey(): Buffer | null {
+  if (cachedLegacyKey) return cachedLegacyKey;
+  if (!LEGACY_MASTER || LEGACY_MASTER === MASTER) return null;
+  try {
+    cachedLegacyKey = scryptSync(LEGACY_MASTER, KEY_SALT, KEY_LEN);
+    return cachedLegacyKey;
+  } catch {
     return null;
   }
 }
@@ -149,14 +195,36 @@ export function openSecret(sealed: string): string | null {
     // throw on these anyway, but an explicit check keeps the failure a clean
     // null and documents the invariants.
     if (iv.length !== IV_LEN || tag.length !== TAG_LEN) return null;
+    // SEC-4: primary key first; on a failed GCM auth, the legacy key (values
+    // sealed before a key rotation). The auth tag guarantees a wrong key can
+    // only fail cleanly — it can never decrypt to garbage.
+    const primary = tryDecrypt(key, iv, tag, ct);
+    if (primary !== null) return primary;
+    const legacyKey = getLegacyKey();
+    if (legacyKey) return tryDecrypt(legacyKey, iv, tag, ct);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Attempt one AES-256-GCM decrypt with `key`. Returns the UTF-8 plaintext, or
+ * null when the GCM auth tag does not verify (any tamper of iv/tag/ct, or a
+ * wrong key — `decipher.final()` throws in that case). Never throws.
+ */
+function tryDecrypt(
+  key: Buffer,
+  iv: Buffer,
+  tag: Buffer,
+  ct: Buffer
+): string | null {
+  try {
     const decipher = createDecipheriv('aes-256-gcm', key, iv);
     decipher.setAuthTag(tag);
     const plain = Buffer.concat([decipher.update(ct), decipher.final()]);
     return plain.toString('utf8');
   } catch {
-    // `decipher.final()` throws when the GCM auth tag does not verify (i.e. any
-    // tamper of iv/tag/ct, or a wrong key). That is the whole point — map it to
-    // null so callers treat tampered data as "no valid secret".
     return null;
   }
 }
