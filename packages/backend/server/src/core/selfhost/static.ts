@@ -128,8 +128,17 @@ export class StaticFilesResolver implements OnModuleInit {
 
     // fallback all unknown routes
     app.get([basePath, basePath + '/*path'], this.check.use, (req, res) => {
+      // CDZ: upstream gates the mobile edition behind the canary namespace, so
+      // on a STABLE self-host build this was always false and every phone was
+      // served the full desktop bundle (3.63 MB over the wire, and a desktop
+      // UI on a 5-inch screen). The self-host mobile build is already shipped
+      // in the image at static/mobile/selfhost.html with publicPath '/', it
+      // was simply never routed to. Serve it to mobile user-agents.
+      //
+      // Escape hatch: CDZ_MOBILE_WEB=0 restores the old behaviour (desktop
+      // bundle for everyone) without needing a rebuild.
       const mobile =
-        env.namespaces.canary &&
+        process.env.CDZ_MOBILE_WEB !== '0' &&
         isMobile({
           ua: req.headers['user-agent'] ?? undefined,
         });
