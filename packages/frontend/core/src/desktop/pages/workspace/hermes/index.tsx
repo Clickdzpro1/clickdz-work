@@ -1,4 +1,5 @@
 import { AgentPalette } from '@affine/core/modules/agents/components';
+import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
 import {
   ApprovalPrompt,
   Composer,
@@ -103,6 +104,11 @@ const P = {
 
 // Page-unique keyframes for this shell's own fades (SHELL owns its component
 // motion). Reduced-motion users get no animation.
+const CdzResponsive = () => {
+  ensureClickDzResponsiveCss();
+  return null;
+};
+
 const GLOBAL_CSS = `
 @keyframes cdz-hermes-fade-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 .cdz-hermes-fade{animation:cdz-hermes-fade-in 200ms ease both}
@@ -330,6 +336,8 @@ const HermesConsole = ({
 
   return (
     <div
+      data-cdz-surface=""
+      data-cdz-shell=""
       style={{
         height: '100%',
         width: '100%',
@@ -342,6 +350,8 @@ const HermesConsole = ({
       }}
     >
       <style>{GLOBAL_CSS}</style>
+      {/* Phone layout for the rail/main split — see clickdz/responsive.ts */}
+      <CdzResponsive />
 
       {/* ---- Left: thread rail -------------------------------------- */}
       <ThreadSidebar

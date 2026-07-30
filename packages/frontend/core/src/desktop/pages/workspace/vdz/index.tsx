@@ -15,6 +15,8 @@ import {
   useState,
 } from 'react';
 
+import { ensureClickDzResponsiveCss } from '../../../../clickdz/responsive';
+
 import {
   computeTimelineDuration,
   createSampleTimeline,
@@ -76,6 +78,12 @@ const EffectsPanel = lazy(() =>
 const ShortsPanel = lazy(() =>
   import('./shorts-panel').then(m => ({ default: m.ShortsPanel }))
 );
+
+/** Inject the CDZ responsive stylesheet (idempotent, SSR-safe). */
+const CdzResponsive = () => {
+  ensureClickDzResponsiveCss();
+  return null;
+};
 
 /** Which top-level surface the page is showing. */
 type VdzMode = 'edit' | 'generate';
@@ -795,7 +803,7 @@ const VdzStudioPage = () => {
               character or spilling buttons toward the mode tabs. In Generate
               mode the editor-only panels are mode-controlled, so disable them
               here. */}
-          <div className={styles.headerRight}>
+          <div className={styles.headerRight} data-cdz-actions="">
             <NotifyBell />
             <ProjectBar
               timeline={timeline}
@@ -840,12 +848,14 @@ const VdzStudioPage = () => {
         ) : (
           <div
             className={styles.root}
+            data-cdz-surface=""
             ref={containerRef}
             tabIndex={-1}
             onDragOver={onRootDragOver}
             onDrop={onRootDrop}
           >
-            <div className={styles.main}>
+            <CdzResponsive />
+            <div className={styles.main} data-cdz-shell="">
               {/* Media bin — flexible left panel. Draggable items add to the
                   timeline via drag or the "+" button (both route through
                   `run`). Resizable seam on its right edge; hides to a slim

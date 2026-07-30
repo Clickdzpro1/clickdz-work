@@ -7,6 +7,12 @@ import {
 import { lazy, Suspense } from 'react';
 
 import { dirFor, useVpicLang } from '../../../../modules/vpic/i18n';
+import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
+
+const CdzResponsive = () => {
+  ensureClickDzResponsiveCss();
+  return null;
+};
 
 /**
  * VPIC Studio — the page shell (Easel).
@@ -209,9 +215,14 @@ const VpicStudioPage = () => {
       </ViewHeader>
 
       <ViewBody>
+        <CdzResponsive />
         {/* Direction-stamped host so the entire editor lays out RTL-aware in
-            darja. The panel and every section inside inherit `dir` from here. */}
+            darja. The panel and every section inside inherit `dir` from here.
+            data-cdz-surface enables the shared responsive stylesheet; the
+            shell/rail markers are stamped on the two-column split inside
+            editor-panel.tsx (styles.root / styles.rail). */}
         <div
+          data-cdz-surface=""
           dir={dir}
           style={{
             display: 'flex',

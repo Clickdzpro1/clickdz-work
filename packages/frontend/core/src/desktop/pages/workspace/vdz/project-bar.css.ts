@@ -106,6 +106,13 @@ export const nameField = style({
       maxWidth: 112,
     },
   },
+  // ---- Mobile: shrink further so buttons don't get clipped ----------------
+  '@media': {
+    '(max-width: 600px)': {
+      minWidth: 48,
+      maxWidth: 100,
+    },
+  },
 });
 
 // The <input> shown while editing the name — matches nameField's metrics
@@ -315,6 +322,14 @@ export const browserMenu = style([
     boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
     zIndex: 40,
     overflow: 'hidden',
+    // ---- Mobile: don't let the popover overflow the viewport ---------------
+    '@media': {
+      '(max-width: 600px)': {
+        width: 'min(320px, calc(100vw - 24px))',
+        right: 0,
+        left: 'auto',
+      },
+    },
   },
 ]);
 

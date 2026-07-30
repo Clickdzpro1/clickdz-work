@@ -77,6 +77,10 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
+
+// Inject the CDZ responsive stylesheet once per document (idempotent + SSR-safe).
+const CdzResponsive = () => { ensureClickDzResponsiveCss(); return null; };
 
 const C = AgentPalette.color;
 const R = AgentPalette.radius;
@@ -903,6 +907,7 @@ const CreateAgentPage = () => {
       </ViewHeader>
       <ViewBody>
         <div
+          data-cdz-surface=""
           style={{
             height: '100%',
             width: '100%',
@@ -913,6 +918,7 @@ const CreateAgentPage = () => {
             lineHeight: 1.5,
           }}
         >
+          <CdzResponsive />
           <style>{CREATE_CSS}</style>
           <div
             className="cdz-create-canvas"

@@ -5,6 +5,13 @@ import { useCallback } from 'react';
 // the <clickdz-builder-studio> overlay it hosts.
 import '@affine/core/blocksuite/ai/components/ai-tools/clickdz-builder-home';
 
+import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
+
+const CdzResponsive = () => {
+  ensureClickDzResponsiveCss();
+  return null;
+};
+
 /**
  * ClickDz Apps (/apps) — the App Builder's front door.
  *
@@ -32,6 +39,7 @@ export const Component = () => {
       <ViewTitle title="ClickDz Apps" />
       <ViewIcon icon="ai" />
       <ViewBody>
+        <CdzResponsive />
         {/*
           `width: '100%'` is load-bearing, not decorative. ViewBody portals its
           children straight into `viewBodyContainer`, which is a flex row — a
@@ -39,9 +47,16 @@ export const Component = () => {
           `max-width: 1000px` would pin the whole page flush-left with dead
           space beside it on any wide monitor. Every sibling page (chat,
           shoperp) sets this for the same reason.
+
+          data-cdz-surface: injects the shared responsive stylesheet. The host
+          div is constrained to max-width:100% which the shared sheet enforces
+          via [data-cdz-surface]*. The <clickdz-builder-home> Lit element uses
+          a shadow root, so the shared stylesheet cannot reach inside it — see
+          the report for what remains out of reach and which file owns it.
         */}
         <div
-          style={{ height: '100%', width: '100%', overflow: 'hidden' }}
+          data-cdz-surface=""
+          style={{ height: '100%', width: '100%', maxWidth: '100%', overflow: 'hidden' }}
           ref={onContainerRef}
         />
       </ViewBody>

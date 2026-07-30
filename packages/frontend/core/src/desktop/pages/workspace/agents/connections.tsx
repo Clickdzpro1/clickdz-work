@@ -4,7 +4,11 @@ import {
   ensureAgentKeyframes,
   Spinner,
 } from '@affine/core/modules/agents/components';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 import { useAgentLang } from '@affine/core/modules/agents/i18n';
+
+// Inject the CDZ responsive stylesheet once per document (idempotent + SSR-safe).
+const CdzResponsive = () => { ensureClickDzResponsiveCss(); return null; };
 import { useAgents } from '@affine/core/modules/agents/use-agents';
 import {
   ViewBody,
@@ -250,6 +254,7 @@ function ConnectionsPage() {
       </ViewHeader>
       <ViewBody>
         <div
+          data-cdz-surface=""
           style={{
             height: '100%',
             width: '100%',
@@ -260,6 +265,7 @@ function ConnectionsPage() {
             lineHeight: 1.5,
           }}
         >
+          <CdzResponsive />
           <style>{GLOBAL_CSS}</style>
           <div
             dir={dir}

@@ -20,6 +20,13 @@ import {
   useState,
 } from 'react';
 
+import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
+
+const CdzResponsive = () => {
+  ensureClickDzResponsiveCss();
+  return null;
+};
+
 // The zero-dep flow canvas (CANVAS-FE) — pure/presentational: it takes a Flow +
 // the toolkits `catalog` + an onChange(flow) and renders the draggable node
 // graph / palette / inspector. FLOW-FE owns the fetching (use-flows) and mounts
@@ -652,7 +659,9 @@ const IntegrationsPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <CdzResponsive />
         <div
+          data-cdz-surface=""
           style={{
             height: '100%',
             width: '100%',
@@ -1494,6 +1503,10 @@ const TabBar = ({
   tab: TabKey;
   onChange: (t: TabKey) => void;
 }) => (
+  /* On phones the strip is horizontally scrollable so all three tabs stay
+     reachable without wrapping or clipping. scroll-snap keeps the selected
+     tab from sitting half off-screen. Desktop is unaffected — the container
+     never overflows on viewports wider than 600 px. */
   <div
     role="tablist"
     aria-label="Integrations sections"
@@ -1505,6 +1518,10 @@ const TabBar = ({
       background: C.panel,
       border: `1px solid ${C.border}`,
       alignSelf: 'flex-start',
+      overflowX: 'auto',
+      maxWidth: '100%',
+      scrollSnapType: 'x mandatory',
+      WebkitOverflowScrolling: 'touch',
     }}
   >
     {(['catalog', 'flows', 'runs'] as TabKey[]).map(key => {
@@ -1519,10 +1536,15 @@ const TabBar = ({
           style={{
             appearance: 'none',
             cursor: 'pointer',
+            /* 44 px min-height for comfortable touch target (WCAG 2.5.5). */
+            minHeight: 44,
             padding: '7px 16px',
             borderRadius: 8,
             fontSize: 13,
             fontWeight: 600,
+            flexShrink: 0,
+            scrollSnapAlign: 'start',
+            whiteSpace: 'nowrap',
             color: on ? '#fff' : C.text,
             background: on ? C.accent : 'transparent',
             border: 'none',

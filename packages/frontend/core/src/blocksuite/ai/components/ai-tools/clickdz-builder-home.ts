@@ -345,6 +345,31 @@ export class ClickDzBuilderHome extends LitElement {
       border: 0;
       background: #fff;
     }
+
+    /* Phone layout. This component renders inside a Lit shadow root, so the
+       app-level ClickDz responsive stylesheet (clickdz/responsive.ts) cannot
+       reach it — a stylesheet in document.head does not pierce the shadow
+       boundary. These rules therefore have to live here.
+
+       The grid is already intrinsically responsive via
+       repeat(auto-fill, minmax(210px, 1fr)), so it collapses to one column on
+       its own; what was missing was an overflow guard on the host and tighter
+       gutters so cards are not squeezed by 40px of padding on a 390px screen. */
+    @media (max-width: 600px) {
+      :host {
+        max-width: 100vw;
+        overflow-x: hidden;
+      }
+      .wrap {
+        padding: 20px 14px 56px;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .live iframe {
+        height: 220px;
+      }
+    }
   `;
 
   /** Optional deep-link: a prompt to prefill the composer with. */

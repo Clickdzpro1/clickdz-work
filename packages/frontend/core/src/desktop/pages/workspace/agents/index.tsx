@@ -42,6 +42,7 @@ import {
   IconButton,
   Spinner,
 } from '@affine/core/modules/agents/components';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 // R11 (WS11-11, BUDGET): the home embeds the soft month-to-date <BudgetBar>; it
 // fetches GET /api/v1/agents/budget via Pouls's api wrapper. On 404 (feature
 // dark: CDZ_AGENTS_ENABLED off) the bar hides — byte-identical legacy home.
@@ -70,6 +71,9 @@ import {
 import { AiIcon } from '@blocksuite/icons/rc';
 import { useService } from '@toeverything/infra';
 import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
+
+// Inject the CDZ responsive stylesheet once per document (idempotent + SSR-safe).
+const CdzResponsive = () => { ensureClickDzResponsiveCss(); return null; };
 
 import { AgentCard } from './agent-card';
 
@@ -852,6 +856,7 @@ const AgentsPage = () => {
       </ViewHeader>
       <ViewBody>
         <div
+          data-cdz-surface=""
           style={{
             height: '100%',
             width: '100%',
@@ -862,6 +867,7 @@ const AgentsPage = () => {
             lineHeight: 1.5,
           }}
         >
+          <CdzResponsive />
           <style>{HOME_CSS}</style>
           <div
             className="cdz-agents-home-canvas"

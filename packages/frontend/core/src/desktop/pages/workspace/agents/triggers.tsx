@@ -1,4 +1,8 @@
 import { AgentPalette } from '@affine/core/modules/agents/components';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
+
+// Inject the CDZ responsive stylesheet once per document (idempotent + SSR-safe).
+const CdzResponsive = () => { ensureClickDzResponsiveCss(); return null; };
 import {
   AgentApiError,
   type AgentTrigger,
@@ -327,8 +331,10 @@ const AgentsTriggersPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
-        <div style={scrollStyle} dir={dir}>
-          <div style={innerStyle}>
+        <div data-cdz-surface="" style={scrollStyle} dir={dir}>
+          <CdzResponsive />
+          <style>{TRIGGERS_CSS}</style>
+          <div className="cdz-triggers-inner" style={innerStyle}>
             {/* Header + refresh */}
             <div
               style={{
@@ -542,7 +548,7 @@ const TriggerRow = ({
       </div>
 
       {/* status + actions */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+      <div data-cdz-actions="" style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
         <span
           style={pillStyle(
             active ? C.okText : C.muted,
@@ -1022,6 +1028,7 @@ const innerStyle: CSSProperties = {
   flexDirection: 'column',
   gap: 18,
   boxSizing: 'border-box',
+  // className added in JSX for mobile padding override (cdz-triggers-inner)
 };
 
 const headerStyle: CSSProperties = {
@@ -1182,6 +1189,14 @@ function pillStyle(color: string, bg: string, border: string): CSSProperties {
     whiteSpace: 'nowrap',
   };
 }
+
+// Mobile polish: tighten canvas padding on phones. Trigger rows already
+// flex-wrap so the action cluster drops to a second line on very narrow widths.
+const TRIGGERS_CSS = `
+@media (max-width: 560px){
+  .cdz-triggers-inner{padding:18px 14px 40px !important;}
+}
+`;
 
 // Default export + `Component` alias so the router's lazy convention (every
 // sibling agents page uses `export const Component`) can wire it either way.

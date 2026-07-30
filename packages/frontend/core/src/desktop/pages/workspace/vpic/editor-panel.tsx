@@ -944,9 +944,11 @@ export function VpicEditorPanel() {
 
   // 3) The editor.
   return (
-    <div dir={dir} style={styles.root}>
+    /* data-cdz-shell: on phones the shared sheet stacks the two columns
+       vertically (rail above canvas) instead of side by side. */
+    <div data-cdz-shell="" dir={dir} style={styles.root}>
       {/* ---- LEFT: canvas preview (grows to fill) ---- */}
-      <div style={styles.canvasCol}>
+      <div data-cdz-main="" style={styles.canvasCol}>
         {hasImage ? (
           <div style={styles.canvasStage}>
             <canvas ref={canvasRef} style={styles.canvas} />
@@ -1041,7 +1043,9 @@ export function VpicEditorPanel() {
       </div>
 
       {/* ---- RIGHT: the tool rail (scrollable) ---- */}
-      <div style={styles.rail}>
+      {/* data-cdz-rail: on phones the shared sheet makes this full-width,
+          capped at 38 vh, instead of the 320 px fixed column. */}
+      <div data-cdz-rail="" style={styles.rail}>
         {/* New image + Undo/Redo header row (always available). */}
         <div style={styles.railHeader}>
           <button

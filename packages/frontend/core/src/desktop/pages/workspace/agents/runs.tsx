@@ -1,4 +1,8 @@
 import { AgentPalette } from '@affine/core/modules/agents/components';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
+
+// Inject the CDZ responsive stylesheet once per document (idempotent + SSR-safe).
+const CdzResponsive = () => { ensureClickDzResponsiveCss(); return null; };
 // Jauge's compact spend estimate (token/tool-call → DZD "estimé"). Imported by
 // CONTRACT NAME from the components barrel; when the sibling export isn't on
 // disk yet the barrel still resolves because the merged barrel re-exports it.
@@ -226,6 +230,7 @@ const AgentsRunsPage = () => {
       </ViewHeader>
       <ViewBody>
         <div
+          data-cdz-surface=""
           style={{
             height: '100%',
             width: '100%',
@@ -236,6 +241,7 @@ const AgentsRunsPage = () => {
             lineHeight: 1.5,
           }}
         >
+          <CdzResponsive />
           <style>{RUNS_CSS}</style>
           <div
             dir={dir}
@@ -406,11 +412,15 @@ function pagerLabels(dir: 'rtl' | 'ltr'): {
       };
 }
 
-// Mobile polish: tighten the canvas padding on phones (the flex/wrap layout
-// already stacks; this just reclaims horizontal space).
+// Mobile polish: tighten the canvas padding on phones.
+// Run rows: on very narrow phones the right-hand chip + arrow would squeeze the
+// prompt preview. We allow the row to wrap so the chip + arrow drop to a second
+// line rather than truncating the preview to a few characters.
 const RUNS_CSS = `
 @media (max-width: 560px){
   .cdz-agents-runs-canvas{padding:18px 14px 40px !important;}
+  .cdz-run-row{flex-wrap:wrap !important;}
+  .cdz-run-row-meta{flex:0 0 100%;display:flex;justify-content:flex-end;gap:8px;margin-top:2px;}
 }
 `;
 
@@ -432,6 +442,7 @@ const ExecutionRow = ({
     <button
       type="button"
       onClick={onOpen}
+      className="cdz-run-row"
       style={{
         appearance: 'none',
         textAlign: 'start',

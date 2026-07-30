@@ -1,4 +1,8 @@
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
+
+// Inject the CDZ responsive stylesheet once per document (idempotent + SSR-safe).
+const CdzResponsive = () => { ensureClickDzResponsiveCss(); return null; };
 // Shared paginated-list kit (R9, Feuillet). Dependency-light, boot-safe; the
 // library is paged (grid) instead of rendering every artifact at once.
 import { PagedList } from '@affine/core/clickdz/paged-list';
@@ -359,6 +363,7 @@ const AgentsArtifactsPage = () => {
       </ViewHeader>
       <ViewBody>
         <div
+          data-cdz-surface=""
           style={{
             height: '100%',
             width: '100%',
@@ -369,6 +374,7 @@ const AgentsArtifactsPage = () => {
             lineHeight: 1.5,
           }}
         >
+          <CdzResponsive />
           <style>{ARTIFACTS_CSS}</style>
           <div
             dir={dir}

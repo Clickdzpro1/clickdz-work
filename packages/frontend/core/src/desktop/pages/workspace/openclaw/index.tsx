@@ -40,6 +40,7 @@ import {
   useState,
 } from 'react';
 
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 // CLAWX (C9): OpenClaw-specific workspace components. They resolve against
 // their C9 prop signatures (documented at the bottom of this file); in an
 // isolated single-file esbuild check they won't resolve — expected.
@@ -109,6 +110,13 @@ const EXAMPLES: string[] = [
   'Write a Node script that fetches https://jsonplaceholder.typicode.com/todos/1 and summarizes the fields',
   'Write a Python fizzbuzz function and a small test that asserts the first 15 outputs, then run the test',
 ];
+
+// Inject the shared CDZ responsive stylesheet once (idempotent). Rendered as a
+// null component so it sits inside the React tree without disturbing hook order.
+const CdzResponsive = () => {
+  ensureClickDzResponsiveCss();
+  return null;
+};
 
 type LoadState = 'loading' | 'ready' | 'error';
 type WorkspaceTab = 'files' | 'terminal' | 'preview';
@@ -276,7 +284,7 @@ const OpenClawPage = () => {
       <ViewTitle title="OpenClaw" />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
-        <div style={headerStyle}>
+        <div data-cdz-actions="" style={headerStyle}>
           <span style={headerGlyphStyle}>{'>_'}</span>
           OpenClaw
           <span style={betaBadgeStyle}>béta</span>
@@ -293,6 +301,7 @@ const OpenClawPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <CdzResponsive />
         {view === 'console' && provisioned ? (
           // The live coding console fills the whole body (its own 3-pane layout).
           <OpenClawConsole
@@ -307,7 +316,7 @@ const OpenClawPage = () => {
         ) : (
           // Wizard + dashboard share a centered, scrollable canvas (matches the
           // ShopERP onboarding surface).
-          <div style={studioScrollStyle}>
+          <div data-cdz-surface="" style={studioScrollStyle}>
             <div style={studioInnerStyle}>
               {bootState === 'loading' ? (
                 <div style={studioLoadingStyle}>
@@ -809,7 +818,7 @@ const OpenClawConsole = ({
   const hasThread = !!activeId;
 
   return (
-    <div style={rootStyle}>
+    <div data-cdz-surface="" data-cdz-shell="" style={rootStyle}>
       {/* =====================================================================
           R11 INVERSION — the WORKSPACE is the hero. Column order:
             LEFT  : project/thread sidebar (collapsible)
@@ -833,7 +842,7 @@ const OpenClawConsole = ({
           </button>
         </div>
       ) : (
-        <div style={sidebarWrapStyle}>
+        <div data-cdz-rail="" style={sidebarWrapStyle}>
           <div style={railHeadStyle}>
             <span style={railHeadLabelStyle}>Projects</span>
             <button
@@ -868,10 +877,10 @@ const OpenClawConsole = ({
       )}
 
       {/* ---- CENTER (HERO): workspace — Files / Terminal / Preview ---- */}
-      <div style={heroColStyle}>
+      <div data-cdz-main="" style={heroColStyle}>
         {/* hero header — mono chrome: tabs live below; this strip carries the
             live-build affordance + the rail toggle when the rail is hidden. */}
-        <div style={heroHeadStyle}>
+        <div data-cdz-actions="" style={heroHeadStyle}>
           <span style={heroTitleStyle}>{'>_'} Workspace</span>
           {building ? (
             <span style={buildingChipStyle} title="Files are streaming in">
@@ -920,15 +929,15 @@ const OpenClawConsole = ({
               />
             </div>
           ) : tab === 'files' ? (
-            <div style={filesLayoutStyle}>
-              <div style={fileTreeWrapStyle}>
+            <div data-cdz-shell="" style={filesLayoutStyle}>
+              <div data-cdz-panel="" style={fileTreeWrapStyle}>
                 <FileTree
                   files={files}
                   activePath={openFile?.path}
                   onOpen={path => void openPath(path)}
                 />
               </div>
-              <div style={codeViewerWrapStyle}>
+              <div data-cdz-main="" style={codeViewerWrapStyle}>
                 {openFile ? (
                   openFile.loading ? (
                     <CodeViewer path={openFile.path} loading />
@@ -980,7 +989,7 @@ const OpenClawConsole = ({
           </button>
         </div>
       ) : (
-        <div style={copilotColStyle}>
+        <div data-cdz-panel="" style={copilotColStyle}>
           <div style={railHeadStyle}>
             <button
               type="button"
@@ -1159,7 +1168,7 @@ const WorkspaceTabs = ({
     },
   ];
   return (
-    <div style={tabsBarStyle} role="tablist" aria-label="Workspace">
+    <div data-cdz-actions="" style={tabsBarStyle} role="tablist" aria-label="Workspace">
       {tabs.map(t => {
         const on = t.id === tab;
         return (
@@ -1421,6 +1430,12 @@ const sidebarStripStyle: CSSProperties = {
 // CENTER (HERO) — the workspace. This is the dominant column: it grows to eat
 // the frame (`flex: 1 1 auto`, the biggest basis) so Files/Terminal/Preview is
 // where the eye lands. No side borders — it is flanked by bordered rails.
+// minWidth 0 allows the phone shell stacking to shrink this below 420px; the
+// Desktop keeps its 420px floor so the hero never squashes below a usable
+// width; the shared responsive sheet overrides this to min-width:0 !important
+// via [data-cdz-main] inside its max-width:600px query, which is what lets the
+// pane shrink on phones. Changing the base value instead would have altered
+// desktop behaviour for narrow windows (<~1030px), where the floor still binds.
 const heroColStyle: CSSProperties = {
   flex: '1 1 auto',
   minWidth: 420,

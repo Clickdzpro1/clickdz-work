@@ -233,6 +233,10 @@ export function ThreadSidebar({
   return (
     <aside
       aria-label={title ?? 'Conversation history'}
+      // data-cdz-rail lets the shared responsive stylesheet turn this fixed
+      // column into a full-width capped-height strip on phones. Without it a
+      // 248-264px rail consumes ~68% of a 390px viewport.
+      data-cdz-rail=""
       style={{
         width: width ?? 248,
         flex: '0 0 auto',

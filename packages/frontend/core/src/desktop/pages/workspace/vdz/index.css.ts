@@ -36,6 +36,13 @@ export const root = style([
     color: text,
     fontSize: 13,
     overflow: 'hidden',
+    // ---- Mobile (≤ 600px): prevent horizontal overflow on the root --------
+    '@media': {
+      '(max-width: 600px)': {
+        overflowX: 'hidden',
+        overflowY: 'auto',
+      },
+    },
   },
 ]);
 
@@ -60,6 +67,17 @@ export const header = style({
   flexWrap: 'nowrap',
   overflow: 'hidden',
   boxSizing: 'border-box',
+  // ---- Mobile: allow the header to grow when actions wrap ----------------
+  '@media': {
+    '(max-width: 600px)': {
+      flexWrap: 'wrap',
+      height: 'auto',
+      minHeight: HEADER_H,
+      padding: '4px 12px',
+      gap: 6,
+      rowGap: 4,
+    },
+  },
 });
 
 // LEFT zone: the product title. Takes an equal share of the free space so the
@@ -89,6 +107,14 @@ export const headerRight = style({
   flex: 1,
   minWidth: 0,
   justifyContent: 'flex-end',
+  // ---- Mobile: allow wrapping so ProjectBar buttons don't get clipped ----
+  '@media': {
+    '(max-width: 600px)': {
+      flexWrap: 'wrap',
+      rowGap: 4,
+      justifyContent: 'flex-start',
+    },
+  },
 });
 
 export const headerTitle = style({
@@ -151,6 +177,16 @@ export const main = style({
   minHeight: 0,
   minWidth: 0,
   overflow: 'hidden',
+  // ---- Mobile: stack panels vertically so nothing exceeds viewport width --
+  '@media': {
+    '(max-width: 600px)': {
+      flexDirection: 'column',
+      overflow: 'visible',
+      overflowX: 'hidden',
+      overflowY: 'auto',
+      height: 'auto',
+    },
+  },
 });
 
 // Host for the Generate panel: fills the body with a definite height so the
@@ -529,6 +565,16 @@ export const timeline = style({
   gap: 8,
   overflow: 'hidden',
   boxSizing: 'border-box',
+  // ---- Mobile: allow inline height override to be ignored; give a sane min-
+  // height so the timeline is usable, and let the lanes scroll horizontally.
+  '@media': {
+    '(max-width: 600px)': {
+      height: 'auto !important' as 'auto',
+      minHeight: 180,
+      overflow: 'visible',
+      overflowX: 'hidden',
+    },
+  },
 });
 
 // The lanes area inside the timeline panel: takes the remaining height and
@@ -537,6 +583,16 @@ export const timelineLanesWrap = style({
   flex: 1,
   minHeight: 0,
   overflow: 'auto',
+  // ---- Mobile: explicit horizontal scroll so lane content doesn't widen page
+  '@media': {
+    '(max-width: 600px)': {
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      minHeight: 100,
+      // webkit momentum scrolling on iOS
+      WebkitOverflowScrolling: 'touch',
+    },
+  },
 });
 
 export const scrubberRow = style({
@@ -843,6 +899,15 @@ export const footer = style({
   borderTop: `1px solid ${border}`,
   background: raised,
   overflow: 'hidden',
+  // ---- Mobile: allow wrapping and height growth for footer text ------------
+  '@media': {
+    '(max-width: 600px)': {
+      flexWrap: 'wrap',
+      height: 'auto',
+      minHeight: 36,
+      padding: '6px 12px',
+    },
+  },
 });
 
 export const footerLabel = style({
@@ -1189,6 +1254,14 @@ export const sidePanelSlot = style({
   minWidth: 0,
   minHeight: 0,
   height: '100%',
+  // ---- Mobile: override the inline width; let the slot fill the column ----
+  '@media': {
+    '(max-width: 600px)': {
+      width: '100% !important' as '100%',
+      height: 'auto',
+      minHeight: 200,
+    },
+  },
 });
 
 // The center column (preview + timeline): the flex remainder.
@@ -1199,6 +1272,14 @@ export const center = style({
   minWidth: 0,
   minHeight: 0,
   overflow: 'hidden',
+  // ---- Mobile: full width, not hidden so timeline can scroll internally ---
+  '@media': {
+    '(max-width: 600px)': {
+      width: '100%',
+      overflow: 'visible',
+      overflowX: 'hidden',
+    },
+  },
 });
 
 // The right-hand stack that holds inspector + AI dock, each its own slot. A
@@ -1212,6 +1293,14 @@ export const rightStack = style({
   minHeight: 0,
   height: '100%',
   alignItems: 'stretch',
+  // ---- Mobile: stack panels in a column, each full-width ------------------
+  '@media': {
+    '(max-width: 600px)': {
+      flexDirection: 'column',
+      width: '100%',
+      height: 'auto',
+    },
+  },
 });
 
 // ---- Slim reusable panel chrome (<VdzPanel>) ----------------------------

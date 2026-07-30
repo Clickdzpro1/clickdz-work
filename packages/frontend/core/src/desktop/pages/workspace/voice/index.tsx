@@ -6,6 +6,7 @@ import {
 } from '@affine/core/modules/workbench';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 
+import { ensureClickDzResponsiveCss } from '../../../clickdz/responsive';
 import { GenerateTab } from './generate-tab';
 import { StudioTab } from './studio-tab';
 import { TranscribeTab } from './transcribe-tab';
@@ -14,6 +15,11 @@ import {
   fetchVoiceCapabilities,
   type VoiceCapabilities,
 } from './voice-shared';
+
+const CdzResponsive = () => {
+  ensureClickDzResponsiveCss();
+  return null;
+};
 
 // ---------------------------------------------------------------------------
 // ClickDz Voice Studio — DARK by default.
@@ -91,7 +97,9 @@ const VoiceStudioPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <CdzResponsive />
         <div
+          data-cdz-surface=""
           style={{
             height: '100%',
             width: '100%',
@@ -134,16 +142,24 @@ const VoiceStudioPage = () => {
               </p>
             </header>
 
-            {/* Tab switcher */}
+            {/* Tab switcher — scrollable on phones so all three tabs stay
+                reachable without clipping. scroll-snap keeps the active tab
+                from sitting half off-screen. Desktop is unaffected. */}
             <div
+              data-cdz-actions=""
+              role="tablist"
               style={{
-                display: 'inline-flex',
+                display: 'flex',
                 gap: 4,
                 padding: 4,
                 borderRadius: 10,
                 background: C.panel,
                 border: `1px solid ${C.border}`,
                 alignSelf: 'flex-start',
+                overflowX: 'auto',
+                maxWidth: '100%',
+                scrollSnapType: 'x mandatory',
+                WebkitOverflowScrolling: 'touch',
               }}
             >
               <TabButton
@@ -238,15 +254,22 @@ const TabButton = ({
 }) => (
   <button
     type="button"
+    role="tab"
+    aria-selected={active}
     onClick={onClick}
     style={{
       appearance: 'none',
+      /* 44 px min-height for comfortable touch target (WCAG 2.5.5). */
+      minHeight: 44,
       padding: '7px 18px',
       borderRadius: 7,
       border: 'none',
       fontSize: 13,
       fontWeight: 600,
       cursor: 'pointer',
+      flexShrink: 0,
+      scrollSnapAlign: 'start',
+      whiteSpace: 'nowrap',
       color: active ? '#fff' : C.muted,
       background: active ? C.accent : 'transparent',
       transition: 'background 150ms ease, color 150ms ease',

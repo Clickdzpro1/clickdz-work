@@ -1,4 +1,8 @@
 import { AgentPalette } from '@affine/core/modules/agents/components';
+import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
+
+// Inject the CDZ responsive stylesheet once per document (idempotent + SSR-safe).
+const CdzResponsive = () => { ensureClickDzResponsiveCss(); return null; };
 // Consumed from sibling builders BY CONTRACT NAME via the components barrel:
 //   • Chrono  — <RunTimeline steps state finalText onApprove pendingApproval />
 //   • Galerie — <ArtifactsPanel artifacts onOpen />
@@ -400,6 +404,7 @@ const AgentRunPage = () => {
       </ViewHeader>
       <ViewBody>
         <div
+          data-cdz-surface=""
           style={{
             height: '100%',
             width: '100%',
@@ -410,6 +415,7 @@ const AgentRunPage = () => {
             lineHeight: 1.5,
           }}
         >
+          <CdzResponsive />
           <div
             dir={dir}
             className="cdz-agents-run-canvas"
@@ -574,6 +580,7 @@ const RunHeader = ({
       }}
     >
       <div
+        data-cdz-actions=""
         style={{
           display: 'flex',
           alignItems: 'center',

@@ -401,6 +401,13 @@ export const readonlyLine = style({
   gap: 8,
   fontSize: 11,
   color: v.muted,
+  // ---- Mobile: wrap label+value onto two lines when panel is narrow --------
+  '@media': {
+    '(max-width: 600px)': {
+      flexWrap: 'wrap',
+      rowGap: 2,
+    },
+  },
 });
 
 export const readonlyValue = style({
@@ -409,6 +416,13 @@ export const readonlyValue = style({
   fontWeight: 600,
   wordBreak: 'break-all',
   textAlign: 'right',
+  // ---- Mobile: allow wrapping and left-align when on its own line ---------
+  '@media': {
+    '(max-width: 600px)': {
+      textAlign: 'left',
+      maxWidth: '100%',
+    },
+  },
 });
 
 // ---- No-selection Project section ------------------------------------------
@@ -428,6 +442,12 @@ export const ratioGrid = style({
   display: 'grid',
   gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
   gap: 6,
+  // ---- Mobile: collapse to 2 columns so cards don't overflow narrow panels -
+  '@media': {
+    '(max-width: 600px)': {
+      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+    },
+  },
 });
 
 export const ratioBtn = style({
