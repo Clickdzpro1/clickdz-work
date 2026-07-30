@@ -1,0 +1,95 @@
+name: server typecheck (no new errors)
+
+# WHY THIS EXISTS
+#
+# The server is bundled with `affine bundle` (esbuild), which strips types
+# WITHOUT typechecking them. So a type error does not fail the build — it ships
+# and becomes a runtime bug.
+#
+# That is not hypothetical. `clickdz-bridge.controller.ts` called
+# `pendingCodMarkerPartitions(...)` without importing it (TS2304). At runtime it
+# threw ReferenceError inside `erpWritePendingCod`'s deliberately fail-soft
+# try/catch, so it was swallowed silently — pending-COD caisse markers were
+# never written, which understated `pendingCodTotal` and the expected side of
+# `reconcileCourier`. Real money, invisible for weeks.
+#
+# The repo carries a large pre-existing type-error debt, so a plain "tsc must be
+# clean" gate would be red forever and get ignored. Instead this gate is
+# BASELINE-AWARE: it fails only when the error count goes UP. Existing debt is
+# tolerated; new debt is blocked.
+#
+# When you legitimately reduce the count, lower .github/typecheck-baseline.txt in
+# the same PR (the job prints the exact new number to use).
+
+on:
+  push:
+    paths:
+      - 'packages/backend/server/**'
+      - '.github/workflows/server-typecheck.yml'
+      - '.github/typecheck-baseline.txt'
+  pull_request:
+    paths:
+      - 'packages/backend/server/**'
+      - '.github/workflows/server-typecheck.yml'
+      - '.github/typecheck-baseline.txt'
+  workflow_dispatch:
+
+jobs:
+  typecheck:
+    name: server tsc --noEmit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+
+      # Yarn 4 is vendored at .yarn/releases, so this never touches
+      # registry.yarnpkg.com (which some networks block).
+      - name: Install server workspace
+        run: node .yarn/releases/yarn-4.13.0.cjs workspaces focus @affine/server
+        env:
+          YARN_ENABLE_IMMUTABLE_INSTALLS: 'false'
+
+      # @prisma/client types are generated, not checked in. Without this every
+      # model reference is an error and the count is meaningless.
+      - name: Generate Prisma client
+        run: node .yarn/releases/yarn-4.13.0.cjs prisma generate
+        working-directory: packages/backend/server
+
+      - name: Typecheck and compare against baseline
+        run: |
+          set -o pipefail
+          BASELINE="$(tr -d '[:space:]' < .github/typecheck-baseline.txt)"
+
+          node node_modules/typescript/bin/tsc --noEmit \
+            -p packages/backend/server/tsconfig.json 2>&1 | tee /tmp/tsc.log || true
+
+          COUNT="$(grep -cE '^[^ ].*error TS' /tmp/tsc.log || true)"
+          COUNT="${COUNT:-0}"
+
+          echo "baseline=$BASELINE  current=$COUNT"
+          {
+            echo "### Server typecheck"
+            echo ""
+            echo "| baseline | current |"
+            echo "|---|---|"
+            echo "| $BASELINE | $COUNT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$COUNT" -gt "$BASELINE" ]; then
+            echo ""
+            echo "::error::Type errors increased: $BASELINE -> $COUNT. New errors below."
+            echo ""
+            echo "--- all current errors, newest work is most likely at the end ---"
+            grep -E '^[^ ].*error TS' /tmp/tsc.log | sort | uniq -c | sort -rn
+            exit 1
+          fi
+
+          if [ "$COUNT" -lt "$BASELINE" ]; then
+            echo "::notice::Type errors went DOWN ($BASELINE -> $COUNT). Please set .github/typecheck-baseline.txt to $COUNT in this PR."
+          fi
+
+          echo "OK — no new type errors."
