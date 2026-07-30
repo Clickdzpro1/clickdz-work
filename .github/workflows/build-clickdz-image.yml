@@ -36,5 +36,5 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.revision-tag || 'stable' }}
-      app-version: 0.27.1
+      app-version: 0.27.3
       git-short-hash: ${{ needs.meta.outputs.short-sha }}
