@@ -27,6 +27,14 @@ export type GraphqlContext = {
       useFactory: (config: Config) => {
         return {
           ...config.graphql.apolloDriverConfig,
+          // SEC-7: introspection is OFF in production (verified live: an
+          // unauthenticated `{ __schema { … } }` succeeded). Dev/test keep the
+          // configured value (default true) so codegen and GraphiQL still
+          // work; set CDZ_GQL_INTROSPECTION=1 to re-enable it in production
+          // deliberately (e.g. a staging deployment running NODE_ENV=production).
+          introspection: env.prod
+            ? process.env.CDZ_GQL_INTROSPECTION === '1'
+            : (config.graphql.apolloDriverConfig.introspection ?? true),
           buildSchemaOptions: {
             numberScalarMode: 'integer',
           },
