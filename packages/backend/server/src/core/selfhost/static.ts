@@ -135,10 +135,18 @@ export class StaticFilesResolver implements OnModuleInit {
       // in the image at static/mobile/selfhost.html with publicPath '/', it
       // was simply never routed to. Serve it to mobile user-agents.
       //
-      // Escape hatch: CDZ_MOBILE_WEB=0 restores the old behaviour (desktop
-      // bundle for everyone) without needing a rebuild.
+      // !! DO NOT DEFAULT THIS ON !! Verified 2026-07-30: every ClickDz surface
+      // (shoperp, agents, hermes, openclaw, apps, clickdz-welcome) lives under
+      // packages/frontend/core/src/desktop/pages/, and packages/frontend/apps/
+      // mobile/src contains NO references to any of them. Serving AFFiNE's
+      // mobile edition to phones would therefore REMOVE the shop, ERP, agents
+      // and onboarding from mobile users entirely.
+      //
+      // Opt-in only (CDZ_MOBILE_WEB=1), and only once the CDZ routes are
+      // registered in the mobile app. The correct mobile fix is making the
+      // existing desktop-tree UI responsive, not switching bundles.
       const mobile =
-        process.env.CDZ_MOBILE_WEB !== '0' &&
+        process.env.CDZ_MOBILE_WEB === '1' &&
         isMobile({
           ua: req.headers['user-agent'] ?? undefined,
         });
