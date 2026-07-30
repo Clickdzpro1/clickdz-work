@@ -19,12 +19,207 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 const DATA_SECRET =
   process.env.CDZ_DATA_SECRET || process.env.CLICKDZ_BRIDGE_TOKEN || '';
 
-export function dataWriteToken(slug: string): string {
+// ---------------------------------------------------------------------------
+// SEC-3 — SCOPED data tokens (collection + action + expiry).
+//
+// The original data token above ("legacy": HMAC over `appdata:${slug}`) is
+// bound to the slug ONLY — no collection, no action, no expiry. Because it is
+// embedded in every published app's HTML, anyone who views a storefront's
+// source holds a credential that can create/upsert/delete/CLEAR every
+// collection of that slug, forever. Scoped tokens close that: the payload now
+// carries the allowed collections, the allowed actions and an absolute expiry,
+// all folded into the signature (same versioned-blob shape as the staff token
+// below — see STAFF_TOKEN_V — so the two formats never collide: a scoped token
+// is base64url("d1." + …), a legacy token is a bare 32-char base64url slice).
+//
+// Two mint profiles:
+//   • dataWriteToken(slug)  — SERVER-INTERNAL. Every bridge/courier/agents
+//     call site mints this immediately before a server→server fetch, so it is
+//     now a full-scope ('*'/'*') but SHORT-LIVED token (10 min). Signature and
+//     truthiness contract are unchanged ('' when no secret), so the ~40
+//     existing call sites keep working untouched — and keep working after the
+//     legacy format is retired.
+//   • publicDataToken(slug) — EMBEDDED in generated/template app HTML. Wildcard
+//     collections (templates use dynamic monthly partitions), every action
+//     EXCEPT the destructive `clear` (no generated app calls it), and a long
+//     but FINITE expiry (CDZ_DATA_TOKEN_TTL_DAYS, default 365d — republishing
+//     re-mints, so a leaked token now dies on its own).
+//
+// BACK-COMPAT: already-published storefronts still carry legacy tokens.
+// verifyDataToken therefore ALSO accepts the legacy format while
+// CDZ_DATA_TOKEN_LEGACY is not '0' (default ON — nothing breaks on deploy).
+// Once every live storefront has been re-served/re-published with a scoped
+// token, set CDZ_DATA_TOKEN_LEGACY=0 to retire the unscoped format for good.
+// ---------------------------------------------------------------------------
+
+/** The five Data API operations a scoped token can be minted for. */
+export type DataAction = 'read' | 'create' | 'upsert' | 'delete' | 'clear';
+
+/** Current scoped-token format tag (payload versioning, mirrors 's1'/'v1'). */
+const DATA_TOKEN_V = 'd1';
+/** Every action, for internal full-scope mints. */
+const ALL_DATA_ACTIONS: readonly DataAction[] = [
+  'read',
+  'create',
+  'upsert',
+  'delete',
+  'clear',
+];
+/** Public (HTML-embedded) profile: everything EXCEPT the collection wipe. */
+const PUBLIC_DATA_ACTIONS: readonly DataAction[] = [
+  'read',
+  'create',
+  'upsert',
+  'delete',
+];
+/** Server-internal tokens are minted per request — keep them short-lived. */
+const INTERNAL_TOKEN_TTL_MS = 10 * 60 * 1000;
+/** Embedded-token lifetime (days). Clamped to [1, 730]; default 365. */
+const PUBLIC_TOKEN_TTL_DAYS = Math.min(
+  Math.max(Math.floor(Number(process.env.CDZ_DATA_TOKEN_TTL_DAYS) || 365), 1),
+  730
+);
+/** Legacy (slug-only) tokens accepted unless explicitly retired with '0'. */
+const LEGACY_TOKENS_OK = process.env.CDZ_DATA_TOKEN_LEGACY !== '0';
+/** Monthly partition suffix (`invoices-202607`) — matches the data controller. */
+const DATA_PARTITION_SUFFIX_RE = /-\d{6}$/;
+
+/** The legacy slug-only mint (kept verbatim for the back-compat verify path). */
+function legacyDataToken(slug: string): string {
   if (!DATA_SECRET) return '';
   return createHmac('sha256', DATA_SECRET)
     .update(`appdata:${slug}`)
     .digest('base64url')
     .slice(0, 32);
+}
+
+/**
+ * Sign the canonical scoped payload → base64url HMAC-SHA256 signature. Binds
+ * slug + collections + actions + exp so a signature is valid for EXACTLY that
+ * tuple. Returns '' when no secret is configured (fail closed, like every
+ * other sign helper in this file).
+ */
+function signDataScope(
+  slug: string,
+  collections: string,
+  actions: string,
+  exp: number
+): string {
+  if (!DATA_SECRET) return '';
+  return createHmac('sha256', DATA_SECRET)
+    .update(`datascope:${slug}:${collections}:${actions}:${exp}`)
+    .digest('base64url');
+}
+
+/**
+ * Mint a scoped data token for `slug`. `collections` is '*' or an explicit
+ * list (each must match the data controller's collection charset — anything
+ * else is dropped); `actions` is '*' or a subset of DataAction. Returns '' when
+ * no secret is configured or the scope normalizes to empty. The result is a
+ * single base64url blob, safe in a Bearer header, a `?t=` query or client JS.
+ */
+export function scopedDataToken(
+  slug: string,
+  collections: '*' | readonly string[],
+  actions: '*' | readonly DataAction[],
+  ttlMs: number
+): string {
+  if (!DATA_SECRET) return '';
+  const cols =
+    collections === '*'
+      ? '*'
+      : collections
+          .filter(c => /^[a-z0-9_-]{1,32}$/.test(c))
+          .slice(0, 32)
+          .join(',');
+  const acts =
+    actions === '*'
+      ? '*'
+      : actions
+          .filter(a => (ALL_DATA_ACTIONS as readonly string[]).includes(a))
+          .join(',');
+  if (!cols || !acts) return '';
+  const exp = Date.now() + Math.max(1000, Math.floor(ttlMs));
+  const sig = signDataScope(slug, cols, acts, exp);
+  if (!sig) return '';
+  const payload = `${DATA_TOKEN_V}.${cols}.${acts}.${exp}.${sig}`;
+  return Buffer.from(payload, 'utf8').toString('base64url');
+}
+
+/**
+ * SERVER-INTERNAL mint — full scope, 10-minute expiry. Same name/signature/
+ * truthiness as the historical export so the ~40 bridge/courier/agents call
+ * sites (which all mint immediately before a server→server fetch) stay
+ * untouched. NOT for embedding in HTML — use publicDataToken for that.
+ */
+export function dataWriteToken(slug: string): string {
+  return scopedDataToken(slug, '*', '*', INTERNAL_TOKEN_TTL_MS);
+}
+
+/**
+ * PUBLIC mint — the token baked into generated/template app HTML
+ * (`__CLICKDZ_DATA_TOKEN__`). Wildcard collections, no `clear`, finite expiry
+ * (CDZ_DATA_TOKEN_TTL_DAYS, default 365d). Re-serving/republishing an app
+ * re-mints it, which is the rotation story for leaked tokens.
+ */
+export function publicDataToken(slug: string): string {
+  return scopedDataToken(
+    slug,
+    '*',
+    PUBLIC_DATA_ACTIONS,
+    PUBLIC_TOKEN_TTL_DAYS * 86_400_000
+  );
+}
+
+/** Decoded scope of a verified `d1.` token. */
+interface DataTokenScope {
+  collections: string;
+  actions: string;
+}
+
+/**
+ * Cryptographically verify a `d1.` scoped token for `slug` (constant-time sig
+ * compare + expiry check). Returns the embedded scope on success, null for ANY
+ * problem — not a d1 blob, malformed, expired, bad signature. Never throws.
+ */
+function verifyScopedDataToken(
+  slug: string,
+  token: string
+): DataTokenScope | null {
+  if (!DATA_SECRET || !token) return null;
+  let payload: string;
+  try {
+    payload = Buffer.from(token, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+  // EXACTLY 5 fields; collections/actions never contain '.', the sig cannot
+  // either, so a plain split is unambiguous (same idiom as the staff token).
+  const parts = payload.split('.');
+  if (parts.length !== 5) return null;
+  const [ver, cols, acts, expRaw, sig] = parts;
+  if (ver !== DATA_TOKEN_V || !cols || !acts || !sig) return null;
+  const exp = Number(expRaw);
+  if (!Number.isFinite(exp) || exp < Date.now()) return null;
+  const expected = signDataScope(slug, cols, acts, exp);
+  if (!expected || !safeEqual(expected, sig)) return null;
+  return { collections: cols, actions: acts };
+}
+
+/**
+ * Whether a verified scope covers `collection`. '*' covers everything; an
+ * explicit list matches the exact name OR its partition base (`invoices`
+ * covers `invoices-202607` — same suffix rule the data controller applies).
+ */
+function scopeAllowsCollection(scope: string, collection: string): boolean {
+  if (scope === '*') return true;
+  const base = collection.replace(DATA_PARTITION_SUFFIX_RE, '');
+  return scope.split(',').some(c => c === collection || c === base);
+}
+
+/** Whether a verified scope covers `action`. '*' covers everything. */
+function scopeAllowsAction(scope: string, action: DataAction): boolean {
+  return scope === '*' || scope.split(',').includes(action);
 }
 
 /**
@@ -42,10 +237,42 @@ export function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ha, hb);
 }
 
-/** Verify a caller-supplied write token for `slug` (constant-time). */
-export function verifyDataToken(slug: string, token: string): boolean {
-  const expected = dataWriteToken(slug);
-  if (!expected || !token) return false;
+/**
+ * Verify a caller-supplied token for `slug` (constant-time).
+ *
+ * SEC-3: accepts BOTH formats —
+ *   • a scoped `d1.` token: signature + expiry are always enforced; when the
+ *     caller also passes `collection`/`action`, the embedded scope must cover
+ *     them (callers that pass neither — e.g. the /pay/checkout gate — only
+ *     prove "this request comes from this app", which is all they need);
+ *   • a legacy slug-only token: accepted while CDZ_DATA_TOKEN_LEGACY is not
+ *     '0' (default ON). Legacy tokens carry no scope, so they authorize every
+ *     collection/action — exactly their historical behaviour. Set the flag to
+ *     '0' once all live storefronts are re-minted to retire them.
+ *
+ * The optional parameters keep every existing `verifyDataToken(slug, token)`
+ * call site source-compatible.
+ */
+export function verifyDataToken(
+  slug: string,
+  token: string,
+  collection?: string,
+  action?: DataAction
+): boolean {
+  if (!token) return false;
+  const scope = verifyScopedDataToken(slug, token);
+  if (scope) {
+    if (collection && !scopeAllowsCollection(scope.collections, collection)) {
+      return false;
+    }
+    if (action && !scopeAllowsAction(scope.actions, action)) {
+      return false;
+    }
+    return true;
+  }
+  if (!LEGACY_TOKENS_OK) return false;
+  const expected = legacyDataToken(slug);
+  if (!expected) return false;
   return safeEqual(expected, token);
 }
 

@@ -54,7 +54,7 @@ import {
 // C6: verifyDataToken gates the @Public() /pay/checkout route with the SAME
 // per-slug token the published shop already sends on data writes (checkout auth
 // == data-write auth), so no new secret/credential is introduced.
-import { dataWriteToken, safeEqual, verifyDataToken,
+import { dataWriteToken, publicDataToken, safeEqual, verifyDataToken,
   staffToken,
   verifyStaffToken,
   staffCan,
@@ -3355,7 +3355,7 @@ export class ClickDzBridgeController {
           '__CLICKDZ_DATA_URL__',
           `${externalBase}/api/v2/apps-data/${slug}`
         )
-        .replaceAll('__CLICKDZ_DATA_TOKEN__', dataWriteToken(slug));
+        .replaceAll('__CLICKDZ_DATA_TOKEN__', publicDataToken(slug));
       const seconds = Math.round((Date.now() - startedAt) / 1000);
       this.logger.log(
         `[apps] stream-generated ${html.length} chars in ${seconds}s slug=${slug} user=${user.id}`
@@ -3556,7 +3556,7 @@ export class ClickDzBridgeController {
         '__CLICKDZ_DATA_URL__',
         `${externalBase}/api/v2/apps-data/${slug}`
       )
-      .replaceAll('__CLICKDZ_DATA_TOKEN__', dataWriteToken(slug));
+      .replaceAll('__CLICKDZ_DATA_TOKEN__', publicDataToken(slug));
     this.logger.log(
       `[apps] generated ${html.length} chars in ${Math.round((Date.now() - startedAt) / 1000)}s`
     );
@@ -3759,7 +3759,9 @@ export class ClickDzBridgeController {
       process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
     ).replace(/\/+$/, '');
     const dataUrl = `${externalBase}/api/v2/apps-data/${slug}`;
-    const dataToken = dataWriteToken(slug);
+    // SEC-3: embedded in served HTML → the PUBLIC scoped profile (no `clear`,
+    // finite expiry), never the full-scope internal mint.
+    const dataToken = publicDataToken(slug);
     // Map the contract's placeholder tokens → real minted values. The generate
     // path substitutes __CLICKDZ_DATA_URL__/__CLICKDZ_DATA_TOKEN__ with these
     // exact values; templates additionally carry __CLICKDZ_SLUG__ (mapped to the
@@ -3952,7 +3954,7 @@ export class ClickDzBridgeController {
       // data namespace matches the deployed one.
       const dataSlug = rec.storeSlug || rec.slug;
       const dataUrl = `${externalBase}/api/v2/apps-data/${dataSlug}`;
-      const dataToken = dataWriteToken(dataSlug);
+      const dataToken = publicDataToken(dataSlug);
       return renderTemplateSource({
         templateHtml,
         slug: dataSlug,
@@ -6699,7 +6701,7 @@ export class ClickDzBridgeController {
       if (!templateHtml) return '';
       const dataSlug = rec.storeSlug || rec.slug;
       const dataUrl = `${externalBase}/api/v2/apps-data/${dataSlug}`;
-      const dataToken = dataWriteToken(dataSlug);
+      const dataToken = publicDataToken(dataSlug);
       return renderTemplateSource({
         templateHtml,
         slug: dataSlug,
@@ -7481,7 +7483,7 @@ export class ClickDzBridgeController {
       if (!templateHtml) return '';
       const dataSlug = rec.storeSlug || rec.slug;
       const dataUrl = `${externalBase}/api/v2/apps-data/${dataSlug}`;
-      const dataToken = dataWriteToken(dataSlug);
+      const dataToken = publicDataToken(dataSlug);
       return renderTemplateSource({
         templateHtml,
         slug: dataSlug,
