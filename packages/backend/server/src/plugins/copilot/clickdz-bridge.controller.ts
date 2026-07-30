@@ -113,6 +113,7 @@ import {
   buildConversion,
   buildDraftInvoice,
   buildInvoiceFromOrder,
+  checkSellerIdentity,
   coerceInvoice,
   filterInvoices,
   invoiceCollectionForDate,
@@ -1169,6 +1170,14 @@ const CDZ_SHOP_STATE = process.env.CDZ_SHOP_STATE === '1';
 // INCR, byte-identical behaviour. '1' = Postgres cdz_erp_seq becomes the
 // monotonic floor via max-merge (see CdzErpSeqModel.reserve + erpReserveSeq).
 const CDZ_ERPSEQ_PG = process.env.CDZ_ERPSEQ_PG === '1';
+// SEC-5 — refuse to legally number a FACTURE while the seller's fiscal
+// identity (sellerName + RC/NIF/NIS/ART, "obligatoire légalement" on the
+// printed sheet) is blank in the settings singleton. Default ON; set
+// CDZ_ERP_SELLER_ID_ENFORCE=0 to restore the old permissive behaviour (e.g.
+// while migrating merchants who validated factures before this gate existed).
+// Devis/BL are NOT gated — they are not fiscal invoices.
+const CDZ_ERP_SELLER_ID_ENFORCE =
+  process.env.CDZ_ERP_SELLER_ID_ENFORCE !== '0';
 // Bound the PG hop on the validation path; past this the reserve fails soft to
 // the Redis number so invoicing never stalls on a slow Postgres.
 const CDZ_ERPSEQ_PG_TIMEOUT_MS = Math.max(
@@ -5078,6 +5087,27 @@ export class ClickDzBridgeController {
         .status(HttpStatus.CONFLICT)
         .json({ error: 'invoice_not_draft', status: draft.status });
       return;
+    }
+    // SEC-5: a facture must not receive a legal number while the seller's
+    // mandatory identity fields are blank. Checked BEFORE the seq reservation
+    // so a refusal never burns a gap-less number. Settings unreadable (data
+    // API down) ⇒ typed 502, same contract as the settings routes — never a
+    // silent pass. Same typed 400 body shape as every other invoice refusal.
+    if (CDZ_ERP_SELLER_ID_ENFORCE && draft.type === 'facture') {
+      const settingsRows = await this.erpList(slug, 'settings');
+      if (!settingsRows) {
+        res
+          .status(HttpStatus.BAD_GATEWAY)
+          .json({ error: 'data_api_unavailable' });
+        return;
+      }
+      const settingsRow =
+        settingsRows.find(r => erpStr(r.key) === 'settings') ?? settingsRows[0];
+      const seller = checkSellerIdentity(settingsRow);
+      if (!seller.ok) {
+        this.erpInvoiceBadInput(res, seller.reason, seller.field);
+        return;
+      }
     }
     const { timbreRate } = this.erpInvoiceOptions();
     // Reserve the gap-less number ONLY now, right before persisting. Routed
