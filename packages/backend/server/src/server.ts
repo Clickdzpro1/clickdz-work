@@ -20,6 +20,7 @@ import {
 import { SocketIoAdapter } from './base/websocket';
 import { AuthGuard } from './core/auth';
 import { TelemetryService } from './core/telemetry/service';
+import { securityHeaders } from './middleware/security-headers';
 import { serverTimingAndCache } from './middleware/timing';
 
 const OneMB = 1024 * 1024;
@@ -105,6 +106,9 @@ export async function run() {
   }
 
   app.use(serverTimingAndCache);
+  // SEC-6: baseline security headers (CSP / HSTS / XFO / nosniff), env-gated —
+  // see middleware/security-headers.ts for the exact policy + escape hatches.
+  app.use(securityHeaders);
 
   app.use(
     graphqlUploadExpress({
