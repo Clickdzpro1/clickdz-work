@@ -15,6 +15,9 @@ const SLIDEPRO_URL_KEY = 'cdz.slidepro.url';
  */
 const SLIDEPRO_HEALTH_PATH = '/api/v1/auth/status';
 
+/** The deployed shared Presenton instance (Railway service cdz-slidepro). */
+const SLIDEPRO_DEFAULT_URL = 'https://cdz-slidepro-production.up.railway.app';
+
 /**
  * Shared-instance base URL.
  *
@@ -41,7 +44,14 @@ function slideProBaseUrl(slug: string): string {
     typeof process !== 'undefined'
       ? (process.env?.CDZ_SLIDEPRO_URL ?? '')
       : '';
-  return fromEnv.replace(/\/+$/, '');
+  if (fromEnv) return fromEnv.replace(/\/+$/, '');
+  // The deployed shared instance. process.env is baked at BUILD time (the image
+  // is built in CI, not on Railway), so an env var set on the server would never
+  // reach this bundle — a checked-in default is what actually makes the tab work
+  // out of the box. Verified live: / and /api/v1/auth/status both return 200.
+  // The localStorage override above still wins, so a self-hoster can repoint it
+  // without a rebuild.
+  return SLIDEPRO_DEFAULT_URL;
 }
 
 export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void }) => {
