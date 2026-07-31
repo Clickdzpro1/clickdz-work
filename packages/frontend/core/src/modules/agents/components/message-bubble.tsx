@@ -1,16 +1,16 @@
 // MessageBubble — one turn in the transcript. User turns are a compact
 // right-aligned accent bubble; assistant turns are a full-width surface that
-// renders the step timeline (StepList) above the answer (MarkdownLite) with a
-// live StreamingText cursor while `streaming`. Typed against AgentMessage (C1).
-// Pure presentational.
+// renders the step timeline (StepList) above the answer, going through
+// StreamingAnswer so the live token stream gets an animated reveal + cursor
+// while `streaming`, then hands off to MarkdownLite (internally) once it
+// settles. Typed against AgentMessage (C1). Pure presentational.
 
 import type { ReactNode } from 'react';
 
 import type { AgentMessage } from '../types';
-import { MarkdownLite } from './markdown-lite';
 import { AgentPalette as P } from './palette';
+import { StreamingAnswer } from './streaming-answer';
 import { StepList } from './tool-call-card';
-import { StreamingText } from './streaming-text';
 
 function Avatar({ role, agent }: { role: string; agent?: string }) {
   const isUser = role === 'user';
@@ -101,14 +101,10 @@ export function MessageBubble({
           </div>
         ) : null}
         {message.content ? (
-          streaming ? (
-            <StreamingText text={message.content} active />
-          ) : (
-            <MarkdownLite text={message.content} />
-          )
+          <StreamingAnswer text={message.content} live={!!streaming} />
         ) : streaming && !hasSteps ? (
           // Nothing yet — a bare cursor so the surface doesn't read as empty.
-          <StreamingText text="" active />
+          <StreamingAnswer text="" live />
         ) : null}
         {extras ? <div style={{ marginTop: 12 }}>{extras}</div> : null}
       </div>

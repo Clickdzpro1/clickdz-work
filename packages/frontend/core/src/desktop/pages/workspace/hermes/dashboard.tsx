@@ -16,11 +16,11 @@ import {
   type ApprovalInboxItem,
   CodDesk,
   type CodOrder,
-  MarkdownLite,
   MissionsCard,
   PulseCard,
   type AgentPulse,
   StepList,
+  StreamingAnswer,
 } from '@affine/core/modules/agents/components';
 import { CdzAILoading } from '@affine/core/clickdz/cdz-animations';
 import type { AgentStep, AgentThreadSummary } from '@affine/core/modules/agents/types';
@@ -1336,8 +1336,10 @@ const ExecutionRow = ({
 // ---------------------------------------------------------------------------
 // RunLiveView — an inline overlay that re-attaches to a background run's stream
 // (durable hook) and renders the SAME step timeline the console uses (StepList)
-// plus a final answer card (MarkdownLite). On first mount it seeds from the
-// persisted record (getAgentRun) so an already-finished run shows instantly,
+// plus a final answer card (StreamingAnswer — animated reveal while `isLive`,
+// handing off to MarkdownLite internally once the run settles). On first mount
+// it seeds from the persisted record (getAgentRun) so an already-finished run
+// shows instantly,
 // then the durable hook replays events + live-attaches. Fail-soft: a load error
 // shows a retry; a missing hook payload just renders what the record gave us.
 // ---------------------------------------------------------------------------
@@ -1598,7 +1600,7 @@ const RunLiveView = ({
                   >
                     Final answer
                   </div>
-                  <MarkdownLite text={finalText} />
+                  <StreamingAnswer text={finalText} live={isLive} />
                 </div>
               ) : null}
             </>

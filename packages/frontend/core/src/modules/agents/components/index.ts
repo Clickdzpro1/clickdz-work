@@ -37,7 +37,7 @@ export { MessageBubble } from './message-bubble';
 export { MarkdownLite } from './markdown-lite';
 export { StepList, ToolCallCard } from './tool-call-card';
 export { RunTimeline, type RunTimelineProps } from './run-timeline';
-export { StreamingText } from './streaming-text';
+export { StreamingAnswer } from './streaming-answer';
 
 // ---- input + status ----
 export { Composer } from './composer';

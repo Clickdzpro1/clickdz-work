@@ -108,82 +108,130 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
     }
 
     /* Quick starts — the empty-state shortcut grid. Auto-fit so it lands as
-       3x2 in the wide chat page and collapses to 2x3 / 1x6 in the narrow docked
-       sidebar without a media query. */
+       3x2 in the wide chat page and collapses to 2x3 / 1x1 in the narrow docked
+       sidebar without a media query. Cards carry real product copy (a
+       confident outcome title + a concrete supporting line), so the minmax
+       floor is wider than a typical chip grid to give that copy room to
+       breathe instead of wrapping awkwardly. */
     .cdz-quickstarts {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(248px, 1fr));
+      gap: 10px;
       width: 100%;
-      max-width: 760px;
-      margin-top: 4px;
+      max-width: 860px;
+      margin-top: 8px;
     }
     .cdz-quickstart {
+      position: relative;
       display: flex;
       align-items: flex-start;
-      gap: 10px;
-      padding: 11px 12px;
+      gap: 12px;
+      padding: 16px 18px;
       text-align: left;
       cursor: pointer;
       font: inherit;
       color: var(--affine-v2-text-primary);
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
-      border-radius: 12px;
+      border-radius: 14px;
       background: var(--affine-v2-layer-background-primary);
+      overflow: hidden;
       /* Staggered entrance: --cdz-qs-delay is set per card inline, so the grid
          resolves as a quick cascade instead of six cards snapping in together. */
       opacity: 0;
-      animation: cdz-qs-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      animation: cdz-qs-in 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
       animation-delay: var(--cdz-qs-delay, 0ms);
       transition:
-        transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
-        border-color 160ms ease,
-        box-shadow 160ms ease,
-        background 160ms ease;
+        transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+        border-color 200ms ease,
+        box-shadow 200ms ease,
+        background 200ms ease;
     }
-    .cdz-quickstart:hover {
-      transform: translateY(-2px);
+    /* Accent rail: a thin left bar in the brand blue, hidden off-canvas until
+       hover/focus pulls it in. Reads as a deliberate design mark rather than
+       a generic hover tint, and reinforces which card is about to fire. */
+    .cdz-quickstart::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 3px;
+      background: #2f7bff;
+      transform: translateX(-3px);
+      transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .cdz-quickstart:hover,
+    .cdz-quickstart:focus-visible {
+      transform: translateY(-3px);
       border-color: color-mix(in srgb, #2f7bff 42%, transparent);
       background: color-mix(
         in srgb,
-        #2f7bff 4%,
+        #2f7bff 5%,
         var(--affine-v2-layer-background-primary)
       );
-      box-shadow: 0 6px 18px color-mix(in srgb, #2f7bff 14%, transparent);
+      box-shadow: 0 10px 24px color-mix(in srgb, #2f7bff 16%, transparent);
+    }
+    .cdz-quickstart:hover::before,
+    .cdz-quickstart:focus-visible::before {
+      transform: translateX(0);
+    }
+    .cdz-quickstart:hover .cdz-quickstart-arrow,
+    .cdz-quickstart:focus-visible .cdz-quickstart-arrow {
+      opacity: 1;
+      transform: translateX(0);
     }
     .cdz-quickstart:active {
-      transform: translateY(0) scale(0.985);
+      transform: translateY(-1px) scale(0.988);
     }
     .cdz-quickstart:focus-visible {
       outline: 2px solid color-mix(in srgb, #2f7bff 60%, transparent);
       outline-offset: 2px;
     }
     .cdz-quickstart-icon {
-      font-size: 17px;
-      line-height: 20px;
+      font-size: 22px;
+      line-height: 24px;
       flex: 0 0 auto;
     }
     .cdz-quickstart-copy {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 4px;
       min-width: 0;
+      padding-right: 18px;
     }
     .cdz-quickstart-title {
-      font-size: 13px;
+      font-size: 14.5px;
       font-weight: 650;
-      line-height: 18px;
+      line-height: 19px;
+      color: var(--affine-v2-text-emphasis);
     }
     .cdz-quickstart-hint {
-      font-size: 11.5px;
-      font-weight: 500;
-      line-height: 15px;
+      font-size: 12.5px;
+      font-weight: 400;
+      line-height: 17px;
       color: var(--affine-v2-text-secondary);
+    }
+    /* Affordance: a small arrow that hints the card will fill the composer
+       rather than fire a request outright. Resting off to the side and
+       transparent, it slides in on hover/focus instead of always being on
+       screen, so the card reads as copy first and control second. */
+    .cdz-quickstart-arrow {
+      position: absolute;
+      top: 16px;
+      right: 14px;
+      font-size: 13px;
+      line-height: 1;
+      color: #2f7bff;
+      opacity: 0;
+      transform: translateX(-4px);
+      transition:
+        opacity 200ms ease,
+        transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
     }
     @keyframes cdz-qs-in {
       from {
         opacity: 0;
-        transform: translateY(8px) scale(0.98);
+        transform: translateY(10px) scale(0.98);
       }
       to {
         opacity: 1;
@@ -196,8 +244,13 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
         animation: none;
         transition: none;
       }
+      .cdz-quickstart::before,
+      .cdz-quickstart-arrow {
+        transition: none;
+      }
       .cdz-quickstart:hover,
-      .cdz-quickstart:active {
+      .cdz-quickstart:active,
+      .cdz-quickstart:focus-visible {
         transform: none;
       }
     }
@@ -496,45 +549,45 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
   }> = [
     {
       icon: '🛍️',
-      title: 'Lancer une boutique',
-      hint: 'Catalogue + paiement à la livraison',
+      title: 'Ouvrir ma boutique en ligne',
+      hint: 'Catalogue, panier et paiement à la livraison, avec confirmation automatique par WhatsApp.',
       prompt:
         'Crée-moi une boutique en ligne prête à vendre en Algérie : catalogue produits, panier, paiement à la livraison et confirmation WhatsApp.',
     },
     {
       icon: '📦',
-      title: 'Suivre mes commandes',
-      hint: 'De « Nouvelle » à « Livrée »',
+      title: 'Organiser mes commandes',
+      hint: 'Un pipeline clair de « Nouvelle » à « Livrée », avec relances client et export pour le livreur.',
       prompt:
-        'Mets en place un suivi de commandes clair : statuts de « Nouvelle » à « Livrée », relances client et export pour le livreur.',
+        'Mets en place un suivi de commandes clair : statuts de « Nouvelle » à « Livrée », relances client et export pour le livreur, avec les 58 wilayas couvertes.',
     },
     {
       icon: '🧾',
-      title: 'Facturer un client',
-      hint: 'Facture conforme, en DZD',
+      title: 'Facturer en toute conformité',
+      hint: 'Facture algérienne en DZD, TVA et mentions légales incluses, prête en PDF en quelques secondes.',
       prompt:
         'Génère une facture algérienne conforme en DZD à partir d’une commande, avec TVA, mentions légales et export PDF.',
     },
     {
       icon: '📊',
-      title: 'Analyser mes ventes',
-      hint: 'Ce qui marche, ce qui bloque',
+      title: 'Comprendre mes ventes',
+      hint: 'Produits qui rapportent, commandes annulées, et trois actions concrètes pour vendre plus ce mois-ci.',
       prompt:
         'Analyse mes ventes du mois : produits les plus rentables, commandes annulées, et les trois actions qui augmenteraient le chiffre.',
     },
     {
       icon: '📽️',
-      title: 'Créer une présentation',
-      hint: 'Deck prêt à présenter',
+      title: 'Préparer une présentation',
+      hint: 'Un deck clair et chiffré pour convaincre un partenaire, une banque ou un investisseur.',
       prompt:
-        'Prépare une présentation courte et convaincante de mon activité pour un partenaire, avec un plan clair et des chiffres clés.',
+        'Prépare une présentation courte et convaincante de mon activité pour un partenaire, avec un plan clair, des chiffres clés et une structure prête à présenter.',
     },
     {
       icon: '📣',
-      title: 'Écrire une promo',
-      hint: 'Post prêt à publier',
+      title: 'Publier une promotion',
+      hint: 'Un post prêt à publier, en français et en derja, avec un appel à l’action qui pousse à commander.',
       prompt:
-        'Écris une promotion courte et accrocheuse pour mes réseaux sociaux, en français et en derja algérienne, avec un appel à l’action.',
+        'Écris une promotion courte et accrocheuse pour mes réseaux sociaux, en français et en derja algérienne, avec un appel à l’action clair pour commander maintenant.',
     },
   ];
 
@@ -562,6 +615,7 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
             <span class="cdz-quickstart-title">${item.title}</span>
             <span class="cdz-quickstart-hint">${item.hint}</span>
           </span>
+          <span class="cdz-quickstart-arrow" aria-hidden="true">&#8594;</span>
         </button>`
       )}
     </div>`;

@@ -2,7 +2,9 @@
 // Renders an AgentStep[] as a rail of ToolCallCards (connectors between them),
 // pulses the in-flight step while the run is `running`, surfaces a pending
 // approval inline (ApprovalPrompt), caps the run with a terminal state banner
-// (done / failed / stopped), and renders the final answer via MarkdownLite.
+// (done / failed / stopped), and renders the final answer via StreamingAnswer
+// — animated reveal while the run hasn't reached a terminal state, handing
+// off to MarkdownLite (internally) once it has.
 //
 // PURE PRESENTATIONAL (R7 contract): all data + handlers arrive via props; this
 // component never fetches. Scene mounts it in the single-run live view, feeding
@@ -22,9 +24,9 @@ import {
   ApprovalPrompt,
   type ApprovalRequest,
 } from './approval-prompt';
-import { MarkdownLite } from './markdown-lite';
 import { AgentPalette as P, ensureAgentKeyframes } from './palette';
 import { Spinner } from './primitives';
+import { StreamingAnswer } from './streaming-answer';
 import { ToolCallCard } from './tool-call-card';
 
 interface BannerMeta {
@@ -169,6 +171,12 @@ export function RunTimeline({
   const { t, dir } = useAgentLang();
 
   const running = state === 'running' || state === 'queued';
+  // Broader than `running`: also true during `waiting_approval`, since the
+  // run hasn't reached a terminal state yet and a partial `finalText` is
+  // still subject to change. Mirrors the `isLive` used at the other
+  // StreamingAnswer call site (hermes/dashboard.tsx's background-run
+  // overlay) so both surfaces agree on what "still streaming" means.
+  const live = state !== 'done' && state !== 'failed' && state !== 'stopped';
   const banner = bannerFor(state, t);
   const hasSteps = Array.isArray(steps) && steps.length > 0;
 
@@ -386,7 +394,7 @@ export function RunTimeline({
             </span>
             {t('timeline.finalAnswer')}
           </div>
-          <MarkdownLite text={finalText} />
+          <StreamingAnswer text={finalText} live={live} />
         </div>
       ) : null}
     </div>
