@@ -153,6 +153,7 @@ function parseFollowUps(raw: string): FollowUp[] {
   return arr ?? [];
 }
 
+@Controller()
 export class ClickDzSuggestionsController {
   private readonly logger = new Logger(ClickDzSuggestionsController.name);
 
