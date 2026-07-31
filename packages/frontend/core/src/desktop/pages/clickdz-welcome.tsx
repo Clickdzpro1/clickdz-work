@@ -1,389 +1,241 @@
-// ClickDz Work — merchant onboarding (/welcome)
-//
-// ONE screen, three fields: shop name, WhatsApp number, language. Then straight
-// into the app, where the shop wizard picks up the handoff and finishes the job.
-//
-// What this replaced, and why: the previous /welcome was a workspace wizard —
-// name, language, a 20-niche grid (law office, NGO, HR…) and doc-template packs
-// ("Command Center, Workflow, Tracker"). It never mentioned the shop, never
-// asked for the WhatsApp number the whole business runs on, and then dropped
-// the merchant onto a documents list. Two minutes of questions about the wrong
-// product. A merchant should be looking at their own storefront in about three.
-//
-// The language picker now actually switches the app language. It previously
-// wrote a value nothing read, so a merchant who picked "Français" still got
-// English chrome everywhere.
-//
-// Self-contained: no engine services, inline styles only.
+// ClickDz Work — Premium app onboarding (/welcome)
+// Redesigned: workspace name + language + feature briefing.
+// No shop creation here — that happens in DzOS ERP tab when the user is ready.
 import { getOrCreateI18n } from '@affine/i18n';
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-
 import { ONBOARDED_KEY } from '../../clickdz/niches';
 
-/**
- * Handoff payload for the shop wizard, written here and consumed exactly once
- * on the other side (see readPendingShop in shoperp/wizard.tsx).
- */
 export const PENDING_SHOP_KEY = 'clickdz:pending-shop:v1';
-
-export interface PendingShop {
-  shopName: string;
-  /** Digits only, international, no '+'. */
-  whatsapp: string;
-  lang: 'fr' | 'en' | 'ar';
-}
+export interface PendingShop { shopName: string; whatsapp: string; lang: 'fr' | 'en' | 'ar'; }
 
 const C = {
-  primary: '#2B7FFF',
-  sky: '#0EA5E9',
-  fg: '#0F172A',
-  muted: '#5B6B82',
-  border: '#E2E8F0',
-  soft: '#F0F6FC',
-  danger: '#DC2626',
+  primary: '#2B7FFF', sky: '#0EA5E9', fg: '#0F172A', muted: '#5B6B82',
+  border: '#E2E8F0', soft: '#F0F6FC', danger: '#DC2626',
+  accent: '#0f766e', accentSoft: '#ecfdf5',
 };
+
+// All app features for the briefing carousel
+const FEATURES = [
+  { icon: '⚡', titleFr: 'DzOS ERP', titleEn: 'DzOS ERP', titleAr: 'DzOS ERP',
+    descFr: 'Gérez votre business : commandes, stock, caisse, clients, facturation.',
+    descEn: 'Run your business: orders, inventory, cash register, clients, invoicing.',
+    descAr: 'أدر عملك: الطلبات، المخزون، الصندوق، الزبائن، الفواتير.' },
+  { icon: '🤖', titleFr: 'Agents IA', titleEn: 'AI Agents', titleAr: 'وكلاء الذكاء',
+    descFr: 'Créez des agents IA qui travaillent pour vous 24/7.',
+    descEn: 'Create AI agents that work for you 24/7.',
+    descAr: 'أنشئ وكلاء ذكاء اصطناعي يعملون لك على مدار الساعة.' },
+  { icon: '📽️', titleFr: 'SlidePro', titleEn: 'SlidePro', titleAr: 'سلايد برو',
+    descFr: 'Générez des présentations professionnelles avec l\'IA.',
+    descEn: 'Generate professional presentations with AI.',
+    descAr: 'أنشئ عروض تقديمية احترافية بالذكاء الاصطناعي.' },
+  { icon: '🎨', titleFr: 'Studio Image', titleEn: 'Image Studio', titleAr: 'استوديو الصور',
+    descFr: 'CDZIM3.0 + OpenAI : génération d\'images par IA.',
+    descEn: 'CDZIM3.0 + OpenAI: AI-powered image generation.',
+    descAr: 'CDZIM3.0 + OpenAI: توليد الصور بالذكاء الاصطناعي.' },
+  { icon: '🎬', titleFr: 'Vdz Studio', titleEn: 'Vdz Studio', titleAr: 'استوديو Vdz',
+    descFr: 'Création vidéo IA : scripts, voix, et rendu automatique.',
+    descEn: 'AI video creation: scripts, voice, and automatic rendering.',
+    descAr: 'إنشاء فيديو بالذكاء الاصطناعي: نصوص، صوت، وتصيير تلقائي.' },
+  { icon: '💬', titleFr: 'Hermes', titleEn: 'Hermes', titleAr: 'هيرمس',
+    descFr: 'Assistant IA conversationnel pour votre entreprise.',
+    descEn: 'Conversational AI assistant for your business.',
+    descAr: 'مساعد ذكاء اصطناعي محادثة لعملك.' },
+  { icon: '🔧', titleFr: 'OpenClaw', titleEn: 'OpenClaw', titleAr: 'أوبنكلو',
+    descFr: 'Sandbox de code IA : exécutez Python, Node, et plus.',
+    descEn: 'AI code sandbox: run Python, Node, and more.',
+    descAr: 'صندوق رمز ذكاء اصطناعي: شغّل Python و Node والمزيد.' },
+  { icon: '🔗', titleFr: 'Intégrations', titleEn: 'Integrations', titleAr: 'تكاملات',
+    descFr: 'Connectez WhatsApp, Make.com, et vos outils préférés.',
+    descEn: 'Connect WhatsApp, Make.com, and your favorite tools.',
+    descAr: 'اربط واتساب و Make.com وأدواتك المفضلة.' },
+];
 
 const T = {
   fr: {
-    badge: 'Votre boutique en ligne — par clickdz.ai',
-    title: 'Bienvenue ! On ouvre votre boutique',
-    subtitle:
-      'Trois minutes, pas plus : votre boutique en ligne, avec paiement à la livraison et commandes sur WhatsApp. Le reste se règle après, tranquillement.',
-    nameLabel: 'Le nom de votre boutique',
-    namePh: 'Ex. : Boutique Amina',
-    nameErr: 'Donnez un nom à votre boutique (60 caractères maximum).',
-    waLabel: 'Votre numéro WhatsApp',
-    waHint:
-      'Les commandes de vos clients arrivent sur ce numéro. Chiffres uniquement, sans « + ». Ex. : 213661234567.',
-    waErr: 'Numéro invalide — 8 à 15 chiffres, sans « + ».',
-    langLabel: 'Langue',
-    go: 'Ouvrir ma boutique →',
-    later: "Je veux d'abord explorer l'espace de travail",
-    darja: 'دير حانوتك فـ3 دقايق — الدفع عند الاستلام و الطلبات على واتساب.',
+    badge: 'Votre espace de travail — par clickdz.ai',
+    title: 'Bienvenue sur DzOS',
+    subtitle: 'Votre plateforme tout-en-un pour gérer votre business, créer avec l\'IA, et vendre en ligne.',
+    nameLabel: 'Nom de votre espace de travail',
+    namePh: 'Ex. : Mon Business',
+    nameErr: 'Donnez un nom à votre espace (60 caractères max).',
+    langLabel: 'Langue préférée',
+    featuresTitle: 'Tout ce que vous pouvez faire',
+    featuresSub: 'Voici un aperçu rapide. Vous explorerez chaque outil quand vous serez prêt.',
+    go: 'Commencer →',
+    step1: 'Votre espace',
+    step2: 'Découverte',
+    darja: 'دير بزنسك من قاع واحد — الذكاء الاصطناعي، البيع، و كلش.',
   },
   en: {
-    badge: 'Your online shop — by clickdz.ai',
-    title: 'Welcome! Let\'s open your shop',
-    subtitle:
-      'Three minutes, that\'s all: your online shop with cash-on-delivery and WhatsApp orders. You can adjust everything else later at your own pace.',
-    nameLabel: 'Your shop name',
-    namePh: 'e.g. Amina\'s Boutique',
-    nameErr: 'Give your shop a name (60 characters max).',
-    waLabel: 'Your WhatsApp number',
-    waHint:
-      'Your customers\' orders go straight to this number. Digits only, no "+". e.g. 213661234567.',
-    waErr: 'Invalid number — 8 to 15 digits, no "+".',
-    langLabel: 'Language',
-    go: 'Open my shop →',
-    later: 'I want to explore the workspace first',
+    badge: 'Your workspace — by clickdz.ai',
+    title: 'Welcome to DzOS',
+    subtitle: 'Your all-in-one platform to run your business, create with AI, and sell online.',
+    nameLabel: 'Your workspace name',
+    namePh: 'e.g. My Business',
+    nameErr: 'Give your workspace a name (60 characters max).',
+    langLabel: 'Preferred language',
+    featuresTitle: 'Everything you can do',
+    featuresSub: 'Here\'s a quick overview. You\'ll explore each tool when you\'re ready.',
+    go: 'Get started →',
+    step1: 'Your workspace',
+    step2: 'Discovery',
     darja: '',
   },
   ar: {
-    badge: 'متجرك على الإنترنت — من clickdz.ai',
-    title: 'مرحباً! لنفتح متجرك',
-    subtitle:
-      'ثلاث دقائق فقط: متجرك مع الدفع عند الاستلام والطلب عبر واتساب. الباقي يُضبط لاحقاً بهدوء.',
-    nameLabel: 'اسم متجرك',
-    namePh: 'مثال: بوتيك أمينة',
-    nameErr: 'أعطِ اسماً لمتجرك (60 حرفاً كحد أقصى).',
-    waLabel: 'رقم الواتساب',
-    waHint:
-      'طلبات زبائنك تصل إلى هذا الرقم. أرقام فقط، بدون «+». مثال: 213661234567.',
-    waErr: 'رقم غير صالح — من 8 إلى 15 رقماً، بدون «+».',
-    langLabel: 'اللغة',
-    go: 'افتح متجري ←',
-    later: 'أريد استكشاف مساحة العمل أولاً',
+    badge: 'مساحة عملك — من clickdz.ai',
+    title: 'مرحباً بك في DzOS',
+    subtitle: 'منصتك المتكاملة لإدارة عملك، الإبداع بالذكاء الاصطناعي، والبيع عبر الإنترنت.',
+    nameLabel: 'اسم مساحة عملك',
+    namePh: 'مثال: عملي',
+    nameErr: 'أعطِ اسماً لمساحتك (60 حرفاً كحد أقصى).',
+    langLabel: 'اللغة المفضلة',
+    featuresTitle: 'كل ما يمكنك فعله',
+    featuresSub: 'إليك نظرة سريعة. ستستكشف كل أداة عندما تكون جاهزاً.',
+    go: 'ابدأ ←',
+    step1: 'مساحتك',
+    step2: 'الاكتشاف',
     darja: '',
   },
 };
 
-const WA_RE = /^[0-9]{8,15}$/;
-
 const pageStyle: React.CSSProperties = {
   minHeight: '100vh',
-  background:
-    'radial-gradient(1100px 480px at 70% -10%, #E8F1FF 0%, transparent 60%), linear-gradient(180deg,#FFFFFF,#F7FAFF 55%,#FFFFFF)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  // 360px-safe: fixed padding that cannot squeeze the card off-screen.
-  padding: 16,
-  fontFamily:
-    "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-  color: C.fg,
+  background: 'radial-gradient(1100px 480px at 70% -10%, #E8F1FF 0%, transparent 60%), linear-gradient(180deg,#FFFFFF,#F7FAFF 55%,#FFFFFF)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+  fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", color: C.fg,
 };
 
 const cardStyle: React.CSSProperties = {
-  width: '100%',
-  maxWidth: 560,
-  background: '#fff',
-  border: `1px solid ${C.border}`,
-  borderRadius: 20,
-  boxShadow: '0 18px 60px rgba(15,23,42,.08)',
-  padding: 'clamp(20px, 5vw, 40px)',
-  boxSizing: 'border-box',
+  width: '100%', maxWidth: 600, background: '#fff', border: '1px solid ' + C.border,
+  borderRadius: 24, boxShadow: '0 18px 60px rgba(15,23,42,.08)',
+  padding: 'clamp(20px, 5vw, 44px)', boxSizing: 'border-box',
 };
 
 const inputStyle: React.CSSProperties = {
-  width: '100%',
-  boxSizing: 'border-box',
-  padding: '13px 16px',
-  // >=16px so Android and iOS do not zoom the viewport when the field focuses.
-  fontSize: 16,
-  borderRadius: 12,
-  border: `1.5px solid ${C.border}`,
-  outline: 'none',
-  color: '#1a1a1a',
-  backgroundColor: '#fff',
+  width: '100%', boxSizing: 'border-box', padding: '13px 16px', fontSize: 16,
+  borderRadius: 12, border: '1.5px solid ' + C.border, outline: 'none',
+  color: '#1a1a1a', backgroundColor: '#fff',
 };
 
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontWeight: 600,
-  fontSize: 14,
-  marginBottom: 8,
-};
+const labelStyle: React.CSSProperties = { display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 8 };
+
+type Step = 'name' | 'features';
 
 export const Component = () => {
   const navigate = useNavigate();
   const [lang, setLang] = useState<'fr' | 'en' | 'ar'>('fr');
-  const [shopName, setShopName] = useState('');
-  const [whatsapp, setWhatsapp] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [step, setStep] = useState<Step>('name');
   const [touched, setTouched] = useState(false);
+  const [featureIdx, setFeatureIdx] = useState(0);
   const t = T[lang];
-
-  const nameOk = shopName.trim().length > 0 && shopName.trim().length <= 60;
-  const waOk = WA_RE.test(whatsapp);
+  const nameOk = workspaceName.trim().length > 0 && workspaceName.trim().length <= 60;
 
   const applyLang = useCallback((next: 'fr' | 'en' | 'ar') => {
     setLang(next);
-    // A real language switch: the I18n entity listens for 'languageChanged'
-    // and persists to GlobalCache 'i18n_lng', so the choice sticks for the
-    // whole app rather than only restyling this page.
-    getOrCreateI18n()
-      .changeLanguage(next)
-      .catch(() => {
-        /* a failed language switch must never block onboarding */
-      });
+    getOrCreateI18n().changeLanguage(next).catch(() => {});
   }, []);
 
-  const finish = useCallback(
-    (withShop: boolean) => {
-      // Commit the language on the way out, not only when a pill is tapped.
-      // 'fr' is pre-selected and the whole page is already French, so a
-      // merchant who simply accepts it never clicks anything — and would
-      // otherwise land in an app whose chrome is English, because i18next's
-      // own default is 'en'. applyLang is idempotent.
-      applyLang(lang);
-      try {
-        if (withShop) {
-          const pending: PendingShop = {
-            shopName: shopName.trim(),
-            whatsapp,
-            lang,
-          };
-          localStorage.setItem(PENDING_SHOP_KEY, JSON.stringify(pending));
-        }
-        localStorage.setItem(ONBOARDED_KEY, '1');
-      } catch {
-        /* storage unavailable (private mode) — just enter the app */
-      }
-      navigate('/', { replace: true });
-    },
-    [shopName, whatsapp, lang, applyLang, navigate]
-  );
+  const finish = useCallback(() => {
+    applyLang(lang);
+    try {
+      localStorage.setItem(ONBOARDED_KEY, '1');
+      localStorage.setItem('cdz:workspace-name', workspaceName.trim());
+    } catch {}
+    navigate('/', { replace: true });
+  }, [workspaceName, lang, applyLang, navigate]);
 
-  const submit = useCallback(() => {
+  const nextFromName = () => {
     setTouched(true);
-    if (nameOk && waOk) finish(true);
-  }, [nameOk, waOk, finish]);
+    if (nameOk) { setStep('features'); setTouched(false); }
+  };
+
+  const isRtl = lang === 'ar';
 
   return (
-    <div style={pageStyle} dir={lang === 'ar' ? 'rtl' : 'ltr'} lang={lang === 'ar' ? 'ar' : lang === 'en' ? 'en' : 'fr'}>
+    <div style={pageStyle} dir={isRtl ? 'rtl' : 'ltr'} lang={lang === 'ar' ? 'ar' : lang === 'en' ? 'en' : 'fr'}>
       <div style={cardStyle} className="clickdz-welcome-page">
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            marginBottom: 22,
-            flexWrap: 'wrap',
-          }}
-        >
-          <img
-            src="/favicon-96.png"
-            alt=""
-            width={34}
-            height={34}
-            style={{ borderRadius: 9 }}
-          />
-          <span style={{ fontWeight: 700, fontSize: 17 }}>
-            ClickDz&nbsp;Work
-          </span>
-          <span
-            style={{
-              marginInlineStart: 'auto',
-              fontSize: 12,
-              color: C.muted,
-              background: C.soft,
-              border: `1px solid ${C.border}`,
-              borderRadius: 999,
-              padding: '4px 12px',
-            }}
-          >
-            {t.badge}
-          </span>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+          <img src="/favicon-96.png" alt="" width={36} height={36} style={{ borderRadius: 10 }} />
+          <span style={{ fontWeight: 700, fontSize: 18 }}>ClickDz Work</span>
+          <span style={{ marginInlineStart: 'auto', fontSize: 12, color: C.muted, background: C.soft, border: '1px solid ' + C.border, borderRadius: 999, padding: '4px 12px' }}>{t.badge}</span>
         </div>
 
-        <h1
-          style={{
-            fontSize: 'clamp(24px, 6vw, 32px)',
-            lineHeight: 1.15,
-            margin: '6px 0',
-          }}
-        >
-          {t.title}{' '}
-          <span
-            style={{
-              background: `linear-gradient(135deg, ${C.sky}, ${C.primary})`,
-              WebkitBackgroundClip: 'text',
-              color: 'transparent',
-            }}
-          >
-            🛍️
-          </span>
-        </h1>
-        <p
-          style={{
-            color: C.muted,
-            margin: '0 0 10px',
-            fontSize: 14.5,
-            lineHeight: 1.55,
-          }}
-        >
-          {t.subtitle}
-        </p>
-        {t.darja ? (
-          <p
-            dir="rtl"
-            style={{ color: C.muted, margin: '0 0 22px', fontSize: 13 }}
-          >
-            {t.darja}
-          </p>
+        {/* Step indicator */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
+          <div style={{ flex: 1, height: 4, borderRadius: 2, background: step === 'name' ? C.primary : C.border, transition: 'background 200ms' }} />
+          <div style={{ flex: 1, height: 4, borderRadius: 2, background: step === 'features' ? C.primary : C.border, transition: 'background 200ms' }} />
+        </div>
+
+        {step === 'name' ? (
+          <>
+            <h1 style={{ fontSize: 'clamp(24px, 6vw, 34px)', lineHeight: 1.15, margin: '6px 0', fontWeight: 800 }}>
+              {t.title}{' '}
+              <span style={{ background: 'linear-gradient(135deg, ' + C.sky + ', ' + C.primary + ')', WebkitBackgroundClip: 'text', color: 'transparent' }}>⚡</span>
+            </h1>
+            <p style={{ color: C.muted, margin: '0 0 10px', fontSize: 14.5, lineHeight: 1.55 }}>{t.subtitle}</p>
+            {t.darja ? <p dir="rtl" style={{ color: C.muted, margin: '0 0 22px', fontSize: 13 }}>{t.darja}</p> : <div style={{ height: 12 }} />}
+
+            <label htmlFor="cdz-ws-name" style={labelStyle}>{t.nameLabel}</label>
+            <input id="cdz-ws-name" value={workspaceName} maxLength={60} onChange={e => setWorkspaceName(e.target.value)} placeholder={t.namePh} style={inputStyle} autoFocus onKeyDown={e => { if (e.key === 'Enter') nextFromName(); }} />
+            {touched && !nameOk ? <div style={{ color: C.danger, fontSize: 12.5, marginTop: 6 }}>{t.nameErr}</div> : null}
+
+            <div style={{ ...labelStyle, marginTop: 20 }}>{t.langLabel}</div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              {(['fr', 'en', 'ar'] as const).map(l => (
+                <button key={l} type="button" onClick={() => applyLang(l)} aria-pressed={lang === l} style={{
+                  background: '#fff', borderRadius: 999, padding: '10px 22px', fontSize: 14, cursor: 'pointer',
+                  border: '1.5px solid ' + (lang === l ? C.primary : C.border), color: lang === l ? C.primary : C.muted, fontWeight: lang === l ? 700 : 500,
+                }}>{l === 'fr' ? '🇫🇷 Français' : l === 'en' ? '🇬🇧 English' : '🇩🇿 العربية'}</button>
+              ))}
+            </div>
+
+            <button type="button" onClick={nextFromName} style={{
+              marginTop: 28, width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
+              color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
+              cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)', opacity: nameOk ? 1 : 0.85,
+            }}>{t.go}</button>
+          </>
         ) : (
-          <div style={{ height: 12 }} />
+          <>
+            {/* Feature briefing — carousel */}
+            <h2 style={{ fontSize: 22, fontWeight: 800, margin: '0 0 4px' }}>{t.featuresTitle}</h2>
+            <p style={{ color: C.muted, fontSize: 13.5, margin: '0 0 24px' }}>{t.featuresSub}</p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {FEATURES.map((f, i) => {
+                const title = lang === 'en' ? f.titleEn : lang === 'ar' ? f.titleAr : f.titleFr;
+                const desc = lang === 'en' ? f.descEn : lang === 'ar' ? f.descAr : f.descFr;
+                return (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 16px',
+                    borderRadius: 14, border: '1px solid ' + C.border, background: i === featureIdx ? C.soft : '#fff',
+                    transition: 'background 200ms', cursor: 'pointer', onClick: () => setFeatureIdx(i),
+                  }}>
+                    <div style={{ fontSize: 28, flexShrink: 0, width: 48, height: 48, borderRadius: 12, display: 'grid', placeItems: 'center', background: 'linear-gradient(135deg, ' + C.soft + ', #fff)' }}>{f.icon}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: C.fg, marginBottom: 3 }}>{title}</div>
+                      <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>{desc}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Progress dots */}
+            <div style={{ display: 'flex', gap: 5, justifyContent: 'center', marginTop: 20 }}>
+              {FEATURES.map((_, i) => <span key={i} style={{ width: 6, height: 6, borderRadius: 3, background: i === featureIdx ? C.primary : C.border, transition: 'background 200ms' }} />)}
+            </div>
+
+            <button type="button" onClick={finish} style={{
+              marginTop: 24, width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
+              color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
+              cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)',
+            }}>{t.go}</button>
+          </>
         )}
-
-        <label htmlFor="cdz-shop-name" style={labelStyle}>
-          {t.nameLabel}
-        </label>
-        <input
-          id="cdz-shop-name"
-          value={shopName}
-          maxLength={60}
-          onChange={e => setShopName(e.target.value)}
-          placeholder={t.namePh}
-          style={inputStyle}
-          autoFocus
-        />
-        {touched && !nameOk ? (
-          <div style={{ color: C.danger, fontSize: 12.5, marginTop: 6 }}>
-            {t.nameErr}
-          </div>
-        ) : null}
-
-        <label
-          htmlFor="cdz-shop-whatsapp"
-          style={{ ...labelStyle, marginTop: 18 }}
-        >
-          {t.waLabel}
-        </label>
-        <input
-          id="cdz-shop-whatsapp"
-          value={whatsapp}
-          inputMode="numeric"
-          autoComplete="tel"
-          onChange={e =>
-            setWhatsapp(e.target.value.replace(/[^0-9]/g, '').slice(0, 15))
-          }
-          placeholder="213661234567"
-          // The number stays LTR even when the page is Arabic.
-          style={{ ...inputStyle, direction: 'ltr' }}
-        />
-        <div
-          style={{
-            color: touched && !waOk ? C.danger : C.muted,
-            fontSize: 12.5,
-            marginTop: 6,
-            lineHeight: 1.5,
-          }}
-        >
-          {touched && !waOk ? t.waErr : t.waHint}
-        </div>
-
-        <div style={{ ...labelStyle, marginTop: 18 }}>{t.langLabel}</div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {(['fr', 'en', 'ar'] as const).map(l => (
-            <button
-              key={l}
-              type="button"
-              onClick={() => applyLang(l)}
-              aria-pressed={lang === l}
-              style={{
-                background: '#fff',
-                borderRadius: 999,
-                padding: '10px 22px',
-                fontSize: 14,
-                cursor: 'pointer',
-                border: `1.5px solid ${lang === l ? C.primary : C.border}`,
-                color: lang === l ? C.primary : C.muted,
-                fontWeight: lang === l ? 700 : 500,
-              }}
-            >
-              {l === 'fr' ? '🇫🇷 Français' : l === 'en' ? '🇬🇧 English' : '🇩🇿 العربية'}
-            </button>
-          ))}
-        </div>
-
-        <button
-          type="button"
-          onClick={submit}
-          style={{
-            marginTop: 26,
-            width: '100%',
-            background: `linear-gradient(135deg, ${C.primary}, #1D4ED8)`,
-            color: '#fff',
-            border: 'none',
-            borderRadius: 999,
-            padding: '15px 30px',
-            fontSize: 16,
-            fontWeight: 700,
-            cursor: 'pointer',
-            boxShadow: '0 6px 18px rgba(43,127,255,.28)',
-            // Never disabled: clicking tells the merchant what is missing,
-            // rather than leaving them staring at a dead button.
-            opacity: nameOk && waOk ? 1 : 0.85,
-          }}
-        >
-          {t.go}
-        </button>
-        <button
-          type="button"
-          onClick={() => finish(false)}
-          style={{
-            marginTop: 14,
-            width: '100%',
-            background: 'none',
-            border: 'none',
-            color: C.muted,
-            fontSize: 13,
-            cursor: 'pointer',
-            textDecoration: 'underline',
-          }}
-        >
-          {t.later}
-        </button>
       </div>
     </div>
   );
