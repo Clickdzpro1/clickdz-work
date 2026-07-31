@@ -100,19 +100,24 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
         {status === 'ready' ? <a href={presentonUrl} target="_blank" rel="noopener noreferrer" style={{ ...miniBtnStyle('secondary'), textDecoration: 'none' }}>Ouvrir SlidePro ↗</a> : null}
         <button style={miniBtnStyle('secondary')} onClick={checkPresentonHealth}>↻ Verifier</button>
       </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
+      <div style={status === 'ready'
+        ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
+        : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
         {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion a SlidePro…</div>
         : status === 'ready' && presentonUrl ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', minHeight: 520 }}>
-              <iframe src={presentonUrl} style={{ width: '100%', height: 520, border: 'none' }} title="SlidePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+          /* The iframe must fill the pane, not sit in a fixed 520px box with a
+             dead region below it (the user circled exactly that). The wrapper
+             is flex:1 so it takes whatever height the pane offers, and the
+             iframe is height:100% of that. The "Generation rapide" explainer
+             used to sit under the iframe — it is collapsed into a dismissible
+             footer strip so it no longer eats the iframe's space. */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
+              <iframe src={presentonUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="SlidePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
             </div>
-            <div style={{ borderRadius: 12, border: `1px solid ${C.border}`, background: C.panel, padding: '18px 20px' }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 8 }}>🚀 Generation rapide</div>
-              <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.6 }}>SlidePro utilise vos modeles CDZ AI pour generer des presentations professionnelles. Creez des slides a partir d'un prompt, d'un document, ou d'un template personnalise. Export en PPTX ou PDF.</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                {['PPTX Export','Templates AI','CDZ Models','Apache 2.0'].map(t=><span key={t} style={{ fontSize: 11, fontWeight: 600, color: C.accent, padding: '4px 10px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
-              </div>
+            <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🚀 Propulsé par vos modèles CDZ AI · Export PPTX / PDF · Templates pro</span>
+              {['PPTX','Templates','CDZ'].map(t=><span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.accent, padding: '3px 8px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
             </div>
           </div>
         ) : deploymentState === 'not_deployed' ? (
