@@ -448,6 +448,37 @@ export class ClickDzAppProvisionController {
   }
 
   /**
+   * POST /api/bridge/bootstrap
+   * Headers: Authorization: Bearer <BRIDGE_SECRET>  (the login shim)
+   * Body: { ticket }
+   * Returns: { presenton_session, auth, cookie_name, cookie_value }
+   * Same verification as /api/bridge/session but ALSO returns the legacy
+   * `presenton_session`/`auth` field names so a v1 shim reading either shape
+   * works. (The deployed SlidePro shim v1 reads `presenton_session` directly.)
+   */
+  @Public()
+  @Throttle('strict')
+  @Post('/api/bridge/bootstrap')
+  async bridgeBootstrap(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: unknown
+  ): Promise<{
+    presenton_session: string;
+    cookie_name: string;
+    cookie_value: string;
+  }> {
+    const { cookie_name, cookie_value } = await this.bridgeSession(
+      authorization,
+      body
+    );
+    return {
+      presenton_session: cookie_value,
+      cookie_name,
+      cookie_value,
+    };
+  }
+
+  /**
    * POST /api/bridge/exchange
    * Headers: Authorization: Bearer <BRIDGE_SECRET>  (the embedded service's shim)
    * Body: { code }
