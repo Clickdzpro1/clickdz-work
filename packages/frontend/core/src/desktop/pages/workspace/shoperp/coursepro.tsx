@@ -5,6 +5,7 @@
 import { ViewBody, ViewHeader, ViewIcon, ViewTitle } from '@affine/core/modules/workbench';
 import { type CSSProperties, useCallback, useEffect, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
+import { provisionApp, withBridgeCode } from './app-provision';
 
 const COURSEPRO_URL_KEY = 'cdz.coursepro.url';
 
@@ -51,10 +52,25 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
 }) => {
   const [status, setStatus] = useState<'loading'|'ready'|'error'|'unavailable'>('loading');
   const [classroomUrl, setClassroomUrl] = useState('');
+  const [iframeSrc, setIframeSrc] = useState('');
   const [deploymentState, setDeploymentState] = useState<'not_deployed'|'deploying'|'deployed'|'failed'>('not_deployed');
   const [healthMsg, setHealthMsg] = useState('');
 
   useEffect(() => { ensureShoperpResponsiveCss(); checkHealth(); }, [slug]);
+
+  // Render the iframe with the bare URL immediately, then upgrade to a
+  // code-bearing URL once the provision call resolves — awaiting the code
+  // before first render would just delay the embed on the failure path
+  // (provisioning is best-effort; the app loads either way).
+  useEffect(() => {
+    if (status !== 'ready' || !classroomUrl) return;
+    setIframeSrc(classroomUrl);
+    let cancelled = false;
+    provisionApp('coursepro').then(p => {
+      if (!cancelled && p) setIframeSrc(withBridgeCode(classroomUrl, p.code));
+    });
+    return () => { cancelled = true; };
+  }, [status, classroomUrl]);
 
   const checkHealth = async () => {
     setStatus('loading');
@@ -108,7 +124,7 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
              iframe's space. */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
             <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
-              <iframe src={classroomUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="CoursePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+              <iframe src={iframeSrc || classroomUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="CoursePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
             </div>
             <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🚀 Cours, leçons et exercices générés par vos modèles CDZ AI · Cohorts · Certificats</span>

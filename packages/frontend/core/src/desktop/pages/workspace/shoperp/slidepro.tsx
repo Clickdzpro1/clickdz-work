@@ -1,6 +1,7 @@
 import { ViewBody, ViewHeader, ViewIcon, ViewTitle } from '@affine/core/modules/workbench';
 import { type CSSProperties, useCallback, useEffect, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
+import { provisionApp, withBridgeCode } from './app-provision';
 /* SlidePro - AI Presentation Generator powered by Presenton (Apache 2.0) + CDZ AI */
 
 const SLIDEPRO_URL_KEY = 'cdz.slidepro.url';
@@ -57,10 +58,25 @@ function slideProBaseUrl(slug: string): string {
 export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void }) => {
   const [status, setStatus] = useState<'loading'|'ready'|'error'|'unavailable'>('loading');
   const [presentonUrl, setPresentonUrl] = useState('');
+  const [iframeSrc, setIframeSrc] = useState('');
   const [deploymentState, setDeploymentState] = useState<'not_deployed'|'deploying'|'deployed'|'failed'>('not_deployed');
   const [healthMsg, setHealthMsg] = useState('');
 
   useEffect(() => { ensureShoperpResponsiveCss(); checkPresentonHealth(); }, [slug]);
+
+  // Render the iframe with the bare URL immediately, then upgrade to a
+  // code-bearing URL once the provision call resolves — awaiting the code
+  // before first render would just delay the embed on the failure path
+  // (provisioning is best-effort; the app loads either way).
+  useEffect(() => {
+    if (status !== 'ready' || !presentonUrl) return;
+    setIframeSrc(presentonUrl);
+    let cancelled = false;
+    provisionApp('slidepro').then(p => {
+      if (!cancelled && p) setIframeSrc(withBridgeCode(presentonUrl, p.code));
+    });
+    return () => { cancelled = true; };
+  }, [status, presentonUrl]);
 
   const checkPresentonHealth = async () => {
     setStatus('loading');
@@ -113,7 +129,7 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
              footer strip so it no longer eats the iframe's space. */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
             <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
-              <iframe src={presentonUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="SlidePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+              <iframe src={iframeSrc || presentonUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="SlidePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
             </div>
             <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🚀 Propulsé par vos modèles CDZ AI · Export PPTX / PDF · Templates pro</span>
