@@ -144,6 +144,63 @@ async function slideproEnsureUser(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Social+ (Postiz) — per-user account provisioning via the public register
+// route. With RESEND_API_KEY unset, Postiz auto-activates new accounts, so
+// POST /api/auth/register both creates AND immediately activates the user's
+// org + account. We then log in to capture the auth cookie for auto-login.
+// DISABLE_REGISTRATION=true on the service keeps strangers out — our backend
+// is the only provisioner.
+// ---------------------------------------------------------------------------
+const POSTIZ_URL = (
+  process.env.CDZ_POSTIZ_URL ||
+  'https://postiz-production-2db4.up.railway.app'
+).replace(/\/+$/, '');
+
+async function postizRegister(
+  email: string,
+  password: string,
+  company: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${POSTIZ_URL}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: 'LOCAL',
+        email,
+        password,
+        company,
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    // 201/200 created; 409/400 already-exists — all mean the account is usable.
+    return res.ok || res.status === 409 || res.status === 400;
+  } catch {
+    return false;
+  }
+}
+
+async function postizLogin(
+  email: string,
+  password: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${POSTIZ_URL}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return null;
+    const setCookie = res.headers.get('set-cookie') || '';
+    const match = setCookie.match(/(?:^|,\s*)auth=([^;]+)/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
 @Controller()
 export class ClickDzAppProvisionController {
   constructor(private readonly redis: CacheRedis) {}
@@ -285,6 +342,36 @@ export class ClickDzAppProvisionController {
       }
     }
 
+    // Social+: provision via Postiz register (auto-activated) + stash the auth
+    // cookie for the shim, best-effort. The Postiz account uses the per-app
+    // username as its email local-part (Postiz requires an email-shaped id).
+    if (app === 'socialplus' && plainCredential) {
+      try {
+        const email = `${record.username}@apps.clickdz.local`;
+        await postizRegister(email, plainCredential, record.username);
+        const authJwt = await postizLogin(email, plainCredential);
+        if (authJwt) {
+          try {
+            await this.redis.set(
+              `clickdz:appsession:${nonce}`,
+              authJwt,
+              'PX',
+              CODE_TTL_MS,
+              'NX'
+            );
+          } catch {
+            /* non-fatal */
+          }
+          const shim = (
+            process.env.CDZ_POSTIZ_SHIM_URL || POSTIZ_URL
+          ).replace(/\/+$/, '');
+          loginUrl = `${shim}/?ticket=${encodeURIComponent(code)}`;
+        }
+      } catch {
+        loginUrl = undefined;
+      }
+    }
+
     return {
       code,
       expiresAt: exp,
@@ -297,10 +384,12 @@ export class ClickDzAppProvisionController {
    * POST /api/bridge/session
    * Headers: Authorization: Bearer <BRIDGE_SECRET>  (the login shim)
    * Body: { ticket, app }
-   * Returns: { presenton_session }
+   * Returns: { cookie_name, cookie_value }
    * Verifies a bridge code (same format as /api/bridge/exchange) and, if a
    * per-user app session was stashed for it at provision time, returns + burns
-   * it. The shim sets it as a first-party cookie on the app domain.
+   * it. The shim sets it as a first-party cookie on the app domain. The cookie
+   * name differs per app (Presenton `presenton_session`, Postiz `auth`), so we
+   * return the pair and let the shim set it generically.
    */
   @Public()
   @Throttle('strict')
@@ -308,7 +397,7 @@ export class ClickDzAppProvisionController {
   async bridgeSession(
     @Headers('authorization') authorization: string | undefined,
     @Body() body: unknown
-  ): Promise<{ presenton_session: string }> {
+  ): Promise<{ cookie_name: string; cookie_value: string }> {
     if (!BRIDGE_SECRET) {
       throw new BadRequest('Bridge session is not configured');
     }
@@ -353,7 +442,9 @@ export class ClickDzAppProvisionController {
     if (!jwt) {
       throw new BadRequest('No session for ticket');
     }
-    return { presenton_session: jwt };
+    // Cookie name per app (Presenton `presenton_session`, Postiz `auth`).
+    const cookieName = app === 'socialplus' ? 'auth' : 'presenton_session';
+    return { cookie_name: cookieName, cookie_value: jwt };
   }
 
   /**
