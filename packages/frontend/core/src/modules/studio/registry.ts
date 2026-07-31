@@ -133,12 +133,13 @@ export const STUDIOS: StudioDef[] = [
     beta: true,
   },
   {
-    // Labelled in plain French, not by its internal codename. A merchant
-    // arriving from Facebook selling has no way to guess that "⚡ DzOS" is
-    // where their store lives — and this is the single most important entry
-    // in the whole sidebar for them.
+    // Named DzOS, matching the boutique→ERP rename that went through the
+    // dashboard and wizard: one store is no longer the whole of this surface,
+    // so "Ma boutique" undersold it. The 🛍️ glyph is kept deliberately — it is
+    // the visual anchor a merchant arriving from Facebook selling actually
+    // scans for, which is what the plain-French label used to provide.
     id: 'shoperp',
-    label: '🛍️ Ma boutique',
+    label: '🛍️ DzOS',
     route: '/shoperp',
     icon: () => createElement(BlockLinkIcon),
     group: 'commerce',

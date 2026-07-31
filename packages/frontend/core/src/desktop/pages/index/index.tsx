@@ -36,11 +36,14 @@ import { AppContainer } from '../../components/app-container';
  * - initCloud: boolean, if true, when user is logged in, create a cloud workspace
  */
 export const Component = ({
-  // ClickDz Work: a merchant's home is their shop, not the AFFiNE doc list.
-  // Landing on 'all' meant every session opened on an empty documents page,
-  // with the store itself buried behind a sidebar entry they had no reason to
-  // click. The mobile index still passes its own 'home' explicitly.
-  defaultIndexRoute = 'shoperp',
+  // ClickDz Work opens on the AI chat entry, not the AFFiNE doc list and not
+  // the ERP. Landing on 'all' meant every session opened on an empty documents
+  // page; landing on 'shoperp' pushed every merchant — including ones who never
+  // intend to run a store — straight into the ERP, and dropped freshly
+  // onboarded users into shop setup as their very first screen. '/chat' is the
+  // one surface that makes sense cold: ask for something and the workspace
+  // routes you from there. The mobile index still passes its own 'home'.
+  defaultIndexRoute = 'chat',
   children,
   fallback,
   createErrorFallback,
