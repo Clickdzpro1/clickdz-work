@@ -69,6 +69,25 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/shoperp/index'),
   },
   {
+    // Promoted out of the ERP dashboard's tab strip to a top-level sidebar
+    // entry — see modules/studio/registry.ts. The tab still exists in
+    // shoperp/dashboard.tsx too.
+    path: '/slidepro',
+    lazy: () => import('./pages/workspace/slidepro/index'),
+  },
+  {
+    path: '/coursepro',
+    lazy: () => import('./pages/workspace/coursepro/index'),
+  },
+  {
+    path: '/socialplus',
+    lazy: () => import('./pages/workspace/socialplus/index'),
+  },
+  {
+    path: '/zoomplus',
+    lazy: () => import('./pages/workspace/zoomplus/index'),
+  },
+  {
     path: '/hermes',
     lazy: () => import('./pages/workspace/hermes/index'),
   },

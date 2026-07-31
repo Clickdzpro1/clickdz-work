@@ -32,7 +32,11 @@ export type StudioId =
   | 'hermes'
   | 'openclaw'
   | 'agents'
-  | 'vpic';
+  | 'vpic'
+  | 'slidepro'
+  | 'coursepro'
+  | 'socialplus'
+  | 'zoomplus';
 
 export type StudioGroup = 'create' | 'commerce' | 'agents' | 'connect';
 
@@ -200,6 +204,58 @@ export const STUDIOS: StudioDef[] = [
     testId: 'slider-bar-vpic-studio-button',
     beta: true,
     flag: 'vpic',
+  },
+  // ---------------------------------------------------------------------
+  // Four panels promoted out of the ERP dashboard's tab strip (shoperp/
+  // dashboard.tsx) to top-level sidebar entries, so they're reachable
+  // without first navigating into DzOS. The tabs remain in the dashboard
+  // too (both surfaces stay live) — see the panel components themselves
+  // (packages/frontend/core/src/desktop/pages/workspace/shoperp/{slidepro,
+  // coursepro,socialplus,zoomplus}.tsx) which are now also rendered by
+  // their own /slidepro, /coursepro, /socialplus, /zoomplus page routes.
+  // Grouped under 'commerce' (alongside shoperp/apps) since all four are
+  // merchant-facing tools that originated inside the ERP surface. Icons are
+  // reused from the boot-safe set already imported above — no new rc icon
+  // import (a missing export would crash React render at boot):
+  //   slidepro  → FrameIcon (creative/canvas surface, same as vdz/vpic)
+  //   coursepro → AiIcon (AI-assisted course generation, same as apps)
+  //   socialplus→ BlockLinkIcon (publishes/links out, same as shoperp/integrations)
+  //   zoomplus  → VoiceIcon (real-time audio/video, same family as Voice Studio)
+  {
+    id: 'slidepro',
+    label: 'SlidePro',
+    route: '/slidepro',
+    icon: () => createElement(FrameIcon),
+    group: 'commerce',
+    testId: 'slider-bar-slidepro-button',
+    beta: true,
+  },
+  {
+    id: 'coursepro',
+    label: 'CoursePro',
+    route: '/coursepro',
+    icon: () => createElement(AiIcon),
+    group: 'commerce',
+    testId: 'slider-bar-coursepro-button',
+    beta: true,
+  },
+  {
+    id: 'socialplus',
+    label: 'Social+',
+    route: '/socialplus',
+    icon: () => createElement(BlockLinkIcon),
+    group: 'commerce',
+    testId: 'slider-bar-socialplus-button',
+    beta: true,
+  },
+  {
+    id: 'zoomplus',
+    label: 'ZOOM+',
+    route: '/zoomplus',
+    icon: () => createElement(VoiceIcon),
+    group: 'commerce',
+    testId: 'slider-bar-zoomplus-button',
+    beta: true,
   },
 ];
 
