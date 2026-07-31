@@ -1,5 +1,6 @@
 import { AgentPalette } from '@affine/core/modules/agents/components';
 import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
+import { CdzAILoading } from '@affine/core/clickdz/cdz-animations';
 
 // Inject the CDZ responsive stylesheet once per document (idempotent + SSR-safe).
 const CdzResponsive = () => { ensureClickDzResponsiveCss(); return null; };
@@ -848,7 +849,9 @@ const LoadingRow = ({ label }: { label: string }) => (
       color: C.muted,
     }}
   >
-    <Spinner /> {label}
+    {/* This row only ever covers "waiting on the agent run", which is the model
+        thinking — so it gets the AI pulse, not the mechanical ring spinner. */}
+    <CdzAILoading /> {label}
   </div>
 );
 
@@ -931,22 +934,6 @@ const QuietFallback = ({ t, onBack }: { t: TFunc; onBack: () => void }) => (
       {t('common.back')}
     </button>
   </div>
-);
-
-const Spinner = () => (
-  <span
-    aria-hidden
-    style={{
-      display: 'inline-block',
-      width: 14,
-      height: 14,
-      borderRadius: '50%',
-      border: `2px solid color-mix(in srgb, ${C.accent} 30%, transparent)`,
-      borderTopColor: C.accent,
-      animation: 'cdz-agent-spin 0.7s linear infinite',
-      flex: '0 0 auto',
-    }}
-  />
 );
 
 export const Component = () => {

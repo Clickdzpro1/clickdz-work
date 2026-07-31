@@ -22,6 +22,7 @@ import {
   type AgentPulse,
   StepList,
 } from '@affine/core/modules/agents/components';
+import { CdzAILoading } from '@affine/core/clickdz/cdz-animations';
 import type { AgentStep, AgentThreadSummary } from '@affine/core/modules/agents/types';
 import { useAgentLang } from '@affine/core/modules/agents/i18n';
 import { useAgentRunStream } from '@affine/core/modules/agents/use-agent-stream';
@@ -1561,7 +1562,10 @@ const RunLiveView = ({
                     color: C.muted,
                   }}
                 >
-                  <Spinner /> Working…
+                  {/* The one spot in this surface where the wait IS the model
+                      thinking, so it gets the AI pulse rather than the generic
+                      mechanical spinner used for list/attach states. */}
+                  <CdzAILoading /> Working…
                 </div>
               ) : (
                 <EmptyNote>No steps were recorded for this run.</EmptyNote>
