@@ -871,36 +871,53 @@ export class AIChatInput extends SignalWatcher(
       background: color-mix(in srgb, #6e56cf 20%, transparent);
     }
 
+    /* OUT OF FLOW ON PURPOSE — this is the fix after three failed attempts at
+       sizing it in place.
+
+       Every previous try tuned the card's own height/max-height/flex while it was
+       still a child of the composer (.chat-panel-input). That could never work:
+       the composer is a text-input box with its own height budget, and whatever
+       the card asked for, an ancestor clipped it. The tell in the last report was
+       the footer ("4 of 6 selected") drawing ON TOP OF the question text with all
+       six steps invisible — overlap like that is an ancestor clipping an
+       overflowing child, not a child mis-sizing itself. No value I set inside the
+       card could win that argument.
+
+       And semantically this was never an inline input decoration: it has Cancel /
+       Approve, an Esc binding and a Ctrl+Enter binding. It is a MODAL. So it now
+       renders as one — centered, out of flow, sized by the viewport instead of by
+       the composer.
+
+       position:fixed may be resolved against the workbench route container rather
+       than the viewport (that element sets contain:strict, which makes it a
+       containing block for fixed descendants — the same trap that made the shop
+       tour spotlight frame the wrong tab). That is fine here: with inset-based
+       centering the worst case is centering inside the content area instead of
+       the whole window, which still looks correct and, crucially, is no longer
+       clipped. */
     .cdz-plan-review {
-      margin: 0 0 8px;
-      padding: 12px 14px;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 2147483000;
+      width: min(680px, 92vw);
+      max-height: 82vh;
+      box-sizing: border-box;
+      margin: 0;
+      padding: 14px 16px;
       border: 1px solid color-mix(in srgb, #10a37f 32%, transparent);
-      border-radius: 14px;
-      background: color-mix(in srgb, #10a37f 6%, var(--affine-v2-layer-background-primary));
-      box-shadow: 0 4px 18px color-mix(in srgb, #10a37f 10%, transparent);
+      border-radius: 16px;
+      background: var(--affine-v2-layer-background-primary);
+      box-shadow:
+        0 18px 60px rgba(0, 0, 0, 0.22),
+        0 2px 8px color-mix(in srgb, #10a37f 14%, transparent);
       animation: clickdz-card-in 0.2s ease-out both;
-      /* GROWS TO FIT (replaces the old fixed frame): the card is content-sized
-         and expands up to the viewport-aware budget the composer sets, so the
-         whole plan is visible instead of being clipped.
-
-         The previous rule set a rigid height of min(budget - 96px, 720px) and
-         paired it with overflow hidden. Two problems. It subtracted 96px from a
-         custom property that itself substitutes a min(), producing a nested
-         min(min(...) - 96px, ...) — brittle to parse and easy to drop entirely,
-         and once dropped the card became a squeezed flex child. And because the
-         height was rigid rather than a cap, any content taller than the frame
-         was silently cut off instead of making the box bigger — which is exactly
-         how the goal, question and answer chips ended up clipped at the bottom
-         of the composer.
-
-         Now: no subtraction (the budget is consumed as-is), height is auto, and
-         the body scrolls if a plan is genuinely enormous. Still viewport-
-         reactive through the vh units in the budget, with the 100dvh clamp kept
-         for mobile browser chrome. */
+      /* A definite max-height on an out-of-flow box gives the inner flex column a
+         real budget to divide, which is what lets .cdz-plan-steps resolve its own
+         scroll instead of collapsing to nothing. */
       display: flex;
       flex-direction: column;
-      height: auto;
-      max-height: min(var(--cdz-plan-budget, 640px), calc(100dvh - 96px));
       overflow: hidden;
     }
     .cdz-plan-body {
