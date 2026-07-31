@@ -201,6 +201,68 @@ async function postizLogin(
   }
 }
 
+// ---------------------------------------------------------------------------
+// CoursePro (ClassroomIO) — per-user provisioning via Better Auth email routes.
+// Sign-up auto-activates (minimal SMTP → no verification wall). The session
+// cookie is __Secure-classroomio.session_token (signed value, 30-day). Requires
+// an Origin header (CSRF) equal to the dashboard origin on every auth call.
+// ---------------------------------------------------------------------------
+const COURSEPRO_URL = (
+  process.env.CDZ_COURSEPRO_URL ||
+  'https://cio-dashboard-production-c568.up.railway.app'
+).replace(/\/+$/, '');
+
+function courseproHeaders(): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    Origin: COURSEPRO_URL,
+  };
+}
+
+function courseproSessionCookie(setCookie: string): string | null {
+  const match = setCookie.match(
+    /__Secure-classroomio\.session_token=([^;]+)/
+  );
+  return match ? match[1] : null;
+}
+
+async function courseproSignUp(
+  name: string,
+  email: string,
+  password: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${COURSEPRO_URL}/api/auth/sign-up/email`, {
+      method: 'POST',
+      headers: courseproHeaders(),
+      body: JSON.stringify({ name, email, password }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    // 200 created; 422 already-exists — both mean the account is usable.
+    return res.ok || res.status === 422;
+  } catch {
+    return false;
+  }
+}
+
+async function courseproLogin(
+  email: string,
+  password: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(`${COURSEPRO_URL}/api/auth/sign-in/email`, {
+      method: 'POST',
+      headers: courseproHeaders(),
+      body: JSON.stringify({ email, password }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return null;
+    return courseproSessionCookie(res.headers.get('set-cookie') || '');
+  } catch {
+    return null;
+  }
+}
+
 @Controller()
 export class ClickDzAppProvisionController {
   constructor(private readonly redis: CacheRedis) {}
@@ -372,6 +434,36 @@ export class ClickDzAppProvisionController {
       }
     }
 
+    // CoursePro: provision via Better Auth sign-up (auto-activated) + stash the
+    // signed session cookie for the shim, best-effort.
+    if (app === 'coursepro' && plainCredential) {
+      try {
+        const email = `${record.username}@apps.clickdz.local`;
+        const displayName = record.name || record.username;
+        await courseproSignUp(displayName, email, plainCredential);
+        const sessionCookie = await courseproLogin(email, plainCredential);
+        if (sessionCookie) {
+          try {
+            await this.redis.set(
+              `clickdz:appsession:${nonce}`,
+              sessionCookie,
+              'PX',
+              CODE_TTL_MS,
+              'NX'
+            );
+          } catch {
+            /* non-fatal */
+          }
+          const shim = (
+            process.env.CDZ_COURSEPRO_SHIM_URL || COURSEPRO_URL
+          ).replace(/\/+$/, '');
+          loginUrl = `${shim}/?ticket=${encodeURIComponent(code)}`;
+        }
+      } catch {
+        loginUrl = undefined;
+      }
+    }
+
     return {
       code,
       expiresAt: exp,
@@ -442,8 +534,14 @@ export class ClickDzAppProvisionController {
     if (!jwt) {
       throw new BadRequest('No session for ticket');
     }
-    // Cookie name per app (Presenton `presenton_session`, Postiz `auth`).
-    const cookieName = app === 'socialplus' ? 'auth' : 'presenton_session';
+    // Cookie name per app (Presenton `presenton_session`, Postiz `auth`,
+    // ClassroomIO `__Secure-classroomio.session_token`).
+    const cookieName =
+      app === 'socialplus'
+        ? 'auth'
+        : app === 'coursepro'
+          ? '__Secure-classroomio.session_token'
+          : 'presenton_session';
     return { cookie_name: cookieName, cookie_value: jwt };
   }
 
