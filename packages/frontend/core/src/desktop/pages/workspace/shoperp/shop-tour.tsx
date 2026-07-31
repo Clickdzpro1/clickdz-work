@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import { btnStyle, C } from './shoperp-shared';
 
@@ -467,7 +468,25 @@ export const ShopTour = ({
   const lbl = tourLabels[activeLang];
   const isRtl = activeLang === 'ar';
 
-  return (
+  // Portalled to <body> ON PURPOSE — this is the whole reason the spotlight used
+  // to frame the wrong tab.
+  //
+  // The workbench route container sets `contain: strict`
+  // (modules/workbench/view/route-container.css.ts), and `contain` implies
+  // `layout`, which makes that element a containing block for position:fixed
+  // descendants. Rendered in place, every `position: fixed` coordinate below was
+  // therefore resolved against the route container's box — which starts to the
+  // right of the sidebar and below the header — while readTargetRect's
+  // getBoundingClientRect() correctly returns VIEWPORT coordinates. The two
+  // disagreed by exactly (sidebar width, header height), so the cut-out landed
+  // roughly one tab-row down and two tabs across: the card said « Commandes »
+  // while the spotlight framed « Caisse ».
+  //
+  // The measuring code was never the bug, which is why tweaking it never fixed
+  // this. Portalling to document.body puts the overlay outside every contained
+  // ancestor, so position:fixed is viewport-relative again and agrees with the
+  // measured rect. Keep it portalled.
+  return createPortal(
     <div style={rootStyle} role="dialog" aria-modal="true" aria-label={lbl.skipAria}>
       {/* Backdrop — four dark panels framing the spotlight (a cut-out effect
           without SVG masks). Clicking any panel advances (fast-forward feel);
@@ -607,7 +626,8 @@ export const ShopTour = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

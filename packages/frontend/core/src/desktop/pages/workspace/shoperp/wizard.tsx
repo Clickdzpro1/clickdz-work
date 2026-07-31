@@ -260,22 +260,10 @@ const ReplaceCap = ({ info, onReplace, onCancel }: { info: PublishCapInfo; onRep
   );
 };
 
+// The ERP-publishing state machine and its publishErp() callback lived here and
+// went with the tile below — the dashboard is an in-app admin surface, so
+// "publishing" it was never a real action.
 const DoneCard = ({ result, settings, onFinish }: { result: CreateResult; settings: ShopSettings; onFinish: () => void }) => {
-  const [erpState, setErpState] = useState<{ kind: 'idle' } | { kind: 'publishing' } | { kind: 'published'; url: string } | { kind: 'cap' } | { kind: 'error'; message: string }>(result.erpPublished ? { kind: 'published', url: result.erpUrl } : { kind: 'idle' });
-
-  const publishErp = useCallback(async () => {
-    if (!result.erpSlug) return;
-    setErpState({ kind: 'publishing' });
-    const art = artifactStore.get('app_' + result.erpSlug);
-    const html = art?.payload;
-    if (!html) { setErpState({ kind: 'error', message: 'Source de l’ERP introuvable.' }); return; }
-    const outcome = await deployApp({ html, slug: result.erpSlug, kind: 'erp', storeSlug: result.storeSlug });
-    if (outcome.status === 'ok') { setErpState({ kind: 'published', url: outcome.result.url }); artifactStore.upsert({ ...(art as NonNullable<typeof art>), url: outcome.result.url }); }
-    else if (outcome.status === 'cap') { setErpState({ kind: 'cap' }); }
-    else if (outcome.status === 'upgrade') { setErpState({ kind: 'error', message: 'La publication de l’ERP demande un plan Pro.' }); }
-    else { setErpState({ kind: 'error', message: outcome.message }); }
-  }, [result.erpSlug, result.storeSlug]);
-
   return (
     <Card>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', textAlign: 'center' }}>
@@ -287,11 +275,13 @@ const DoneCard = ({ result, settings, onFinish }: { result: CreateResult; settin
         <ResultTile emoji="🛍️" title="Site en ligne" subtitle={result.shopUrl || 'Publié'} accent={settings.accentColor}>
           {result.shopUrl ? <a href={result.shopUrl} target="_blank" rel="noopener noreferrer" style={{ ...btnStyle('primary'), textDecoration: 'none' }}>Voir le site ↗</a> : null}
         </ResultTile>
-        <ResultTile emoji="📊" title="Tableau de bord ERP" subtitle={erpState.kind === 'published' ? erpState.url : result.erpSlug ? 'Préparé dans votre Studio — publiez-le' : 'Non créé'} accent="#2f6bff">
-          {erpState.kind === 'published' && erpState.url ? <a href={erpState.url} target="_blank" rel="noopener noreferrer" style={{ ...btnStyle('primary'), textDecoration: 'none' }}>Ouvrir l’ERP ↗</a> : result.erpSlug ? <button style={btnStyle('secondary', erpState.kind === 'publishing')} disabled={erpState.kind === 'publishing'} onClick={() => void publishErp()}>{erpState.kind === 'publishing' ? <><Spinner /> Publication…</> : 'Publier l’ERP'}</button> : null}
-        </ResultTile>
-        {erpState.kind === 'cap' ? <Banner tone="warn">Limite atteinte. Libérez un slot depuis <strong>Gérer</strong>.</Banner> : erpState.kind === 'error' ? <Banner tone="error">{erpState.message}</Banner> : null}
-        <Banner tone="info">Les deux applications sont sur votre shelf <strong>Studio</strong> — ouvrez-les pour continuer l’édition.</Banner>
+        {/* The « Tableau de bord ERP · Publier l'ERP » tile used to sit here and
+            was removed on purpose. The ERP dashboard is the merchant's own admin
+            surface inside this app — there is nothing to "publish" about it, so
+            the button offered an action with no meaning, and its « Préparé dans
+            votre Studio — publiez-le » subtitle implied the ERP was somehow not
+            ready yet. « Accéder à mon ERP → » below already goes there. */}
+        <Banner tone="info">Votre boutique est sur votre shelf <strong>Studio</strong> — ouvrez-la pour continuer l’édition.</Banner>
       </div>
       <div style={{ display: 'flex', marginTop: 22 }}>
         <div style={{ flex: 1 }} />

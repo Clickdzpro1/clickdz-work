@@ -879,30 +879,42 @@ export class AIChatInput extends SignalWatcher(
       background: color-mix(in srgb, #10a37f 6%, var(--affine-v2-layer-background-primary));
       box-shadow: 0 4px 18px color-mix(in srgb, #10a37f 10%, transparent);
       animation: clickdz-card-in 0.2s ease-out both;
-      /* FIXED FRAME (the "unfixed unresized boxes" fix): the composer sets
-         --cdz-plan-budget (viewport-aware) while a plan is open and the card
-         claims that budget as a STABLE height, not a max-height. The card and
-         its body never resize with content — the header stays pinned on top,
-         the Cancel/Approve bar stays pinned at the bottom, and the middle is a
-         paginated list windowed to a fixed row count, so a page always fits.
-         No inner scroller means nothing clips and the frame never jumps
-         between pages. The 100dvh clamp keeps it safe on mobile browsers. */
+      /* GROWS TO FIT (replaces the old fixed frame): the card is content-sized
+         and expands up to the viewport-aware budget the composer sets, so the
+         whole plan is visible instead of being clipped.
+
+         The previous rule set a rigid height of min(budget - 96px, 720px) and
+         paired it with overflow hidden. Two problems. It subtracted 96px from a
+         custom property that itself substitutes a min(), producing a nested
+         min(min(...) - 96px, ...) — brittle to parse and easy to drop entirely,
+         and once dropped the card became a squeezed flex child. And because the
+         height was rigid rather than a cap, any content taller than the frame
+         was silently cut off instead of making the box bigger — which is exactly
+         how the goal, question and answer chips ended up clipped at the bottom
+         of the composer.
+
+         Now: no subtraction (the budget is consumed as-is), height is auto, and
+         the body scrolls if a plan is genuinely enormous. Still viewport-
+         reactive through the vh units in the budget, with the 100dvh clamp kept
+         for mobile browser chrome. */
       display: flex;
       flex-direction: column;
-      height: min(var(--cdz-plan-budget, 640px) - 96px, 720px);
-      max-height: calc(100dvh - 120px);
+      height: auto;
+      max-height: min(var(--cdz-plan-budget, 640px), calc(100dvh - 96px));
       overflow: hidden;
     }
     .cdz-plan-body {
       flex: 1 1 auto;
-      /* The body is a fixed column: brief header (goal/question/answer) on top,
-         then the paginated list fills the remaining space. It never scrolls
-         itself — the list is windowed to a fixed row count so a page always
-         fits. min-height:0 lets the flex child shrink correctly inside the
-         fixed frame instead of forcing an overflow. */
+      /* Brief header (goal/question/answer) on top, then the paginated list.
+         The body now carries the scroll as a LAST RESORT: the card grows to fit
+         first, and only a plan that would exceed the viewport budget scrolls
+         here. Previously nothing scrolled and the card was a rigid frame, so
+         overflow was simply clipped and unreachable. min-height:0 lets this
+         flex child shrink correctly rather than forcing an overflow. */
       display: flex;
       flex-direction: column;
       min-height: 0;
+      overflow-y: auto;
       /* breathing room so focus rings don't kiss the edge */
       margin: 0 -6px;
       padding: 0 6px;
