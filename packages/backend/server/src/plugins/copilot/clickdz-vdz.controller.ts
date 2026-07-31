@@ -650,14 +650,18 @@ export class ClickDzVdzController {
   @Post('/api/v1/vdz/chat')
   async chat(
     @CurrentUser() user: CurrentUser,
-    @Body() body: unknown
-  ): Promise<{
-    summary: string;
-    ops: unknown[];
-    plan?: VdzPlanStep[];
-    suggestions?: string[];
-    raw?: string;
-  }> {
+    @Body() body: unknown,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<
+    | {
+        summary: string;
+        ops: unknown[];
+        plan?: VdzPlanStep[];
+        suggestions?: string[];
+        raw?: string;
+      }
+    | { error: { message: string; code: string } }
+  > {
     const payload = (body ?? {}) as Record<string, unknown>;
 
     const message =
@@ -705,7 +709,47 @@ export class ClickDzVdzController {
       `[vdz] chat user=${user.id} mode=${mode} selected=${selectedClipIds.length} history=${history?.length ?? 0} msg=${message.slice(0, 80)}`
     );
 
-    const rawReply = await this.runVdzModel(messages);
+    // Engine failures must NOT surface as a 500. This route previously awaited
+    // runVdzModel() unguarded, so a server with no CDZ_AI_KEY (and no Make
+    // triple) threw InternalServerError straight through the filter and the AI
+    // dock rendered the useless « Vdz AI request failed (500) ». The sibling
+    // repurpose() route in this same file already does it correctly; /chat just
+    // never got the same treatment.
+    //
+    // Two distinct outcomes, both non-500 and both carrying a message the dock
+    // can actually show (the client reads error.message before falling back to
+    // the bare status):
+    //   • not configured  -> 503, a deployment fact the operator must fix
+    //   • upstream failed -> 502, transient, worth retrying
+    const engineConfigured =
+      !!CDZ_AI_KEY || !!(MAKE_API_KEY && MAKE_TEAM_ID && MAKE_AGENT_ID);
+    if (!engineConfigured) {
+      this.logger.warn(
+        '[vdz] chat unavailable: no CDZ_AI_KEY and no complete Make agent triple configured'
+      );
+      res.status(HttpStatus.SERVICE_UNAVAILABLE);
+      return {
+        error: {
+          code: 'vdz_engine_unconfigured',
+          message:
+            "Vdz AI n'est pas configuré sur ce serveur. Ajoutez CDZ_AI_KEY (ou la configuration Make) pour activer les modifications par IA.",
+        },
+      };
+    }
+
+    let rawReply: string;
+    try {
+      rawReply = await this.runVdzModel(messages);
+    } catch {
+      res.status(HttpStatus.BAD_GATEWAY);
+      return {
+        error: {
+          code: 'vdz_engine_unavailable',
+          message:
+            "Le moteur Vdz AI n'a pas répondu. Réessayez dans un instant.",
+        },
+      };
+    }
 
     // Server-side sanity parse. The client re-validates each op with the Zod
     // schema before applying, so we only need to guarantee a well-formed

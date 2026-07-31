@@ -107,6 +107,100 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
       user-select: none;
     }
 
+    /* Quick starts — the empty-state shortcut grid. Auto-fit so it lands as
+       3x2 in the wide chat page and collapses to 2x3 / 1x6 in the narrow docked
+       sidebar without a media query. */
+    .cdz-quickstarts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+      gap: 8px;
+      width: 100%;
+      max-width: 760px;
+      margin-top: 4px;
+    }
+    .cdz-quickstart {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 11px 12px;
+      text-align: left;
+      cursor: pointer;
+      font: inherit;
+      color: var(--affine-v2-text-primary);
+      border: 1px solid var(--affine-v2-layer-insideBorder-border);
+      border-radius: 12px;
+      background: var(--affine-v2-layer-background-primary);
+      /* Staggered entrance: --cdz-qs-delay is set per card inline, so the grid
+         resolves as a quick cascade instead of six cards snapping in together. */
+      opacity: 0;
+      animation: cdz-qs-in 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+      animation-delay: var(--cdz-qs-delay, 0ms);
+      transition:
+        transform 160ms cubic-bezier(0.16, 1, 0.3, 1),
+        border-color 160ms ease,
+        box-shadow 160ms ease,
+        background 160ms ease;
+    }
+    .cdz-quickstart:hover {
+      transform: translateY(-2px);
+      border-color: color-mix(in srgb, #2f7bff 42%, transparent);
+      background: color-mix(
+        in srgb,
+        #2f7bff 4%,
+        var(--affine-v2-layer-background-primary)
+      );
+      box-shadow: 0 6px 18px color-mix(in srgb, #2f7bff 14%, transparent);
+    }
+    .cdz-quickstart:active {
+      transform: translateY(0) scale(0.985);
+    }
+    .cdz-quickstart:focus-visible {
+      outline: 2px solid color-mix(in srgb, #2f7bff 60%, transparent);
+      outline-offset: 2px;
+    }
+    .cdz-quickstart-icon {
+      font-size: 17px;
+      line-height: 20px;
+      flex: 0 0 auto;
+    }
+    .cdz-quickstart-copy {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .cdz-quickstart-title {
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 18px;
+    }
+    .cdz-quickstart-hint {
+      font-size: 11.5px;
+      font-weight: 500;
+      line-height: 15px;
+      color: var(--affine-v2-text-secondary);
+    }
+    @keyframes cdz-qs-in {
+      from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cdz-quickstart {
+        opacity: 1;
+        animation: none;
+        transition: none;
+      }
+      .cdz-quickstart:hover,
+      .cdz-quickstart:active {
+        transform: none;
+      }
+    }
     .messages-placeholder {
       width: 100%;
       position: absolute;
@@ -381,6 +475,98 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
       : new GeneralNetworkError(error.message);
   }
 
+  /**
+   * Quick starts for the empty state — the cold-open problem.
+   *
+   * A blank composer under "what can I help you with?" gives a merchant nothing
+   * to aim at, and this product's real jobs (an ERP, a storefront, invoices,
+   * WhatsApp orders, a deck) are not guessable from a placeholder. Each card
+   * seeds the composer via the same AIAppEvents.requestOpenWithChat bus the
+   * post-answer follow-up chips use, so the text lands in the input and the
+   * merchant can edit before sending rather than firing a request blind.
+   *
+   * Ordered by how commonly they start a session, and kept to six: past that
+   * the grid stops being scannable and becomes a menu to read.
+   */
+  private static readonly CDZ_QUICK_STARTS: ReadonlyArray<{
+    icon: string;
+    title: string;
+    hint: string;
+    prompt: string;
+  }> = [
+    {
+      icon: '🛍️',
+      title: 'Lancer une boutique',
+      hint: 'Catalogue + paiement à la livraison',
+      prompt:
+        'Crée-moi une boutique en ligne prête à vendre en Algérie : catalogue produits, panier, paiement à la livraison et confirmation WhatsApp.',
+    },
+    {
+      icon: '📦',
+      title: 'Suivre mes commandes',
+      hint: 'De « Nouvelle » à « Livrée »',
+      prompt:
+        'Mets en place un suivi de commandes clair : statuts de « Nouvelle » à « Livrée », relances client et export pour le livreur.',
+    },
+    {
+      icon: '🧾',
+      title: 'Facturer un client',
+      hint: 'Facture conforme, en DZD',
+      prompt:
+        'Génère une facture algérienne conforme en DZD à partir d’une commande, avec TVA, mentions légales et export PDF.',
+    },
+    {
+      icon: '📊',
+      title: 'Analyser mes ventes',
+      hint: 'Ce qui marche, ce qui bloque',
+      prompt:
+        'Analyse mes ventes du mois : produits les plus rentables, commandes annulées, et les trois actions qui augmenteraient le chiffre.',
+    },
+    {
+      icon: '📽️',
+      title: 'Créer une présentation',
+      hint: 'Deck prêt à présenter',
+      prompt:
+        'Prépare une présentation courte et convaincante de mon activité pour un partenaire, avec un plan clair et des chiffres clés.',
+    },
+    {
+      icon: '📣',
+      title: 'Écrire une promo',
+      hint: 'Post prêt à publier',
+      prompt:
+        'Écris une promotion courte et accrocheuse pour mes réseaux sociaux, en français et en derja algérienne, avec un appel à l’action.',
+    },
+  ];
+
+  private _renderQuickStarts() {
+    const { host } = this;
+    if (this.isHistoryLoading || !host) return nothing;
+    return html`<div class="cdz-quickstarts" data-testid="clickdz-quickstarts">
+      ${repeat(
+        AIChatMessages.CDZ_QUICK_STARTS,
+        item => item.title,
+        (item, index) => html`<button
+          class="cdz-quickstart"
+          data-testid="clickdz-quickstart"
+          title=${item.prompt}
+          style=${`--cdz-qs-delay:${index * 45}ms`}
+          @click=${() =>
+            AIAppEvents.requestOpenWithChat.next({
+              host,
+              input: item.prompt,
+              fromAnswer: true,
+            })}
+        >
+          <span class="cdz-quickstart-icon" aria-hidden="true">${item.icon}</span>
+          <span class="cdz-quickstart-copy">
+            <span class="cdz-quickstart-title">${item.title}</span>
+            <span class="cdz-quickstart-hint">${item.hint}</span>
+          </span>
+        </button>`
+      )}
+    </div>`;
+  }
+
   private _renderAIOnboarding() {
     return this.isHistoryLoading
       ? nothing
@@ -532,6 +718,7 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
                       >✨ ClickDz AI is ready — what can I help you with?</span
                     >`}
               </div>
+              ${this._renderQuickStarts()}
               ${this.independentMode ? nothing : this._renderAIOnboarding()}
             </div> `
           : repeat(
