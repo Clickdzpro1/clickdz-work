@@ -5,6 +5,45 @@ import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnSt
 
 const SLIDEPRO_URL_KEY = 'cdz.slidepro.url';
 
+/**
+ * Presenton's readiness endpoint.
+ *
+ * This probed `/api/health`, which DOES NOT EXIST in Presenton — so the check
+ * could only ever fail and the tab was permanently stuck on "not deployed",
+ * even once a real instance was running. `/api/v1/auth/status` is the actual
+ * unauthenticated status route (FastAPI, behind the container's nginx).
+ */
+const SLIDEPRO_HEALTH_PATH = '/api/v1/auth/status';
+
+/**
+ * Shared-instance base URL.
+ *
+ * The old fallback was `https://slidepro-${slug}.up.railway.app`, which assumed
+ * ONE PRESENTON DEPLOYMENT PER SHOP — a host that has never existed and that
+ * would not scale past the first merchant anyway. SlidePro is one shared service
+ * with per-user workspaces inside it, so the base URL is deployment config, not
+ * something to derive from a slug.
+ *
+ * Resolution order: an explicit per-install override in localStorage, then the
+ * build-time env value, then empty (which renders the deploy CTA rather than
+ * probing a host we know is fake).
+ */
+function slideProBaseUrl(slug: string): string {
+  try {
+    const override =
+      localStorage.getItem(`${SLIDEPRO_URL_KEY}_${slug}`) ||
+      localStorage.getItem(SLIDEPRO_URL_KEY);
+    if (override) return override.replace(/\/+$/, '');
+  } catch {
+    /* storage unavailable — fall through to env */
+  }
+  const fromEnv =
+    typeof process !== 'undefined'
+      ? (process.env?.CDZ_SLIDEPRO_URL ?? '')
+      : '';
+  return fromEnv.replace(/\/+$/, '');
+}
+
 export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void }) => {
   const [status, setStatus] = useState<'loading'|'ready'|'error'|'unavailable'>('loading');
   const [presentonUrl, setPresentonUrl] = useState('');
@@ -16,14 +55,17 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
   const checkPresentonHealth = async () => {
     setStatus('loading');
     try {
-      const stored = localStorage.getItem(`${SLIDEPRO_URL_KEY}_${slug}`);
-      const url = stored || `https://slidepro-${slug}.up.railway.app`;
-      const resp = await fetch(`${url}/api/health`, { mode: 'cors', signal: AbortSignal.timeout(5000) });
-      if (resp.ok) { setPresentonUrl(url); setStatus('ready'); setDeploymentState('deployed'); return; }
+      const url = slideProBaseUrl(slug);
+      // No configured instance: show the deploy CTA instead of probing a host we
+      // already know does not exist.
+      if (url) {
+        const resp = await fetch(`${url}${SLIDEPRO_HEALTH_PATH}`, { mode: 'cors', signal: AbortSignal.timeout(5000) });
+        if (resp.ok) { setPresentonUrl(url); setStatus('ready'); setDeploymentState('deployed'); return; }
+      }
     } catch {}
     setStatus('unavailable');
     setDeploymentState('not_deployed');
-    setHealthMsg("SlidePro n'est pas encore deploye pour cet ERP.");
+    setHealthMsg('SlidePro n’est pas encore connecté à cet espace de travail.');
   };
 
   const deployPresenton = async () => {
