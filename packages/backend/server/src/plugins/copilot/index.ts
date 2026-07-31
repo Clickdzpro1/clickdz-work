@@ -12,6 +12,7 @@ import { StorageModule } from '../../core/storage';
 import { WorkspaceModule } from '../../core/workspaces';
 import { IndexerModule } from '../indexer';
 import { ClickDzBridgeController } from './clickdz-bridge.controller';
+import { ClickDzAppProvisionController } from './clickdz-app-provision.controller';
 import { ClickDzDataController } from './clickdz-data.controller';
 import { ClickDzPgAdminController } from './clickdz-pg-admin.controller';
 import { ClickDzAgentTelegramController } from './clickdz-agent-telegram';
@@ -109,6 +110,7 @@ export class CopilotApiModule {}
   controllers: [
     CopilotController,
     ClickDzBridgeController,
+    ClickDzAppProvisionController,
     ClickDzDataController,
     ClickDzPgAdminController,
     ClickDzAgentTelegramController,
