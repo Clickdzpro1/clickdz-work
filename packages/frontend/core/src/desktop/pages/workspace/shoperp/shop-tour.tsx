@@ -69,6 +69,55 @@ function tourStepKey(slug: string): string {
   return `cdz.shoperp.tour.step.${slug}`;
 }
 
+/**
+ * How long a resume marker stays trustworthy. Resuming is only kind while the
+ * merchant is still in the same sitting — coming back days later, a spotlight
+ * parked on step 6 reads as "the tour is broken", because they experience it as
+ * the tour's opening step. Past this window we start from the top instead.
+ */
+const TOUR_RESUME_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+
+/**
+ * Read the resume index, honouring the TTL above.
+ *
+ * The marker used to be a bare integer with no timestamp, so a stale index was
+ * indistinguishable from a fresh one and got restored forever. That is the bug
+ * where an abandoned tour reopened with the spotlight on « Livraison » (step 6)
+ * rather than « Aperçu »: only finish() clears the marker, so a tour left by
+ * navigating away kept its index while `isShopTourDone` stayed false and the
+ * tour auto-reopened. Bare-integer markers are therefore treated as stale,
+ * which also self-heals every merchant currently stuck mid-tour.
+ */
+function readResumeStep(slug: string): number {
+  try {
+    const raw = globalThis.localStorage?.getItem(tourStepKey(slug));
+    if (!raw) return 0;
+    const [idxPart, tsPart] = raw.split(':');
+    // No timestamp => legacy marker of unknown age => start fresh.
+    if (!tsPart) return 0;
+    const idx = parseInt(idxPart, 10);
+    const ts = parseInt(tsPart, 10);
+    if (!Number.isFinite(idx) || !Number.isFinite(ts) || idx <= 0) return 0;
+    if (Date.now() - ts > TOUR_RESUME_TTL_MS) return 0;
+    return idx;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Forget where the merchant got to. Called when the tour is replayed on purpose
+ * from the dashboard header — an explicit « Visite guidée » click means "show me
+ * this from the beginning", not "drop me back where I abandoned it".
+ */
+export function resetShopTourProgress(slug: string): void {
+  try {
+    globalThis.localStorage?.removeItem(tourStepKey(slug));
+  } catch {
+    /* storage unavailable — the tour just starts at 0 anyway; harmless */
+  }
+}
+
 /** One tour step. `section` matches a dashboard tab id + its data-cdz-tour attr. */
 export interface ShopTourStep {
   /** The dashboard section/tab id this step points at (spotlight target). */
@@ -250,33 +299,42 @@ export const ShopTour = ({
     return source.filter(s => set.has(s.section));
   }, [steps, sections]);
 
-  // Resume where the merchant left off (see tourStepKey). Clamped below against
-  // the present-steps list, so a stale index from a server with more tabs
-  // enabled can never point past the end.
-  const [idx, setIdx] = useState(() => {
-    try {
-      const raw = globalThis.localStorage?.getItem(tourStepKey(slug));
-      const n = raw ? parseInt(raw, 10) : 0;
-      return Number.isFinite(n) && n > 0 ? n : 0;
-    } catch {
-      return 0;
-    }
-  });
+  // Resume where the merchant left off, but only within the TTL and only for a
+  // timestamped marker (see readResumeStep). Clamped below against the
+  // present-steps list, so a stale index from a server with more tabs enabled
+  // can never point past the end.
+  const [idx, setIdx] = useState(() => readResumeStep(slug));
   const [rect, setRect] = useState<Rect | null>(null);
   const [closed, setClosed] = useState(false);
 
   const total = present.length;
-  const step = present[Math.min(idx, Math.max(0, total - 1))];
+  // One clamped index feeding BOTH the rendered step and the "n/total" badge.
+  // These used to disagree: the step clamped but the badge printed `idx + 1`
+  // raw, so a marker left over from a server with more tabs enabled rendered
+  // the last step under a caption like "11/9".
+  const safeIdx = Math.min(Math.max(idx, 0), Math.max(0, total - 1));
+  const step = present[safeIdx];
 
-  // Persist progress so a reload picks the tour back up mid-way.
+  // Pull an out-of-range index back into range so what we persist (and every
+  // subsequent +1/-1) starts from the step actually on screen.
+  useEffect(() => {
+    if (closed) return;
+    if (idx !== safeIdx) setIdx(safeIdx);
+  }, [closed, idx, safeIdx]);
+
+  // Persist progress so a reload picks the tour back up mid-way — stamped with
+  // the time so readResumeStep can expire it (see TOUR_RESUME_TTL_MS).
   useEffect(() => {
     if (closed) return;
     try {
-      globalThis.localStorage?.setItem(tourStepKey(slug), String(idx));
+      globalThis.localStorage?.setItem(
+        tourStepKey(slug),
+        `${safeIdx}:${Date.now()}`
+      );
     } catch {
       /* storage unavailable — the tour just restarts; harmless */
     }
-  }, [slug, idx, closed]);
+  }, [slug, safeIdx, closed]);
 
   // Finish (complete or skip): persist, notify the parent once, unmount.
   const finish = useCallback(() => {
@@ -353,7 +411,7 @@ export const ShopTour = ({
 
   if (closed || total === 0 || !step) return null;
 
-  const isLast = idx >= total - 1;
+  const isLast = safeIdx >= total - 1;
   const pad = 6; // spotlight padding around the target
   const hasRect = rect !== null;
   const spot: Rect = hasRect
@@ -487,7 +545,7 @@ export const ShopTour = ({
               textTransform: 'uppercase',
             }}
           >
-            {lbl.badge} · {idx + 1}/{total}
+            {lbl.badge} · {safeIdx + 1}/{total}
           </span>
           <div style={{ flex: 1 }} />
           <button style={skipStyle} onClick={finish} aria-label={lbl.skipAria}>
@@ -528,7 +586,7 @@ export const ShopTour = ({
                 height: 4,
                 flex: 1,
                 borderRadius: 2,
-                background: i <= idx ? C.accent : C.border,
+                background: i <= safeIdx ? C.accent : C.border,
                 transition: 'background 200ms ease',
               }}
             />
@@ -536,7 +594,7 @@ export const ShopTour = ({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-          {idx > 0 ? (
+          {safeIdx > 0 ? (
             <button style={btnStyle('secondary')} onClick={back}>
               {lbl.back}
             </button>
