@@ -339,12 +339,23 @@ export function useBlobUrl(src: string): string | undefined {
 // ---- CDZIMAGE generation options (WS1 PR4) --------------------------------
 
 /** The CDZIMAGE tiers the Vdz bin can request (1.0 is Vdz-only by policy). */
-export type CdzImageTier = 'cdzimage-2.0' | 'cdzimage-1.5' | 'cdzimage-1.0';
+export type CdzImageTier =
+  | 'cdzimage-2.0'
+  | 'cdzimage-1.5'
+  | 'cdzimage-1.0'
+  | 'gemini-3-pro-image'
+  | 'gemini-3.1-flash-image'
+  | 'gemini-2.5-flash-image';
 export const CDZIMAGE_TIER_OPTIONS: Array<{ id: CdzImageTier; label: string }> =
   [
     { id: 'cdzimage-2.0', label: 'CDZIMAGE 2.0 · best' },
     { id: 'cdzimage-1.5', label: 'CDZIMAGE 1.5 · balanced' },
     { id: 'cdzimage-1.0', label: 'CDZIMAGE 1.0 · economy' },
+    // CDZIM (Gemini) tiers — the backend routes these ids to the Gemini
+    // generateContent API; labels follow the French-friendly CDZIM wording.
+    { id: 'gemini-3-pro-image', label: 'CDZIM Pro · qualité' },
+    { id: 'gemini-3.1-flash-image', label: 'CDZIM Flash · rapide' },
+    { id: 'gemini-2.5-flash-image', label: 'CDZIM Classic · économie' },
   ];
 
 /** How a reference image is used: true edit vs inspiration (reinterpret). */

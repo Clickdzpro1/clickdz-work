@@ -7,6 +7,44 @@ import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnSt
 
 const SOCIALPLUS_URL_KEY = 'cdz.socialplus.url';
 
+/** Postiz readiness endpoint (probed with a 5s timeout). */
+const SOCIALPLUS_HEALTH_PATH = '/api/health';
+
+/** The deployed shared Postiz instance (Railway service cdz-socialplus). */
+const SOCIALPLUS_DEFAULT_URL = 'https://cdz-socialplus-production.up.railway.app';
+
+/**
+ * Shared-instance base URL.
+ *
+ * The old fallback was `https://socialplus-${slug}.up.railway.app`, which assumed
+ * ONE POSTIZ DEPLOYMENT PER SHOP — a host that has never existed and that
+ * would not scale past the first merchant anyway. Social+ is one shared service
+ * with per-user workspaces inside it, so the base URL is deployment config, not
+ * something to derive from a slug.
+ *
+ * Resolution order: an explicit per-install override in localStorage, then the
+ * build-time env value, then the checked-in default (same pattern as SlidePro).
+ */
+function socialPlusBaseUrl(slug: string): string {
+  try {
+    const override =
+      localStorage.getItem(`${SOCIALPLUS_URL_KEY}_${slug}`) ||
+      localStorage.getItem(SOCIALPLUS_URL_KEY);
+    if (override) return override.replace(/\/+$/, '');
+  } catch {
+    /* storage unavailable — fall through to env */
+  }
+  const fromEnv =
+    typeof process !== 'undefined'
+      ? (process.env?.CDZ_SOCIALPLUS_URL ?? '')
+      : '';
+  if (fromEnv) return fromEnv.replace(/\/+$/, '');
+  // process.env is baked at BUILD time, so an env var set on the server would
+  // never reach this bundle — a checked-in default makes the tab work out of
+  // the box. The localStorage override above still wins for self-hosters.
+  return SOCIALPLUS_DEFAULT_URL;
+}
+
 export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
@@ -20,10 +58,13 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
   const checkHealth = async () => {
     setStatus('loading');
     try {
-      const stored = localStorage.getItem(`${SOCIALPLUS_URL_KEY}_${slug}`);
-      const url = stored || `https://socialplus-${slug}.up.railway.app`;
-      const resp = await fetch(`${url}/api/health`, { mode: 'cors', signal: AbortSignal.timeout(5000) });
-      if (resp.ok) { setPostizUrl(url); setStatus('ready'); setDeploymentState('deployed'); return; }
+      const url = socialPlusBaseUrl(slug);
+      // No configured instance: show the deploy CTA instead of probing a host we
+      // already know does not exist.
+      if (url) {
+        const resp = await fetch(`${url}${SOCIALPLUS_HEALTH_PATH}`, { mode: 'cors', signal: AbortSignal.timeout(5000) });
+        if (resp.ok) { setPostizUrl(url); setStatus('ready'); setDeploymentState('deployed'); return; }
+      }
     } catch {}
     setStatus('unavailable'); setDeploymentState('not_deployed');
     setHealthMsg('Social+ n\'est pas encore déployé pour cet ERP.');
@@ -51,22 +92,26 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Social+</div>
           <div style={{ fontSize: 11.5, color: C.muted }}>Réseaux sociaux IA · Powered by Postiz + CDZ AI</div>
         </div>
-        {status === 'ready' ? <a href={postizUrl} target="_blank" rel="noopener noreferrer" style={{ ...miniBtnStyle('secondary'), textDecoration: 'none' }}>Ouvrir Social+ ↗</a> : null}
         <button style={miniBtnStyle('secondary')} onClick={checkHealth}>↻ Vérifier</button>
       </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
+      <div style={status === 'ready'
+        ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
+        : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
         {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à Social+…</div>
         : status === 'ready' && postizUrl ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', minHeight: 520 }}>
-              <iframe src={postizUrl} style={{ width: '100%', height: 520, border: 'none' }} title="Social+" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+          /* The iframe must fill the pane, not sit in a fixed 520px box with a
+             dead region below it. The wrapper is flex:1 so it takes whatever
+             height the pane offers, and the iframe is height:100% of that. The
+             "Publication IA multi-réseaux" explainer used to sit under the
+             iframe — it is collapsed into a slim footer strip so it no longer
+             eats the iframe's space. */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
+              <iframe src={postizUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="Social+" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
             </div>
-            <div style={{ borderRadius: 12, border: `1px solid ${C.border}`, background: C.panel, padding: '18px 20px' }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 8 }}>🚀 Publication IA multi-réseaux</div>
-              <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.6 }}>Social+ utilise vos modèles CDZ AI pour programmer et publier sur tous vos réseaux sociaux. Analytics, collaboration, automatisation.</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                {['Instagram','TikTok','X','LinkedIn','YouTube','Facebook','Pinterest','Threads','Bluesky','Mastodon','Discord','Slack'].map(t=><span key={t} style={{ fontSize: 11, fontWeight: 600, color: C.accent, padding: '4px 10px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
-              </div>
+            <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🚀 Programmation et publication IA sur tous vos réseaux · Propulsé par vos modèles CDZ AI</span>
+              {['Instagram','TikTok','LinkedIn','YouTube','X','Facebook'].map(t=><span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.accent, padding: '3px 8px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
             </div>
           </div>
         ) : deploymentState === 'not_deployed' ? (

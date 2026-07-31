@@ -5,6 +5,44 @@ import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnSt
 
 const ZOOMPLUS_URL_KEY = 'cdz.zoomplus.url';
 
+/** La Suite Meet readiness endpoint (probed with a 5s timeout). */
+const ZOOMPLUS_HEALTH_PATH = '/api/health';
+
+/** The deployed shared La Suite Meet instance (Railway service cdz-zoomplus). */
+const ZOOMPLUS_DEFAULT_URL = 'https://cdz-zoomplus-production.up.railway.app';
+
+/**
+ * Shared-instance base URL.
+ *
+ * The old fallback was `https://zoomplus-${slug}.up.railway.app`, which assumed
+ * ONE MEET DEPLOYMENT PER SHOP — a host that has never existed and that
+ * would not scale past the first merchant anyway. ZOOM+ is one shared service
+ * with per-user workspaces inside it, so the base URL is deployment config, not
+ * something to derive from a slug.
+ *
+ * Resolution order: an explicit per-install override in localStorage, then the
+ * build-time env value, then the checked-in default (same pattern as SlidePro).
+ */
+function zoomPlusBaseUrl(slug: string): string {
+  try {
+    const override =
+      localStorage.getItem(`${ZOOMPLUS_URL_KEY}_${slug}`) ||
+      localStorage.getItem(ZOOMPLUS_URL_KEY);
+    if (override) return override.replace(/\/+$/, '');
+  } catch {
+    /* storage unavailable — fall through to env */
+  }
+  const fromEnv =
+    typeof process !== 'undefined'
+      ? (process.env?.CDZ_ZOOMPLUS_URL ?? '')
+      : '';
+  if (fromEnv) return fromEnv.replace(/\/+$/, '');
+  // process.env is baked at BUILD time, so an env var set on the server would
+  // never reach this bundle — a checked-in default makes the tab work out of
+  // the box. The localStorage override above still wins for self-hosters.
+  return ZOOMPLUS_DEFAULT_URL;
+}
+
 export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
@@ -18,10 +56,13 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   const checkHealth = async () => {
     setStatus('loading');
     try {
-      const stored = localStorage.getItem(`${ZOOMPLUS_URL_KEY}_${slug}`);
-      const url = stored || `https://zoomplus-${slug}.up.railway.app`;
-      const resp = await fetch(`${url}/api/health`, { mode: 'cors', signal: AbortSignal.timeout(5000) });
-      if (resp.ok) { setMeetUrl(url); setStatus('ready'); setDeploymentState('deployed'); return; }
+      const url = zoomPlusBaseUrl(slug);
+      // No configured instance: show the deploy CTA instead of probing a host we
+      // already know does not exist.
+      if (url) {
+        const resp = await fetch(`${url}${ZOOMPLUS_HEALTH_PATH}`, { mode: 'cors', signal: AbortSignal.timeout(5000) });
+        if (resp.ok) { setMeetUrl(url); setStatus('ready'); setDeploymentState('deployed'); return; }
+      }
     } catch {}
     setStatus('unavailable'); setDeploymentState('not_deployed');
     setHealthMsg('ZOOM+ n\'est pas encore déployé.');
@@ -49,22 +90,26 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>ZOOM+</div>
           <div style={{ fontSize: 11.5, color: C.muted }}>Visioconférence · Powered by La Suite Meet + LiveKit</div>
         </div>
-        {status === 'ready' ? <a href={meetUrl} target="_blank" rel="noopener noreferrer" style={{ ...miniBtnStyle('secondary'), textDecoration: 'none' }}>Ouvrir ZOOM+ ↗</a> : null}
         <button style={miniBtnStyle('secondary')} onClick={checkHealth}>↻ Vérifier</button>
       </div>
-      <div style={{ flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
+      <div style={status === 'ready'
+        ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
+        : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
         {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à ZOOM+…</div>
         : status === 'ready' && meetUrl ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', minHeight: 520 }}>
-              <iframe src={meetUrl} style={{ width: '100%', height: 520, border: 'none' }} title="ZOOM+" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-camera allow-microphone" />
+          /* The iframe must fill the pane, not sit in a fixed 520px box with a
+             dead region below it. The wrapper is flex:1 so it takes whatever
+             height the pane offers, and the iframe is height:100% of that. The
+             "Réunions haute qualité" explainer used to sit under the iframe —
+             it is collapsed into a slim footer strip so it no longer eats the
+             iframe's space. */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
+              <iframe src={meetUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="ZOOM+" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-camera allow-microphone" />
             </div>
-            <div style={{ borderRadius: 12, border: `1px solid ${C.border}`, background: C.panel, padding: '18px 20px' }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: C.text, marginBottom: 8 }}>🎥 Réunions haute qualité</div>
-              <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.6 }}>ZOOM+ offre une visioconférence niveau Zoom, directement dans votre navigateur. 100+ participants, partage d'écran, transcription IA avec CDZ.</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                {['100+ participants','Partage écran','Enregistrement','Transcription IA','E2E encryption','SVC codecs (VP9, AV1)'].map(t=><span key={t} style={{ fontSize: 11, fontWeight: 600, color: C.accent, padding: '4px 10px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
-              </div>
+            <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🎥 Visioconférence HD dans votre navigateur · Transcription IA par CDZ · 100% open-source</span>
+              {['100+ participants','Partage écran','Transcription IA'].map(t=><span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.accent, padding: '3px 8px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
             </div>
           </div>
         ) : deploymentState === 'not_deployed' ? (

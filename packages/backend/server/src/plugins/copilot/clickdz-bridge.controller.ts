@@ -302,6 +302,13 @@ const OPENAI_IMAGE_API_KEY =
   process.env.OPEN_AI ||
   process.env.OPENAI_API_KEY ||
   '';
+// CDZIM (Gemini image models): a SECOND image provider next to the OpenAI
+// gpt-image engines. The dedicated Gemini key first, then the CDZIM alias.
+// No key set -> only gemini-* requests 503 with `gemini_image_key_missing`;
+// the OpenAI path is untouched.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.CDZIM_API_KEY || '';
+const GEMINI_API_BASE =
+  process.env.GEMINI_API_BASE || 'https://generativelanguage.googleapis.com/v1beta';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
 // P5 (VOICE STUDIO): OpenAI as a SECOND voice provider (STT via Whisper + TTS
 // via /v1/audio/speech). Key cascade mirrors the vdz controller's AUDIO cascade
@@ -673,12 +680,16 @@ function extractHtmlApp(reply: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// CDZIMAGE tiers (WS1) — display aliases over OpenAI gpt-image engines.
+// CDZIMAGE tiers (WS1) — display aliases over the image engines.
 // 2.0 = flagship default, 1.5 = balanced, 1.0 = economy (UI exposes 1.0 in
 // Vdz only, per owner decision; the server accepts all three). dall-e-* and
 // bare gpt-image-1 are RETIRED as targets (gpt-image-1 deprecates upstream
 // 2026-10-23) — legacy ids resolve to the nearest tier so old clients keep
 // working during the transition.
+// CDZIM: the gemini-* tiers are REAL engines on the Gemini generateContent
+// API (routed upstream by the gemini branch below) — raw gemini-* ids also
+// resolve through the raw-engine loop, so `resolveCdzImageModel` accepts both
+// the tier id and the engine id for each.
 // ---------------------------------------------------------------------------
 const CDZIMAGE_TIERS: Record<
   string,
@@ -687,6 +698,12 @@ const CDZIMAGE_TIERS: Record<
   'cdzimage-2.0': { engine: 'gpt-image-2', quality: 'high', label: 'CDZIMAGE 2.0' },
   'cdzimage-1.5': { engine: 'gpt-image-1.5', quality: 'medium', label: 'CDZIMAGE 1.5' },
   'cdzimage-1.0': { engine: 'gpt-image-1-mini', quality: 'low', label: 'CDZIMAGE 1.0' },
+  // CDZIM (Gemini) tiers — engine id == tier id, so raw-engine requests map
+  // back to these exact entries (quality feeds the clickdz metadata only;
+  // nothing Gemini-specific is sent upstream).
+  'gemini-3.1-flash-image': { engine: 'gemini-3.1-flash-image', quality: 'medium', label: 'CDZIM Flash' },
+  'gemini-3-pro-image': { engine: 'gemini-3-pro-image', quality: 'high', label: 'CDZIM Pro' },
+  'gemini-2.5-flash-image': { engine: 'gemini-2.5-flash-image', quality: 'low', label: 'CDZIM Classic' },
 };
 const CDZIMAGE_DEFAULT_TIER = 'cdzimage-2.0';
 const CDZIMAGE_LEGACY_ALIASES: Record<string, string> = {
@@ -2622,12 +2639,6 @@ export class ClickDzBridgeController {
   @Throttle('strict')
   @Post(['/api/v1/images/generations', '/v1/images/generations'])
   async imageGenerations(@Body() body: any) {
-    if (!OPENAI_IMAGE_API_KEY) {
-      throw new HttpException(
-        { error: { message: 'OpenAI image generation key is not configured', type: 'configuration_error', code: 'openai_image_key_missing' } },
-        HttpStatus.SERVICE_UNAVAILABLE
-      );
-    }
     // SECURITY: this route hits the paid OpenAI images API. Validate input
     // defensively before doing any upstream work.
     if (typeof body?.prompt !== 'string' || !body.prompt.trim()) {
@@ -2681,6 +2692,24 @@ export class ClickDzBridgeController {
         ...CDZIMAGE_TIERS[CDZIMAGE_DEFAULT_TIER],
         source: 'default',
       };
+    }
+
+    // ---- Provider key guards (per resolved engine) -----------------------
+    // The OpenAI key is only required when the resolved engine is actually a
+    // gpt-image model — a gemini-* request must NOT 503 just because the
+    // OpenAI key is absent. Conversely a gemini engine without a Gemini key
+    // 503s with its own typed code; the OpenAI path is byte-identical.
+    if (!String(resolution.engine).startsWith('gemini-') && !OPENAI_IMAGE_API_KEY) {
+      throw new HttpException(
+        { error: { message: 'OpenAI image generation key is not configured', type: 'configuration_error', code: 'openai_image_key_missing' } },
+        HttpStatus.SERVICE_UNAVAILABLE
+      );
+    }
+    if (String(resolution.engine).startsWith('gemini-') && !GEMINI_API_KEY) {
+      throw new HttpException(
+        { error: { message: 'Gemini image generation key is not configured', type: 'configuration_error', code: 'gemini_image_key_missing' } },
+        HttpStatus.SERVICE_UNAVAILABLE
+      );
     }
 
     // ---- Image-to-image router (WS1 PR2) ---------------------------------
@@ -2759,8 +2788,11 @@ export class ClickDzBridgeController {
 
     const model = resolution.engine;
     // gpt-image-* rejects response_format/style and always returns b64_json;
-    // (all CDZIMAGE engines are gpt-image-*, guard kept for safety.)
+    // (all CDZIMAGE OpenAI engines are gpt-image-*, guard kept for safety.)
     const isGptImage = String(model).startsWith('gpt-image');
+    // CDZIM: gemini-* engines route to the Gemini generateContent API instead
+    // of the OpenAI images API (branch below, keyed on this flag).
+    const isGemini = String(model).startsWith('gemini-');
     // Per-tier quality default (2.0 high / 1.5 medium / 1.0 low); explicit
     // body.quality wins when it's one of the valid knobs. Fast mode drops the
     // resolved-tier default one notch (never the engine); body.quality wins.
@@ -2777,7 +2809,49 @@ export class ClickDzBridgeController {
     const size = String(body?.size || '1024x1024');
 
     let response: Awaited<ReturnType<typeof fetch>>;
-    if (i2iMode === 'edit') {
+    let data: any;
+    if (isGemini) {
+      // CDZIM (Gemini): generateContent endpoint. The prompt is a single text
+      // part; i2i edit mode appends the input image as an inlineData part
+      // (same fetchImageInput resolution/size caps as the OpenAI edit path —
+      // Gemini has no mask knob, so a supplied mask is intentionally ignored).
+      // quality/style/response_format/size are OpenAI-only params and are NOT
+      // sent upstream. The response is translated into the OpenAI shape
+      // ({ data: [{ b64_json }] }) so the b64->data.url normalizer and the
+      // clickdz metadata block below work untouched.
+      const parts: Array<Record<string, unknown>> = [{ text: finalPrompt }];
+      if (i2iMode === 'edit') {
+        const img = await fetchImageInput(imageRef, 'image');
+        parts.push({
+          inlineData: {
+            mimeType: img.mime,
+            data: Buffer.from(img.bytes).toString('base64'),
+          },
+        });
+      }
+      const geminiRes = await fetch(
+        `${GEMINI_API_BASE}/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts }],
+            generationConfig: { responseModalities: ['IMAGE'] },
+          }),
+          signal: AbortSignal.timeout(
+            fastMode ? FAST_IMAGE_TIMEOUT_MS : 180000
+          ),
+        }
+      );
+      const geminiData = (await geminiRes.json()) as any;
+      if (!geminiRes.ok) {
+        throw new HttpException(geminiData, geminiRes.status);
+      }
+      const b64 = geminiData?.candidates?.[0]?.content?.parts?.find(
+        (part: any) => typeof part?.inlineData?.data === 'string'
+      )?.inlineData?.data as string | undefined;
+      data = { data: [{ b64_json: b64 }] };
+    } else if (i2iMode === 'edit') {
       // TRUE image-to-image: multipart to /v1/images/edits. Inputs resolve
       // from data: URLs (inline) or SSRF-guarded public URLs; hard size caps.
       const image = await fetchImageInput(imageRef, 'image');
@@ -2836,9 +2910,11 @@ export class ClickDzBridgeController {
         }
       );
     }
-    const data = (await response.json()) as any;
-    if (!response.ok) {
-      throw new HttpException(data, response.status);
+    if (!isGemini) {
+      data = (await response.json()) as any;
+      if (!response.ok) {
+        throw new HttpException(data, response.status);
+      }
     }
     // normalize: expose a data URL for b64 responses so url-consumers work
     if (Array.isArray(data?.data)) {
