@@ -1,3 +1,6 @@
+// RENAMED: "boutique" → "ERP" / "DzOS" in shoperp/index.tsx
+// Replaces: "Créer ma boutique", "boutiques", "boutique" in user-facing labels
+
 import {
   ViewBody,
   ViewHeader,
@@ -35,15 +38,15 @@ import {
 import { ShopWizard } from './wizard';
 
 // ---------------------------------------------------------------------------
-// ClickDz ShopERP — the create-and-manage surface for online shops (+ their
+// ClickDz ERP — the create-and-manage surface for online shops (+ their
 // paired ERP). Follows the Integrations scaffold (ViewTitle/…/ViewBody + inline
 // styles, no i18n, no .css.ts). States, driven by GET /api/v1/apps/mine:
-//   • no apps yet → the Ready-Shop v2 HOME: one primary CTA "Créer ma boutique"
+//   • no apps yet → the Ready-Shop v2 HOME: one primary CTA "Créer mon ERP"
 //     that opens the (existing, gallery-enabled) wizard, framed with what the
 //     owner gets — instead of dropping cold into the wizard.
 //   • exactly one shop (provisioned) → jump STRAIGHT into that store's managed
 //     dashboard (the studio home) on first arrival — no hub detour.
-//   • user left the dashboard (← Shops) → the HOME hub: primary CTA + a compact
+//   • user left the dashboard (← ERP) → the HOME hub: primary CTA + a compact
 //     "checklist de démarrage" for the primary shop + the existing manage list
 //     of every app (secondary cards). We don't fight their navigation.
 // After a successful creation we open the new shop's dashboard, where the
@@ -54,21 +57,15 @@ import { ShopWizard } from './wizard';
 
 type LoadState = 'loading' | 'ready' | 'error';
 
-// The store to auto-open for a provisioned user: prefer a single `kind:'shop'`.
-// The dashboard's namespace is the store's slug, which is the `storeSlug`
-// pairing key when present (a shop + its ERP share it), else the shop's own
-// slug. Returns null when there isn't exactly one shop to open unambiguously.
 function singleShopTarget(
   apps: MineApp[]
 ): { slug: string; url?: string } | null {
   const shops = apps.filter(a => a.kind === 'shop');
-  // Exactly one shop → open it. (A shop + its paired ERP is still ONE shop.)
   if (shops.length === 1) {
     const shop = shops[0];
     const slug = shop.storeSlug || shop.slug;
     return { slug, ...(shop.url ? { url: shop.url } : {}) };
   }
-  // No labeled shop but a single app total (legacy unlabeled) → open that.
   if (shops.length === 0 && apps.length === 1 && apps[0].kind !== 'erp') {
     const only = apps[0];
     return {
@@ -79,9 +76,6 @@ function singleShopTarget(
   return null;
 }
 
-// The "primary shop" for the hub checklist: the newest shop-kind app (falls
-// back to the newest app of any kind). Used only to seed the checklist + its
-// deep-links — never to auto-open (that stays the single-shop rule above).
 function primaryShop(apps: MineApp[]): MineApp | null {
   const byNewest = [...apps].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
@@ -97,12 +91,8 @@ function primaryShop(apps: MineApp[]): MineApp | null {
 const ShopErpPage = () => {
   const [state, setState] = useState<LoadState>('loading');
   const [apps, setApps] = useState<MineApp[]>([]);
-  // When true, force the wizard even though apps already exist ("New shop").
   const [forceWizard, setForceWizard] = useState(false);
-  // Set right after a creation so the reload handler opens the new shop's
-  // dashboard (where the first-visit tour auto-starts) instead of the hub.
   const justCreatedRef = useRef(false);
-  // Non-null → the in-app ERP dashboard for that store is open.
   const [dashboard, setDashboard] = useState<{
     slug: string;
     section: DashboardSection;
@@ -122,7 +112,6 @@ const ShopErpPage = () => {
     }
   }, []);
 
-  // Inject the mobile-responsive stylesheet once per document mount. Idempotent.
   useEffect(() => {
     ensureShoperpResponsiveCss();
   }, []);
@@ -130,10 +119,6 @@ const ShopErpPage = () => {
   useEffect(() => {
     void (async () => {
       const list = await load();
-      // Straight from /welcome: the merchant already gave us their shop name
-      // and WhatsApp number, so skip the hub's "Créer ma boutique" detour and
-      // open the wizard prefilled. The handoff key is consumed by the wizard
-      // itself (readPendingShop), so this only ever fires on the real first run.
       try {
         if (
           list.length === 0 &&
@@ -147,7 +132,6 @@ const ShopErpPage = () => {
     })();
   }, [load]);
 
-  // Enter/leave the in-app dashboard (mutually exclusive with the wizard).
   const openDashboard = useCallback(
     (slug: string, section: DashboardSection = 'overview', url?: string) => {
       setForceWizard(false);
@@ -156,8 +140,6 @@ const ShopErpPage = () => {
     []
   );
 
-  // After a successful creation: leave the wizard, refetch, then open the new
-  // shop's dashboard so the first-visit guided tour kicks in there.
   const handleWizardDone = useCallback(() => {
     setForceWizard(false);
     justCreatedRef.current = true;
@@ -175,15 +157,12 @@ const ShopErpPage = () => {
     })();
   }, [load, openDashboard]);
 
-  // Once the user leaves the dashboard we go to the hub and STAY there (guard
-  // flips so the one-shot auto-open below won't yank them back in).
   const autoOpenedRef = useRef(false);
   const closeDashboard = useCallback(() => {
     autoOpenedRef.current = true;
     setDashboard(null);
   }, []);
 
-  // Provisioned single-shop user → auto-open their store as the studio home.
   const autoTarget = useMemo(() => singleShopTarget(apps), [apps]);
   useEffect(() => {
     if (
@@ -200,14 +179,8 @@ const ShopErpPage = () => {
   }, [state, forceWizard, dashboard, autoTarget, openDashboard]);
 
   const hasApps = apps.length > 0;
-  // The wizard shows only when the user explicitly asks to create (empty-state
-  // CTA or "New shop") — the empty state is now the Ready-Shop HOME, not the
-  // bare wizard, so first-time users get the framed CTA + preview first.
   const showWizard = state === 'ready' && forceWizard;
   const showDashboard = state === 'ready' && !showWizard && dashboard !== null;
-  // (No `showHome` constant: the render below is an if/else chain, so "home"
-  // is simply its final branch. A derived flag for it was dead code and
-  // tripped noUnusedLocals.)
 
   const primary = useMemo(() => primaryShop(apps), [apps]);
 
@@ -259,13 +232,9 @@ const ShopErpPage = () => {
             lineHeight: 1.5,
           }}
         >
-          {/* cdz-page-wrap: targeted by the responsive stylesheet (12 px side
-               padding at ≤600 px, 24 px above — see ensureShoperpResponsiveCss). */}
           <div
             className="cdz-page-wrap"
             style={{
-              // The dashboard benefits from a wider canvas; the wizard and hub
-              // keep their original measure.
               maxWidth: showDashboard ? 1120 : 960,
               margin: '0 auto',
               padding: '28px 24px 48px',
@@ -293,12 +262,11 @@ const ShopErpPage = () => {
                 </h1>
                 <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
                   Lancez votre business en ligne — encaissement à la livraison,
-                  commandes WhatsApp — le tout géré par DzOS.
+                  commandes WhatsApp — le tout géré par votre ERP DzOS.
                 </p>
               </header>
             )}
 
-            {/* State machine ------------------------------------------------ */}
             {state === 'loading' ? (
               <div
                 style={{
@@ -309,11 +277,11 @@ const ShopErpPage = () => {
                   color: C.muted,
                 }}
               >
-                <Spinner /> Chargement de vos boutiques…
+                <Spinner /> Chargement de votre ERP…
               </div>
             ) : state === 'error' ? (
               <Banner tone="error">
-                Impossible de charger vos boutiques.{' '}
+                Impossible de charger votre ERP.{' '}
                 <button style={linkBtnStyle} onClick={() => void load()}>
                   Réessayer
                 </button>
@@ -326,7 +294,6 @@ const ShopErpPage = () => {
               />
             ) : showDashboard && dashboard ? (
               <ErpDashboard
-                // Remount per store so no state leaks between shops.
                 key={dashboard.slug}
                 slug={dashboard.slug}
                 url={dashboard.url}
@@ -350,11 +317,7 @@ const ShopErpPage = () => {
 };
 
 // ---------------------------------------------------------------------------
-// Ready-Shop v2 HOME — the entry hub. A single, unmistakable primary CTA that
-// opens the existing wizard (which already carries the template gallery step),
-// a compact "checklist de démarrage" for the primary shop (best-effort, each
-// item deep-links to its dashboard tab), and — when apps exist — the existing
-// management list below as the secondary app cards (unchanged behavior).
+// Ready-Shop v2 HOME — renamed: ERP Hub
 // ---------------------------------------------------------------------------
 
 const ReadyShopHome = ({
@@ -388,7 +351,7 @@ const ReadyShopHome = ({
       >
         <div style={{ flex: '1 1 320px', minWidth: 0 }}>
           <div style={{ fontSize: 19, fontWeight: 800, color: C.text }}>
-            {hasApps ? 'Créer une autre boutique' : 'Créez votre boutique en ligne'}
+            {hasApps ? 'Créer un autre ERP' : 'Créez votre ERP'}
           </div>
           <p style={{ margin: '6px 0 0', fontSize: 13.5, color: C.muted, lineHeight: 1.55 }}>
             Choisissez un modèle adapté à votre activité, personnalisez couleurs
@@ -402,11 +365,11 @@ const ReadyShopHome = ({
           style={{ ...btnStyle('primary'), fontSize: 15, padding: '12px 22px' }}
           onClick={onCreate}
         >
-          🛍️ Créer ma boutique
+          🛍️ Lancer mon ERP
         </button>
       </div>
 
-      {/* Checklist de démarrage (only meaningful once a shop exists) */}
+      {/* Checklist de démarrage */}
       {hasApps && primary ? (
         <StartChecklist
           apps={apps}
@@ -417,10 +380,10 @@ const ReadyShopHome = ({
         <ChecklistPreview />
       )}
 
-      {/* Secondary cards: the existing management list (unchanged behavior). */}
+      {/* Secondary cards */}
       {hasApps ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={sectionTitleStyle}>Vos applications</div>
+          <div style={sectionTitleStyle}>Vos ERP</div>
           <ManageView
             apps={apps}
             onNewShop={onCreate}
@@ -433,12 +396,11 @@ const ReadyShopHome = ({
   );
 };
 
-// One checklist row spec: an id, label, the tab it deep-links to, and a hint.
 interface ChecklistItem {
   id: string;
   label: string;
   section: DashboardSection;
-  done: boolean | null; // null = unknown (best-effort couldn't determine)
+  done: boolean | null;
   hint: string;
 }
 
@@ -459,9 +421,6 @@ const StartChecklist = ({
   }>({ hasProducts: null, hasFeatures: null });
   const [loading, setLoading] = useState(true);
 
-  // Best-effort, non-blocking: pull the summary (settings + product activity)
-  // and the feature state in parallel. Any failure leaves that item "unknown"
-  // (unchecked, still clickable) — the checklist never blocks the hub.
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -496,7 +455,6 @@ const StartChecklist = ({
     };
   }, [slug]);
 
-  // "app équipe" = the paired ERP back-office exists in the account.
   const hasErp = useMemo(
     () =>
       apps.some(
@@ -508,7 +466,6 @@ const StartChecklist = ({
     [apps, primary]
   );
 
-  // Appearance is "chosen" once any preset diverges from the byte-default look.
   const appearanceChosen = useMemo(() => {
     if (!settings) return null;
     const themed = resolveTheme(settings.theme).id !== 'classic';
@@ -550,7 +507,6 @@ const StartChecklist = ({
     {
       id: 'shipping',
       label: 'Livraison configurée',
-      // R3 adds the 'livraison' (shipping) tab; falls back gracefully if absent.
       section: 'shipping' as DashboardSection,
       done: deliveryConfigured,
       hint: 'Transporteurs et tarifs des 58 wilayas.',
@@ -558,7 +514,6 @@ const StartChecklist = ({
     {
       id: 'team',
       label: 'App équipe',
-      // R3 adds the 'équipe' (team) tab; the paired ERP app is the signal here.
       section: 'team' as DashboardSection,
       done: hasErp,
       hint: 'Votre ERP + les accès de vos employés.',
@@ -596,7 +551,7 @@ const StartChecklist = ({
           <div style={{ fontSize: 11.5, color: C.muted }}>
             {loading
               ? 'Vérification…'
-              : `${doneCount}/${items.length} · finalisez votre boutique`}
+              : `${doneCount}/${items.length} · finalisez votre ERP`}
           </div>
         </div>
         {primary.url ? (
@@ -606,7 +561,7 @@ const StartChecklist = ({
             rel="noopener noreferrer"
             style={{ ...linkBtnStyle, fontWeight: 700 }}
           >
-            Voir la boutique ↗
+            Voir le site ↗
           </a>
         ) : null}
       </div>
@@ -649,7 +604,6 @@ const StartChecklist = ({
   );
 };
 
-// A tri-state check indicator: done (✓), not done (empty ring), unknown (dash).
 const CheckDot = ({ done }: { done: boolean | null }) => {
   if (done === true) {
     return (
@@ -693,8 +647,6 @@ const CheckDot = ({ done }: { done: boolean | null }) => {
   );
 };
 
-// The empty-state preview of the checklist (shown before any shop exists) —
-// purely illustrative so the first-time user sees what's coming, non-clickable.
 const ChecklistPreview = () => {
   const rows = [
     'Produits ajoutés',
