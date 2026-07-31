@@ -61,7 +61,16 @@ const MAKE_AGENT_ID =
   process.env.MAKE_SUPERAGENT_ID || process.env.MAKE_AGENT_ID || '';
 const CDZ_AI_BASE_URL = (
   process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
-).replace(/\/+$/, '');
+)
+  // Trailing slashes first, THEN a trailing `/v1`. Every call site below appends
+  // `/v1/chat/completions`, so a base URL that already ends in `/v1` produced
+  // `.../v1/v1/chat/completions` — a 404. Production is configured exactly that
+  // way, which is why the direct fast path silently failed everywhere: the vdz
+  // dock surfaced it as a 500, and the reasoning pulse swallowed it and served
+  // its static fallback lines. Normalising here fixes every append site at once
+  // and accepts the base URL with or without the `/v1` suffix.
+  .replace(/\/+$/, '')
+  .replace(/\/v1$/, '');
 const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
 
 // ---------------------------------------------------------------------------
