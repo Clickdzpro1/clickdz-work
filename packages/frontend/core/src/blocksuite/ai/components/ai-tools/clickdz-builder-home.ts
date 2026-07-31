@@ -113,6 +113,47 @@ const CDZ_STARTERS: ReadonlyArray<{ label: string; prompt: string }> = [
   },
 ];
 
+/**
+ * Backend error strings that carry no information, mapped to something a
+ * merchant can act on.
+ *
+ * « Http Exception » is the worst offender and the one users actually reported
+ * seeing. It is not a message anybody wrote: NestJS's HttpException.initMessage()
+ * falls back to splitting its own CONSTRUCTOR NAME when it is constructed as
+ * `new HttpException(body, status)` with a body that has no top-level string
+ * `.message` — "HttpException" then splits to ["Http","Exception"]. Several POST
+ * routes in clickdz-bridge.controller.ts construct exactly that shape, including
+ * one that forwards a third-party image API's raw JSON body straight through, so
+ * the text can reach the client verbatim. Surfacing it told the merchant nothing
+ * and looked like a crash.
+ *
+ * Anything that is blank, a bare status code, or a known framework placeholder is
+ * replaced by the caller's contextual fallback. Genuine messages pass through
+ * untouched — this only filters noise, it does not hide real explanations.
+ */
+const CDZ_MEANINGLESS_ERRORS = new Set([
+  'http exception',
+  'internal server error',
+  'an internal error occurred.',
+  'an internal error occurred',
+  'error',
+  'bad request',
+  'forbidden',
+  'unknown error',
+  '[object object]',
+]);
+
+function cdzFriendlyError(raw: unknown, fallback: string): string {
+  const text =
+    raw instanceof Error ? raw.message : typeof raw === 'string' ? raw : '';
+  const trimmed = text.trim();
+  if (!trimmed) return fallback;
+  // A bare status code ("500", "502") is no more useful than no message at all.
+  if (/^\d{3}$/.test(trimmed)) return fallback;
+  if (CDZ_MEANINGLESS_ERRORS.has(trimmed.toLowerCase())) return fallback;
+  return trimmed;
+}
+
 @customElement('clickdz-builder-home')
 export class ClickDzBuilderHome extends LitElement {
   static override styles = css`
@@ -600,7 +641,10 @@ export class ClickDzBuilderHome extends LitElement {
             }
           } else if (event === 'error') {
             settled = true;
-            this.error = String(payload?.message || 'Génération échouée');
+            this.error = cdzFriendlyError(
+              payload?.message,
+              "La génération a échoué. Reformulez votre demande ou réessayez dans un instant."
+            );
           }
         }
       }
@@ -708,7 +752,10 @@ export class ClickDzBuilderHome extends LitElement {
         html: data.html,
       });
     } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Génération échouée';
+      this.error = cdzFriendlyError(
+        err,
+        "La génération a échoué. Reformulez votre demande ou réessayez dans un instant."
+      );
     } finally {
       this.busy = false;
       this.busyLabel = '';
@@ -757,7 +804,10 @@ export class ClickDzBuilderHome extends LitElement {
         html: data.html,
       });
     } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Création échouée';
+      this.error = cdzFriendlyError(
+        err,
+        "La création depuis ce modèle a échoué. Réessayez, ou décrivez votre besoin dans le champ ci-dessus."
+      );
     } finally {
       this.busy = false;
       this.busyLabel = '';
@@ -875,7 +925,19 @@ export class ClickDzBuilderHome extends LitElement {
     const draftSlugs = new Set(
       this.drafts.map(d => d.slug ?? d.id.replace(/^app_/, ''))
     );
-    const publishedOnly = this.mine.filter(m => !draftSlugs.has(m.slug));
+    // Storefronts and their ERP dashboards are NOT app-builder output and do not
+    // belong in this list — a shop showing up under « Vos applications » (as
+    // shop-xxxxxxxx did) blurs two different products together and sends the
+    // merchant to the builder to manage a store that lives in DzOS.
+    //
+    // /api/v1/apps/mine returns shops, ERPs and apps in one flat array with no
+    // kind filter (and accepts no ?kind= param), so the split has to happen
+    // here. Convention follows shoperp/index.tsx, which already distinguishes
+    // these: kind is 'shop' | 'erp' | 'app', and a MISSING kind means a legacy
+    // pre-C5 record that predates the field — those are plain apps, so they stay.
+    const publishedOnly = this.mine.filter(
+      m => !draftSlugs.has(m.slug) && m.kind !== 'shop' && m.kind !== 'erp'
+    );
     if (!this.drafts.length && !publishedOnly.length) return nothing;
     return html`
       <h2>Vos applications</h2>
@@ -947,7 +1009,10 @@ export class ClickDzBuilderHome extends LitElement {
         ...(found?.url ? { url: found.url } : {}),
       });
     } catch (err) {
-      this.error = err instanceof Error ? err.message : 'Récupération échouée';
+      this.error = cdzFriendlyError(
+        err,
+        "Impossible d’ouvrir cette application pour le moment. Réessayez dans un instant."
+      );
     } finally {
       this.busy = false;
       this.busyLabel = '';
