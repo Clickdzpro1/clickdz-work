@@ -257,21 +257,77 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     ></chat-content-rich-text>`;
   }
 
+  /**
+   * Follow-up suggestions derived from what the answer actually IS.
+   *
+   * This used to be a three-way ternary over (hasApp, hasImage, else) that
+   * always produced the same two strings per branch and never once looked at the
+   * answer body — so a code walkthrough, a comparison table and a one-line reply
+   * were all offered « Go deeper with examples ». Now tool output AND the shape
+   * of the response contribute candidates, most-specific first, with the generic
+   * pair kept only as a backstop.
+   *
+   * Ordering is priority: what the turn PRODUCED (an app, an image) outranks how
+   * it is FORMATTED (code, table, list), which outranks bulk heuristics
+   * (length). Deduped and capped at 3 — past that the row wraps and stops
+   * reading as a quick choice.
+   */
+  private cdzFollowUpSuggestions(): string[] {
+    const { item } = this;
+    const text = item.content ?? '';
+
+    // tool-call and tool-result are the only stream objects carrying a toolName;
+    // accepting both means a still-resolving tool already informs the row.
+    const tools = new Set<string>();
+    for (const object of item.streamObjects ?? []) {
+      if (object.type === 'tool-call' || object.type === 'tool-result') {
+        tools.add(object.toolName);
+      }
+    }
+
+    const out: string[] = [];
+    const add = (suggestion: string) => {
+      if (out.length < 3 && !out.includes(suggestion)) out.push(suggestion);
+    };
+
+    // 1. What this turn produced.
+    if (tools.has('clickdz_app')) {
+      add('Make it more polished');
+      add('Add one useful feature');
+    }
+    if (item.attachments?.length) {
+      add('Create a refined variation');
+      add('Make it more cinematic');
+    }
+
+    // 2. How the answer is shaped.
+    if (text.includes('```')) {
+      add('Walk me through this code');
+      add('Add error handling');
+    }
+    if (/^\s*\|.*\|/m.test(text)) add('Chart this data');
+    if (/^\s*(?:\d+[.)]|[-*+])\s+\S/m.test(text)) {
+      add('Turn this into an action plan');
+    }
+    if (/https?:\/\//.test(text)) add('Summarize the sources');
+
+    // 3. Bulk heuristics — a wall of text and a one-liner want opposite things.
+    if (text.length > 1400) add('Summarize this in three bullets');
+    if (text.length > 0 && text.length < 320) add('Go deeper with examples');
+
+    // 4. Backstop, so the row is never empty.
+    add('Go deeper with examples');
+    add('Turn this into an action plan');
+
+    return out;
+  }
+
   private renderFollowUps() {
-    const { item, isLast, status, host } = this;
+    const { isLast, status, host } = this;
     if (!isLast || !host || (status !== 'success' && status !== 'idle')) {
       return nothing;
     }
-    const hasApp = item.streamObjects?.some(
-      object =>
-        object.type === 'tool-result' && object.toolName === 'clickdz_app'
-    );
-    const hasImage = !!item.attachments?.length;
-    const suggestions = hasApp
-      ? ['Make it more polished', 'Add one useful feature']
-      : hasImage
-        ? ['Create a refined variation', 'Make it more cinematic']
-        : ['Go deeper with examples', 'Turn this into an action plan'];
+    const suggestions = this.cdzFollowUpSuggestions();
     return html`<div class="cdz-followups" data-testid="clickdz-followups">
       ${suggestions.map(
         suggestion =>

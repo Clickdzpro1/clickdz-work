@@ -71,11 +71,25 @@ export class AILoading extends WithDisposable(LitElement) {
     .progress::after {
       content: '';
       display: block;
-      width: 42%;
+      width: 38%;
       height: 100%;
       border-radius: inherit;
-      background: linear-gradient(90deg, #2f7bff, #8b5cf6, #10a37f);
-      animation: cdz-progress 1.25s ease-in-out infinite;
+      /* Soft ends so the bar reads as a travelling highlight rather than a hard
+         block clipping in and out at the edges. */
+      background: linear-gradient(
+        90deg,
+        transparent,
+        #2f7bff,
+        #8b5cf6,
+        #10a37f,
+        transparent
+      );
+      /* An indeterminate bar wants to accelerate in and decelerate out, not
+         slow down at BOTH ends. ease-in-out did the latter, which made the
+         sweep look like it stalled on every cycle. This curve keeps the middle
+         of the travel quick. */
+      animation: cdz-progress 1.5s cubic-bezier(0.5, 0.05, 0.3, 0.95) infinite;
+      will-change: transform;
     }
     @keyframes cdz-orb {
       0%,

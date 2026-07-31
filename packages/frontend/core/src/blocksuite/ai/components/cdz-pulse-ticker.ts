@@ -42,11 +42,20 @@ const FALLBACKS: Record<string, string[]> = {
     'Choosing a palette…',
     'Rendering the details…',
   ],
+  // Kept in step with FALLBACK_LINES.chat in the server's
+  // copilot/clickdz-pulse.controller.ts. These two lists had drifted apart, and
+  // because this one paints instantly while the server's arrives a moment later,
+  // the very first line the user read ("Thinking it through…") was replaced
+  // mid-animation by a different opening line ("Thinking about your request…").
+  // Matching the server's wording makes that handoff invisible. If you edit one
+  // list, edit the other.
   chat: [
-    'Thinking it through…',
-    'Gathering the context…',
-    'Weighing the options…',
-    'Drafting a response…',
+    'Thinking about your request…',
+    'Gathering the key points…',
+    'Structuring a clear answer…',
+    'Weighing the best approach…',
+    'Drafting the response…',
+    'Refining the wording…',
   ],
   video: [
     'Reading your brief…',
@@ -65,6 +74,13 @@ export class CdzPulseTicker extends LitElement {
       display: block;
       width: 100%;
     }
+    /* Theme-aware, deliberately. This row used to hardcode #12151d / #e7eaf3 /
+       #232838, so on the default light theme it rendered as an opaque dark slab
+       directly beneath the light "working" tip — two boxes that plainly did not
+       belong to the same interface. It now mirrors .generating-tip in
+       ai-loading.ts (a faint tint of its own accent over the app's layer
+       background), so the pair reads as one narrated progress unit in either
+       theme. Keep these as variables — no raw hex. */
     .row {
       display: flex;
       align-items: center;
@@ -74,12 +90,15 @@ export class CdzPulseTicker extends LitElement {
       padding: 10px 14px;
       box-sizing: border-box;
       border-radius: 12px;
-      border: 1px solid #232838;
-      background: #12151d;
-      color: #e7eaf3;
-      font-family:
-        system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial,
-        sans-serif;
+      border: 1px solid color-mix(in srgb, #8b5cf6 24%, transparent);
+      background: color-mix(
+        in srgb,
+        #8b5cf6 5%,
+        var(--affine-v2-layer-background-primary)
+      );
+      color: var(--affine-v2-text-primary);
+      font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto,
+        Helvetica, Arial, sans-serif;
       overflow: hidden;
     }
     .dot {
@@ -105,11 +124,14 @@ export class CdzPulseTicker extends LitElement {
       font-size: 13px;
       font-weight: 500;
       letter-spacing: -0.005em;
-      color: #e7eaf3;
-      animation: cdz-line-in 320ms ease;
+      color: var(--affine-v2-text-primary);
+      /* Settle on a decelerating curve rather than plain ease — the line
+         arrives quickly then eases into place, which reads as composed instead
+         of springy when lines swap every 1.8-3s. */
+      animation: cdz-line-in 300ms cubic-bezier(0.16, 1, 0.3, 1);
     }
     .line.tail {
-      opacity: 0.72;
+      opacity: 0.66;
     }
     @keyframes cdz-pulse {
       0%,
