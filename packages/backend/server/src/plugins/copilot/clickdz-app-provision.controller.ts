@@ -85,6 +85,65 @@ function nonceKey(nonce: string): string {
   return `clickdz:bridgecode:${nonce}`;
 }
 
+// ---------------------------------------------------------------------------
+// SlidePro (Presenton) — real per-user account provisioning + auto-login.
+// The admin creds are Railway references to the cdz-slidepro service's own
+// AUTH_USERNAME/AUTH_PASSWORD (never handled in plaintext here). We log in as
+// admin once per call to create the user (idempotent on 409), then log in AS
+// the user to mint their presenton_session JWT, which we hand back as a
+// one-time auto-login URL fragment for the iframe.
+// ---------------------------------------------------------------------------
+const SLIDEPRO_URL = (
+  process.env.CDZ_SLIDEPRO_URL ||
+  'https://cdz-slidepro-production.up.railway.app'
+).replace(/\/+$/, '');
+const SLIDEPRO_ADMIN_USERNAME = process.env.CDZ_SLIDEPRO_ADMIN_USERNAME || '';
+const SLIDEPRO_ADMIN_PASSWORD = process.env.CDZ_SLIDEPRO_ADMIN_PASSWORD || '';
+
+interface SlideProSession {
+  cookie: string; // "presenton_session=<jwt>"
+}
+
+async function slideproLogin(
+  username: string,
+  password: string
+): Promise<SlideProSession | null> {
+  try {
+    const res = await fetch(`${SLIDEPRO_URL}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const setCookie = res.headers.get('set-cookie') || '';
+    const match = setCookie.match(/presenton_session=([^;]+)/);
+    if (!match) return null;
+    return { cookie: `presenton_session=${match[1]}` };
+  } catch {
+    return null;
+  }
+}
+
+async function slideproEnsureUser(
+  adminCookie: string,
+  username: string,
+  password: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${SLIDEPRO_URL}/api/v1/admin/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
+      body: JSON.stringify({ username, password }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    // 201 created, 409 already exists — both mean the account is usable.
+    return res.status === 201 || res.status === 409;
+  } catch {
+    return false;
+  }
+}
+
 @Controller()
 export class ClickDzAppProvisionController {
   constructor(private readonly redis: CacheRedis) {}
@@ -105,6 +164,9 @@ export class ClickDzAppProvisionController {
     code: string;
     expiresAt: number;
     account: { username: string };
+    /** When set, the iframe should use this URL — it carries the one-time
+        credential that lands the user already logged in (best-effort). */
+    loginUrl?: string;
   }> {
     if (!BRIDGE_SECRET) {
       throw new BadRequest(
@@ -151,6 +213,10 @@ export class ClickDzAppProvisionController {
         /* non-fatal: we still mint a code; the record re-creates next time */
       }
     }
+    // The plaintext credential, for services we provision server-to-server.
+    const plainCredential = record.credential
+      ? openSecret(record.credential)
+      : null;
 
     // Mint the one-time bridge code.
     const nonce = randomBytes(16).toString('base64url');
@@ -166,7 +232,128 @@ export class ClickDzAppProvisionController {
       /* if Redis is down the code still verifies by signature, just re-usable */
     }
 
-    return { code, expiresAt: exp, account: { username: record.username } };
+    // SlidePro: provision the account + build an auto-login URL, best-effort.
+    // We do this server-to-server so the iframe can land the user already
+    // logged in without ever showing a signup/login screen.
+    let loginUrl: string | undefined;
+    if (
+      app === 'slidepro' &&
+      SLIDEPRO_ADMIN_USERNAME &&
+      SLIDEPRO_ADMIN_PASSWORD &&
+      plainCredential
+    ) {
+      try {
+        const admin = await slideproLogin(
+          SLIDEPRO_ADMIN_USERNAME,
+          SLIDEPRO_ADMIN_PASSWORD
+        );
+        if (admin) {
+          await slideproEnsureUser(
+            admin.cookie,
+            record.username,
+            plainCredential
+          );
+          const userSess = await slideproLogin(
+            record.username,
+            plainCredential
+          );
+          if (userSess) {
+            // Stash the user's presenton_session JWT in Redis keyed by the code
+            // nonce; the login shim redeems it (one-time, short TTL) via
+            // /api/bridge/session, sets it as a first-party cookie on the shim
+            // domain, and lands in the app authenticated.
+            const jwt = userSess.cookie.replace(/^presenton_session=/, '');
+            try {
+              await this.redis.set(
+                `clickdz:appsession:${nonce}`,
+                jwt,
+                'PX',
+                CODE_TTL_MS,
+                'NX'
+              );
+            } catch {
+              /* non-fatal */
+            }
+            const shim = (
+              process.env.CDZ_SLIDEPRO_SHIM_URL || SLIDEPRO_URL
+            ).replace(/\/+$/, '');
+            loginUrl = `${shim}/?ticket=${encodeURIComponent(code)}`;
+          }
+        }
+      } catch {
+        loginUrl = undefined; // fall through to the code-only flow
+      }
+    }
+
+    return {
+      code,
+      expiresAt: exp,
+      account: { username: record.username },
+      loginUrl,
+    };
+  }
+
+  /**
+   * POST /api/bridge/session
+   * Headers: Authorization: Bearer <BRIDGE_SECRET>  (the login shim)
+   * Body: { ticket, app }
+   * Returns: { presenton_session }
+   * Verifies a bridge code (same format as /api/bridge/exchange) and, if a
+   * per-user app session was stashed for it at provision time, returns + burns
+   * it. The shim sets it as a first-party cookie on the app domain.
+   */
+  @Public()
+  @Throttle('strict')
+  @Post('/api/bridge/session')
+  async bridgeSession(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: unknown
+  ): Promise<{ presenton_session: string }> {
+    if (!BRIDGE_SECRET) {
+      throw new BadRequest('Bridge session is not configured');
+    }
+    const expected = `Bearer ${BRIDGE_SECRET}`;
+    if (!authorization || !safeEqual(authorization, expected)) {
+      throw new BadRequest('Invalid bridge credentials');
+    }
+    const ticket = String((body as any)?.ticket ?? '');
+    if (!ticket) throw new BadRequest('Missing ticket');
+
+    // Re-derive the nonce from the ticket (same b1.* format) and verify sig.
+    let decoded: string;
+    try {
+      decoded = fromB64url(ticket);
+    } catch {
+      throw new BadRequest('Malformed ticket');
+    }
+    const parts = decoded.split('.');
+    if (parts.length !== 6 || parts[0] !== 'b1') {
+      throw new BadRequest('Malformed ticket');
+    }
+    const [, userId, app, nonce, expStr, sig] = parts;
+    if (!userId || !app || !nonce || !expStr || !sig) {
+      throw new BadRequest('Malformed ticket');
+    }
+    if (Date.now() > Number(expStr)) {
+      throw new BadRequest('Ticket expired');
+    }
+    const payload = `bridge:${userId}:${app}:${nonce}:${expStr}`;
+    if (!safeEqual(signBridgePayload(payload), sig)) {
+      throw new BadRequest('Bad signature');
+    }
+
+    const sessionKey = `clickdz:appsession:${nonce}`;
+    let jwt = '';
+    try {
+      jwt = (await this.redis.get(sessionKey)) || '';
+      if (jwt) await this.redis.del(sessionKey); // single-use
+    } catch {
+      jwt = '';
+    }
+    if (!jwt) {
+      throw new BadRequest('No session for ticket');
+    }
+    return { presenton_session: jwt };
   }
 
   /**

@@ -73,7 +73,10 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
     setIframeSrc(presentonUrl);
     let cancelled = false;
     provisionApp('slidepro').then(p => {
-      if (!cancelled && p) setIframeSrc(withBridgeCode(presentonUrl, p.code));
+      if (cancelled || !p) return;
+      // Prefer the shim loginUrl (lands the user already logged in); fall back
+      // to appending the bridge code to the bare URL.
+      setIframeSrc(p.loginUrl || withBridgeCode(presentonUrl, p.code));
     });
     return () => { cancelled = true; };
   }, [status, presentonUrl]);

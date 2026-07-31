@@ -8,6 +8,9 @@
 export interface ProvisionedApp {
   code: string;
   username: string;
+  /** When present, the iframe should load THIS url (it lands the user already
+      logged in via the app's auth shim). Takes precedence over withBridgeCode. */
+  loginUrl?: string;
 }
 
 /**
@@ -29,7 +32,11 @@ export async function provisionApp(app: string): Promise<ProvisionedApp | null> 
     const data = await resp.json().catch(() => null);
     const code = data?.code;
     if (typeof code !== 'string' || !code) return null;
-    return { code, username: data?.account?.username ?? '' };
+    return {
+      code,
+      username: data?.account?.username ?? '',
+      loginUrl: typeof data?.loginUrl === 'string' ? data.loginUrl : undefined,
+    };
   } catch {
     return null;
   }
