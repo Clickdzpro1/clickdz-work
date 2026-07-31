@@ -5,7 +5,7 @@
 // [text](url) links (http/https/mailto only), and paragraph/line breaks.
 // Anything unrecognised falls through as plain text.
 
-import type { ReactNode } from 'react';
+import { memo, type ReactNode, useMemo } from 'react';
 
 import { AgentPalette as P } from './palette';
 
@@ -77,7 +77,35 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
   return nodes;
 }
 
-export function MarkdownLite({ text }: { text: string }) {
+/**
+ * MEMOISED ON PURPOSE — this component was the streaming lag.
+ *
+ * It reparses the whole answer (split on fences, regex-tokenise every inline
+ * span, rebuild the entire ReactNode tree) on every single render, and it was a
+ * plain unmemoised function component. Two compounding costs followed:
+ *
+ *  1. While an answer streams, `text` grows by a token per render, so the total
+ *     parse work over one answer is quadratic in its final length. Long answers
+ *     visibly stuttered near the end.
+ *  2. Worse, EVERY unrelated re-render of a chat surface reparsed EVERY message
+ *     in the transcript. The reasoning ticker alone swaps its line every 1.8-3s,
+ *     so an idle conversation with N settled answers was doing N full markdown
+ *     parses several times a minute for no reason at all.
+ *
+ * memo() fixes (2) outright: settled messages keep their text identity, so they
+ * never reparse again. useMemo fixes the repeat-render case for identical text
+ * within a single instance. (1) is inherent to re-rendering on each token and
+ * would need coalescing in the stream hook, but with (2) gone the per-token cost
+ * is now paid by the one streaming message instead of the whole transcript.
+ */
+function MarkdownLiteImpl({ text }: { text: string }) {
+  const rendered = useMemo(() => buildMarkdownNodes(text), [text]);
+  return rendered;
+}
+
+export const MarkdownLite = memo(MarkdownLiteImpl);
+
+function buildMarkdownNodes(text: string) {
   if (!text) return null;
   const blocks: ReactNode[] = [];
   // Split into fenced code blocks vs prose.

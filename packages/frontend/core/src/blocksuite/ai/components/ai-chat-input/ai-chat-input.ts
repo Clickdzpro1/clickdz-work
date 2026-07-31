@@ -905,16 +905,16 @@ export class AIChatInput extends SignalWatcher(
     }
     .cdz-plan-body {
       flex: 1 1 auto;
-      /* Brief header (goal/question/answer) on top, then the paginated list.
-         The body now carries the scroll as a LAST RESORT: the card grows to fit
-         first, and only a plan that would exceed the viewport budget scrolls
-         here. Previously nothing scrolled and the card was a rigid frame, so
-         overflow was simply clipped and unreachable. min-height:0 lets this
-         flex child shrink correctly rather than forcing an overflow. */
+      /* Brief (goal/question/answer) on top, then the step list.
+         This element must NOT scroll and must NOT be the shrink target — that
+         WAS the collapse. It is a plain flex column; the brief and steps head
+         hold their size, and .cdz-plan-steps below is the one scroller.
+         min-height:0 only lets the column participate in shrinking so the inner
+         scroller can resolve; it no longer absorbs the entire shortfall itself,
+         because .cdz-plan-steps now carries a min-height floor. */
       display: flex;
       flex-direction: column;
       min-height: 0;
-      overflow-y: auto;
       /* breathing room so focus rings don't kiss the edge */
       margin: 0 -6px;
       padding: 0 6px;
@@ -1105,14 +1105,21 @@ export class AIChatInput extends SignalWatcher(
     .cdz-plan-selectall:hover {
       background: color-mix(in srgb, #10a37f 12%, transparent);
     }
-    /* The list fills the body and holds exactly one page of fixed-height rows.
-       flex:1 + min-height:0 make it take the leftover space under the brief
-       header without ever overflowing the fixed frame; it does NOT scroll
-       (pagination handles overflow). The rows themselves carry a stable height
-       so pages never change the frame height. */
+    /* THE single scroller in this card. Everything above (header, brief, steps
+       head) and below (Cancel/Approve bar) is flex-shrink:0, so on a short
+       viewport the plan scrolls HERE and the merchant always keeps the goal, the
+       controls and the buttons on screen.
+
+       The min-height floor is what makes a collapse impossible. Previously this
+       was min-height:0 with no scroll and pagination "handling" overflow, so when
+       the cap bit, this element shrank toward zero and the card clipped a row in
+       half — the reported bug. A floor plus its own scrollbar means it can never
+       shrink below two usable rows, and any excess scrolls instead of vanishing. */
     .cdz-plan-steps {
       flex: 1 1 auto;
-      min-height: 0;
+      min-height: 116px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -1121,15 +1128,16 @@ export class AIChatInput extends SignalWatcher(
       border-radius: 10px;
       background: var(--affine-v2-layer-background-primary);
     }
-    /* Each plan item is a CONSISTENT-HEIGHT row (the "unresized boxes" fix):
-       a fixed 56px row, never taller, so every page has identical geometry and
-       there is zero layout jump between pages. The editable text clamps to two
-       lines and scrolls inside its own box rather than growing the row. */
+    /* Rows size to their content with a floor, rather than a hard 56px cap.
+       The fixed height existed to keep pagination geometry identical, but with
+       pagination gone it only served to clip step text mid-sentence inside its
+       own little scroller. A min-height keeps the list visually regular while
+       letting a long step wrap and stay readable. */
     .cdz-plan-step {
       display: flex;
       align-items: center;
       gap: 8px;
-      height: 56px;
+      min-height: 52px;
       flex-shrink: 0;
       padding: 4px 6px;
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
@@ -2692,45 +2700,6 @@ export class AIChatInput extends SignalWatcher(
     if (next !== this._planPage) this._planPage = next;
   }
 
-  // Page dots for the checklist pager, mirroring the PagedList visual pattern:
-  // at most 7 slots with an ellipsis when there are more pages, the current
-  // page always shown, and each dot clickable to jump straight to that page.
-  private _renderPlanPagerDots(current: number, pageCount: number) {
-    // Build the compact window of page indices to show as dots.
-    const pages: number[] = [];
-    if (pageCount <= 7) {
-      for (let i = 0; i < pageCount; i++) pages.push(i);
-    } else {
-      const add = (i: number) => {
-        if (i >= 0 && i < pageCount && !pages.includes(i)) pages.push(i);
-      };
-      add(0);
-      for (let i = current - 1; i <= current + 1; i++) add(i);
-      add(pageCount - 1);
-      pages.sort((a, b) => a - b);
-    }
-    // Render dots, inserting an ellipsis marker wherever the page index jumps.
-    const nodes: unknown[] = [];
-    let prev = -1;
-    for (const i of pages) {
-      if (prev >= 0 && i - prev > 1) {
-        nodes.push(
-          html`<span class="cdz-plan-pager-ellipsis" aria-hidden="true">…</span>`
-        );
-      }
-      nodes.push(
-        html`<button
-          class="cdz-plan-pager-dot ${i === current ? 'active' : ''}"
-          title=${`Page ${i + 1} sur ${pageCount}`}
-          aria-label=${`Page ${i + 1} sur ${pageCount}`}
-          aria-current=${i === current ? 'true' : 'false'}
-          @click=${() => this._goToPlanPage(i)}
-        ></button>`
-      );
-      prev = i;
-    }
-    return nodes;
-  }
 
   private readonly _planCardKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
@@ -2832,18 +2801,23 @@ export class AIChatInput extends SignalWatcher(
     checked: number
   ) {
     const allChecked = total > 0 && checked === total;
-    const pageCount = this._planPageCount;
-    const pageSize = AIChatInput.CDZ_PLAN_PAGE_SIZE;
-    // Clamp defensively at render time too (state edits elsewhere already
-    // clamp, but a page could be stale for one frame after a shrink).
-    const page = Math.min(this._planPage, pageCount - 1);
-    const pageStart = page * pageSize;
-    const pageEnd = Math.min(pageStart + pageSize, total);
-    const pageSteps = review.steps.slice(pageStart, pageEnd);
-    // Pad the page to a full pageSize of row-slots so EVERY page has identical
-    // geometry — the last (short) page gets invisible filler rows instead of
-    // collapsing, which is what kept the frame from jumping page-to-page.
-    const fillerCount = Math.max(0, pageSize - pageSteps.length);
+    // REFACTORED: render EVERY step, no page window and no filler rows.
+    //
+    // What was here before, and why it kept breaking: the list was windowed to
+    // CDZ_PLAN_PAGE_SIZE (6) and then PADDED back up to 6 with invisible filler
+    // rows, so that every page had byte-identical geometry. Combined with fixed
+    // 56px rows, a 3-step plan still reserved six 56px slots (~366px) plus the
+    // brief — which overflowed the card's cap, so .cdz-plan-body (flex-shrink:1,
+    // min-height:0) absorbed the entire shortfall, collapsed, and the card
+    // clipped down to a single half-visible row. Half the reserved space was
+    // invisible filler. Stable page geometry is worthless if it hides the plan.
+    //
+    // Steps are capped at 12 upstream (see the Add step button), and twelve
+    // auto-height rows scroll fine, so the window and the fillers both go. The
+    // card now grows with real content and .cdz-plan-steps is the single
+    // scroller, which is what makes "see the full plan" actually true.
+    const pageStart = 0;
+    const pageSteps = review.steps;
     return html`<div class="cdz-plan-body">
       <div class="cdz-plan-brief">
         ${review.goal
@@ -2951,43 +2925,7 @@ export class AIChatInput extends SignalWatcher(
             </div>`;
           }
         )}
-        ${fillerCount > 0
-          ? repeat(
-              Array.from({ length: fillerCount }, (_, i) => i),
-              i => `filler-${i}`,
-              () => html`<div class="cdz-plan-step filler" aria-hidden="true"></div>`
-            )
-          : nothing}
       </div>
-      ${pageCount > 1
-        ? html`<div
-            class="cdz-plan-pager"
-            role="navigation"
-            aria-label="Plan step pages"
-          >
-            <button
-              class="cdz-plan-pager-btn text"
-              title="Étape précédente"
-              aria-label="Précédent"
-              ?disabled=${page <= 0}
-              @click=${() => this._goToPlanPage(page - 1)}
-            >
-              ‹ Précédent
-            </button>
-            <div class="cdz-plan-pager-dots" role="presentation">
-              ${this._renderPlanPagerDots(page, pageCount)}
-            </div>
-            <button
-              class="cdz-plan-pager-btn text"
-              title="Étape suivante"
-              aria-label="Suivant"
-              ?disabled=${page >= pageCount - 1}
-              @click=${() => this._goToPlanPage(page + 1)}
-            >
-              Suivant ›
-            </button>
-          </div>`
-        : nothing}
       </div>
       <div class="cdz-plan-actions">
         <span class="cdz-plan-selected-count"
