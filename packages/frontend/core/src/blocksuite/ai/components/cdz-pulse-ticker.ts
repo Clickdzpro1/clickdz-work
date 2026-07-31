@@ -31,41 +31,40 @@ import { cdzApiUrl } from '../provider';
 // fails, these carry the whole animation on their own).
 const FALLBACKS: Record<string, string[]> = {
   app: [
-    'Reading your brief…',
-    'Sketching the layout…',
-    'Wiring up the components…',
-    'Polishing the details…',
+    'Lecture de votre brief…',
+    'Esquisse de la mise en page…',
+    'Câblage des composants…',
+    'Soin des détails…',
   ],
   image: [
-    'Reading your prompt…',
-    'Composing the scene…',
-    'Choosing a palette…',
-    'Rendering the details…',
+    'Lecture de votre prompt…',
+    'Composition de la scène…',
+    'Choix d’une palette…',
+    'Rendu des détails…',
   ],
   // Kept in step with FALLBACK_LINES.chat in the server's
   // copilot/clickdz-pulse.controller.ts. These two lists had drifted apart, and
   // because this one paints instantly while the server's arrives a moment later,
-  // the very first line the user read ("Thinking it through…") was replaced
-  // mid-animation by a different opening line ("Thinking about your request…").
-  // Matching the server's wording makes that handoff invisible. If you edit one
-  // list, edit the other.
+  // the very first line the user read was replaced mid-animation by a different
+  // opening line. Matching the server's wording makes that handoff invisible.
+  // If you edit one list, edit the other. (Both are French-first.)
   chat: [
-    'Thinking about your request…',
-    'Gathering the key points…',
-    'Structuring a clear answer…',
-    'Weighing the best approach…',
-    'Drafting the response…',
-    'Refining the wording…',
+    'Réflexion sur votre demande…',
+    'Rassemblement des points clés…',
+    'Structuration d’une réponse claire…',
+    'Pesée de la meilleure approche…',
+    'Rédaction de la réponse…',
+    'Raffinement de la formulation…',
   ],
   video: [
-    'Reading your brief…',
-    'Blocking the shots…',
-    'Timing the motion…',
-    'Rendering frames…',
+    'Lecture de votre brief…',
+    'Cadrage des plans…',
+    'Réglage du mouvement…',
+    'Rendu des images…',
   ],
 };
 
-const genericFallback = ['Thinking it through…', 'Working on it…'];
+const genericFallback = ['Réflexion en cours…', 'Travail en cours…'];
 
 @customElement('cdz-pulse-ticker')
 export class CdzPulseTicker extends LitElement {
@@ -100,6 +99,17 @@ export class CdzPulseTicker extends LitElement {
       font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto,
         Helvetica, Arial, sans-serif;
       overflow: hidden;
+    }
+    /* Embedded mode: the ticker drops its own box so it can live INSIDE the
+       "working" pill (ai-loading.ts) as the narrated line of one cohesive
+       card, instead of a second bordered box stacked beneath it. Transparent
+       background, no border, no radius — the parent pill supplies the chrome. */
+    :host([embedded]) .row {
+      min-height: 0;
+      padding: 0;
+      border: none;
+      border-radius: 0;
+      background: transparent;
     }
     .dot {
       flex-shrink: 0;
@@ -178,6 +188,14 @@ export class CdzPulseTicker extends LitElement {
   /** Host flips this true while the real (slow) request is in flight. */
   @property({ type: Boolean })
   accessor active = false;
+
+  /**
+   * When set, the ticker renders borderless/transparent so it can be embedded
+   * inside a parent card (ai-loading's pill) rather than as its own box.
+   * Reflected to the `embedded` attribute so the CSS above can target it.
+   */
+  @property({ type: Boolean, reflect: true })
+  accessor embedded = false;
 
   @state()
   private accessor _line = '';

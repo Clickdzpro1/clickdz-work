@@ -20,13 +20,14 @@ import type { CopilotChatHistoryFragment } from '@affine/graphql';
 import track, { type EventArgs } from '@affine/track';
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
 import { dropTargetForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
+import { createSimplePortal } from '@blocksuite/affine/components/portal';
 import { SignalWatcher, WithDisposable } from '@blocksuite/affine/global/lit';
 import { unsafeCSSVar, unsafeCSSVarV2 } from '@blocksuite/affine/shared/theme';
 import type { EditorHost } from '@blocksuite/affine/std';
 import { ShadowlessElement } from '@blocksuite/affine/std';
 import type { NotificationService } from '@blocksuite/affine-shared/services';
 import { ArrowUpBigIcon, CloseIcon } from '@blocksuite/icons/lit';
-import { css, html, nothing, type PropertyValues } from 'lit';
+import { css, html, nothing, render, type PropertyValues } from 'lit';
 import { property, query, state } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import { styleMap } from 'lit/directives/style-map.js';
@@ -364,6 +365,18 @@ export class AIChatInput extends SignalWatcher(
       to {
         opacity: 1;
         transform: translateY(0);
+      }
+    }
+    /* Same entrance, but without touching transform — for elements whose
+       position depends on a static transform (e.g. the fixed, viewport-centered
+       plan review card, where the keyframe above would override its centering
+       translate with the forwards fill). */
+    @keyframes clickdz-card-fade-in {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
       }
     }
     .clickdz-image-loading {
@@ -888,13 +901,19 @@ export class AIChatInput extends SignalWatcher(
        renders as one — centered, out of flow, sized by the viewport instead of by
        the composer.
 
-       position:fixed may be resolved against the workbench route container rather
+       position:fixed IS resolved against the workbench route container rather
        than the viewport (that element sets contain:strict, which makes it a
        containing block for fixed descendants — the same trap that made the shop
-       tour spotlight frame the wrong tab). That is fine here: with inset-based
-       centering the worst case is centering inside the content area instead of
-       the whole window, which still looks correct and, crucially, is no longer
-       clipped. */
+       tour spotlight frame the wrong tab). So the card is NOT rendered inline
+       here: it is mirrored into a document.body portal (see _syncPlanPortal /
+       _teardownPlanPortal), which escapes the containing block entirely and
+       centers against the real viewport. The styles below apply to the
+       portalled copy because this component is light-DOM (ShadowlessElement).
+
+       Note: no clickdz-card-in animation on this element — that keyframe
+       animates transform and its forwards fill (translateY(0)) overrides the
+       translate(-50%,-50%) centering below, which pinned the card's top-left
+       corner to the center point instead of centering the card. */
     .cdz-plan-review {
       position: fixed;
       top: 50%;
@@ -912,7 +931,7 @@ export class AIChatInput extends SignalWatcher(
       box-shadow:
         0 18px 60px rgba(0, 0, 0, 0.22),
         0 2px 8px color-mix(in srgb, #10a37f 14%, transparent);
-      animation: clickdz-card-in 0.2s ease-out both;
+      animation: clickdz-card-fade-in 0.2s ease-out both;
       /* A definite max-height on an out-of-flow box gives the inner flex column a
          real budget to divide, which is what lets .cdz-plan-steps resolve its own
          scroll instead of collapsing to nothing. */
@@ -3479,8 +3498,46 @@ export class AIChatInput extends SignalWatcher(
     }
   }
 
+  // The plan review card is a viewport-centered modal, but the workbench route
+  // container sets contain:strict — which makes that box the containing block
+  // for every position:fixed descendant, so a fixed card rendered inline here
+  // resolves its top/left against the content area (bottom-right of center).
+  // Rendering the card into a document.body portal escapes the containing
+  // block entirely (same fix as the shop tour). The portal is a thin mirror:
+  // this component's render stays the single source of truth and updated()
+  // re-renders the card into the portal whenever plan state changes, so step
+  // checks / edits / phase flips stay live. Light-DOM component ⇒ the styles
+  // above reach the portalled node.
+  private _planPortalRoot: HTMLElement | null = null;
+
+  private _syncPlanPortal() {
+    const open = this.planBusy || !!this.planReview;
+    if (open) {
+      if (!this._planPortalRoot) {
+        this._planPortalRoot = createSimplePortal({
+          container: this.portalContainer ?? document.body,
+          shadowDom: false,
+          template: nothing,
+        });
+      }
+      render(this._renderPlanReview(), this._planPortalRoot);
+    } else if (this._planPortalRoot) {
+      this._teardownPlanPortal();
+    }
+  }
+
+  private _teardownPlanPortal() {
+    this._planPortalRoot?.remove();
+    this._planPortalRoot = null;
+  }
+
+  protected override updated(): void {
+    this._syncPlanPortal();
+  }
+
   override disconnectedCallback(): void {
     super.disconnectedCallback();
+    this._teardownPlanPortal();
     this._internalDropCleanup?.();
     this._internalDropCleanup = null;
     window.removeEventListener('dragleave', this._handleWindowDragLeave);
@@ -3599,7 +3656,6 @@ export class AIChatInput extends SignalWatcher(
             </div>
           </div>`
         : nothing}
-      ${this.planBusy || this.planReview ? this._renderPlanReview() : nothing}
       ${this.imageBusy || this.appBusy
         ? html`<cdz-pulse-ticker
             class="cdz-composer-pulse"

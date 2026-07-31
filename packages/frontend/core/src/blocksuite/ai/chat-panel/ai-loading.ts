@@ -12,27 +12,42 @@ export class AILoading extends WithDisposable(LitElement) {
       display: block;
       width: 100%;
     }
+    /* One cohesive card: the pill owns the chrome (border, tint, radius) and
+       the narrated pulse line lives INSIDE it as a second row, separated only
+       by a soft divider — not as a second bordered box. */
     .cdz-chat-pulse {
       display: block;
-      width: min(420px, 100%);
-      margin-top: 8px;
+      width: 100%;
     }
     .generating-tip {
       position: relative;
       display: flex;
-      align-items: center;
-      gap: 11px;
+      flex-direction: column;
+      gap: 9px;
       overflow: hidden;
-      width: min(420px, 100%);
+      width: min(460px, 100%);
       box-sizing: border-box;
-      padding: 10px 12px 13px;
+      padding: 10px 14px 14px;
       border: 1px solid color-mix(in srgb, #2f7bff 28%, transparent);
-      border-radius: 12px;
+      border-radius: 14px;
       color: var(--affine-v2-text-primary);
       background: color-mix(
         in srgb,
         #2f7bff 6%,
         var(--affine-v2-layer-background-primary)
+      );
+    }
+    .tip-head {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+    }
+    .tip-divider {
+      height: 1px;
+      background: color-mix(
+        in srgb,
+        var(--affine-v2-layer-insideBorder-border) 70%,
+        transparent
       );
     }
     .orb {
@@ -150,16 +165,20 @@ export class AILoading extends WithDisposable(LitElement) {
 
   override render() {
     return html`<div class="generating-tip">
+      <div class="tip-head">
         <span class="orb" aria-hidden="true"></span>
-        <span class="text">ClickDz AI is working<span class="dots"></span></span>
-        <span class="progress" aria-hidden="true"></span>
+        <span class="text">ClickDz AI travaille<span class="dots"></span></span>
       </div>
+      <div class="tip-divider" aria-hidden="true"></div>
       <cdz-pulse-ticker
         class="cdz-chat-pulse"
         .task=${this.task}
         surface="chat"
         ?active=${true}
-      ></cdz-pulse-ticker>`;
+        ?embedded=${true}
+      ></cdz-pulse-ticker>
+      <span class="progress" aria-hidden="true"></span>
+    </div>`;
   }
 }
 

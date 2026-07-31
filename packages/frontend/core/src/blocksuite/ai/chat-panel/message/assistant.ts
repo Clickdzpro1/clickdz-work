@@ -27,7 +27,7 @@ import {
   type StreamObject,
 } from '../../components/ai-chat-messages';
 import { AIChatErrorRenderer } from '../../messages/error';
-import { AIAppEvents, type AIError } from '../../provider';
+import { AIAppEvents, type AIError, cdzApiUrl } from '../../provider';
 import { mergeStreamContent } from '../../utils/stream-objects';
 
 export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
@@ -39,24 +39,42 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     }
     .cdz-followups {
       display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin: 12px 0 2px;
+    }
+    .cdz-followups-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--affine-v2-text-secondary);
+      opacity: 0.7;
+    }
+    .cdz-followups-row {
+      display: flex;
       flex-wrap: wrap;
       gap: 6px;
-      margin: 10px 0 2px;
     }
     .cdz-followup {
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
       border-radius: 999px;
-      padding: 5px 10px;
+      padding: 6px 12px;
       cursor: pointer;
       color: var(--affine-v2-text-secondary);
       background: transparent;
       font: inherit;
-      font-size: 12px;
-      font-weight: 600;
+      font-size: 12.5px;
+      font-weight: 500;
+      transition:
+        background 0.15s ease,
+        color 0.15s ease,
+        border-color 0.15s ease;
     }
     .cdz-followup:hover {
       color: var(--affine-v2-text-primary);
       background: var(--affine-v2-layer-background-hoverOverlay);
+      border-color: color-mix(in srgb, #2f7bff 40%, transparent);
     }
 
     /*
@@ -180,6 +198,16 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
   @property({ attribute: false })
   accessor pulseTask = '';
 
+  // AI-upgraded follow-up pairs for THIS message; null until the fetch lands
+  // (the deterministic French heuristic row renders in the meantime).
+  @state()
+  private accessor _followUps: Array<{ label: string; prompt: string }> | null =
+    null;
+
+  // Guards against an out-of-date fetch overwriting a newer message's row.
+  private _followUpsRunId = 0;
+  private _followUpsFetchedFor = '';
+
   get state() {
     const { isLast, status } = this;
     return isLast
@@ -217,6 +245,20 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       ${shouldRenderError ? AIChatErrorRenderer(error, host) : nothing}
       ${this.renderEditorActions()} ${this.renderFollowUps()}
     `;
+  }
+
+  protected override updated() {
+    // Fetch AI-upgraded follow-ups once per settled message. The row renders the
+    // instant French heuristic immediately; this upgrades it in place. Keyed on
+    // the message id + settled status so a re-send / retry re-fetches.
+    const { isLast, status, item } = this;
+    const settled = status === 'success' || status === 'idle';
+    const key = settled && isLast && item.content ? `${item.id}:${status}` : '';
+    if (key && key !== this._followUpsFetchedFor) {
+      this._followUpsFetchedFor = key;
+      this._followUps = null;
+      void this._fetchFollowUps();
+    }
   }
 
   private renderImages() {
@@ -258,26 +300,23 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
   }
 
   /**
-   * Follow-up suggestions derived from what the answer actually IS.
+   * Follow-up suggestions, decoupled: a short French LABEL on the chip, a rich
+   * self-contained PROMPT that is what actually gets sent on click.
    *
-   * This used to be a three-way ternary over (hasApp, hasImage, else) that
-   * always produced the same two strings per branch and never once looked at the
-   * answer body — so a code walkthrough, a comparison table and a one-line reply
-   * were all offered « Go deeper with examples ». Now tool output AND the shape
-   * of the response contribute candidates, most-specific first, with the generic
-   * pair kept only as a backstop.
-   *
-   * Ordering is priority: what the turn PRODUCED (an app, an image) outranks how
-   * it is FORMATTED (code, table, list), which outranks bulk heuristics
-   * (length). Deduped and capped at 3 — past that the row wraps and stops
-   * reading as a quick choice.
+   * Two layers, per the modern pattern (Perplexity "Related", Theo's
+   * follow_ups: [{label, prompt}]): an instant deterministic FRENCH fallback
+   * renders immediately (never an empty row), and a fast-model call to
+   * POST /api/v1/ai/suggestions upgrades it with pairs grounded in the actual
+   * question + answer. The model labels stay questions (≤ ~9 words); the
+   * prompts are 1-2 sentence instructions that stand alone, so clicking a chip
+   * sends a fully-formed next turn — not a bare 3-word label. French-first to
+   * match the product voice (quick-starts are French; these were English, an
+   * inconsistency the user flagged).
    */
-  private cdzFollowUpSuggestions(): string[] {
+  private _cdzHeuristicFollowUps(): Array<{ label: string; prompt: string }> {
     const { item } = this;
     const text = item.content ?? '';
 
-    // tool-call and tool-result are the only stream objects carrying a toolName;
-    // accepting both means a still-resolving tool already informs the row.
     const tools = new Set<string>();
     for (const object of item.streamObjects ?? []) {
       if (object.type === 'tool-call' || object.type === 'tool-result') {
@@ -285,41 +324,120 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       }
     }
 
-    const out: string[] = [];
-    const add = (suggestion: string) => {
-      if (out.length < 3 && !out.includes(suggestion)) out.push(suggestion);
+    const out: Array<{ label: string; prompt: string }> = [];
+    const add = (label: string, prompt: string) => {
+      if (out.length < 3 && !out.some(f => f.label === label))
+        out.push({ label, prompt });
     };
 
     // 1. What this turn produced.
     if (tools.has('clickdz_app')) {
-      add('Make it more polished');
-      add('Add one useful feature');
+      add(
+        'Rendre cela plus abouti ?',
+        'Peux-tu rendre cette application plus aboutie : meilleure mise en page, transitions et finition visuelle ?'
+      );
+      add(
+        'Ajouter une fonctionnalité utile ?',
+        'Ajoute une fonctionnalité vraiment utile à cette application, adaptée à mon activité.'
+      );
     }
     if (item.attachments?.length) {
-      add('Create a refined variation');
-      add('Make it more cinematic');
+      add(
+        'Créer une variante raffinée ?',
+        'Crée une variante plus raffinée de ce résultat, avec un rendu plus soigné.'
+      );
+      add(
+        'Le rendre plus cinématographique ?',
+        'Rends ce résultat plus cinématographique : lumière, cadrage et ambiance.'
+      );
     }
 
     // 2. How the answer is shaped.
     if (text.includes('```')) {
-      add('Walk me through this code');
-      add('Add error handling');
+      add(
+        'M’expliquer ce code pas à pas ?',
+        'Peux-tu m’expliquer ce code pas à pas, en français, de façon simple ?'
+      );
+      add(
+        'Ajouter la gestion des erreurs ?',
+        'Ajoute une gestion des erreurs robuste à ce code, en expliquant chaque ajout.'
+      );
     }
-    if (/^\s*\|.*\|/m.test(text)) add('Chart this data');
+    if (/^\s*\|.*\|/m.test(text)) {
+      add(
+        'Transformer ces données en graphique ?',
+        'Transforme ces données en un graphique clair et lisible, avec un titre et des libellés en français.'
+      );
+    }
     if (/^\s*(?:\d+[.)]|[-*+])\s+\S/m.test(text)) {
-      add('Turn this into an action plan');
+      add(
+        'Transformer en plan d’action ?',
+        'Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.'
+      );
     }
-    if (/https?:\/\//.test(text)) add('Summarize the sources');
+    if (/https?:\/\//.test(text)) {
+      add(
+        'Résumer les sources ?',
+        'Peux-tu résumer les points clés des sources citées dans cette réponse ?'
+      );
+    }
 
     // 3. Bulk heuristics — a wall of text and a one-liner want opposite things.
-    if (text.length > 1400) add('Summarize this in three bullets');
-    if (text.length > 0 && text.length < 320) add('Go deeper with examples');
+    if (text.length > 1400) {
+      add(
+        'Résumer en trois points ?',
+        'Résume cette réponse en trois points clés, simples et directs.'
+      );
+    }
+    if (text.length > 0 && text.length < 320) {
+      add(
+        'Approfondir avec des exemples ?',
+        'Peux-tu approfondir cette réponse avec des exemples concrets adaptés à mon activité ?'
+      );
+    }
 
     // 4. Backstop, so the row is never empty.
-    add('Go deeper with examples');
-    add('Turn this into an action plan');
+    add(
+      'Approfondir avec des exemples ?',
+      'Peux-tu approfondir cette réponse avec des exemples concrets adaptés à mon activité ?'
+    );
+    add(
+      'Transformer en plan d’action ?',
+      'Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.'
+    );
 
     return out;
+  }
+
+  private async _fetchFollowUps() {
+    const { item } = this;
+    const runId = ++this._followUpsRunId;
+    const answer = (item.content ?? '').slice(0, 2000);
+    if (!answer) return;
+    const question = (this.pulseTask ?? '').slice(0, 2000);
+    try {
+      const res = await fetch(cdzApiUrl('/api/v1/ai/suggestions'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, answer }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { suggestions?: unknown };
+      // Ignore if a newer fetch started (message flipped / re-sent).
+      if (runId !== this._followUpsRunId) return;
+      const list = Array.isArray(data?.suggestions) ? data.suggestions : [];
+      const cleaned: Array<{ label: string; prompt: string }> = [];
+      for (const s of list) {
+        if (!s || typeof s !== 'object') continue;
+        const label = String((s as any).label ?? '').trim();
+        const prompt = String((s as any).prompt ?? '').trim();
+        if (label && prompt) cleaned.push({ label, prompt });
+        if (cleaned.length >= 3) break;
+      }
+      if (cleaned.length) this._followUps = cleaned;
+    } catch {
+      // Cosmetic route — keep the heuristic row on any failure.
+    }
   }
 
   private renderFollowUps() {
@@ -327,22 +445,26 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     if (!isLast || !host || (status !== 'success' && status !== 'idle')) {
       return nothing;
     }
-    const suggestions = this.cdzFollowUpSuggestions();
+    const suggestions = this._followUps ?? this._cdzHeuristicFollowUps();
     return html`<div class="cdz-followups" data-testid="clickdz-followups">
-      ${suggestions.map(
-        suggestion =>
-          html`<button
-            class="cdz-followup"
-            @click=${() =>
-              AIAppEvents.requestOpenWithChat.next({
-                host,
-                input: suggestion,
-                fromAnswer: true,
-              })}
-          >
-            ${suggestion}
-          </button>`
-      )}
+      <span class="cdz-followups-title">À approfondir</span>
+      <div class="cdz-followups-row">
+        ${suggestions.map(
+          s =>
+            html`<button
+              class="cdz-followup"
+              title=${s.prompt}
+              @click=${() =>
+                AIAppEvents.requestOpenWithChat.next({
+                  host,
+                  input: s.prompt,
+                  fromAnswer: true,
+                })}
+            >
+              ${s.label}
+            </button>`
+        )}
+      </div>
     </div>`;
   }
 
