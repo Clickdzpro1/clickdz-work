@@ -1,8 +1,21 @@
 import { sentry, tracker } from '@affine/track';
 import { APP_SETTINGS_STORAGE_KEY } from '@toeverything/infra/atom';
 
+import { initCdzPostHog, trackCdzEvent } from '../clickdz/posthog';
+
 tracker.init();
 sentry.init();
+
+// PostHog product analytics (ClickDz): lazy-loads posthog-js and is a no-op
+// unless CDZ_POSTHOG_KEY + CDZ_POSTHOG_HOST are set at build time. Fires the
+// `app_opened` key action once per app boot; pageviews and user identity are
+// wired via trackCdzPageView / identifyCdzPostHogUser (see clickdz/posthog.ts
+// and components/workspace/index.tsx).
+initCdzPostHog().then(posthog => {
+  if (posthog) {
+    trackCdzEvent('app_opened', { surface: 'web' });
+  }
+});
 
 if (typeof localStorage !== 'undefined') {
   let enabled = true;

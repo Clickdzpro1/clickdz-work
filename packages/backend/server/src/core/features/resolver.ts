@@ -1,8 +1,11 @@
 import {
   Args,
+  Field,
   Int,
   Mutation,
+  ObjectType,
   Parent,
+  Query,
   registerEnumType,
   ResolveField,
   Resolver,
@@ -10,7 +13,12 @@ import {
 import { difference } from 'lodash-es';
 
 import { BadRequest, EventBus } from '../../base';
-import { Feature, Models, type UserFeatureName } from '../../models';
+import {
+  APP_ENTITLEMENT_APPS,
+  Feature,
+  Models,
+  type UserFeatureName,
+} from '../../models';
 import { Admin } from '../common';
 import { EntitlementService } from '../entitlement';
 import { UserType } from '../user/types';
@@ -19,6 +27,30 @@ import { AvailableUserFeatureConfig } from './types';
 registerEnumType(Feature, {
   name: 'FeatureType',
 });
+
+@ObjectType('UserAppEntitlement')
+class UserAppEntitlementType {
+  @Field()
+  app!: string;
+
+  @Field()
+  plan!: string;
+
+  @Field()
+  active!: boolean;
+
+  @Field({ nullable: true })
+  reason?: string | null;
+
+  @Field({ nullable: true })
+  expiresAt?: Date | null;
+
+  @Field()
+  createdAt!: Date;
+
+  @Field()
+  updatedAt!: Date;
+}
 
 @Resolver(() => UserType)
 export class UserFeatureResolver extends AvailableUserFeatureConfig {
@@ -114,5 +146,44 @@ export class AdminFeatureManagementResolver extends AvailableUserFeatureConfig {
   ) {
     await this.entitlement.revokeAdminGrant(targetType, targetId);
     return true;
+  }
+
+  @Mutation(() => Boolean, {
+    description: 'Grant a ClickDz app entitlement to a user (admin)',
+  })
+  async grantUserApp(
+    @Args('userId') userId: string,
+    @Args('app') app: string,
+    @Args('plan', { type: () => String, nullable: true }) plan?: string,
+    @Args('expiresAt', { type: () => Date, nullable: true }) expiresAt?: Date
+  ) {
+    const normalized = app.toLowerCase();
+    if (!APP_ENTITLEMENT_APPS.includes(normalized as any)) {
+      throw new BadRequest(`Unknown app "${app}"`);
+    }
+    await this.models.userAppEntitlement.upsert(userId, normalized, {
+      plan: plan ?? 'manual',
+      expiresAt: expiresAt ?? null,
+      reason: 'admin panel',
+    });
+    return true;
+  }
+
+  @Mutation(() => Boolean, {
+    description: 'Revoke a ClickDz app entitlement from a user (admin)',
+  })
+  async revokeUserApp(
+    @Args('userId') userId: string,
+    @Args('app') app: string
+  ) {
+    await this.models.userAppEntitlement.remove(userId, app.toLowerCase());
+    return true;
+  }
+
+  @Query(() => [UserAppEntitlementType], {
+    description: 'List ClickDz app entitlements of a user (admin)',
+  })
+  async userAppEntitlements(@Args('userId') userId: string) {
+    return await this.models.userAppEntitlement.list(userId);
   }
 }

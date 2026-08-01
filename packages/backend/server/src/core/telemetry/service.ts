@@ -4,6 +4,7 @@ import { Config, OnEvent, URLHelper } from '../../base';
 import { cleanTelemetryEvent } from './cleaner';
 import { TelemetryDeduper } from './deduper';
 import { Ga4Client } from './ga4-client';
+import { PostHogClient } from './posthog-client';
 import { TelemetryAck, TelemetryBatch } from './types';
 
 const TELEMETRY_ROUTE_PATTERN = /\/api\/telemetry(?:\/|$)/;
@@ -13,6 +14,7 @@ export class TelemetryService {
   private readonly logger = new Logger(TelemetryService.name);
   private allowedOrigins: string[] = [];
   private ga4Client!: Ga4Client;
+  private posthogClient!: PostHogClient;
   private readonly deduper: TelemetryDeduper;
 
   constructor(
@@ -135,6 +137,15 @@ export class TelemetryService {
 
     try {
       await this.ga4Client.send(cleanedEvents);
+      // PostHog forwarding (CDZ_POSTHOG_KEY/CDZ_POSTHOG_HOST): fire-and-forget
+      // alongside GA4 — never blocks or fails the ack. Server-side events like
+      // `user_provisioned_app` and `generation_completed` flow through this
+      // same batch path from the frontend collectors.
+      this.posthogClient.send(cleanedEvents).catch(error => {
+        this.logger.warn(
+          `PostHog forwarding failed: ${(error as Error)?.message ?? error}`
+        );
+      });
       return {
         ok: true,
         accepted: cleanedEvents.length,
@@ -194,6 +205,12 @@ export class TelemetryService {
     this.ga4Client = new Ga4Client(
       this.config.telemetry.ga4.measurementId,
       this.config.telemetry.ga4.apiSecret,
+      Math.max(1, this.config.telemetry.batch.maxEvents)
+    );
+
+    this.posthogClient = new PostHogClient(
+      this.config.telemetry.posthog.key,
+      this.config.telemetry.posthog.host,
       Math.max(1, this.config.telemetry.batch.maxEvents)
     );
   }

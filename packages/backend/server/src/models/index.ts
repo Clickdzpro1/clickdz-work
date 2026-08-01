@@ -44,6 +44,7 @@ import {
 import { MODELS_SYMBOL } from './provider';
 import { SessionModel } from './session';
 import { UserModel } from './user';
+import { UserAppEntitlementModel } from './user-app-entitlement';
 import { UserDocModel } from './user-doc';
 import { UserFeatureModel } from './user-feature';
 import { UserSettingsModel } from './user-settings';
@@ -75,6 +76,7 @@ const MODELS = {
   docAccessPolicy: DocAccessPolicyModel,
   docGrant: DocGrantModel,
   userSettings: UserSettingsModel,
+  userAppEntitlement: UserAppEntitlementModel,
   copilotSession: CopilotSessionModel,
   copilotUsage: CopilotUsageModel,
   copilotTranscriptTask: CopilotTranscriptTaskModel,
@@ -174,6 +176,7 @@ export * from './notification';
 export * from './permission-write';
 export * from './session';
 export * from './user';
+export * from './user-app-entitlement';
 export * from './user-doc';
 export * from './user-feature';
 export * from './user-settings';

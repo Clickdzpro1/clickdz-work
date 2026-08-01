@@ -31,6 +31,8 @@ import { createHmac, randomBytes } from 'node:crypto';
 // routes (no @Public / no bridge token). `CurrentUser` just RECEIVES the
 // already-verified session user so the per-owner cap can key on identity.
 import { CurrentUser, Public } from '../../core/auth';
+// ClickDz PostHog server-side capture (no-op unless CDZ_POSTHOG_KEY/HOST set).
+import { createPostHogClientFromEnv } from '../../core/telemetry/posthog-client';
 // SECURITY: hard per-IP rate cap for cost/side-effecting routes (strict = 20/min).
 // AuthenticationRequired -> typed 401 (raw HttpException becomes a generic 500 here).
 // WS4: BadRequest/NotFound are the typed 4xx (a raw HttpException becomes a
@@ -2638,7 +2640,10 @@ export class ClickDzBridgeController {
 
   @Throttle('strict')
   @Post(['/api/v1/images/generations', '/v1/images/generations'])
-  async imageGenerations(@Body() body: any) {
+  async imageGenerations(
+    @Body() body: any,
+    @CurrentUser() user?: CurrentUser
+  ) {
     // SECURITY: this route hits the paid OpenAI images API. Validate input
     // defensively before doing any upstream work.
     if (typeof body?.prompt !== 'string' || !body.prompt.trim()) {
@@ -2944,6 +2949,21 @@ export class ClickDzBridgeController {
           }
         : {}),
     };
+    // PostHog server-side event (no-op unless CDZ_POSTHOG_KEY/HOST are set):
+    // a generation completed on the paid images route. Fire-and-forget — never
+    // delays or fails the response.
+    void createPostHogClientFromEnv().capture({
+      event: 'generation_completed',
+      distinctId: user?.id ?? 'anonymous',
+      properties: {
+        kind: 'image',
+        model: resolution.tierId,
+        engine: resolution.engine,
+        quality,
+        fast: fastMode,
+        i2i: i2iMode,
+      },
+    });
     return data;
   }
 

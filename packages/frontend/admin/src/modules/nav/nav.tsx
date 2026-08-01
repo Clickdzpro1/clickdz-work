@@ -3,6 +3,7 @@ import { ROUTES } from '@affine/routes';
 import { AccountIcon, SelfhostIcon } from '@blocksuite/icons/rc';
 import {
   BarChart3Icon,
+  ChartPieIcon,
   LayoutDashboardIcon,
   ListChecksIcon,
 } from 'lucide-react';
@@ -42,6 +43,12 @@ export function Nav({ isCollapsed = false }: NavProps) {
           to={ROUTES.admin.accounts}
           icon={<AccountIcon fontSize={20} />}
           label="Accounts"
+          isCollapsed={isCollapsed}
+        />
+        <NavItem
+          to={ROUTES.admin.analytics}
+          icon={<ChartPieIcon size={18} />}
+          label="Analytique"
           isCollapsed={isCollapsed}
         />
         {environment.isSelfHosted ? null : (

@@ -13,6 +13,7 @@ import { useServerConfig } from '../../common';
 import { RightPanelHeader } from '../../header';
 import type { UserInput, UserType } from '../schema';
 import { validateEmails, validatePassword } from '../utils/csv-utils';
+import { AppAccessSection } from './app-access-section';
 import { useCreateUser, useUpdateUser } from './use-user-management';
 
 type UserFormProps = {
@@ -24,6 +25,11 @@ type UserFormProps = {
   actions?: React.ReactNode;
   showOption?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * When set (update form), renders the "Accès aux applications" section
+   * for per-user app gating.
+   */
+  userId?: string;
 };
 
 function UserForm({
@@ -35,6 +41,7 @@ function UserForm({
   actions,
   showOption,
   onDirtyChange,
+  userId,
 }: UserFormProps) {
   const serverConfig = useServerConfig();
 
@@ -161,6 +168,7 @@ function UserForm({
           controlPosition="right"
           showSeparators={true}
         />
+        {userId ? <AppAccessSection userId={userId} /> : null}
         {actions}
       </div>
     </div>
@@ -308,6 +316,7 @@ export function UpdateUserForm({
       onConfirm={onUpdateUser}
       onValidate={validateUpdateUser}
       onDirtyChange={onDirtyChange}
+      userId={user.id}
       actions={
         <div className="space-y-2">
           <Button

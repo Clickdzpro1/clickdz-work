@@ -1,3 +1,4 @@
+import { trackCdzEvent } from '@affine/core/clickdz/posthog';
 import type {
   AIDraftService,
   AIToolsConfigService,
@@ -4131,6 +4132,8 @@ export class AIChatInput extends SignalWatcher(
           '**Image ready.** Describe a change to refine it, or switch back to Chat.',
         attachments: [url],
       });
+      // PostHog key action (no-op unless CDZ_POSTHOG_KEY/HOST configured).
+      trackCdzEvent('image_generated', { surface: 'ai_chat_image' });
       this.onChatSuccess?.();
     } catch (error) {
       await this.runtime.dispatch({

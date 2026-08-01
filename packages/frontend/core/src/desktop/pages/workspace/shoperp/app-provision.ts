@@ -3,6 +3,7 @@
 // one-time 90s bridge code that the target app redeems via its auth shim, so
 // the iframe can auto-login the current user. Provisioning is BEST-EFFORT:
 // any failure returns null and the panel still iframes the bare URL.
+import { trackCdzEvent } from '@affine/core/clickdz/posthog';
 
 /** The subset of the provision response the panels consume. */
 export interface ProvisionedApp {
@@ -32,6 +33,8 @@ export async function provisionApp(app: string): Promise<ProvisionedApp | null> 
     const data = await resp.json().catch(() => null);
     const code = data?.code;
     if (typeof code !== 'string' || !code) return null;
+    // PostHog key action (no-op unless CDZ_POSTHOG_KEY/HOST configured).
+    trackCdzEvent('app_provisioned', { app });
     return {
       code,
       username: data?.account?.username ?? '',

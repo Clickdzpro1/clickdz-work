@@ -13,6 +13,10 @@ export interface TelemetryConfig {
   batch: {
     maxEvents: ConfigItem<number>;
   };
+  posthog: {
+    key: ConfigItem<string>;
+    host: ConfigItem<string>;
+  };
 }
 
 declare global {
@@ -47,5 +51,15 @@ defineModuleConfig('telemetry', {
   'batch.maxEvents': {
     desc: 'Max events per telemetry batch.',
     default: 25,
+  },
+  'posthog.key': {
+    desc: 'PostHog project API key (phc_…) for server-side capture. Empty = PostHog forwarding disabled.',
+    default: '',
+    env: 'CDZ_POSTHOG_KEY',
+  },
+  'posthog.host': {
+    desc: 'PostHog capture host, e.g. https://eu.i.posthog.com (EU Cloud), https://us.i.posthog.com, or a self-hosted instance URL.',
+    default: '',
+    env: 'CDZ_POSTHOG_HOST',
   },
 });

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Headers,
+  Logger,
   Post,
 } from '@nestjs/common';
 import { createHmac, randomBytes } from 'node:crypto';
@@ -9,10 +10,12 @@ import { createHmac, randomBytes } from 'node:crypto';
 // Typed AFFiNE errors + the @Global CacheRedis raw handle + the session user.
 // AuthGuard gates every route here (none are @Public except the code exchange,
 // which is guarded by the bridge secret instead). Ownership is by user.id.
-import { BadRequest, Throttle } from '../../base';
+import { AccessDenied, BadRequest, Throttle } from '../../base';
 import { CacheRedis } from '../../base/redis';
 import { CurrentUser } from '../../core/auth';
 import { Public } from '../../core/auth/guard';
+import { createPostHogClientFromEnv } from '../../core/telemetry/posthog-client';
+import { Models } from '../../models';
 import { safeEqual } from './cdz-data-token';
 import { sealSecret, openSecret } from './clickdz-secret-box';
 
@@ -265,7 +268,12 @@ async function courseproLogin(
 
 @Controller()
 export class ClickDzAppProvisionController {
-  constructor(private readonly redis: CacheRedis) {}
+  private readonly logger = new Logger(ClickDzAppProvisionController.name);
+
+  constructor(
+    private readonly redis: CacheRedis,
+    private readonly models: Models
+  ) {}
 
   /**
    * POST /api/v1/apps/provision
@@ -295,6 +303,24 @@ export class ClickDzAppProvisionController {
     const app = String((body as any)?.app ?? '').toLowerCase();
     if (!APPS.includes(app as AppId)) {
       throw new BadRequest(`Unknown app "${app}"`);
+    }
+
+    // Per-user app-entitlement gate (admin panel grants). A blocked user gets
+    // no bridge code. FAIL-OPEN: if the entitlement table is unreachable
+    // (e.g. migration not yet applied — P2021/42P01), allow so existing users
+    // aren't locked out before admin grants exist, but log it loudly.
+    try {
+      const entitled = await this.models.userAppEntitlement.has(user.id, app);
+      if (!entitled) {
+        throw new AccessDenied(
+          `You don't have access to "${app}". Ask an admin to grant it.`
+        );
+      }
+    } catch (err) {
+      if (err instanceof AccessDenied) throw err;
+      this.logger.error(
+        `Entitlement check failed (fail-open, allowing ${app} for ${user.id}): ${(err as Error)?.message ?? err}`
+      );
     }
 
     // Look up (or lazily create) the per-user account record for this app.
@@ -463,6 +489,18 @@ export class ClickDzAppProvisionController {
         loginUrl = undefined;
       }
     }
+
+    // PostHog server-side event (no-op unless CDZ_POSTHOG_KEY/HOST are set):
+    // a user provisioned (opened) an embedded app. Fire-and-forget.
+    void createPostHogClientFromEnv().capture({
+      event: 'user_provisioned_app',
+      distinctId: user.id,
+      properties: {
+        app,
+        username: record.username,
+        has_login_url: Boolean(loginUrl),
+      },
+    });
 
     return {
       code,

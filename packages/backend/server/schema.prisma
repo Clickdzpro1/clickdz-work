@@ -53,6 +53,7 @@ model User {
   workspaceMemberLastAccesses WorkspaceMemberLastAccess[]
   quotaState                  EffectiveUserQuotaState?
   ownedQuotaStates            EffectiveWorkspaceQuotaState[]
+  appEntitlements             UserAppEntitlement[]
 
   @@index([email])
   @@map("users")
@@ -515,6 +516,27 @@ model UserFeature {
   @@index([userId])
   @@index([name])
   @@map("user_features")
+}
+
+/// ClickDz per-user app entitlement (slidepro/socialplus/coursepro/zoomplus).
+/// Admin-granted gate checked by POST /api/v1/apps/provision before minting a
+/// bridge code. `active` is the kill-switch; `expiresAt` null = no expiry.
+model UserAppEntitlement {
+  id        String    @id @default(uuid()) @db.VarChar
+  userId    String    @map("user_id") @db.VarChar
+  app       String    @db.VarChar
+  plan      String    @default("manual") @db.VarChar
+  active    Boolean   @default(true)
+  reason    String?   @db.VarChar
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, app])
+  @@index([userId])
+  @@map("user_app_entitlements")
 }
 
 model WorkspaceFeature {
