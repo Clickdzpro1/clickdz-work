@@ -13,7 +13,7 @@ import type { ExtensionType } from '@blocksuite/affine/store';
 import type { NotificationService } from '@blocksuite/affine-shared/services';
 import type { Signal } from '@preact/signals-core';
 import { css, html, nothing } from 'lit';
-import { property } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 
 import {
   EdgelessEditorActions,
