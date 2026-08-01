@@ -29,7 +29,20 @@ const OneMB = 1024 * 1024;
 // 500 logs/sec rate limit. NestJS LogLevel order: verbose > debug > log >
 // warn > error > fatal. Keeping [log, warn, error, fatal] drops the two
 // noisiest levels; all operational messages and errors are preserved.
-const PROD_LOG_LEVELS: LogLevel[] = ['log', 'warn', 'error', 'fatal'];
+//
+// BOOT-FLOOD FIX (2026-08-01): the `log` level is the one that sinks boot.
+// JobHandlerScanner (scanner.ts:75) + EventHandlerScanner emit one `log` line
+// PER registered handler — hundreds in a burst during NestFactory.create().
+// At 500+ lines/sec Railway drops messages AND the process burns CPU building
+// strings (CLS request-id lookup per line), so module init crawls past the
+// healthcheck window and `app.listen` never runs → "replicas never became
+// healthy". Default prod to ['warn','error','fatal'] (boot stays fast + quiet);
+// set AFFINE_VERBOSE_BOOT=1 to restore 'log' when you need the registration
+// trace for debugging.
+const PROD_LOG_LEVELS: LogLevel[] =
+  process.env.AFFINE_VERBOSE_BOOT === '1'
+    ? ['log', 'warn', 'error', 'fatal']
+    : ['warn', 'error', 'fatal'];
 
 export async function run() {
   const { AppModule } = await import('./app.module');
