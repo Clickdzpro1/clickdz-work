@@ -1,0 +1,40 @@
+name: Patch Meet images (fix malformed upstream User field)
+
+# The upstream La Suite Meet images carry a malformed container User field
+# ("1001:127:-1000" — three components; a container runtime expects uid or
+# uid:gid). Railway rejects CREATE_CONTAINER, so the services never start.
+# This rebuilds them FROM the mirrored ghcr images with a valid USER 1001.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { name: meet-frontend, version: v1.21.0 }
+          - { name: meet-backend, version: v1.9.0 }
+    steps:
+      - name: Log in to ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build patched image
+        run: |
+          cat > Dockerfile <<'DOCKEREOF'
+          FROM ghcr.io/clickdzpro1/${{ matrix.name }}:${{ matrix.version }}
+          USER 1001
+          DOCKEREOF
+          docker build -t ghcr.io/clickdzpro1/${{ matrix.name }}-patched:${{ matrix.version }} .
+
+      - name: Push patched image
+        run: docker push ghcr.io/clickdzpro1/${{ matrix.name }}-patched:${{ matrix.version }}
