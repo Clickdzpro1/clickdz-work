@@ -39,7 +39,7 @@ class UserAppEntitlementType {
   @Field()
   active!: boolean;
 
-  @Field({ nullable: true })
+  @Field(() => String, { nullable: true })
   reason?: string | null;
 
   @Field({ nullable: true })
