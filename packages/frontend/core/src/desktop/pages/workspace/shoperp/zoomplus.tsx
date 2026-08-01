@@ -10,7 +10,7 @@ const ZOOMPLUS_URL_KEY = 'cdz.zoomplus.url';
 const ZOOMPLUS_HEALTH_PATH = '/api/health';
 
 /** The deployed shared La Suite Meet instance (Railway service cdz-zoomplus). */
-const ZOOMPLUS_DEFAULT_URL = 'https://cdz-zoomplus-production.up.railway.app';
+const ZOOMPLUS_DEFAULT_URL = 'https://meet-frontend-production.up.railway.app';
 
 /**
  * Shared-instance base URL.
