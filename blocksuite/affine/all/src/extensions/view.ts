@@ -16,6 +16,7 @@ import { NoteViewExtension } from '@blocksuite/affine-block-note/view';
 import { ParagraphViewExtension } from '@blocksuite/affine-block-paragraph/view';
 import { RootViewExtension } from '@blocksuite/affine-block-root/view';
 import { SurfaceViewExtension } from '@blocksuite/affine-block-surface/view';
+import { StickerViewExtension } from '@blocksuite/affine-block-sticker/view';
 import { SurfaceRefViewExtension } from '@blocksuite/affine-block-surface-ref/view';
 import { TableViewExtension } from '@blocksuite/affine-block-table/view';
 import { FoundationViewExtension } from '@blocksuite/affine-foundation/view';
@@ -90,6 +91,7 @@ export function getInternalViewExtensions() {
     ListViewExtension,
     NoteViewExtension,
     ParagraphViewExtension,
+    StickerViewExtension,
     SurfaceRefViewExtension,
     TableViewExtension,
     SurfaceViewExtension,
