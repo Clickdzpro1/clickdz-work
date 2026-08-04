@@ -42,13 +42,13 @@ class UserAppEntitlementType {
   @Field(() => String, { nullable: true })
   reason?: string | null;
 
-  @Field({ nullable: true })
+  @Field(() => Date, { nullable: true })
   expiresAt?: Date | null;
 
-  @Field()
+  @Field(() => Date)
   createdAt!: Date;
 
-  @Field()
+  @Field(() => Date)
   updatedAt!: Date;
 }
 
