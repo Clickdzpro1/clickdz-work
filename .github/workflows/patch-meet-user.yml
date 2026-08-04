@@ -84,6 +84,10 @@ jobs:
           # has the nginx.org apk repo configured, so the version-matched njs module
           # installs cleanly and auto-registers via /etc/nginx/modules/*.conf.
           RUN apk add --no-cache nginx-module-njs
+          # The apk package drops the .so but nginxinc's nginx.conf does not
+          # auto-include /etc/nginx/modules, so load the njs module explicitly in
+          # the MAIN context (js_path/js_import are otherwise "unknown directive").
+          RUN sed -i '1i load_module /usr/lib/nginx/modules/ngx_http_js_module.so;' /etc/nginx/nginx.conf
           RUN mkdir -p /etc/nginx/njs
           COPY .github/meet-proxy/cdz_cookies.js /etc/nginx/njs/cdz_cookies.js
           COPY .github/meet-proxy/default.conf /etc/nginx/conf.d/default.conf
