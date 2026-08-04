@@ -78,8 +78,16 @@ jobs:
           # Overwrite the upstream SPA-only conf with our proxy-enabled one.
           # Root is needed to write into /etc/nginx/conf.d; drop back to 1001 after.
           USER root
+          # njs module: needed for the js_header_filter that appends `; Partitioned`
+          # (CHIPS) to backend Set-Cookie headers so the Django session survives the
+          # cross-site iframe. The base is nginxinc/nginx-unprivileged (alpine), which
+          # has the nginx.org apk repo configured, so the version-matched njs module
+          # installs cleanly and auto-registers via /etc/nginx/modules/*.conf.
+          RUN apk add --no-cache nginx-module-njs
+          RUN mkdir -p /etc/nginx/njs
+          COPY .github/meet-proxy/cdz_cookies.js /etc/nginx/njs/cdz_cookies.js
           COPY .github/meet-proxy/default.conf /etc/nginx/conf.d/default.conf
-          RUN chmod 0644 /etc/nginx/conf.d/default.conf
+          RUN chmod 0644 /etc/nginx/conf.d/default.conf /etc/nginx/njs/cdz_cookies.js
           # Fail the build early if the nginx config is syntactically invalid.
           # `nginx -t` only parses config; it does not resolve DNS or dial the
           # upstream, so the Railway-internal resolver/proxy_pass are fine here.
@@ -93,7 +101,7 @@ jobs:
           # "1001:127:-1000" User field that Railway's runtime rejects).
           USER 1001
           DOCKEREOF
-          docker build -f Dockerfile.proxy -t ghcr.io/clickdzpro1/meet-frontend-patched:v1.21.0-proxy .
+          docker build -f Dockerfile.proxy -t ghcr.io/clickdzpro1/meet-frontend-patched:v1.21.0-proxy2 .
 
       - name: Push patched frontend image (proxy)
-        run: docker push ghcr.io/clickdzpro1/meet-frontend-patched:v1.21.0-proxy
+        run: docker push ghcr.io/clickdzpro1/meet-frontend-patched:v1.21.0-proxy2
