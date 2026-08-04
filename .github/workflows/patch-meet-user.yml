@@ -83,7 +83,12 @@ jobs:
           # Fail the build early if the nginx config is syntactically invalid.
           # `nginx -t` only parses config; it does not resolve DNS or dial the
           # upstream, so the Railway-internal resolver/proxy_pass are fine here.
-          RUN nginx -t
+          # NOTE: running `nginx -t` as root leaves a root-owned /tmp/nginx.pid
+          # baked into the layer; at runtime nginx runs as uid 1001 and cannot
+          # reopen that root-owned pid file -> [emerg] open("/tmp/nginx.pid")
+          # failed (13: Permission denied) crash loop. Remove it after the test
+          # so the runtime user recreates it fresh.
+          RUN nginx -t && rm -f /tmp/nginx.pid
           # Same USER fix as the plain patched image (upstream ships a malformed
           # "1001:127:-1000" User field that Railway's runtime rejects).
           USER 1001
