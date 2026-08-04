@@ -55,6 +55,12 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
   const [connectNote, setConnectNote] = useState<string | null>(null);
   const [showChannels, setShowChannels] = useState(true);
 
+  // --- Compose & publish (via Composio /run) --------------------------------
+  const [composeText, setComposeText] = useState('');
+  const [selectedChannels, setSelectedChannels] = useState<string[]>([]);
+  const [publishing, setPublishing] = useState(false);
+  const [pubResults, setPubResults] = useState<Record<string, 'ok' | 'fail' | 'pending'>>({});
+
   // Robust flow: provision the app, then iframe the shim loginUrl (preferred) or
   // the bridge-code URL. The iframe load IS the health check — no CORS probe.
   const load = useCallback(async () => {
@@ -123,6 +129,32 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
     }
   }, [refreshChannels]);
 
+  const publish = useCallback(async () => {
+    const text = composeText.trim();
+    if (!text || selectedChannels.length === 0 || publishing) return;
+    setPublishing(true);
+    setPubResults(Object.fromEntries(selectedChannels.map(s => [s, 'pending' as const])));
+    // Publish to each selected channel via the Composio agent (/run): a strict
+    // verbatim instruction so the planner posts the exact text, no paraphrase.
+    await Promise.all(selectedChannels.map(async chSlug => {
+      try {
+        const res = await fetch(cdzApiUrl('/api/v1/integrations/run'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            prompt: `Publish the following post to my ${chSlug} account, EXACTLY as written, verbatim, with no changes, no commentary and no extra hashtags:\n\n"""${text}"""`,
+            toolkits: [chSlug],
+          }),
+        });
+        setPubResults(prev => ({ ...prev, [chSlug]: res.ok ? 'ok' : 'fail' }));
+      } catch {
+        setPubResults(prev => ({ ...prev, [chSlug]: 'fail' }));
+      }
+    }));
+    setPublishing(false);
+  }, [composeText, selectedChannels, publishing]);
+
   useEffect(() => {
     ensureShoperpResponsiveCss();
     void load();
@@ -178,6 +210,44 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
             </div>
           )}
           {connectNote && <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>{connectNote}</div>}
+
+          {/* Compose & publish to CONNECTED channels via Composio. This is how
+              a channel connected through CDZ Connect actually gets used — Postiz
+              can't see Composio connections, so publishing goes through Composio. */}
+          {Object.values(connected).some(Boolean) && (
+            <div style={{ marginTop: 14, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: C.text, marginBottom: 8 }}>Composer &amp; publier</div>
+              <textarea
+                value={composeText}
+                onChange={e => setComposeText(e.target.value)}
+                placeholder="Écrivez votre publication…"
+                rows={3}
+                style={{ width: '100%', resize: 'vertical', borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, padding: '10px 12px', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                <span style={{ fontSize: 11.5, color: C.muted }}>Publier sur :</span>
+                {CHANNELS.filter(c => connected[c.slug]).map(c => {
+                  const on = selectedChannels.includes(c.slug);
+                  const r = pubResults[c.slug];
+                  return (
+                    <button key={c.slug}
+                      onClick={() => setSelectedChannels(prev => on ? prev.filter(s => s !== c.slug) : [...prev, c.slug])}
+                      style={{ fontSize: 11.5, fontWeight: 700, padding: '5px 10px', borderRadius: 999, cursor: 'pointer',
+                        border: `1px solid ${on ? C.accent : C.border}`, background: on ? C.accentSoft : C.panel2,
+                        color: r === 'ok' ? C.accent : r === 'fail' ? '#c8283a' : C.text }}>
+                      {c.icon} {c.label}{r === 'ok' ? ' ✓' : r === 'fail' ? ' ✕' : r === 'pending' ? ' …' : ''}
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={() => void publish()}
+                  disabled={publishing || !composeText.trim() || selectedChannels.length === 0}
+                  style={{ marginLeft: 'auto', ...miniBtnStyle('primary'), opacity: (publishing || !composeText.trim() || selectedChannels.length === 0) ? 0.5 : 1 }}>
+                  {publishing ? 'Publication…' : 'Publier'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
