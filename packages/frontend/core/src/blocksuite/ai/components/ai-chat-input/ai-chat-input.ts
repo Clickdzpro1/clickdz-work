@@ -80,8 +80,8 @@ export class AIChatInput extends SignalWatcher(
     .chat-panel-input[data-if-focused='true'] {
       box-shadow:
         var(--border-shadow),
-        0px 0px 0px 3px transparent,
-        0px 4px 6px rgba(0, 0, 0, 0.05);
+        0px 0px 0px 3px rgba(28, 158, 228, 0.14),
+        0px 4px 10px rgba(0, 0, 0, 0.06);
     }
     [data-theme='dark'] .chat-panel-input[data-if-focused='true'] {
       box-shadow:
@@ -104,7 +104,9 @@ export class AIChatInput extends SignalWatcher(
       padding: 8px 6px 6px 8px;
       min-height: 94px;
       box-sizing: border-box;
-      transition: box-shadow 0.23s ease;
+      transition:
+        box-shadow 0.23s ease,
+        background-color 0.2s ease;
       background-color: var(--affine-v2-input-background);
 
       &[data-independent-mode='true'] {
@@ -1774,8 +1776,18 @@ export class AIChatInput extends SignalWatcher(
         margin-left: auto;
       }
 
+      .chat-input-icon {
+        transition:
+          background-color 0.15s ease,
+          transform 0.12s ease;
+      }
+
       .chat-input-icon:hover {
         background-color: ${unsafeCSSVarV2('layer/background/hoverOverlay')};
+      }
+
+      .chat-input-icon:active {
+        transform: scale(0.95);
       }
 
       .chat-input-icon[data-active='true'] {
@@ -1812,8 +1824,21 @@ export class AIChatInput extends SignalWatcher(
         color: var(--affine-text-primary-color);
         box-sizing: border-box;
         resize: none;
-        overflow-y: scroll;
+        /* Auto-grow composer (see _autosizeTextarea): JS sets explicit px
+           heights on every change so height animates smoothly px->px; the
+           scrollbar only appears once the growth cap is hit (overflow is
+           toggled by the same method). */
+        min-height: 44px;
+        overflow-y: hidden;
         background-color: transparent;
+        caret-color: var(--affine-v2-icon-activated, #1e96eb);
+        transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        textarea {
+          transition: none;
+        }
       }
 
       textarea::-webkit-scrollbar {
@@ -1841,6 +1866,11 @@ export class AIChatInput extends SignalWatcher(
         font-weight: 400;
         font-family: var(--affine-font-family);
         color: var(--affine-v2-text-placeholder);
+        transition: opacity 0.2s ease;
+      }
+
+      textarea:focus::placeholder {
+        opacity: 0.55;
       }
 
       textarea:focus {
@@ -1893,6 +1923,17 @@ export class AIChatInput extends SignalWatcher(
       border: none;
       padding: 0;
       cursor: pointer;
+      transition:
+        transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
+        box-shadow 0.2s ease,
+        background 0.2s ease;
+    }
+    .chat-panel-send:not([aria-disabled='true']):hover {
+      transform: scale(1.08);
+      box-shadow: 0 3px 10px rgba(30, 150, 235, 0.35);
+    }
+    .chat-panel-send:not([aria-disabled='true']):active {
+      transform: scale(0.92);
     }
     .chat-panel-send[aria-disabled='true'] {
       cursor: not-allowed;
@@ -3462,6 +3503,7 @@ export class AIChatInput extends SignalWatcher(
         if (input) {
           this.textarea.value = input;
           this.isInputEmpty = !this.textarea.value.trim();
+          this._autosizeTextarea();
           this.textarea.focus();
         }
         AIAppEvents.requestOpenWithChat.next(null);
@@ -3479,6 +3521,19 @@ export class AIChatInput extends SignalWatcher(
     window.addEventListener('dragleave', this._handleWindowDragLeave);
     window.addEventListener('drop', this._resetDragState);
     window.addEventListener('dragend', this._resetDragState);
+
+    // Re-fit the composer when its width changes (sidebar drag, window
+    // resize, panel collapse): fewer/more px per line changes how many rows
+    // the same text needs. Width-gated so our own height writes never loop.
+    let lastComposerWidth = 0;
+    const composerResizeObserver = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      if (Math.abs(width - lastComposerWidth) < 1) return;
+      lastComposerWidth = width;
+      this._autosizeTextarea();
+    });
+    composerResizeObserver.observe(this);
+    this._disposables.add(() => composerResizeObserver.disconnect());
     // Close the slash palette when the user clicks anywhere outside this
     // composer (capture phase so we see the click before it's swallowed).
     document.addEventListener('pointerdown', this._handleSlashOutsidePointer, {
@@ -3494,6 +3549,7 @@ export class AIChatInput extends SignalWatcher(
         .then(draft => {
           this.textarea.value = draft.input;
           this.isInputEmpty = !this.textarea.value.trim();
+          this._autosizeTextarea();
         })
         .catch(console.error);
     }
@@ -3910,6 +3966,33 @@ export class AIChatInput extends SignalWatcher(
     }
   };
 
+  /**
+   * Single source of truth for the composer's height. Grows the textarea to
+   * fit its content up to a viewport-aware cap (~a third of the window, never
+   * less than 4 lines), then hands overflow to an inner scrollbar. Heights are
+   * written as explicit px values so the CSS height transition animates
+   * smoothly, including when text is inserted PROGRAMMATICALLY (suggestion
+   * cards, draft restore, slash palette) — the paths that previously left the
+   * box stuck at one row hiding everything but the last line.
+   */
+  private readonly _autosizeTextarea = () => {
+    const textarea = this.textarea;
+    if (!textarea) return;
+    const cap = Math.max(Math.round(window.innerHeight * 0.32), 4 * 22);
+    // Measure natural height without losing the previous px value (so the
+    // height transition animates px -> px instead of jumping from 'auto').
+    const prev = textarea.style.height;
+    textarea.style.height = 'auto';
+    const natural = textarea.scrollHeight;
+    textarea.style.height = prev || 'auto';
+    // Force a reflow so the browser registers the starting height before we
+    // set the target — otherwise the transition is skipped.
+    void textarea.offsetHeight;
+    const next = Math.min(natural, cap);
+    textarea.style.height = next + 'px';
+    textarea.style.overflowY = natural > cap ? 'auto' : 'hidden';
+  };
+
   private readonly _handleInput = async () => {
     const { textarea } = this;
     const value = textarea.value.trim();
@@ -3920,14 +4003,7 @@ export class AIChatInput extends SignalWatcher(
     // effect unless the value starts with '/'.
     this._syncSlashPalette(textarea.value);
 
-    textarea.style.height = 'auto';
-    textarea.style.height = textarea.scrollHeight + 'px';
-    let imagesHeight = this.imagePreviewGrid?.scrollHeight ?? 0;
-    if (imagesHeight) imagesHeight += 12;
-    if (this.scrollHeight >= 200 + imagesHeight) {
-      textarea.style.height = '148px';
-      textarea.style.overflowY = 'scroll';
-    }
+    this._autosizeTextarea();
 
     if (this.aiDraftService) {
       await this.aiDraftService.setDraft({
@@ -4058,7 +4134,7 @@ export class AIChatInput extends SignalWatcher(
 
     this.textarea.value = '';
     this.isInputEmpty = true;
-    this.textarea.style.height = 'unset';
+    this._autosizeTextarea();
 
     if (this.aiDraftService) {
       await this.aiDraftService.setDraft({
