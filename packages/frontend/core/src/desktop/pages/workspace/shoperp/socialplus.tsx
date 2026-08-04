@@ -1,7 +1,8 @@
 // Social+ — AI social media scheduling tab for ClickDz Work
-// Powered by Postiz (open-source) + CDZ AI models.
-// Same integration pattern as SlidePro/CoursePro: embed via iframe.
+// Channel connections are powered by CDZ Connect (Composio managed auth — no
+// per-platform developer app needed); composing/scheduling is Postiz embedded.
 
+import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import { useCallback, useEffect, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
 import { provisionApp, withBridgeCode } from './app-provision';
@@ -11,8 +12,7 @@ const SOCIALPLUS_URL_KEY = 'cdz.socialplus.url';
 /**
  * Base URL used ONLY for the bridge-code fallback (and as a last resort). We use
  * the SHIM host as the base so proxying + auth keep working; the shim redeems
- * the bridge_code and lands the user logged in. A self-hoster can repoint this
- * via localStorage without a rebuild — but there is no fake per-shop host.
+ * the bridge_code and lands the user logged in.
  */
 const SOCIALPLUS_INSTANCE_URL = 'https://postiz-shim-production.up.railway.app';
 
@@ -26,11 +26,34 @@ function socialPlusInstanceUrl(): string {
   return SOCIALPLUS_INSTANCE_URL;
 }
 
+// The social channels we surface, keyed by their Composio toolkit slug. Composio
+// provides MANAGED auth for these, so the user connects with one click and never
+// has to register a developer app themselves.
+const CHANNELS: { slug: string; label: string; icon: string }[] = [
+  { slug: 'twitter', label: 'X / Twitter', icon: '𝕏' },
+  { slug: 'linkedin', label: 'LinkedIn', icon: 'in' },
+  { slug: 'instagram', label: 'Instagram', icon: '📸' },
+  { slug: 'facebook', label: 'Facebook', icon: 'f' },
+  { slug: 'youtube', label: 'YouTube', icon: '▶' },
+  { slug: 'tiktok', label: 'TikTok', icon: '♪' },
+  { slug: 'reddit', label: 'Reddit', icon: '👽' },
+  { slug: 'pinterest', label: 'Pinterest', icon: '📌' },
+  { slug: 'telegram', label: 'Telegram', icon: '✈' },
+  { slug: 'discord', label: 'Discord', icon: '🎮' },
+];
+
 export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [iframeSrc, setIframeSrc] = useState('');
+
+  // --- CDZ Connect (Composio) channel state --------------------------------
+  const [connectEnabled, setConnectEnabled] = useState<boolean | null>(null);
+  const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const [connecting, setConnecting] = useState<string | null>(null);
+  const [connectNote, setConnectNote] = useState<string | null>(null);
+  const [showChannels, setShowChannels] = useState(true);
 
   // Robust flow: provision the app, then iframe the shim loginUrl (preferred) or
   // the bridge-code URL. The iframe load IS the health check — no CORS probe.
@@ -45,10 +68,66 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
     setStatus('ready');
   }, []);
 
+  // Load the per-user connected state for each channel (best-effort). The
+  // toolkits endpoint returns a `connected` flag per toolkit for THIS user.
+  const refreshChannels = useCallback(async () => {
+    try {
+      const s = await fetch(cdzApiUrl('/api/v1/integrations/status'), { credentials: 'include' });
+      const sj = await s.json().catch(() => ({}));
+      if (!sj?.enabled) { setConnectEnabled(false); return; }
+      setConnectEnabled(true);
+      const results = await Promise.allSettled(
+        CHANNELS.map(async c => {
+          const r = await fetch(cdzApiUrl(`/api/v1/integrations/toolkits?search=${encodeURIComponent(c.slug)}&limit=5`), { credentials: 'include' });
+          const j = await r.json().catch(() => ({}));
+          const hit = (j?.toolkits || []).find((t: any) => t?.slug === c.slug);
+          return [c.slug, !!hit?.connected] as const;
+        })
+      );
+      const next: Record<string, boolean> = {};
+      for (const res of results) if (res.status === 'fulfilled') next[res.value[0]] = res.value[1];
+      setConnected(next);
+    } catch {
+      setConnectEnabled(false);
+    }
+  }, []);
+
+  const connectChannel = useCallback(async (chSlug: string) => {
+    setConnecting(chSlug);
+    setConnectNote(null);
+    try {
+      const res = await fetch(cdzApiUrl('/api/v1/integrations/connect'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ toolkit: chSlug }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.redirectUrl) {
+        // Hosted Composio auth opens in a new tab (sandbox allows popups); the
+        // OAuth completes there against Composio's managed app.
+        window.open(data.redirectUrl, '_blank', 'noopener,noreferrer');
+        setConnectNote('Autorisation ouverte dans un nouvel onglet — terminez la connexion, puis revenez et cliquez « Actualiser ».');
+      } else if (data.error === 'not_configured') {
+        setConnectNote('CDZ Connect n’est pas encore configuré (COMPOSIO_API_KEY manquant).');
+      } else if (data.error === 'toolkit_auth_unconfigured') {
+        setConnectNote(`« ${chSlug} » n’est pas encore disponible côté CDZ Connect. Réessayez plus tard.`);
+      } else {
+        setConnectNote(data.detail || `Connexion à « ${chSlug} » impossible pour le moment.`);
+      }
+    } catch {
+      setConnectNote(`Connexion à « ${chSlug} » impossible pour le moment.`);
+    } finally {
+      setConnecting(null);
+      setTimeout(() => void refreshChannels(), 1500);
+    }
+  }, [refreshChannels]);
+
   useEffect(() => {
     ensureShoperpResponsiveCss();
     void load();
-  }, [slug, load]);
+    void refreshChannels();
+  }, [slug, load, refreshChannels]);
 
   return (
     <div data-cdz-surface="" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -56,10 +135,52 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
         <span style={{ fontSize: 20 }}>📱</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Social+</div>
-          <div style={{ fontSize: 11.5, color: C.muted }}>Réseaux sociaux IA · Powered by Postiz + CDZ AI</div>
+          <div style={{ fontSize: 11.5, color: C.muted }}>Réseaux sociaux IA · Connexion CDZ + Postiz</div>
         </div>
-        <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
+        <button style={miniBtnStyle('secondary')} onClick={() => setShowChannels(s => !s)}>{showChannels ? 'Masquer les réseaux' : 'Connecter les réseaux'}</button>
+        <button style={miniBtnStyle('secondary')} onClick={() => { void load(); void refreshChannels(); }}>↻ Actualiser</button>
       </div>
+
+      {/* --- CDZ Connect channels bar (Composio managed auth) --- */}
+      {showChannels && (
+        <div style={{ padding: '14px 16px', borderBottom: `1px solid ${C.border}`, background: C.panel, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 800, color: C.text }}>Connectez vos réseaux</span>
+            <span style={{ fontSize: 11.5, color: C.muted }}>en un clic via CDZ Connect — aucune app développeur requise</span>
+          </div>
+          {connectEnabled === false ? (
+            <Banner tone="error">CDZ Connect n’est pas encore configuré (COMPOSIO_API_KEY manquant côté serveur).</Banner>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+              {CHANNELS.map(ch => {
+                const isConn = connected[ch.slug];
+                const isBusy = connecting === ch.slug;
+                return (
+                  <button
+                    key={ch.slug}
+                    onClick={() => !isConn && connectChannel(ch.slug)}
+                    disabled={isBusy || isConn}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10,
+                      border: `1px solid ${isConn ? C.accent + '55' : C.border}`,
+                      background: isConn ? C.accentSoft : C.panel2,
+                      cursor: isConn ? 'default' : 'pointer', textAlign: 'left', width: '100%',
+                    }}
+                  >
+                    <span style={{ fontSize: 16, width: 20, textAlign: 'center', fontWeight: 800 }}>{ch.icon}</span>
+                    <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: C.text }}>{ch.label}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: isConn ? C.accent : C.muted }}>
+                      {isBusy ? '…' : isConn ? '✓ Connecté' : 'Connecter'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {connectNote && <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>{connectNote}</div>}
+        </div>
+      )}
+
       <div style={status === 'ready'
         ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
         : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
@@ -67,8 +188,6 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
         : status === 'error' ? (
           <Banner tone="error">Impossible de se connecter à Social+ pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
         ) : (
-          /* The iframe fills the pane (flex:1, height:100%); the explainer is a
-             slim footer strip so it never eats the iframe's space. */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
             <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
               <iframe src={iframeSrc} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="Social+" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
