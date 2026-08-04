@@ -192,7 +192,11 @@ async function postizLogin(
     const res = await fetch(`${POSTIZ_URL}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      // Postiz's /api/auth/login REQUIRES the `provider` field (returns 400
+      // "provider should not be null" without it) — this omission meant the
+      // provisioning login always failed, so Social+ never got a session cookie
+      // and always showed the Postiz sign-up screen.
+      body: JSON.stringify({ provider: 'LOCAL', email, password }),
       signal: AbortSignal.timeout(12_000),
     });
     if (!res.ok) return null;
@@ -528,7 +532,14 @@ export class ClickDzAppProvisionController {
         process.env.CDZ_ZOOMPLUS_URL ||
         'https://meet-frontend-production.up.railway.app'
       ).replace(/\/+$/, '');
-      loginUrl = `${idp}/prime?code=${encodeURIComponent(code)}&next=${encodeURIComponent(meetFrontend + '/')}`;
+      // Point `next` at Meet's OIDC authenticate endpoint (not the marketing
+      // home) so the flow fires immediately: /prime stashes the bridge_code as a
+      // first-party cookie on the IdP domain, then redirects into
+      // authenticate → IdP /authorize (cookie present) → auto-approve →
+      // callback → LOGIN_REDIRECT_URL (Meet home, now authenticated). Without
+      // this the SPA just shows a "Login" button and never auto-logs-in.
+      const meetAuthenticate = `${meetFrontend}/api/v1.0/authenticate/`;
+      loginUrl = `${idp}/prime?code=${encodeURIComponent(code)}&next=${encodeURIComponent(meetAuthenticate)}`;
     }
 
     // PostHog server-side event (no-op unless CDZ_POSTHOG_KEY/HOST are set):
