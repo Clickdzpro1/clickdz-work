@@ -305,22 +305,32 @@ export class ClickDzAppProvisionController {
       throw new BadRequest(`Unknown app "${app}"`);
     }
 
-    // Per-user app-entitlement gate (admin panel grants). A blocked user gets
-    // no bridge code. FAIL-OPEN: if the entitlement table is unreachable
-    // (e.g. migration not yet applied — P2021/42P01), allow so existing users
-    // aren't locked out before admin grants exist, but log it loudly.
-    try {
-      const entitled = await this.models.userAppEntitlement.has(user.id, app);
-      if (!entitled) {
-        throw new AccessDenied(
-          `You don't have access to "${app}". Ask an admin to grant it.`
+    // Per-user app-entitlement gate.
+    //
+    // PRODUCT DECISION (ClickDz): every workspace user auto-provisions an
+    // account in every embedded app the moment they open it — no admin grant,
+    // no request step. So the gate is DEFAULT-OPEN: provisioning always
+    // proceeds. Set CDZ_APP_ENTITLEMENT_ENFORCE=1 to switch back to grant-gated
+    // access (admin panel grants become required). Even when enforcing, we
+    // FAIL-OPEN if the entitlement table is unreachable (e.g. migration not yet
+    // applied — P2021/42P01) so a schema hiccup never locks users out.
+    const enforceEntitlements = /^(1|true|yes)$/i.test(
+      process.env.CDZ_APP_ENTITLEMENT_ENFORCE ?? ''
+    );
+    if (enforceEntitlements) {
+      try {
+        const entitled = await this.models.userAppEntitlement.has(user.id, app);
+        if (!entitled) {
+          throw new AccessDenied(
+            `You don't have access to "${app}". Ask an admin to grant it.`
+          );
+        }
+      } catch (err) {
+        if (err instanceof AccessDenied) throw err;
+        this.logger.error(
+          `Entitlement check failed (fail-open, allowing ${app} for ${user.id}): ${(err as Error)?.message ?? err}`
         );
       }
-    } catch (err) {
-      if (err instanceof AccessDenied) throw err;
-      this.logger.error(
-        `Entitlement check failed (fail-open, allowing ${app} for ${user.id}): ${(err as Error)?.message ?? err}`
-      );
     }
 
     // Look up (or lazily create) the per-user account record for this app.

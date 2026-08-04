@@ -66,7 +66,10 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
     setIframeSrc(postizUrl);
     let cancelled = false;
     provisionApp('socialplus').then(p => {
-      if (!cancelled && p) setIframeSrc(withBridgeCode(postizUrl, p.code));
+      if (cancelled || !p) return;
+      // Prefer the shim loginUrl (lands the user already logged in via the
+      // Postiz auth shim); fall back to appending the bridge code.
+      setIframeSrc(p.loginUrl || withBridgeCode(postizUrl, p.code));
     });
     return () => { cancelled = true; };
   }, [status, postizUrl]);

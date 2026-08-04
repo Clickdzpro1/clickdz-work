@@ -116,7 +116,8 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>SlidePro</div>
           <div style={{ fontSize: 11.5, color: C.muted }}>Presentations AI · Powered by Presenton + CDZ AI</div>
         </div>
-        {status === 'ready' ? <a href={presentonUrl} target="_blank" rel="noopener noreferrer" style={{ ...miniBtnStyle('secondary'), textDecoration: 'none' }}>Ouvrir SlidePro ↗</a> : null}
+        {/* No external "open in new tab" link: SlidePro is iframe-only inside
+            ClickDz Work (users must use it in-app, never via an external URL). */}
         <button style={miniBtnStyle('secondary')} onClick={checkPresentonHealth}>↻ Verifier</button>
       </div>
       <div style={status === 'ready'

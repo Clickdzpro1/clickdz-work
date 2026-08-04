@@ -67,7 +67,10 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
     setIframeSrc(classroomUrl);
     let cancelled = false;
     provisionApp('coursepro').then(p => {
-      if (!cancelled && p) setIframeSrc(withBridgeCode(classroomUrl, p.code));
+      if (cancelled || !p) return;
+      // Prefer the shim loginUrl (lands the user already logged in via the
+      // ClassroomIO auth shim); fall back to appending the bridge code.
+      setIframeSrc(p.loginUrl || withBridgeCode(classroomUrl, p.code));
     });
     return () => { cancelled = true; };
   }, [status, classroomUrl]);
