@@ -64,7 +64,11 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
     setIframeSrc(meetUrl);
     let cancelled = false;
     provisionApp('zoomplus').then(p => {
-      if (!cancelled && p) setIframeSrc(withBridgeCode(meetUrl, p.code));
+      if (cancelled || !p) return;
+      // Prefer the IdP /prime loginUrl (stashes the bridge_code as a first-party
+      // cookie, then redirects into Meet so the OIDC dance auto-approves with no
+      // login form). Fall back to appending bridge_code to the bare Meet URL.
+      setIframeSrc(p.loginUrl || withBridgeCode(meetUrl, p.code));
     });
     return () => { cancelled = true; };
   }, [status, meetUrl]);

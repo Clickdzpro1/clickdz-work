@@ -500,6 +500,27 @@ export class ClickDzAppProvisionController {
       }
     }
 
+    // ZOOM+ (La Suite Meet): unlike the cookie-shim apps, Meet authenticates
+    // via OIDC against our meet-idp-bridge. Meet's OIDC client builds a fixed
+    // /authorize URL and drops our bridge_code, so we can't ride it in on the
+    // authorize redirect. Instead we point the iframe at the IdP's /prime
+    // endpoint, which stashes the code in a first-party cookie on the IdP domain
+    // and redirects into Meet; when Meet bounces back to /authorize the IdP
+    // reads that cookie and auto-approves — no login form. The code is consumed
+    // by /api/bridge/exchange (already implemented below), so no server-to-
+    // server provisioning step is needed here.
+    if (app === 'zoomplus') {
+      const idp = (
+        process.env.CDZ_ZOOM_IDP_URL ||
+        'https://cdz-zoom-idp-production.up.railway.app'
+      ).replace(/\/+$/, '');
+      const meetFrontend = (
+        process.env.CDZ_ZOOMPLUS_URL ||
+        'https://meet-frontend-production.up.railway.app'
+      ).replace(/\/+$/, '');
+      loginUrl = `${idp}/prime?code=${encodeURIComponent(code)}&next=${encodeURIComponent(meetFrontend + '/')}`;
+    }
+
     // PostHog server-side event (no-op unless CDZ_POSTHOG_KEY/HOST are set):
     // a user provisioned (opened) an embedded app. Fire-and-forget.
     void createPostHogClientFromEnv().capture({
