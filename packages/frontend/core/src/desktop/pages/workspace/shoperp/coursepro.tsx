@@ -71,7 +71,16 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
              slim footer strip so it never eats the iframe's space. */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
             <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
-              <iframe src={iframeSrc} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="CoursePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+              <iframe
+                src={iframeSrc}
+                style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+                title="CoursePro"
+                /* Cross-origin iframes need explicit Permissions Policy
+                   delegation or clipboard/fullscreen/media silently fail with
+                   no prompt (the sandbox attr provided no such grants). */
+                allow="clipboard-read *; clipboard-write *; fullscreen *; autoplay *; camera *; microphone *; display-capture *"
+                allowFullScreen
+              />
             </div>
             <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🚀 Cours, leçons et exercices générés par vos modèles CDZ AI · Cohorts · Certificats</span>

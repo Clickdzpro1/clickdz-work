@@ -72,7 +72,19 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
              slim footer strip so it never eats the iframe's space. */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
             <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
-              <iframe src={iframeSrc} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="ZOOM+" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-camera allow-microphone" />
+              <iframe
+                src={iframeSrc}
+                style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+                title="ZOOM+"
+                /* Permissions Policy delegation — REQUIRED for a cross-origin
+                   iframe: without `allow`, getUserMedia / getDisplayMedia /
+                   navigator.clipboard are blocked silently (no permission
+                   prompt ever shows). NOTE: allow-camera/allow-microphone are
+                   NOT sandbox tokens — the old sandbox attr silently blocked
+                   mic, camera, screen share AND the copy-link clipboard. */
+                allow="camera *; microphone *; display-capture *; clipboard-read *; clipboard-write *; fullscreen *; autoplay *; speaker-selection *; screen-wake-lock *"
+                allowFullScreen
+              />
             </div>
             <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🎥 Visioconférence HD dans votre navigateur · Transcription IA par CDZ · 100% open-source</span>
