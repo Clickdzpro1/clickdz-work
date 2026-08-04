@@ -1,5 +1,4 @@
-import { ViewBody, ViewHeader, ViewIcon, ViewTitle } from '@affine/core/modules/workbench';
-import { type CSSProperties, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
 import { provisionApp, withBridgeCode } from './app-provision';
 /* SlidePro - AI Presentation Generator powered by Presenton (Apache 2.0) + CDZ AI */
@@ -7,106 +6,44 @@ import { provisionApp, withBridgeCode } from './app-provision';
 const SLIDEPRO_URL_KEY = 'cdz.slidepro.url';
 
 /**
- * Presenton's readiness endpoint.
- *
- * This probed `/api/health`, which DOES NOT EXIST in Presenton — so the check
- * could only ever fail and the tab was permanently stuck on "not deployed",
- * even once a real instance was running. `/api/v1/auth/status` is the actual
- * unauthenticated status route (FastAPI, behind the container's nginx).
+ * Base URL used ONLY for the bridge-code fallback (and as a last resort). We use
+ * the SHIM host as the base so proxying + auth keep working; the shim redeems
+ * the bridge_code and lands the user logged in. A self-hoster can repoint this
+ * via localStorage without a rebuild — but there is no fake per-shop host.
  */
-const SLIDEPRO_HEALTH_PATH = '/api/v1/auth/status';
+const SLIDEPRO_INSTANCE_URL = 'https://slidepro-shim-production.up.railway.app';
 
-/** The deployed shared Presenton instance (Railway service cdz-slidepro). */
-const SLIDEPRO_DEFAULT_URL = 'https://cdz-slidepro-production.up.railway.app';
-
-/**
- * Shared-instance base URL.
- *
- * The old fallback was `https://slidepro-${slug}.up.railway.app`, which assumed
- * ONE PRESENTON DEPLOYMENT PER SHOP — a host that has never existed and that
- * would not scale past the first merchant anyway. SlidePro is one shared service
- * with per-user workspaces inside it, so the base URL is deployment config, not
- * something to derive from a slug.
- *
- * Resolution order: an explicit per-install override in localStorage, then the
- * build-time env value, then empty (which renders the deploy CTA rather than
- * probing a host we know is fake).
- */
-function slideProBaseUrl(slug: string): string {
+function slideProInstanceUrl(): string {
   try {
-    const override =
-      localStorage.getItem(`${SLIDEPRO_URL_KEY}_${slug}`) ||
-      localStorage.getItem(SLIDEPRO_URL_KEY);
+    const override = localStorage.getItem(SLIDEPRO_URL_KEY);
     if (override) return override.replace(/\/+$/, '');
   } catch {
-    /* storage unavailable — fall through to env */
+    /* storage unavailable — fall through to the default */
   }
-  const fromEnv =
-    typeof process !== 'undefined'
-      ? (process.env?.CDZ_SLIDEPRO_URL ?? '')
-      : '';
-  if (fromEnv) return fromEnv.replace(/\/+$/, '');
-  // The deployed shared instance. process.env is baked at BUILD time (the image
-  // is built in CI, not on Railway), so an env var set on the server would never
-  // reach this bundle — a checked-in default is what actually makes the tab work
-  // out of the box. Verified live: / and /api/v1/auth/status both return 200.
-  // The localStorage override above still wins, so a self-hoster can repoint it
-  // without a rebuild.
-  return SLIDEPRO_DEFAULT_URL;
+  return SLIDEPRO_INSTANCE_URL;
 }
 
 export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void }) => {
-  const [status, setStatus] = useState<'loading'|'ready'|'error'|'unavailable'>('loading');
-  const [presentonUrl, setPresentonUrl] = useState('');
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [iframeSrc, setIframeSrc] = useState('');
-  const [deploymentState, setDeploymentState] = useState<'not_deployed'|'deploying'|'deployed'|'failed'>('not_deployed');
-  const [healthMsg, setHealthMsg] = useState('');
 
-  useEffect(() => { ensureShoperpResponsiveCss(); checkPresentonHealth(); }, [slug]);
-
-  // Render the iframe with the bare URL immediately, then upgrade to a
-  // code-bearing URL once the provision call resolves — awaiting the code
-  // before first render would just delay the embed on the failure path
-  // (provisioning is best-effort; the app loads either way).
-  useEffect(() => {
-    if (status !== 'ready' || !presentonUrl) return;
-    setIframeSrc(presentonUrl);
-    let cancelled = false;
-    provisionApp('slidepro').then(p => {
-      if (cancelled || !p) return;
-      // Prefer the shim loginUrl (lands the user already logged in); fall back
-      // to appending the bridge code to the bare URL.
-      setIframeSrc(p.loginUrl || withBridgeCode(presentonUrl, p.code));
-    });
-    return () => { cancelled = true; };
-  }, [status, presentonUrl]);
-
-  const checkPresentonHealth = async () => {
+  // Robust flow: provision the app, then iframe the shim loginUrl (preferred) or
+  // the bridge-code URL. The iframe load IS the health check — no CORS probe.
+  const load = useCallback(async () => {
     setStatus('loading');
-    try {
-      const url = slideProBaseUrl(slug);
-      // No configured instance: show the deploy CTA instead of probing a host we
-      // already know does not exist.
-      if (url) {
-        const resp = await fetch(`${url}${SLIDEPRO_HEALTH_PATH}`, { mode: 'cors', signal: AbortSignal.timeout(5000) });
-        if (resp.ok) { setPresentonUrl(url); setStatus('ready'); setDeploymentState('deployed'); return; }
-      }
-    } catch {}
-    setStatus('unavailable');
-    setDeploymentState('not_deployed');
-    setHealthMsg('SlidePro n’est pas encore connecté à cet espace de travail.');
-  };
+    const p = await provisionApp('slidepro');
+    if (!p) {
+      setStatus('error');
+      return;
+    }
+    setIframeSrc(p.loginUrl || withBridgeCode(slideProInstanceUrl(), p.code));
+    setStatus('ready');
+  }, []);
 
-  const deployPresenton = async () => {
-    setDeploymentState('deploying');
-    try {
-      const resp = await fetch(`/api/v1/apps/${slug}/slidepro/deploy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: 'ghcr.io/presenton/presenton:latest', llm: 'custom' }) });
-      if (!resp.ok) throw new Error((await resp.json().catch(()=>({message:'Deploy failed'}))).message || 'Deploy failed');
-      const { url } = await resp.json();
-      localStorage.setItem(`${SLIDEPRO_URL_KEY}_${slug}`, url);
-      setPresentonUrl(url); setDeploymentState('deployed'); setStatus('ready'); onMutated();
-    } catch (err: any) { setDeploymentState('failed'); setHealthMsg(err.message || 'Le deploiement a echoue'); onWritesBlocked(); }
-  };
+  useEffect(() => {
+    ensureShoperpResponsiveCss();
+    void load();
+  }, [slug, load]);
 
   return (
     <div data-cdz-surface="" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -114,61 +51,30 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
         <span style={{ fontSize: 20 }}>📽️</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>SlidePro</div>
-          <div style={{ fontSize: 11.5, color: C.muted }}>Presentations AI · Powered by Presenton + CDZ AI</div>
+          <div style={{ fontSize: 11.5, color: C.muted }}>Présentations IA · Powered by Presenton + CDZ AI</div>
         </div>
         {/* No external "open in new tab" link: SlidePro is iframe-only inside
             ClickDz Work (users must use it in-app, never via an external URL). */}
-        <button style={miniBtnStyle('secondary')} onClick={checkPresentonHealth}>↻ Verifier</button>
+        <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
       <div style={status === 'ready'
         ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
         : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
-        {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion a SlidePro…</div>
-        : status === 'ready' && presentonUrl ? (
-          /* The iframe must fill the pane, not sit in a fixed 520px box with a
-             dead region below it (the user circled exactly that). The wrapper
-             is flex:1 so it takes whatever height the pane offers, and the
-             iframe is height:100% of that. The "Generation rapide" explainer
-             used to sit under the iframe — it is collapsed into a dismissible
-             footer strip so it no longer eats the iframe's space. */
+        {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à SlidePro…</div>
+        : status === 'error' ? (
+          <Banner tone="error">Impossible de se connecter à SlidePro pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
+        ) : (
+          /* The iframe fills the pane (flex:1, height:100%); the explainer is a
+             slim footer strip so it never eats the iframe's space. */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
             <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
-              <iframe src={iframeSrc || presentonUrl} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="SlidePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+              <iframe src={iframeSrc} style={{ width: '100%', height: '100%', border: 'none', display: 'block' }} title="SlidePro" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
             </div>
             <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🚀 Propulsé par vos modèles CDZ AI · Export PPTX / PDF · Templates pro</span>
               {['PPTX','Templates','CDZ'].map(t=><span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.accent, padding: '3px 8px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
             </div>
           </div>
-        ) : deploymentState === 'not_deployed' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 640 }}>
-            <div style={{ borderRadius: 16, border: `1px solid ${C.border}`, background: `linear-gradient(135deg, ${C.accentSoft}, transparent)`, padding: '28px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: C.text }}>📽️ SlidePro — AI Presentation Studio</div>
-                <p style={{ margin: '8px 0 0', fontSize: 13.5, color: C.muted, lineHeight: 1.6 }}>Generez des presentations professionnelles avec vos propres modeles CDZ AI. SlidePro est propulse par <strong>Presenton</strong> (Apache 2.0) — vos donnees restent sur votre infrastructure Railway.</p>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-                {[{icon:'🤖',title:'CDZ AI Models',desc:'Utilisez vos modeles configures'},{icon:'🎨',title:'Templates Pro',desc:'6 modeles integres + custom'},{icon:'📄',title:'Export PPTX/PDF',desc:'Fichiers editable'},{icon:'🔒',title:'Self-Hosted',desc:'Vos donnees, votre infra'}].map(f=><div key={f.title} style={{ background: C.panel, borderRadius: 10, padding: '12px 14px', border: `1px solid ${C.border}` }}><div style={{ fontSize: 18, marginBottom: 4 }}>{f.icon}</div><div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{f.title}</div><div style={{ fontSize: 11.5, color: C.muted, marginTop: 2 }}>{f.desc}</div></div>)}
-              </div>
-              <button onClick={deployPresenton} style={{ padding: '14px 28px', borderRadius: 12, border: 'none', background: C.accent, color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', alignSelf: 'flex-start' }}>🚀 Deployer SlidePro sur Railway</button>
-              <div style={{ fontSize: 11.5, color: C.muted }}>Deploie Presenton comme service Docker sur Railway · Configure automatiquement avec vos cles CDZ AI · Temps estime : 2-3 minutes</div>
-            </div>
-            <div style={{ borderRadius: 12, border: `1px solid ${C.border}`, background: C.panel, padding: '14px 18px', fontSize: 12, color: C.muted, lineHeight: 1.7 }}>
-              <strong style={{ color: C.text }}>Details techniques :</strong><br />
-              • Image : <code style={{ background: C.panel2, padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>ghcr.io/presenton/presenton:latest</code><br />
-              • LLM : custom → CDZ AI (votre endpoint OpenAI-compatible)<br />
-              • Port : 5001 (interne Railway)<br />
-              • Licence : Apache 2.0 · 100% open-source
-            </div>
-          </div>
-        ) : deploymentState === 'deploying' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '60px 20px' }}>
-            <Spinner />
-            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Deploiement de SlidePro en cours…</div>
-            <div style={{ fontSize: 12.5, color: C.muted, textAlign: 'center', maxWidth: 400 }}>Railway provisionne le conteneur Presenton avec vos modeles CDZ AI. Cela prend environ 2-3 minutes.</div>
-          </div>
-        ) : (
-          <Banner tone="error">{healthMsg || 'Impossible de se connecter a SlidePro.'} <button style={linkBtnStyle} onClick={checkPresentonHealth}>Reessayer</button></Banner>
         )}
       </div>
     </div>

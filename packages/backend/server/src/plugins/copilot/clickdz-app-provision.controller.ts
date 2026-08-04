@@ -215,10 +215,20 @@ const COURSEPRO_URL = (
   'https://cio-dashboard-production-c568.up.railway.app'
 ).replace(/\/+$/, '');
 
+// ClassroomIO runs self-hosted (single shared org). Its signup is guarded by
+// `signupGuard`, which 400s with ORG_CONTEXT_REQUIRED unless the request carries
+// a `cio-org-id` header identifying the org to attach the new user to. The shared
+// "ClickDz" org was bootstrapped once; its id is the default below and can be
+// overridden with CDZ_COURSEPRO_ORG_ID.
+const COURSEPRO_ORG_ID =
+  process.env.CDZ_COURSEPRO_ORG_ID ||
+  '615b23a6-4a7b-4c71-aeb8-0d88ec7534cd';
+
 function courseproHeaders(): Record<string, string> {
   return {
     'Content-Type': 'application/json',
     Origin: COURSEPRO_URL,
+    'cio-org-id': COURSEPRO_ORG_ID,
   };
 }
 
