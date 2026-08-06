@@ -102,8 +102,8 @@ export interface StudioDef {
  * Icons (boot-safe): vdz→FrameIcon, apps(/apps)→AiIcon, shoperp→BlockLinkIcon,
  * voice→VoiceIcon, integrations→BlockLinkIcon, hermes→ChatWithAiIcon,
  * openclaw→KeyboardIcon, agents→ChatWithAiIcon (reused), vpic→FrameIcon
- * (reused). beta: integrations/voice/shoperp/hermes/openclaw/agents/vpic; vdz
- * and apps are not beta.
+ * (reused). beta: slidepro only — the other studios cleared QC and had their
+ * beta chip removed; vdz and apps were never beta.
  */
 export const STUDIOS: StudioDef[] = [
   {
@@ -134,7 +134,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(BlockLinkIcon),
     group: 'connect',
     testId: 'slider-bar-integrations-button',
-    beta: true,
   },
   {
     // Named DzOS, matching the boutique→ERP rename that went through the
@@ -148,7 +147,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(BlockLinkIcon),
     group: 'commerce',
     testId: 'slider-bar-shoperp-button',
-    beta: true,
   },
   {
     id: 'voice',
@@ -157,7 +155,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(VoiceIcon),
     group: 'create',
     testId: 'slider-bar-voice-studio-button',
-    beta: true,
   },
   {
     id: 'hermes',
@@ -166,7 +163,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(ChatWithAiIcon),
     group: 'agents',
     testId: 'slider-bar-hermes-button',
-    beta: true,
   },
   {
     id: 'openclaw',
@@ -175,7 +171,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(KeyboardIcon),
     group: 'agents',
     testId: 'slider-bar-openclaw-button',
-    beta: true,
   },
   {
     // Unified /agents studio (R7). flag-gated on caps.multi (CDZ_AGENTS_MULTI):
@@ -187,7 +182,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(ChatWithAiIcon),
     group: 'agents',
     testId: 'slider-bar-agents-button',
-    beta: true,
     flag: 'agents-multi',
   },
   {
@@ -202,7 +196,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(FrameIcon),
     group: 'create',
     testId: 'slider-bar-vpic-studio-button',
-    beta: true,
     flag: 'vpic',
   },
   // ---------------------------------------------------------------------
@@ -237,7 +230,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(AiIcon),
     group: 'commerce',
     testId: 'slider-bar-coursepro-button',
-    beta: true,
   },
   {
     id: 'socialplus',
@@ -246,7 +238,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(BlockLinkIcon),
     group: 'commerce',
     testId: 'slider-bar-socialplus-button',
-    beta: true,
   },
   {
     id: 'zoomplus',
@@ -255,7 +246,6 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(VoiceIcon),
     group: 'commerce',
     testId: 'slider-bar-zoomplus-button',
-    beta: true,
   },
 ];
 

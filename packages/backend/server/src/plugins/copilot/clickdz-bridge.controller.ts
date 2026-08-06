@@ -461,6 +461,23 @@ const CDZ_AI_BASE_URL = (
   .replace(/\/+$/, '')
   .replace(/\/v1$/, '');
 const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
+// --- REROUTE (planner/agent path) ---------------------------------------
+// The Make AI-Agents path used by runMakeAgent is dead in production (the
+// configured agent UUIDs live in a different Make team, and the backend's Make
+// org is paused). cdz-flash via api.clickdz.ai is the WORKING brain the simple
+// chat + Hermes planner already use. These consts let runMakeAgent prefer
+// cdz-flash and only touch Make as a last resort.
+//
+// CDZ_AI_ORIGIN re-strips a trailing `/v1` (CDZ_AI_BASE_URL is already
+// normalised above, so this is idempotent belt-and-suspenders) so the single
+// canonical `/v1/chat/completions` path is appended exactly once regardless of
+// how the env is set.
+const CDZ_AI_ORIGIN = CDZ_AI_BASE_URL.replace(/\/v1$/, '').replace(/\/+$/, '');
+const CDZ_AGENT_MODEL = process.env.CDZ_AGENT_MODEL || 'cdz-flash';
+// Master switch for the reroute. Defaults ON whenever a CDZ_AI_KEY is present
+// (the working path). Set CDZ_AGENT_VIA_CDZ_AI=0 to force the legacy Make path.
+const CDZ_AGENT_VIA_CDZ_AI =
+  process.env.CDZ_AGENT_VIA_CDZ_AI === '0' ? false : !!CDZ_AI_KEY;
 // CDZ_AI direct-path models: the OpenAI-compatible `cdz-*` catalog served by
 // CDZ_AI_BASE_URL (same ids `runFastPlanner`/pulse/vdz use). ONLY these can be
 // real-streamed pass-through (A1); the marketing `clickdz-*` ids map to the
@@ -1950,6 +1967,48 @@ export class ClickDzBridgeController {
     agentIdOverride?: string,
     timeoutMs = 240000
   ) {
+    // REROUTE: prefer the WORKING cdz-flash brain (api.clickdz.ai, OpenAI-
+    // compatible) over the dead/paused Make AI-Agents path. Isolated, additive,
+    // fail-open: any non-2xx / empty / throw / timeout falls through to the
+    // untouched legacy Make call below, so behavior is unchanged when the
+    // reroute is off or when cdz-flash is unavailable. Returns the same content
+    // string shape callers already consume from parseMakeAgentResponse.
+    if (CDZ_AGENT_VIA_CDZ_AI && CDZ_AI_KEY) {
+      try {
+        const response = await fetch(`${CDZ_AI_ORIGIN}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: CDZ_AGENT_MODEL,
+            messages,
+            // SECURITY: clamp to the shared ceiling (<=4096, floor 1). Reuse the
+            // existing clamp/DEFAULT machinery, requesting a roomier 2048 for
+            // agent-style completions.
+            max_tokens: clampMaxTokens(2048, DEFAULT_MAX_TOKENS),
+          }),
+          signal: AbortSignal.timeout(60000),
+        });
+        const data = (await response.json().catch(() => null)) as any;
+        const content = data?.choices?.[0]?.message?.content;
+        if (response.ok && typeof content === 'string' && content.trim()) {
+          this.logger.log(
+            `runMakeAgent reroute: served via cdz-flash (${CDZ_AGENT_MODEL}) for model=${model}`
+          );
+          return content;
+        }
+        this.logger.warn(
+          `runMakeAgent reroute: cdz-flash unavailable (status=${response.status}); falling back to Make for model=${model}`
+        );
+      } catch {
+        this.logger.warn(
+          `runMakeAgent reroute: cdz-flash threw/timed out; falling back to Make for model=${model}`
+        );
+      }
+    }
+
     this.assertMakeReady();
     const joined = messages
       .map(message => `${message.role.toUpperCase()}: ${message.content}`)
