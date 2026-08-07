@@ -31,6 +31,7 @@ import { ClickDzVdzController } from './clickdz-vdz.controller';
 import { ClickDzVdzComposeController } from './clickdz-vdz-compose.controller';
 import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
 import { ClickDzVpicController } from './clickdz-vpic.controller';
+import { ClickDzVoiceAiController } from './clickdz-voice-ai.controller';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import { McpCredentialService } from './mcp/credential';
@@ -129,6 +130,11 @@ export class CopilotApiModule {}
     ClickDzVdzComposeController,
     ClickDzVdzRenderController,
     ClickDzVpicController,
+    // CDZ Voice AI script writer (POST /api/v1/voice/script). Additive +
+    // flag-gated: every route is behind CDZ_VOICE_AI_ENABLED (default OFF ⇒ a
+    // typed 404), so registering the controller is byte-inert until the owner
+    // enables the flag.
+    ClickDzVoiceAiController,
     WorkspaceMcpController,
   ],
 })
