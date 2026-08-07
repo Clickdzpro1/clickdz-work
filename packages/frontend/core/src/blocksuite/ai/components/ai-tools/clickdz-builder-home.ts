@@ -20,6 +20,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import {
   artifactStore,
   type CdzArtifact,
+  persistAppDraft,
 } from '../../../../modules/ai-artifacts/store';
 import { cdzApiUrl } from '../../provider';
 // Side-effect import: registers <clickdz-builder-studio>.
@@ -386,6 +387,43 @@ export class ClickDzBuilderHome extends LitElement {
       border: 0;
       background: #fff;
     }
+    /* WS1 — draft autosave indicator. Fixed to the viewport corner so it is
+       visible over the full-screen studio overlay the host mounts. */
+    .save-status {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 2147483000;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+      background: var(--affine-background-primary-color, #fff);
+      color: var(--affine-text-secondary-color, #8e8d91);
+      border: 1px solid var(--affine-border-color, #e3e2e4);
+    }
+    .save-status .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .save-status.dirty {
+      color: #b45309;
+    }
+    .save-status.saving {
+      color: #1e96eb;
+    }
+    .save-status.saved {
+      color: #059669;
+    }
+    .save-status.error {
+      color: #b91c1c;
+    }
 
     /* Phone layout. This component renders inside a Lit shadow root, so the
        app-level ClickDz responsive stylesheet (clickdz/responsive.ts) cannot
@@ -455,7 +493,28 @@ export class ClickDzBuilderHome extends LitElement {
   @state()
   private accessor app: CdzOpenApp | null = null;
 
+  /**
+   * WS1 — draft-save status shown in the studio host. 'idle' = persisted (or
+   * nothing to save yet); 'dirty' = there are unsaved edits pending the debounce
+   * flush; 'saving' = a backend autosave is in flight; 'saved' = the last backend
+   * autosave succeeded; 'error' = the last backend autosave failed (local shelf
+   * copy is still written, so no data loss — the indicator just tells the truth).
+   */
+  @state()
+  private accessor saveState: 'idle' | 'dirty' | 'saving' | 'saved' | 'error' =
+    'idle';
+
   private unsubscribe: (() => void) | null = null;
+
+  /** WS1 — debounce timer id for the backend draft autosave. */
+  private draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * WS1 — beforeunload guard installed only while there are unsaved edits, so a
+   * hard reload / tab close during the autosave debounce window warns the
+   * merchant instead of silently losing the in-flight edit.
+   */
+  private beforeUnloadHandler: ((e: BeforeUnloadEvent) => void) | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -473,6 +532,17 @@ export class ClickDzBuilderHome extends LitElement {
   override disconnectedCallback() {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    // WS1 — flush any pending backend autosave before teardown so an edit made
+    // in the last debounce window is not lost when the surface unmounts (a
+    // route change closes this element). The local shelf copy is already
+    // written synchronously in the change handler, so this only chases the
+    // cross-device backend copy.
+    if (this.draftSaveTimer) {
+      clearTimeout(this.draftSaveTimer);
+      this.draftSaveTimer = null;
+      if (this.app) void this.saveDraftToBackend(this.app);
+    }
+    this.teardownUnloadGuard();
     super.disconnectedCallback();
   }
 
@@ -820,26 +890,109 @@ export class ClickDzBuilderHome extends LitElement {
    * record rather than creating a duplicate, then open the studio overlay.
    */
   private openInStudio(app: CdzOpenApp) {
-    const id = `app_${app.slug}`;
-    const existing = artifactStore.get(id);
-    // Same shape as clickdz-app-result's persistApp: spread the existing
-    // record (or a fresh skeleton) first, then overwrite the mutable fields.
-    artifactStore.upsert({
-      ...(existing ?? {
-        id,
-        type: 'app' as const,
-        title: app.title,
-        prompt: app.title,
-        sessionId: 'draft',
-        slug: app.slug,
-        mimeType: 'text/html',
-      }),
+    // WS1 — shared draft-persist path (identical to clickdz-app-result), so the
+    // two studio hosts can never drift again.
+    persistAppDraft({
+      slug: app.slug,
+      html: app.html,
       title: app.title,
-      payload: app.html,
-      url: app.url ?? existing?.url,
+      url: app.url,
     });
     this.app = app;
     this.studioOpen = true;
+    // Freshly opened: no unsaved edits yet.
+    this.saveState = 'idle';
+    if (this.draftSaveTimer) {
+      clearTimeout(this.draftSaveTimer);
+      this.draftSaveTimer = null;
+    }
+    this.teardownUnloadGuard();
+  }
+
+  /**
+   * WS1 — persist a studio edit. Runs TWO writes on every change so an edit made
+   * from the /apps page is never lost (the historical bug: this host only
+   * mutated an in-memory field):
+   *   1. SYNCHRONOUS local shelf write via the shared `persistAppDraft` (survives
+   *      reload/refetch on this device);
+   *   2. a DEBOUNCED backend autosave (survives cross-device / localStorage
+   *      eviction) — see `scheduleBackendDraftSave`.
+   * The `dirty` flag + beforeunload guard are armed here and cleared once the
+   * backend write settles.
+   */
+  private persistDraft(app: CdzOpenApp) {
+    persistAppDraft({
+      slug: app.slug,
+      html: app.html,
+      title: app.title,
+      url: app.url,
+    });
+    this.saveState = 'dirty';
+    this.setupUnloadGuard();
+    this.scheduleBackendDraftSave(app);
+  }
+
+  /** WS1 — debounce (900ms) the backend draft POST so autosave isn't chatty. */
+  private scheduleBackendDraftSave(app: CdzOpenApp) {
+    if (this.draftSaveTimer) clearTimeout(this.draftSaveTimer);
+    this.draftSaveTimer = setTimeout(() => {
+      this.draftSaveTimer = null;
+      // Save the CURRENT app (edits may have advanced since scheduling).
+      if (this.app) void this.saveDraftToBackend(this.app);
+    }, 900);
+  }
+
+  /**
+   * WS1 — POST the working HTML/title to the owner-scoped backend draft store.
+   * Fail-soft: a 404 (route/flag off on an older server) or any network error
+   * leaves the local shelf copy authoritative and simply clears the indicator —
+   * autosave is additive and must never surface as a blocking error.
+   */
+  private async saveDraftToBackend(app: CdzOpenApp) {
+    if (!app.slug) return;
+    this.saveState = 'saving';
+    try {
+      const res = await fetch(
+        cdzApiUrl(`/api/v1/apps/${encodeURIComponent(app.slug)}/draft`),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ html: app.html, title: app.title }),
+        }
+      );
+      if (res.ok) {
+        this.saveState = 'saved';
+        this.teardownUnloadGuard();
+      } else {
+        // 404 = route/flag absent → local copy is the source of truth; treat as
+        // "saved locally" rather than an error (nothing actionable for the user).
+        this.saveState = res.status === 404 ? 'idle' : 'error';
+        if (res.status === 404) this.teardownUnloadGuard();
+      }
+    } catch {
+      // Network hiccup — the local shelf write already succeeded, so no data
+      // loss; keep the guard armed so a reload still warns until it lands.
+      this.saveState = 'error';
+    }
+  }
+
+  /** WS1 — arm the unsaved-changes beforeunload guard (idempotent). */
+  private setupUnloadGuard() {
+    if (this.beforeUnloadHandler || typeof window === 'undefined') return;
+    this.beforeUnloadHandler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Legacy browsers require a returnValue to trigger the native prompt.
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', this.beforeUnloadHandler);
+  }
+
+  /** WS1 — remove the beforeunload guard once edits are safely persisted. */
+  private teardownUnloadGuard() {
+    if (this.beforeUnloadHandler && typeof window !== 'undefined') {
+      window.removeEventListener('beforeunload', this.beforeUnloadHandler);
+    }
+    this.beforeUnloadHandler = null;
   }
 
   /**
@@ -982,12 +1135,54 @@ export class ClickDzBuilderHome extends LitElement {
    * Open an app that is published but absent from this browser's shelf (a
    * different device, or cleared storage) by recovering its source.
    */
+  /**
+   * WS1 — fetch the owner-scoped backend draft for a slug, or null when there
+   * is none (404), the route/flag is absent, or the request fails. Fully
+   * fail-soft: the caller always has /source and the local shelf to fall back
+   * to, so this never throws.
+   */
+  private async tryLoadBackendDraft(
+    slug: string
+  ): Promise<{ html: string; title: string } | null> {
+    try {
+      const res = await fetch(
+        cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/draft`)
+      );
+      if (!res.ok) return null;
+      const data = (await res.json().catch(() => null)) as {
+        html?: string;
+        title?: string;
+      } | null;
+      if (!data?.html) return null;
+      return { html: data.html, title: data.title ?? '' };
+    } catch {
+      return null;
+    }
+  }
+
   private async openPublished(slug: string, title: string) {
     if (this.busy) return;
     this.busy = true;
     this.busyLabel = 'Récupération du code…';
     this.error = '';
     try {
+      const found = this.mine.find(m => m.slug === slug);
+      // WS1 — PREFER the backend DRAFT over the published /source. `/source`
+      // only recovers the last *deployed* HTML, so a merchant who edited but
+      // never re-published (or whose local shelf was evicted / is on another
+      // device) would otherwise reopen an app WITHOUT their in-progress edits.
+      // The draft route 404s when there is none (or the flag is off), so this
+      // transparently falls through to /source — never worse than before.
+      const draft = await this.tryLoadBackendDraft(slug);
+      if (draft?.html) {
+        this.openInStudio({
+          slug,
+          title: draft.title?.trim() || title,
+          html: draft.html,
+          ...(found?.url ? { url: found.url } : {}),
+        });
+        return;
+      }
       const res = await fetch(
         cdzApiUrl(`/api/v1/apps/${encodeURIComponent(slug)}/source`)
       );
@@ -1001,7 +1196,6 @@ export class ClickDzBuilderHome extends LitElement {
           data?.message || 'Impossible de récupérer le code de cette app.'
         );
       }
-      const found = this.mine.find(m => m.slug === slug);
       this.openInStudio({
         slug,
         title,
@@ -1093,27 +1287,90 @@ export class ClickDzBuilderHome extends LitElement {
             .html=${app.html}
             .publishedUrl=${app.url ?? ''}
             @studio-close=${() => {
+              // WS1 — close guard: if a backend autosave is still pending (edits
+              // made inside the debounce window), flush it now so closing the
+              // studio can't strand the cross-device copy. The local shelf copy
+              // is already written synchronously on every change.
+              if (this.draftSaveTimer) {
+                clearTimeout(this.draftSaveTimer);
+                this.draftSaveTimer = null;
+                if (this.app) void this.saveDraftToBackend(this.app);
+              }
+              this.teardownUnloadGuard();
               this.studioOpen = false;
             }}
             @studio-html-change=${(e: CustomEvent<{ html: string }>) => {
-              if (this.app) this.app = { ...this.app, html: e.detail.html };
+              // WS1 — was in-memory only (data loss on refetch/reload). Now
+              // persists via the shared draft path + debounced backend autosave.
+              if (!this.app) return;
+              this.app = { ...this.app, html: e.detail.html };
+              this.persistDraft(this.app);
             }}
             @studio-title-change=${(e: CustomEvent<{ title: string }>) => {
-              if (this.app) this.app = { ...this.app, title: e.detail.title };
+              // WS1 — same omission as html-change; persist the rename too.
+              if (!this.app) return;
+              this.app = { ...this.app, title: e.detail.title };
+              this.persistDraft(this.app);
             }}
             @studio-app-loaded=${(
               e: CustomEvent<{ slug: string; title: string; html: string }>
             ) => {
+              // Ready-Shop loaded a new app in place: adopt its identity and
+              // persist it as the new draft (the studio already wrote its own
+              // shelf copy; this keeps THIS host's save-state coherent).
               this.app = { ...e.detail };
+              persistAppDraft({
+                slug: e.detail.slug,
+                html: e.detail.html,
+                title: e.detail.title,
+              });
+              this.saveState = 'idle';
+              this.teardownUnloadGuard();
               void this.loadMine();
             }}
             @studio-published=${(e: CustomEvent<{ url: string }>) => {
-              if (this.app) this.app = { ...this.app, url: e.detail.url };
+              if (this.app) {
+                this.app = { ...this.app, url: e.detail.url };
+                // Reflect the published URL onto the persisted draft record.
+                persistAppDraft({
+                  slug: this.app.slug,
+                  html: this.app.html,
+                  title: this.app.title,
+                  url: e.detail.url,
+                });
+              }
               void this.loadMine();
             }}
           ></clickdz-builder-studio>`
         : nothing}
+      ${app && this.studioOpen ? this.renderSaveStatus() : nothing}
     `;
+  }
+
+  /**
+   * WS1 — the unsaved/saving/saved indicator. Rendered only while the studio is
+   * open (it is the only surface that mutates the draft). 'idle' shows nothing.
+   */
+  private renderSaveStatus() {
+    const state = this.saveState;
+    if (state === 'idle') return nothing;
+    const map: Record<
+      'dirty' | 'saving' | 'saved' | 'error',
+      { cls: string; label: string }
+    > = {
+      dirty: { cls: 'dirty', label: 'Modifications non enregistrées' },
+      saving: { cls: 'saving', label: 'Enregistrement…' },
+      saved: { cls: 'saved', label: 'Enregistré' },
+      error: { cls: 'error', label: 'Enregistré sur cet appareil' },
+    };
+    const s = map[state];
+    return html`<div
+      class="save-status ${s.cls}"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="dot" aria-hidden></span>${s.label}
+    </div>`;
   }
 }
 

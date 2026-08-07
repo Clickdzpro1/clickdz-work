@@ -3,7 +3,7 @@ import { ShadowlessElement } from '@blocksuite/affine/std';
 import { css, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 
-import { artifactStore } from '../../../../modules/ai-artifacts/store';
+import { persistAppDraft } from '../../../../modules/ai-artifacts/store';
 import { cdzApiUrl } from '../../provider';
 import type { StreamObject } from '../ai-chat-messages';
 // Side-effect import: registers the <clickdz-builder-studio> custom element
@@ -195,23 +195,15 @@ export class ClickDzAppResultCard extends ShadowlessElement {
   private persistApp(url?: string) {
     const result = this.result;
     if (!result) return;
-    const slug = this.effectiveSlug;
-    const id = `app_${slug}`;
-    const existing = artifactStore.get(id);
-    artifactStore.upsert({
-      ...(existing ?? {
-        id,
-        type: 'app',
-        title: result.title,
-        prompt: result.title,
-        sessionId: 'draft',
-        slug,
-        mimeType: 'text/html',
-      }),
-      // Always reflect the latest (possibly renamed) title.
+    // Shared draft-persist path (WS1): identical to clickdz-builder-home so the
+    // two studio hosts can never drift. prompt keeps the original result title
+    // as its seed when the record is first created.
+    persistAppDraft({
+      slug: this.effectiveSlug,
+      html: this.currentHtml,
       title: this.effectiveTitle,
-      payload: this.currentHtml,
-      url: url ?? (this.publishedUrl || existing?.url),
+      url: url ?? (this.publishedUrl || undefined),
+      prompt: result.title,
     });
   }
 
