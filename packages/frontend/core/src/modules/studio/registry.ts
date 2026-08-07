@@ -233,7 +233,10 @@ export const STUDIOS: StudioDef[] = [
   },
   {
     id: 'socialplus',
-    label: 'Social+',
+    // WS9: label renamed 'Social+' → 'Social' (native Composio studio, no
+    // Postiz). id + route kept as 'socialplus'/'/socialplus' to avoid router,
+    // i18n, notify and command-palette churn.
+    label: 'Social',
     route: '/socialplus',
     icon: () => createElement(BlockLinkIcon),
     group: 'commerce',

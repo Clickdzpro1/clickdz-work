@@ -67,7 +67,10 @@ const BRIDGE_SECRET =
 // Codes are short-lived; 90s covers the iframe load + redirect round-trip.
 const CODE_TTL_MS = 90_000;
 
-const APPS = ['slidepro', 'socialplus', 'coursepro', 'zoomplus'] as const;
+// WS9: 'socialplus' is no longer provisioned here — the native Social studio
+// connects/publishes per-user through Composio (clickdz-integrations.controller)
+// and no longer embeds Postiz, so it needs no bridge account/login URL.
+const APPS = ['slidepro', 'coursepro', 'zoomplus'] as const;
 type AppId = (typeof APPS)[number];
 
 function b64url(input: string): string {
@@ -147,66 +150,11 @@ async function slideproEnsureUser(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Social+ (Postiz) — per-user account provisioning via the public register
-// route. With RESEND_API_KEY unset, Postiz auto-activates new accounts, so
-// POST /api/auth/register both creates AND immediately activates the user's
-// org + account. We then log in to capture the auth cookie for auto-login.
-// DISABLE_REGISTRATION=true on the service keeps strangers out — our backend
-// is the only provisioner.
-// ---------------------------------------------------------------------------
-const POSTIZ_URL = (
-  process.env.CDZ_POSTIZ_URL ||
-  'https://postiz-production-2db4.up.railway.app'
-).replace(/\/+$/, '');
-
-async function postizRegister(
-  email: string,
-  password: string,
-  company: string
-): Promise<boolean> {
-  try {
-    const res = await fetch(`${POSTIZ_URL}/api/auth/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: 'LOCAL',
-        email,
-        password,
-        company,
-      }),
-      signal: AbortSignal.timeout(12_000),
-    });
-    // 201/200 created; 409/400 already-exists — all mean the account is usable.
-    return res.ok || res.status === 409 || res.status === 400;
-  } catch {
-    return false;
-  }
-}
-
-async function postizLogin(
-  email: string,
-  password: string
-): Promise<string | null> {
-  try {
-    const res = await fetch(`${POSTIZ_URL}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // Postiz's /api/auth/login REQUIRES the `provider` field (returns 400
-      // "provider should not be null" without it) — this omission meant the
-      // provisioning login always failed, so Social+ never got a session cookie
-      // and always showed the Postiz sign-up screen.
-      body: JSON.stringify({ provider: 'LOCAL', email, password }),
-      signal: AbortSignal.timeout(12_000),
-    });
-    if (!res.ok) return null;
-    const setCookie = res.headers.get('set-cookie') || '';
-    const match = setCookie.match(/(?:^|,\s*)auth=([^;]+)/);
-    return match ? match[1] : null;
-  } catch {
-    return null;
-  }
-}
+// WS9: the Social+ (Postiz) provisioning helpers (postizRegister/postizLogin +
+// POSTIZ_URL / CDZ_POSTIZ_URL / CDZ_POSTIZ_SHIM_URL) were removed. The native
+// Social studio connects and publishes per-user directly through Composio
+// (clickdz-integrations.controller.ts) under ONE COMPOSIO_API_KEY, so there is
+// no Postiz account to register or auto-login into anymore.
 
 // ---------------------------------------------------------------------------
 // CoursePro (ClassroomIO) — per-user provisioning via Better Auth email routes.
@@ -291,7 +239,7 @@ export class ClickDzAppProvisionController {
 
   /**
    * POST /api/v1/apps/provision
-   * Body: { app: 'slidepro'|'socialplus'|'coursepro'|'zoomplus' }
+   * Body: { app: 'slidepro'|'coursepro'|'zoomplus' }
    * Returns: { code, expiresAt, account: { username } , appUrl }
    * Ensures the current user has an account record for the app (creating a
    * sealed credential on first call), then mints a one-time bridge code.
@@ -454,35 +402,9 @@ export class ClickDzAppProvisionController {
       }
     }
 
-    // Social+: provision via Postiz register (auto-activated) + stash the auth
-    // cookie for the shim, best-effort. The Postiz account uses the per-app
-    // username as its email local-part (Postiz requires an email-shaped id).
-    if (app === 'socialplus' && plainCredential) {
-      try {
-        const email = `${record.username}@apps.clickdz.local`;
-        await postizRegister(email, plainCredential, record.username);
-        const authJwt = await postizLogin(email, plainCredential);
-        if (authJwt) {
-          try {
-            await this.redis.set(
-              `clickdz:appsession:${nonce}`,
-              authJwt,
-              'PX',
-              CODE_TTL_MS,
-              'NX'
-            );
-          } catch {
-            /* non-fatal */
-          }
-          const shim = (
-            process.env.CDZ_POSTIZ_SHIM_URL || POSTIZ_URL
-          ).replace(/\/+$/, '');
-          loginUrl = `${shim}/?ticket=${encodeURIComponent(code)}`;
-        }
-      } catch {
-        loginUrl = undefined;
-      }
-    }
+    // WS9: the Social+ (Postiz) provisioning branch was removed. The native
+    // Social studio connects/publishes per-user through Composio and no longer
+    // provisions a Postiz account or shim login URL here.
 
     // CoursePro: provision via Better Auth sign-up (auto-activated) + stash the
     // signed session cookie for the shim, best-effort.
