@@ -35,26 +35,15 @@
 //     picker. That is the one verified, backend-accepted gap this change
 //     closes.
 //
-//   NO new Gemini tier was added. Every Gemini image id referenced anywhere
-//   in this repo (gemini-3.1-flash-lite-image, gemini-3.1-flash-image,
-//   gemini-3-pro-image, gemini-2.5-flash-image) already has a tier below —
-//   there is no fifth Gemini image id anywhere in the codebase to add. More
-//   importantly, no backend route accepts a Gemini model id for image
-//   generation: clickdz-bridge.controller.ts's CDZIMAGE_TIERS/aliases match
-//   only gpt-image-* ids (unknown ids get HTTP 400 `image_model_invalid`),
-//   and the only other image path — TurnOrchestrator.streamImages, reached
-//   via the SSE route in plugins/copilot/controller.ts — validates the
-//   requested model id inside the compiled Rust native addon
-//   (llmResolveRequestedModelMatch in packages/backend/native), which has no
-//   readable TS-level allowlist to verify against without a build. Adding a
-//   Gemini tier here and wiring it into a picker would make it *appear*
-//   selectable while the backend silently rejects (or unverifiably accepts)
-//   it — exactly the "worse than useless" outcome to avoid. If Gemini image
-//   generation should be user-selectable, that requires a backend change
-//   (a Gemini branch in clickdz-bridge.controller.ts's resolver, calling
-//   Google's generativelanguage.googleapis.com, guarded by CDZIM_API_KEY as
-//   this file's own env-var docs above already anticipate) — out of scope
-//   for a frontend registry change.
+//   2026-08 update — the Gemini image path is now LIVE end-to-end. The bridge
+//   controller (clickdz-bridge.controller.ts) resolves every Gemini image id
+//   below through CDZIMAGE_TIERS (gemini-3.1-flash-image / -flash-lite-image /
+//   gemini-3-pro-image / gemini-2.5-flash-image — tier id == engine id) and
+//   routes them to Google's generateContent API, guarded by GEMINI_API_KEY ||
+//   CDZIM_API_KEY. /v1/models advertises all four and brands them owned_by
+//   'clickdz-images'. So the four Gemini tiers below ARE backend-accepted and
+//   are now surfaced in every image picker (image-model-preference.ts,
+//   use-vpic-generate.ts, use-vdz-media.ts) alongside the OpenAI tiers.
 
 export type CDZIMTier = 'lite' | 'flash' | 'pro' | 'classic' | 'openai-economy';
 

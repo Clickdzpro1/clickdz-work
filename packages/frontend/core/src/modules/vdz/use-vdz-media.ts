@@ -345,6 +345,7 @@ export type CdzImageTier =
   | 'cdzimage-1.0'
   | 'gemini-3-pro-image'
   | 'gemini-3.1-flash-image'
+  | 'gemini-3.1-flash-lite-image'
   | 'gemini-2.5-flash-image';
 export const CDZIMAGE_TIER_OPTIONS: Array<{ id: CdzImageTier; label: string }> =
   [
@@ -355,6 +356,7 @@ export const CDZIMAGE_TIER_OPTIONS: Array<{ id: CdzImageTier; label: string }> =
     // generateContent API; labels follow the French-friendly CDZIM wording.
     { id: 'gemini-3-pro-image', label: 'CDZIM Pro · qualité' },
     { id: 'gemini-3.1-flash-image', label: 'CDZIM Flash · rapide' },
+    { id: 'gemini-3.1-flash-lite-image', label: 'CDZIM Lite · le plus rapide' },
     { id: 'gemini-2.5-flash-image', label: 'CDZIM Classic · économie' },
   ];
 

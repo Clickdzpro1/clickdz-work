@@ -148,3 +148,41 @@ export const artifactStore = new ArtifactStoreImpl();
 export function newArtifactId(prefix = 'art'): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/**
+ * Shared app-draft persist path (WS1). Both studio hosts — the chat card
+ * (clickdz-app-result.ts) and the /apps page (clickdz-builder-home.ts) — must
+ * persist studio edits identically so the two paths can never drift again
+ * (the /apps host historically only mutated an in-memory field, losing edits
+ * on refetch/reload). Upserts the `app_${slug}` shelf record, preserving any
+ * existing metadata (createdAt, kind, storeSlug, url) while refreshing the
+ * working HTML and title. Returns the stored record, or null when there is no
+ * slug to key on.
+ */
+export function persistAppDraft(input: {
+  slug: string;
+  html: string;
+  title: string;
+  url?: string;
+  prompt?: string;
+}): CdzArtifact | null {
+  const slug = input.slug?.trim();
+  if (!slug) return null;
+  const id = `app_${slug}`;
+  const existing = artifactStore.get(id);
+  return artifactStore.upsert({
+    ...(existing ?? {
+      id,
+      type: 'app' as CdzArtifactType,
+      title: input.title,
+      prompt: input.prompt ?? input.title,
+      sessionId: 'draft',
+      slug,
+      mimeType: 'text/html',
+    }),
+    // Always reflect the latest (possibly renamed) title + working HTML.
+    title: input.title,
+    payload: input.html,
+    url: input.url ?? existing?.url,
+  });
+}
