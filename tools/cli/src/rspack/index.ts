@@ -305,6 +305,12 @@ export function createHTMLTargetConfig(
       ...createHTMLPlugins(buildConfig, htmlConfig),
       new rspack.DefinePlugin({
         'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),
+        'process.env.CDZ_POSTHOG_KEY': JSON.stringify(
+          process.env.CDZ_POSTHOG_KEY ?? ''
+        ),
+        'process.env.CDZ_POSTHOG_HOST': JSON.stringify(
+          process.env.CDZ_POSTHOG_HOST ?? ''
+        ),
         ...Object.entries(buildConfig).reduce(
           (def, [k, v]) => {
             def[`BUILD_CONFIG.${k}`] = JSON.stringify(v);
