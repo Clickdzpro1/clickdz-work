@@ -308,6 +308,10 @@ interface AgentCaps {
   // R14: whether the VPIC image-editor studio tab is available. Default OFF ⇒
   // unset env == the tab hidden (the FE studio registry gates on this flag).
   vpicEnabled: boolean;
+  // WS14: whether the WhatsappMax studio tab is available. Default OFF ⇒ unset
+  // env == the tab hidden (the FE studio registry gates on this flag). Reuses the
+  // existing whatsapp-gateway backend; this bit only toggles the studio surface.
+  whatsappmaxEnabled: boolean;
 }
 
 /**
@@ -345,6 +349,9 @@ function buildCaps(): AgentCaps {
     // R14: VPIC image-editor studio gate (same inline process.env idiom; default
     // OFF). The FE studio registry gates the VPIC tab's visibility on this flag.
     vpicEnabled: process.env.CDZ_VPIC_ENABLED === '1',
+    // WS14: WhatsappMax studio gate (same inline idiom; default OFF). The FE
+    // studio registry gates the WhatsappMax tab's visibility on this flag.
+    whatsappmaxEnabled: process.env.CDZ_WHATSAPPMAX_ENABLED === '1',
   };
 }
 
