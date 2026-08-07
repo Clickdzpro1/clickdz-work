@@ -8,9 +8,14 @@ import { lazy, Suspense } from 'react';
 
 import { dirFor, useVpicLang } from '../../../../modules/vpic/i18n';
 import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
+import { ensureCdzMotionCss } from '@affine/core/clickdz/motion';
+import { CdzSkeletonList } from '@affine/core/clickdz/skeleton';
 
 const CdzResponsive = () => {
   ensureClickDzResponsiveCss();
+  // Additive: inject the shared cdz-motion sheet beside the responsive sheet so
+  // the skeleton/enter primitives are available to this surface. Idempotent.
+  ensureCdzMotionCss();
   return null;
 };
 
@@ -58,21 +63,39 @@ const VpicEditorPanel = lazy(() =>
  */
 function VpicPanelFallback() {
   const { t } = useVpicLang();
+  // A skeleton of the editor's real two-column geometry (canvas stage + tool
+  // rail) using the shared cdz-motion `[data-cdz-skeleton]` shimmer, so the
+  // streamed editor lands into its own silhouette instead of replacing a bare
+  // text line. currentColor drives the tint → themes + RTL for free. The rule
+  // needs a [data-cdz-motion] ancestor, which the body wrapper provides.
   return (
     <div
+      role="status"
+      aria-label={t('vpic.loading')}
       style={{
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: 16,
         width: '100%',
         height: '100%',
         minHeight: 240,
+        padding: 16,
+        boxSizing: 'border-box',
         color: 'var(--affine-text-secondary-color, #8a90a0)',
-        fontSize: 13,
-        letterSpacing: 0.2,
       }}
     >
-      {t('vpic.loading')}
+      {/* Canvas stage placeholder (grows to fill). */}
+      <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+        <div
+          data-cdz-skeleton=""
+          aria-hidden="true"
+          style={{ width: '100%', height: '100%', borderRadius: 8 }}
+        />
+      </div>
+      {/* Tool-rail placeholder (fixed-ish column). */}
+      <div style={{ flex: '0 0 300px', maxWidth: '40%' }}>
+        <CdzSkeletonList rows={7} gap={14} />
+      </div>
     </div>
   );
 }
@@ -223,6 +246,7 @@ const VpicStudioPage = () => {
             editor-panel.tsx (styles.root / styles.rail). */}
         <div
           data-cdz-surface=""
+          data-cdz-motion=""
           dir={dir}
           style={{
             display: 'flex',

@@ -56,6 +56,15 @@ import {
 // editor's first paint, so it loads on demand the first time the user opens it.
 const MaskPanel = lazy(() => import('./mask-panel'));
 
+// ---- Chunk-within-a-chunk: the text-to-image GENERATE panel ---------------
+// Generation is an occasional action behind a button, and the panel carries its
+// own generation transport (use-vpic-generate). It has no place in the editor's
+// first paint, so it loads on demand the first time the user opens it. It ADOPTS
+// the SAME result sink the mask panel uses (`onMaskApplied`, i.e. saveBlob →
+// loadFromUrl), so a generated image lands in the engine and every edit tool
+// applies to it immediately.
+const GeneratePanel = lazy(() => import('./generate-panel'));
+
 // ---- Backend routes (must match ClickDzVpicController EXACTLY) ------------
 const CAPS_URL = '/api/v1/vpic/caps';
 const PROJECTS_URL = '/api/v1/vpic/projects';
@@ -563,6 +572,16 @@ export function VpicEditorPanel() {
     }
   }, [t]);
 
+  // ---- IA: text-to-image generate (lazy generate panel) ------------------
+  // Additive, low-risk affordance: open/close a modal that POSTs the existing
+  // /api/v1/images/generations route (generation branch) and folds the result
+  // into the engine via onMaskApplied. Gated behind the same caps.enabled the
+  // whole editor is gated behind (if the image key is off server-side, the
+  // route 503s and the panel shows the pinned "AI unavailable" message).
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const openGenerate = useCallback(() => setGenerateOpen(true), []);
+  const closeGenerate = useCallback(() => setGenerateOpen(false), []);
+
   const closeMask = useCallback(() => {
     setMaskOpen(false);
     // Release the object URL we minted for the painter's backdrop.
@@ -973,6 +992,15 @@ export function VpicEditorPanel() {
               >
                 {t('vpic.stock')}
               </button>
+              {/* Text-to-image GENERATE — reachable with no image open yet.
+                  The result is folded into the engine via onMaskApplied. */}
+              <button
+                type="button"
+                style={styles.btn}
+                onClick={openGenerate}
+              >
+                {t('vpic.generate')}
+              </button>
             </div>
             {/* Import-from-URL row. */}
             <div style={styles.openRow}>
@@ -1355,6 +1383,16 @@ export function VpicEditorPanel() {
             {/* ---- IA ---- */}
             <section style={styles.section}>
               <div style={styles.sectionTitle}>{t('vpic.ai')}</div>
+              {/* Text-to-image GENERATE (reachable with an image already open —
+                  generation replaces the canvas via onMaskApplied). */}
+              <button
+                type="button"
+                style={styles.primaryBtn}
+                onClick={openGenerate}
+              >
+                {t('vpic.generate')}
+              </button>
+              <div style={styles.hint}>{t('vpic.generateHint')}</div>
               <button
                 type="button"
                 style={styles.primaryBtn}
@@ -1536,6 +1574,21 @@ export function VpicEditorPanel() {
             </Suspense>
           </div>
         </div>
+      ) : null}
+
+      {/* ---- IA: the lazy text-to-image generate panel ---- */}
+      {generateOpen ? (
+        <Suspense
+          fallback={
+            <div style={styles.modalScrim} role="dialog" aria-modal="true">
+              <div style={styles.centerFill}>{t('vpic.loading')}</div>
+            </div>
+          }
+        >
+          {/* GeneratePanel renders its own overlay/modal; the result folds into
+              the engine via the SAME sink the mask panel uses. */}
+          <GeneratePanel onApplied={onMaskApplied} onClose={closeGenerate} />
+        </Suspense>
       ) : null}
     </div>
   );
