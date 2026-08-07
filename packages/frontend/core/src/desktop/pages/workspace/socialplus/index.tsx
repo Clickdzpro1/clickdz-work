@@ -34,7 +34,7 @@ const SocialPlusPage = () => {
 
   return (
     <>
-      <ViewTitle title="Social+" />
+      <ViewTitle title="Social" />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
@@ -50,7 +50,7 @@ const SocialPlusPage = () => {
           }}
         >
           <span style={{ fontSize: 16 }}>📣</span>
-          Social+
+          Social
           <span
             style={{
               fontSize: 10,
