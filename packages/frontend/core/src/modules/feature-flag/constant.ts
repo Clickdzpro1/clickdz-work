@@ -313,6 +313,20 @@ export const AFFINE_FLAGS = {
     configurable: true,
     defaultState: false,
   },
+  // WS6 — CDZ whiteboard AI stickers. Gates the additive edgeless actions:
+  // "Generate sticker" (bridge image → transparent die-cut sticker) and
+  // "Animate" (client-side preset Lottie motion on a sticker/image). Kept
+  // behind a flag so the net-new element-toolbar actions can't destabilize the
+  // edgeless toolbar for stable/production builds; ON by default in canary.
+  enable_cdz_sticker_ai: {
+    category: 'blocksuite',
+    bsFlag: 'enable_cdz_sticker_ai',
+    displayName: 'Enable CDZ AI Stickers (Whiteboard)',
+    description:
+      'Adds "Generate sticker" and "Animate" actions to the whiteboard: AI die-cut stickers via the image bridge, plus client-side preset Lottie animation (bob / spin / pulse / bounce).',
+    configurable: isCanaryBuild,
+    defaultState: isCanaryBuild,
+  },
 } satisfies { [key in string]: FlagInfo };
 
 // oxlint-disable-next-line no-redeclare

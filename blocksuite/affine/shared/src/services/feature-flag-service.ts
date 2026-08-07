@@ -21,6 +21,7 @@ export interface BlockSuiteFlags {
   enable_turbo_renderer: boolean;
   enable_dom_renderer: boolean;
   enable_pdfmake_export: boolean;
+  enable_cdz_sticker_ai: boolean;
 }
 
 export class FeatureFlagService extends StoreExtension {
@@ -46,6 +47,7 @@ export class FeatureFlagService extends StoreExtension {
     enable_turbo_renderer: false,
     enable_dom_renderer: false,
     enable_pdfmake_export: false,
+    enable_cdz_sticker_ai: false,
   });
 
   setFlag(key: keyof BlockSuiteFlags, value: boolean) {
