@@ -24,6 +24,7 @@ import { ClickDzIntegrationsController } from './clickdz-integrations.controller
 import { ClickDzOpenclawController } from './clickdz-openclaw.controller';
 import { ClickDzPulseController } from './clickdz-pulse.controller';
 import { ClickDzSuggestionsController } from './clickdz-suggestions.controller';
+import { ClickDzPromptSuggestionsController } from './clickdz-prompt-suggestions.controller';
 import { ClickDzAgentsController } from './clickdz-agents.controller';
 import { ClickDzReleasesController } from './clickdz-releases.controller';
 import { ClickDzAgentRunsController } from './clickdz-agent-runs.controller';
@@ -123,6 +124,7 @@ export class CopilotApiModule {}
     ClickDzOpenclawController,
     ClickDzPulseController,
     ClickDzSuggestionsController,
+    ClickDzPromptSuggestionsController,
     ClickDzAgentsController,
     ClickDzReleasesController,
     ClickDzAgentRunsController,

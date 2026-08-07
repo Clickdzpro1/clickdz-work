@@ -2,11 +2,8 @@
 // once and ensures every workspace has a starter template library. Rendered
 // inside the workspace layout where DocsService is available.
 //
-// The floating voice-guide orb ("call agent") that used to mount here was
-// removed: it captured the Space bar app-wide, streamed the microphone to
-// Deepgram on every workspace, and coached users on AFFiNE doc/edgeless
-// concepts that are irrelevant to a ClickDz merchant. Voice generation and
-// transcription remain available, deliberately, in Voice Studio (/voice).
+// No floating voice "call agent" mounts here by design. Voice generation and
+// transcription live, deliberately, in Voice Studio (/voice).
 import { DocsService } from '@affine/core/modules/doc';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import { useLiveData, useService } from '@toeverything/infra';

@@ -4185,12 +4185,9 @@ export class ClickDzBridgeController {
     return { slug, html: resolved.html, source: resolved.source };
   }
 
-  // POST /api/voice/token (Deepgram short-lived browser grant) was removed
-  // alongside the floating voice-guide orb, which was its only caller. It
-  // minted a 60s Deepgram key straight to the browser so the orb could open a
-  // client-side STT socket; with the orb gone that is an unused credential
-  // hand-out. Voice Studio's transcription and TTS both proxy through the
-  // server (`/api/voice/tts` below) and never needed this route.
+  // No client-side voice token route by design: Voice Studio's transcription
+  // and TTS both proxy through the server (`/api/voice/tts` below), so no
+  // credential is ever handed to the browser.
 
   /**
    * GET /api/voice/capabilities — what the Voice Studio can offer right now.
