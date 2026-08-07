@@ -348,6 +348,24 @@ export const VPIC_STRINGS: Record<string, VpicStringPair> = {
   'vpic.upscale': { fr: 'Agrandir', ar: 'كبّر' },
   'vpic.comingSoon': { fr: 'Bientôt disponible', ar: 'جاي قريب' },
 
+  // ── AI GENERATE (text-to-image) ───────────────────────────────────────────
+  // `vpic.generate` (the entry label) already exists above. These drive the
+  // new generate panel: hint, prompt placeholder, the run button, the prompt-pro
+  // toggle, and the three DZ e-commerce presets.
+  'vpic.generateHint': {
+    fr: 'Décrivez l’image à créer.',
+    ar: 'وصّف الصورة اللي تحب تصنع.',
+  },
+  'vpic.generatePrompt': {
+    fr: 'Ex : bouteille de parfum sur fond blanc…',
+    ar: 'مثال: قنينة عطر على خلفية بيضاء…',
+  },
+  'vpic.generateGo': { fr: 'Générer', ar: 'صنع' },
+  'vpic.enhance': { fr: 'Améliorer le prompt', ar: 'حسّن الوصف' },
+  'vpic.genPresetPackshot': { fr: 'Packshot', ar: 'صورة منتوج' },
+  'vpic.genPresetLifestyle': { fr: 'Mise en scène', ar: 'جو ديكور' },
+  'vpic.genPresetPoster': { fr: 'Affiche promo', ar: 'ملصق إشهاري' },
+
   // ── export ────────────────────────────────────────────────────────────────
   'vpic.export': { fr: 'Exporter', ar: 'صدّر' },
   'vpic.format': { fr: 'Format', ar: 'الصيغة' },
