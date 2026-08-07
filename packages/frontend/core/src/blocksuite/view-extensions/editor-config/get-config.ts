@@ -3,6 +3,8 @@ import {
   createToolbarMoreMenuConfig,
 } from '@affine/core/blocksuite/view-extensions/editor-config/toolbar';
 import { WorkspaceServerService } from '@affine/core/modules/cloud';
+// WS6 — additive CDZ AI sticker element-toolbar actions (flag-gated).
+import { createCdzStickerToolbarExtension } from '@affine/core/modules/stickers/toolbar';
 import { EditorSettingService } from '@affine/core/modules/editor-setting';
 import { ToolbarMoreMenuConfigExtension } from '@blocksuite/affine/components/toolbar';
 import { EditorSettingExtension } from '@blocksuite/affine/shared/services';
@@ -25,5 +27,9 @@ export function getEditorConfigExtension(
     ToolbarMoreMenuConfigExtension(createToolbarMoreMenuConfig(framework)),
 
     createCustomToolbarExtension(editorSettingService.editorSetting, baseUrl),
+
+    // Attaches "Animate" + "Generate sticker" to the sticker/image surface
+    // elements, gated behind `enable_cdz_sticker_ai`.
+    createCdzStickerToolbarExtension(),
   ].flat();
 }
