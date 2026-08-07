@@ -303,6 +303,23 @@ export const rawPre = style({
   overflow: 'auto',
 });
 
+/** Compact bullet list of per-op "why it was skipped" reasons under a reply. */
+export const invalidReasonList = style({
+  margin: '6px 0 0',
+  padding: '0 0 0 16px',
+  listStyle: 'disc',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 3,
+});
+
+export const invalidReasonItem = style({
+  fontSize: 11,
+  lineHeight: 1.45,
+  color: textDim,
+  wordBreak: 'break-word',
+});
+
 const pulse = keyframes({
   '0%, 100%': { opacity: 0.35 },
   '50%': { opacity: 1 },

@@ -20,9 +20,68 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  */
 
 const RENDER_URL = '/api/v1/vdz/render';
+const CAPABILITIES_URL = '/api/v1/vdz/render/capabilities';
 const POLL_INTERVAL_MS = 1500;
 // Safety ceiling on polling — the service caps a render well under this.
 const MAX_POLLS = 400; // ~10 min at 1.5s
+// A mid-poll 404 ("Unknown render job") can be a transient blip between the
+// worker minting the job and its status store catching up, so we tolerate a
+// SMALL bounded run of them before declaring the job truly lost. Beyond this we
+// surface a distinct, retry-able "the render job was lost" error.
+const MAX_LOST_JOB_RETRIES = 4;
+
+/**
+ * What render engines this deployment actually offers right now (mirror of the
+ * backend `GET /api/v1/vdz/render/capabilities`). `classicMaxSec` is the Classic
+ * HTML tier's duration cap so the dialog can show it pre-flight.
+ */
+export interface VdzRenderCapabilities {
+  classic: boolean;
+  remotion: boolean;
+  classicMaxSec: number;
+}
+
+/**
+ * Conservative defaults used when the capabilities probe cannot be reached (a
+ * transient network error or an older server without the route). Classic is
+ * assumed available (it is the working baseline path), Remotion assumed OFF (so
+ * we never present it as a working choice when we don't actually know), and the
+ * cap falls back to the well-known classic ceiling (300s).
+ */
+export const DEFAULT_RENDER_CAPABILITIES: VdzRenderCapabilities = {
+  classic: true,
+  remotion: false,
+  classicMaxSec: 300,
+};
+
+/**
+ * Probe the render capabilities route. NEVER throws — on any transport/HTTP/
+ * shape failure it resolves to {@link DEFAULT_RENDER_CAPABILITIES} so the export
+ * UI degrades gracefully (classic-only) instead of erroring. Session cookie
+ * rides along (`credentials: 'include'`) exactly like the other Vdz FE calls.
+ */
+export async function fetchRenderCapabilities(): Promise<VdzRenderCapabilities> {
+  try {
+    const res = await fetch(cdzApiUrl(CAPABILITIES_URL), {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (!res.ok) return DEFAULT_RENDER_CAPABILITIES;
+    const data = (await res.json()) as Partial<VdzRenderCapabilities> | null;
+    if (!data || typeof data !== 'object') return DEFAULT_RENDER_CAPABILITIES;
+    const maxSec = Number(data.classicMaxSec);
+    return {
+      classic: data.classic === true,
+      remotion: data.remotion === true,
+      classicMaxSec:
+        Number.isFinite(maxSec) && maxSec > 0
+          ? maxSec
+          : DEFAULT_RENDER_CAPABILITIES.classicMaxSec,
+    };
+  } catch {
+    return DEFAULT_RENDER_CAPABILITIES;
+  }
+}
 
 export type VdzExportStatus =
   | 'idle'
@@ -71,6 +130,16 @@ function looksUnconfigured(message: string): boolean {
   return /not configured/i.test(message);
 }
 
+/**
+ * Heuristic: does this status response mean "the render job vanished"? The
+ * status route answers an unknown job with a typed 400/404 carrying "Unknown
+ * render job" (see ClickDzVdzRenderController.status). We match either the HTTP
+ * 404 or that phrase so a lost job is handled distinctly from a generic error.
+ */
+function looksLostJob(status: number, message: string): boolean {
+  return status === 404 || /unknown render job/i.test(message);
+}
+
 export interface UseVdzExport {
   status: VdzExportStatus;
   /** 0..1 render progress (meaningful while status === 'rendering'). */
@@ -90,6 +159,18 @@ export interface UseVdzExport {
    * and the server applies its own defaults.
    */
   start: (html: string, extra?: Record<string, unknown>) => Promise<void>;
+  /**
+   * True when the current error is a "render job was lost" (mid-poll 404 past
+   * the bounded retry). The UI can offer a one-click re-enqueue for this case
+   * rather than a dead-end error.
+   */
+  lostJob: boolean;
+  /**
+   * Cancel an in-flight export (stops polling; returns to idle). Safe to call at
+   * any time — a no-op when nothing is running. Distinct from {@link reset},
+   * which also clears a finished/errored result.
+   */
+  cancel: () => void;
   /** Reset back to idle (e.g. when the composition changes). */
   reset: () => void;
 }
@@ -99,6 +180,9 @@ export function useVdzExport(): UseVdzExport {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [fileUrl, setFileUrl] = useState<string | null>(null);
+  // Set when the failure was a lost job (mid-poll 404 past the retry budget) so
+  // the UI can offer a one-click re-enqueue rather than a dead-end error.
+  const [lostJob, setLostJob] = useState(false);
 
   // Guards against setting state after unmount / across a reset.
   const activeRef = useRef(0);
@@ -109,6 +193,18 @@ export function useVdzExport(): UseVdzExport {
     setProgress(0);
     setError(null);
     setFileUrl(null);
+    setLostJob(false);
+  }, []);
+
+  // Cancel an in-flight export: invalidate the poll loop and return to idle,
+  // without carrying an error. A no-op (idempotent) when nothing is running.
+  const cancel = useCallback(() => {
+    activeRef.current++; // supersede any in-flight poll loop
+    setStatus('idle');
+    setProgress(0);
+    setError(null);
+    setFileUrl(null);
+    setLostJob(false);
   }, []);
 
   // Cancel polling on unmount.
@@ -126,6 +222,7 @@ export function useVdzExport(): UseVdzExport {
     setProgress(0);
     setError(null);
     setFileUrl(null);
+    setLostJob(false);
 
     // 1) enqueue
     let jobId: string;
@@ -169,6 +266,10 @@ export function useVdzExport(): UseVdzExport {
 
     // 2) poll status until done / error
     const statusUrl = `${RENDER_URL}/${encodeURIComponent(jobId)}`;
+    // Count consecutive mid-poll "job vanished" responses; a small transient run
+    // is tolerated (the worker's status store may lag the enqueue), but past the
+    // budget we surface a distinct, retry-able lost-job error.
+    let lostStreak = 0;
     for (let i = 0; i < MAX_POLLS; i++) {
       await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
       if (activeRef.current !== token) return; // superseded / unmounted
@@ -176,7 +277,26 @@ export function useVdzExport(): UseVdzExport {
       let body: RenderStatusBody;
       try {
         const res = await fetch(cdzApiUrl(statusUrl), { method: 'GET' });
-        if (!res.ok) throw new Error(await readError(res));
+        if (!res.ok) {
+          const msg = await readError(res);
+          // A mid-poll 404 / "Unknown render job" is a distinct, actionable
+          // case: the job was lost. Retry a bounded number of times (it may be
+          // a transient lag) before failing with a retry-able lost-job error.
+          if (looksLostJob(res.status, msg)) {
+            lostStreak += 1;
+            if (lostStreak <= MAX_LOST_JOB_RETRIES) {
+              continue; // tolerate the blip; poll again next tick
+            }
+            if (activeRef.current === token) {
+              setStatus('error');
+              setLostJob(true);
+              setError('The render job was lost. Please try exporting again.');
+            }
+            return;
+          }
+          throw new Error(msg);
+        }
+        lostStreak = 0; // a good status resets the tolerance window
         body = (await res.json()) as RenderStatusBody;
       } catch (e) {
         if (activeRef.current === token) {
@@ -220,7 +340,9 @@ export function useVdzExport(): UseVdzExport {
     error,
     fileUrl,
     unavailable: status === 'unavailable',
+    lostJob,
     start,
+    cancel,
     reset,
   };
 }

@@ -155,10 +155,23 @@ const VdzStudioPage = () => {
   // honest media/video caveats from the last compile, else nothing.
   const exportNote = useMemo(() => {
     if (exportState.status === 'error') {
+      // A lost job (mid-poll 404 past the bounded retry) is retry-able: nudge
+      // the user to export again rather than reading it as a hard failure.
+      if (exportState.lostJob) {
+        return (
+          exportState.error ||
+          'The render job was lost — please export again.'
+        );
+      }
       return exportState.error || 'Export failed';
     }
     if (timelineExport.preparing) return 'Preparing media…';
     const notes: string[] = [];
+    // When Remotion was requested but isn't available we transparently used
+    // Classic; say so once so the poster/no-audio caveats below make sense.
+    if (timelineExport.fellBackToClassic) {
+      notes.push('Remotion unavailable — exported with Classic');
+    }
     if (timelineExport.skippedMedia.length > 0) {
       notes.push(
         `${timelineExport.skippedMedia.length} media file(s) not embedded`
@@ -172,7 +185,9 @@ const VdzStudioPage = () => {
   }, [
     exportState.status,
     exportState.error,
+    exportState.lostJob,
     timelineExport.preparing,
+    timelineExport.fellBackToClassic,
     timelineExport.skippedMedia,
     timelineExport.lastCompile,
   ]);
@@ -828,6 +843,7 @@ const VdzStudioPage = () => {
         <VdzExportDialog
           open={timelineExport.dialogOpen}
           timeline={timeline}
+          capabilities={timelineExport.capabilities}
           onCancel={timelineExport.closeDialog}
           onConfirm={engine => {
             void timelineExport.start(timeline, engine);
