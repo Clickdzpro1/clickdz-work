@@ -56,6 +56,8 @@ export const DEFAULT_AGENT_CAPS: AgentCaps = {
   webEnabled: false,
   whatsappEnabled: false,
   customEnabled: false,
+  // WS14: WhatsappMax studio gate — dark by default (byte-identical sidebar).
+  whatsappmaxEnabled: false,
 };
 
 /** What {@link useAgents} exposes to the R7 agents pages. */

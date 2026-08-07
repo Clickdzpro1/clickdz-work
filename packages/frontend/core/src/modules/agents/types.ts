@@ -338,6 +338,22 @@ export interface AgentCaps {
    * build. `DEFAULT_AGENT_CAPS` seeds it explicit `false`.
    */
   customEnabled?: boolean;
+  /**
+   * WS14 master switch for the WhatsappMax studio (backend
+   * `CDZ_WHATSAPPMAX_ENABLED`). The FE studio registry (`visibleStudios`) gates
+   * the WhatsappMax sidebar entry on this flag. Optional so a pre-WS14 payload
+   * (no flag) reads `undefined` ⇒ falsy ⇒ feature dark, byte-identical to today.
+   * `DEFAULT_AGENT_CAPS` seeds it explicit `false`.
+   */
+  whatsappmaxEnabled?: boolean;
+  /**
+   * R14 VPIC image-editor studio switch (backend `CDZ_VPIC_ENABLED`). The backend
+   * caps object carries it; `visibleStudios` reads it to gate the VPIC entry.
+   * Optional (undefined ⇒ falsy ⇒ hidden), same contract as the other studio
+   * flags. Declared here so `visibleStudios(caps)` typechecks against the full
+   * caps object.
+   */
+  vpicEnabled?: boolean;
 }
 
 /** Envelope returned by GET /api/v1/agents: the roster plus capability flags. */

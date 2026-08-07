@@ -18,7 +18,9 @@ import { ClickDzPgAdminController } from './clickdz-pg-admin.controller';
 import { ClickDzAgentTelegramController } from './clickdz-agent-telegram';
 import { ClickDzAgentTriggersController } from './clickdz-agent-triggers';
 import { ClickDzAgentWhatsappController } from './clickdz-agent-whatsapp';
+import { ClickDzWhatsappMaxController } from './clickdz-whatsappmax.controller';
 import { ClickDzCourierController } from './clickdz-courier.controller';
+import { ClickDzPaymentController } from './clickdz-payment.controller';
 import { ClickDzHermesController } from './clickdz-hermes.controller';
 import { ClickDzIntegrationsController } from './clickdz-integrations.controller';
 import { ClickDzOpenclawController } from './clickdz-openclaw.controller';
@@ -117,7 +119,13 @@ export class CopilotApiModule {}
     ClickDzAgentTelegramController,
     ClickDzAgentTriggersController,
     ClickDzAgentWhatsappController,
+    // WS14 — WhatsappMax studio backend (reuses the existing whatsapp-gateway;
+    // flag-gated CDZ_WHATSAPPMAX_ENABLED, default OFF ⇒ typed 404 until flipped).
+    ClickDzWhatsappMaxController,
     ClickDzCourierController,
+    // WS13 — Payments BYO-key (SlickPay + Stripe; flag-gated CDZ_PAYMENTS_ENABLED
+    // + per-provider CDZ_PAY_SLICKPAY/CDZ_PAY_STRIPE, default OFF ⇒ typed 404).
+    ClickDzPaymentController,
     ClickDzHermesController,
     ClickDzIntegrationsController,
     ClickDzOpenclawController,

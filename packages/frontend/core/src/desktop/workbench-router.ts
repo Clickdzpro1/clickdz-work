@@ -57,6 +57,13 @@ export const workbenchRoutes = [
     lazy: () => import('./pages/workspace/vpic/index'),
   },
   {
+    // WS14 — WhatsappMax studio. Route stays registered unconditionally (like
+    // /vpic); only the sidebar VISIBILITY is gated (caps.whatsappmaxEnabled), so a
+    // bookmarked/deep-linked /whatsappmax works even before the entry appears.
+    path: '/whatsappmax',
+    lazy: () => import('./pages/workspace/whatsappmax/index'),
+  },
+  {
     path: '/voice',
     lazy: () => import('./pages/workspace/voice/index'),
   },
