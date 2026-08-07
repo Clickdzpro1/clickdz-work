@@ -267,6 +267,38 @@ export class ClickDzVdzRenderController {
     }
   }
 
+  /**
+   * GET /api/v1/vdz/render/capabilities — which render engines this deployment
+   * can actually offer right now, so the export UI never presents a dead choice.
+   *
+   * Mirrors the Voice Studio's `GET /api/voice/capabilities` stance: a purely
+   * read-only reflection of which env keys are set, session-authed like the rest
+   * of the render surface (no @Public), Throttle('strict'), and no upstream
+   * probe. The frontend fetches this before the export dialog so it can gate the
+   * Remotion option (disable + explain when `remotion` is false) and default to
+   * the working Classic engine, and it surfaces `classicMaxSec` as the Classic
+   * tier's duration cap PRE-flight instead of only as a post-enqueue 400.
+   *
+   *   · classic       — true when BOTH CDZ_RENDER_URL and CDZ_RENDER_TOKEN are
+   *                      set (the same precondition `assertRenderReady` gates on).
+   *   · remotion      — true when CDZ_REMOTION_URL is set (mirrors
+   *                      `remotionConfigured()`; the token is optional).
+   *   · classicMaxSec — the Classic HTML tier's hard length cap (CLASSIC_MAX_SEC).
+   */
+  @Throttle('strict')
+  @Get('/api/v1/vdz/render/capabilities')
+  renderCapabilities(): {
+    classic: boolean;
+    remotion: boolean;
+    classicMaxSec: number;
+  } {
+    return {
+      classic: !!RENDER_URL && !!RENDER_TOKEN,
+      remotion: this.remotionConfigured(),
+      classicMaxSec: CLASSIC_MAX_SEC,
+    };
+  }
+
   private assertRenderReady() {
     if (!RENDER_URL || !RENDER_TOKEN) {
       // A typed 4xx (not a 500): the render service simply is not wired up on

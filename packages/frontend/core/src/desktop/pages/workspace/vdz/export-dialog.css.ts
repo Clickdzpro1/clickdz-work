@@ -130,6 +130,15 @@ export const engineCard = style({
       background: accentAlpha(12),
       boxShadow: `0 0 0 1px ${v.accent}`,
     },
+    // Disabled (e.g. Remotion when the render worker isn't wired up): dim it,
+    // drop the pointer and the hover accent so it reads as an unavailable choice.
+    '&[data-disabled="true"]': {
+      opacity: 0.55,
+      cursor: 'not-allowed',
+    },
+    '&[data-disabled="true"]:hover': {
+      borderColor: v.border,
+    },
   },
 });
 
@@ -220,6 +229,13 @@ export const summaryValue = style({
   fontWeight: 600,
   fontVariantNumeric: 'tabular-nums',
   color: v.text,
+});
+
+/** Small muted hint under the summary (e.g. the Classic tier's duration cap). */
+export const summaryHint = style({
+  fontSize: 11.5,
+  color: v.muted,
+  lineHeight: 1.5,
 });
 
 // ---- Inline warning (classic + long timeline) ------------------------------

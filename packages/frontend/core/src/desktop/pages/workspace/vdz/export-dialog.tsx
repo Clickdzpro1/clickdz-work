@@ -3,6 +3,10 @@ import { createPortal } from 'react-dom';
 
 import type { VdzTimeline } from '../../../../modules/vdz';
 import {
+  DEFAULT_RENDER_CAPABILITIES,
+  type VdzRenderCapabilities,
+} from '../../../../modules/vdz/use-vdz-export';
+import {
   computeExportDurationSec,
   persistExportEngine,
   resolveDefaultExportEngine,
@@ -36,13 +40,25 @@ import * as styles from './export-dialog.css';
  * `vdzTheme` marker via its stylesheet so the `--vdz-*` tokens resolve.
  */
 
-/** The classic HTML tier's hard duration cap, in seconds (mirrors C2/C7). */
-const CLASSIC_MAX_SECONDS = 300;
+/**
+ * Fallback classic cap (seconds) used only when the probed capabilities have not
+ * arrived yet. The live value comes from `capabilities.classicMaxSec` (the
+ * backend's CLASSIC_MAX_SEC), so this default just seeds the very first render
+ * before the probe resolves.
+ */
+const CLASSIC_MAX_SECONDS = DEFAULT_RENDER_CAPABILITIES.classicMaxSec;
 
 interface ExportDialogProps {
   open: boolean;
   /** The working timeline — the dialog derives duration / resolution / fps. */
   timeline: VdzTimeline;
+  /**
+   * What render engines this deployment can offer right now (probed by the
+   * export hook). The dialog gates the Remotion option on `remotion` and shows
+   * `classicMaxSec` as the Classic tier's duration cap. Optional so an older
+   * caller that doesn't pass it degrades to the conservative default.
+   */
+  capabilities?: VdzRenderCapabilities;
   /** Close without exporting (Cancel / Escape / backdrop click). */
   onCancel: () => void;
   /** Confirm with the chosen engine — starts the render. */
@@ -80,19 +96,30 @@ const ENGINE_OPTIONS: {
 export function VdzExportDialog({
   open,
   timeline,
+  capabilities = DEFAULT_RENDER_CAPABILITIES,
   onCancel,
   onConfirm,
 }: ExportDialogProps) {
+  const remotionAvailable = capabilities.remotion;
+  const classicMaxSeconds =
+    capabilities.classicMaxSec > 0
+      ? capabilities.classicMaxSec
+      : CLASSIC_MAX_SECONDS;
+
   // Selected engine — seeded from the C7 default each time the dialog opens.
   const [engine, setEngine] = useState<VdzExportEngine>(
     resolveDefaultExportEngine
   );
 
   // Re-seed the choice from the persisted/default rule whenever the dialog
-  // (re)opens, so a fresh open always reflects the saved preference.
+  // (re)opens, so a fresh open always reflects the saved preference. When
+  // Remotion is unavailable on this deployment, never LAND on it — fall back to
+  // Classic so the user can't confirm a dead choice.
   useEffect(() => {
-    if (open) setEngine(resolveDefaultExportEngine());
-  }, [open]);
+    if (!open) return;
+    const preferred = resolveDefaultExportEngine();
+    setEngine(preferred === 'remotion' && !remotionAvailable ? 'classic' : preferred);
+  }, [open, remotionAvailable]);
 
   // Escape closes (the backdrop click does too).
   useEffect(() => {
@@ -113,9 +140,10 @@ export function VdzExportDialog({
   const height = timeline.height || 1080;
 
   // The classic tier will reject a composition longer than its cap; warn (and
-  // recommend Remotion) BEFORE the user spends time compiling + uploading.
+  // recommend Remotion when it's available) BEFORE the user spends time
+  // compiling + uploading. Uses the LIVE probed cap.
   const classicTooLong =
-    engine === 'classic' && durationSec > CLASSIC_MAX_SECONDS;
+    engine === 'classic' && durationSec > classicMaxSeconds;
 
   const confirm = useCallback(() => {
     persistExportEngine(engine);
@@ -168,6 +196,11 @@ export function VdzExportDialog({
             aria-label="Render engine"
           >
             {ENGINE_OPTIONS.map(opt => {
+              // Gate Remotion on the probed capability: when the render worker
+              // isn't wired up on this deployment the option is disabled (and
+              // can't be selected) with an inline explanation, so the user is
+              // never offered a dead choice.
+              const disabled = opt.id === 'remotion' && !remotionAvailable;
               const selected = engine === opt.id;
               return (
                 <button
@@ -175,9 +208,14 @@ export function VdzExportDialog({
                   type="button"
                   role="radio"
                   aria-checked={selected}
+                  aria-disabled={disabled}
                   data-selected={selected}
+                  data-disabled={disabled}
+                  disabled={disabled}
                   className={styles.engineCard}
-                  onClick={() => setEngine(opt.id)}
+                  onClick={() => {
+                    if (!disabled) setEngine(opt.id);
+                  }}
                 >
                   <div className={styles.engineHead}>
                     <span className={styles.engineName}>{opt.name}</span>
@@ -190,7 +228,11 @@ export function VdzExportDialog({
                       ) : null}
                     </span>
                   </div>
-                  <span className={styles.engineDesc}>{opt.desc}</span>
+                  <span className={styles.engineDesc}>
+                    {disabled
+                      ? 'True video + audio render — not available on this workspace yet. Use Classic for now.'
+                      : opt.desc}
+                  </span>
                 </button>
               );
             })}
@@ -222,6 +264,14 @@ export function VdzExportDialog({
           </div>
         </div>
 
+        {/* Classic engine duration cap, shown pre-flight so the limit isn't a
+            surprise 400 after enqueue. */}
+        {engine === 'classic' && !classicTooLong ? (
+          <div className={styles.summaryHint}>
+            Classic exports up to {formatMmSs(classicMaxSeconds)}.
+          </div>
+        ) : null}
+
         {/* Inline warning: classic engine + over the classic length cap */}
         {classicTooLong ? (
           <div className={styles.warning} role="alert">
@@ -230,9 +280,20 @@ export function VdzExportDialog({
             </span>
             <span>
               This timeline is {formatMmSs(durationSec)} — longer than the{' '}
-              {formatMmSs(CLASSIC_MAX_SECONDS)} limit for the Classic engine.
-              Switch to <strong>Remotion (beta)</strong> to export the full
-              length.
+              {formatMmSs(classicMaxSeconds)} limit for the Classic engine.
+              {remotionAvailable ? (
+                <>
+                  {' '}
+                  Switch to <strong>Remotion (beta)</strong> to export the full
+                  length.
+                </>
+              ) : (
+                <>
+                  {' '}
+                  Trim the timeline to under {formatMmSs(classicMaxSeconds)} to
+                  export.
+                </>
+              )}
             </span>
           </div>
         ) : null}
