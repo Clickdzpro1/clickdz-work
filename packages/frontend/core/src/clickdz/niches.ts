@@ -36,6 +36,45 @@ export const NICHES: Niche[] = [
 export const ONBOARDED_KEY = 'clickdz:onboarded:v1';
 export const PENDING_KEY = 'clickdz:pending-templates:v1';
 
+// ─── E2: Personalization profile ─────────────────────────────────────────────
+
+/** Durable localStorage mirror of the onboarding profile. */
+export const CDZ_PROFILE_KEY = 'clickdz:profile:v1';
+
+/** One-shot trigger: workspace-boot consumes this to POST personalize. */
+export const PENDING_PERSONALIZE_KEY = 'clickdz:pending-personalize:v1';
+
+/** Primary-goal options shown on the profile step (fr/en/ar). */
+export interface Goal {
+  id: string;
+  fr: string;
+  en: string;
+  ar: string;
+}
+
+export const GOALS: Goal[] = [
+  { id: 'sell_online',       fr: 'Vendre en ligne',          en: 'Sell online',          ar: 'البيع عبر الإنترنت' },
+  { id: 'create_content',    fr: 'Créer du contenu',         en: 'Create content',        ar: 'إنشاء المحتوى' },
+  { id: 'manage_business',   fr: 'Gérer mon business',       en: 'Manage my business',    ar: 'إدارة عملي' },
+  { id: 'automate',          fr: 'Automatiser mes tâches',   en: 'Automate my tasks',     ar: 'أتمتة مهامي' },
+  { id: 'find_clients',      fr: 'Trouver des clients',      en: 'Find clients',          ar: 'إيجاد عملاء' },
+];
+
+/**
+ * Canonical onboarding profile — written during welcome finish() and stored
+ * server-side via UserSettingsModel (clickdzProfile) + as a localStorage mirror.
+ */
+export interface CdzOnboardingProfile {
+  v: 1;
+  lang: 'fr' | 'en' | 'ar';
+  brandName: string;
+  bizOneLiner?: string;
+  niches: string[];
+  goals: string[];
+  level?: 'beginner' | 'intermediate' | 'pro';
+  updatedAt: string;
+}
+
 export interface PendingSelection {
   name: string;
   lang: 'fr' | 'en' | 'ar';

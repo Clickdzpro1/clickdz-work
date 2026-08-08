@@ -12,10 +12,28 @@ declare global {
   }
 }
 
+// E2: Zod mirror of CdzOnboardingProfile (frontend clickdz/niches.ts).
+// No migration: the payload column is JSON — adding an optional field is
+// non-breaking. All fields are optional so existing rows parse cleanly.
+const CdzOnboardingProfileSchema = z
+  .object({
+    v: z.literal(1),
+    lang: z.enum(['fr', 'en', 'ar']),
+    brandName: z.string(),
+    bizOneLiner: z.string().optional(),
+    niches: z.array(z.string()),
+    goals: z.array(z.string()),
+    level: z.enum(['beginner', 'intermediate', 'pro']).optional(),
+    updatedAt: z.string(),
+  })
+  .optional();
+
 export const UserSettingsSchema = z.object({
   receiveInvitationEmail: z.boolean().default(true),
   receiveMentionEmail: z.boolean().default(true),
   receiveCommentEmail: z.boolean().default(true),
+  // E2 — per-user personalization profile (optional, no migration required)
+  clickdzProfile: CdzOnboardingProfileSchema,
 });
 
 export type UserSettingsInput = z.input<typeof UserSettingsSchema>;

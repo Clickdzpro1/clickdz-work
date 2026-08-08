@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260" width="400" height="260">
+  <rect width="400" height="260" fill="white"/>
+  <rect x="5" y="30" width="75" height="190" rx="4" fill="#4285f4" opacity="0.85"/>
+  <text x="42" y="128" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Partenaires</text>
+  <rect x="82" y="30" width="75" height="90" rx="4" fill="#34a853" opacity="0.85"/>
+  <text x="120" y="78" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Activités</text>
+  <rect x="160" y="30" width="80" height="190" rx="4" fill="#ff7c43" opacity="0.9"/>
+  <text x="200" y="128" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Proposition</text>
+  <rect x="242" y="30" width="75" height="90" rx="4" fill="#7b2d8b" opacity="0.85"/>
+  <text x="280" y="78" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Relations</text>
+  <rect x="320" y="30" width="75" height="190" rx="4" fill="#ea4335" opacity="0.85"/>
+  <text x="358" y="128" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Segments</text>
+  <rect x="82" y="125" width="75" height="95" rx="4" fill="#4285f4" opacity="0.7"/>
+  <text x="120" y="175" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Ressources</text>
+  <rect x="242" y="125" width="75" height="95" rx="4" fill="#34a853" opacity="0.7"/>
+  <text x="280" y="175" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Canaux</text>
+  <rect x="5" y="227" width="185" height="28" rx="4" fill="#888" opacity="0.8"/>
+  <text x="97" y="245" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Structure de Coûts</text>
+  <rect x="210" y="227" width="185" height="28" rx="4" fill="#1e3a5f" opacity="0.8"/>
+  <text x="303" y="245" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Sources de Revenus</text>
+  <text x="200" y="20" text-anchor="middle" fill="#333" font-size="12" font-family="sans-serif" font-weight="bold">Business Model Canvas</text>
+</svg>

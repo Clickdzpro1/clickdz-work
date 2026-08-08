@@ -2493,7 +2493,7 @@ export class AIChatInput extends SignalWatcher(
     return html`<div class="cdz-slash-palette" data-testid="cdz-slash-palette">
       ${smart
         ? html`<div class="cdz-slash-smart" data-testid="cdz-slash-smart">
-            <div class="cdz-slash-smart-title">✦ Suggestions pour vous</div>
+            <div class="cdz-slash-smart-title">Suggestions pour vous</div>
             <div class="cdz-slash-smart-row">
               ${repeat(
                 smart,
@@ -2526,7 +2526,6 @@ export class AIChatInput extends SignalWatcher(
                 @mousedown=${(e: MouseEvent) => e.preventDefault()}
                 @click=${() => this._applySlashCommand(cmd)}
               >
-                <span class="cdz-slash-item-icon">${cmd.emoji}</span>
                 <span class="cdz-slash-item-text">
                   <span class="cdz-slash-item-name">${cmd.label}</span>
                   <span class="cdz-slash-item-desc">${cmd.description}</span>

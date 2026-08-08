@@ -305,10 +305,26 @@ const OPENAI_IMAGE_API_KEY =
   process.env.OPENAI_API_KEY ||
   '';
 // CDZIM (Gemini image models): a SECOND image provider next to the OpenAI
-// gpt-image engines. The dedicated Gemini key first, then the CDZIM alias.
-// No key set -> only gemini-* requests 503 with `gemini_image_key_missing`;
-// the OpenAI path is untouched.
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.CDZIM_API_KEY || '';
+// gpt-image engines.
+//
+// Key resolution order (first non-empty wins):
+//   1. CDZ_GEMINI_IMAGE_KEY  — preferred dedicated key for Gemini image calls.
+//                              MUST be a Google AIza... key (39 chars, starts
+//                              "AIza"). The GEMINI env on humanizily-backend is
+//                              a CDZ-gateway JWT (eyJ..., ~1140 chars) and will
+//                              be rejected by generativelanguage.googleapis.com
+//                              when passed as a ?key= query parameter — do NOT
+//                              map that token here.
+//   2. GEMINI_API_KEY        — legacy/generic Google key env (kept for compat).
+//   3. CDZIM_API_KEY         — older CDZIM alias (kept for compat).
+//
+// No key set -> only gemini-* requests 503 with a clear `gemini_image_key_missing`
+// error; the OpenAI path is byte-identical and untouched.
+const CDZ_GEMINI_IMAGE_KEY =
+  process.env.CDZ_GEMINI_IMAGE_KEY ||
+  process.env.GEMINI_API_KEY ||
+  process.env.CDZIM_API_KEY ||
+  '';
 const GEMINI_API_BASE =
   process.env.GEMINI_API_BASE || 'https://generativelanguage.googleapis.com/v1beta';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
@@ -2796,9 +2812,17 @@ export class ClickDzBridgeController {
         HttpStatus.SERVICE_UNAVAILABLE
       );
     }
-    if (String(resolution.engine).startsWith('gemini-') && !GEMINI_API_KEY) {
+    if (String(resolution.engine).startsWith('gemini-') && !CDZ_GEMINI_IMAGE_KEY) {
       throw new HttpException(
-        { error: { message: 'Gemini image generation key is not configured', type: 'configuration_error', code: 'gemini_image_key_missing' } },
+        {
+          error: {
+            message:
+              'Gemini image generation is not configured. Set CDZ_GEMINI_IMAGE_KEY to a valid Google AIza... key on the bridge service. ' +
+              'The GEMINI env on this service is a CDZ-gateway token, not a direct Google key — it must not be used here.',
+            type: 'configuration_error',
+            code: 'gemini_image_key_missing',
+          },
+        },
         HttpStatus.SERVICE_UNAVAILABLE
       );
     }
@@ -2920,14 +2944,17 @@ export class ClickDzBridgeController {
           },
         });
       }
+      // Google's generateContent API requires BOTH 'TEXT' and 'IMAGE' in
+      // responseModalities for image-generation models (gemini-3.x and above).
+      // Sending ['IMAGE'] alone is rejected or returns an unexpected shape.
       const geminiRes = await fetch(
-        `${GEMINI_API_BASE}/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+        `${GEMINI_API_BASE}/models/${model}:generateContent?key=${CDZ_GEMINI_IMAGE_KEY}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ role: 'user', parts }],
-            generationConfig: { responseModalities: ['IMAGE'] },
+            generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
           }),
           signal: AbortSignal.timeout(
             fastMode ? FAST_IMAGE_TIMEOUT_MS : 180000

@@ -110,6 +110,11 @@ interface SlideProSession {
   cookie: string; // "presenton_session=<jwt>"
 }
 
+// E1.2: per-call upstream timeouts shortened from 10 s → 5 s so the worst-case
+// SlidePro chain (admin-login + ensure-user + user-login = 3 × 5 s = 15 s) fits
+// comfortably within the FE's 25 s budget even on a cold service.
+const SLIDEPRO_CALL_TIMEOUT_MS = 5_000;
+
 async function slideproLogin(
   username: string,
   password: string
@@ -119,7 +124,7 @@ async function slideproLogin(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(SLIDEPRO_CALL_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     const setCookie = res.headers.get('set-cookie') || '';
@@ -141,7 +146,7 @@ async function slideproEnsureUser(
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
       body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(SLIDEPRO_CALL_TIMEOUT_MS),
     });
     // 201 created, 409 already exists — both mean the account is usable.
     return res.status === 201 || res.status === 409;
@@ -191,6 +196,11 @@ function courseproSessionCookie(setCookie: string): string | null {
   return match ? match[1] : null;
 }
 
+// E1.2: per-call upstream timeouts shortened from 12 s → 5 s so the worst-case
+// CoursePro chain (sign-up + login = 2 × 5 s = 10 s) fits comfortably within
+// the FE's 25 s budget even on a cold service.
+const COURSEPRO_CALL_TIMEOUT_MS = 5_000;
+
 async function courseproSignUp(
   name: string,
   email: string,
@@ -201,7 +211,7 @@ async function courseproSignUp(
       method: 'POST',
       headers: courseproHeaders(),
       body: JSON.stringify({ name, email, password }),
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(COURSEPRO_CALL_TIMEOUT_MS),
     });
     // 200 created; 422 already-exists — both mean the account is usable.
     return res.ok || res.status === 422;
@@ -219,7 +229,7 @@ async function courseproLogin(
       method: 'POST',
       headers: courseproHeaders(),
       body: JSON.stringify({ email, password }),
-      signal: AbortSignal.timeout(12_000),
+      signal: AbortSignal.timeout(COURSEPRO_CALL_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     return courseproSessionCookie(res.headers.get('set-cookie') || '');
@@ -296,6 +306,8 @@ export class ClickDzAppProvisionController {
     }
 
     // Look up (or lazily create) the per-user account record for this app.
+    // E1.2: track whether the record already existed so downstream code can
+    // skip the first-provision-only admin-login + ensure-user chain.
     const key = acctKey(app, user.id);
     let record: {
       username: string;
@@ -309,6 +321,7 @@ export class ClickDzAppProvisionController {
     } catch {
       record = null;
     }
+    const recordAlreadyExisted = record !== null;
     if (!record) {
       // Deterministic, URL-safe per-user username scoped to the app.
       const username = `u_${user.id.replace(/-/g, '').slice(0, 20)}`;
@@ -352,6 +365,14 @@ export class ClickDzAppProvisionController {
     // SlidePro: provision the account + build an auto-login URL, best-effort.
     // We do this server-to-server so the iframe can land the user already
     // logged in without ever showing a signup/login screen.
+    //
+    // E1.2 optimisation: when `record` already existed on entry (i.e. the user
+    // has opened SlidePro before), we SKIP the admin-login + ensure-user
+    // round-trips (2 × 5 s saved) and go straight to the user-login to mint a
+    // fresh session. The ensure-user call is idempotent (it only creates the
+    // account once) so repeating it is safe but wasteful on cold services.
+    // `recordAlreadyExisted` is true when we read a non-null record from Redis
+    // before the create block above; we track it via the pre-check.
     let loginUrl: string | undefined;
     if (
       app === 'slidepro' &&
@@ -360,16 +381,23 @@ export class ClickDzAppProvisionController {
       plainCredential
     ) {
       try {
-        const admin = await slideproLogin(
-          SLIDEPRO_ADMIN_USERNAME,
-          SLIDEPRO_ADMIN_PASSWORD
-        );
-        if (admin) {
-          await slideproEnsureUser(
-            admin.cookie,
-            record.username,
-            plainCredential
+        // On first provision (no prior record) run the full 3-call chain.
+        // On repeat opens skip admin-login + ensure-user (2 calls saved).
+        let ensureOk = recordAlreadyExisted; // assume account exists on repeat
+        if (!recordAlreadyExisted) {
+          const admin = await slideproLogin(
+            SLIDEPRO_ADMIN_USERNAME,
+            SLIDEPRO_ADMIN_PASSWORD
           );
+          if (admin) {
+            ensureOk = await slideproEnsureUser(
+              admin.cookie,
+              record.username,
+              plainCredential
+            );
+          }
+        }
+        if (ensureOk) {
           const userSess = await slideproLogin(
             record.username,
             plainCredential
@@ -408,11 +436,17 @@ export class ClickDzAppProvisionController {
 
     // CoursePro: provision via Better Auth sign-up (auto-activated) + stash the
     // signed session cookie for the shim, best-effort.
+    //
+    // E1.2 optimisation: skip courseproSignUp on repeat opens (account already
+    // exists — the 422 path is harmless but wastes 5 s on a cold service).
+    // On first provision the sign-up call is still needed to create the account.
     if (app === 'coursepro' && plainCredential) {
       try {
         const email = `${record.username}@apps.clickdz.local`;
         const displayName = record.name || record.username;
-        await courseproSignUp(displayName, email, plainCredential);
+        if (!recordAlreadyExisted) {
+          await courseproSignUp(displayName, email, plainCredential);
+        }
         const sessionCookie = await courseproLogin(email, plainCredential);
         if (sessionCookie) {
           try {

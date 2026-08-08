@@ -17,13 +17,15 @@
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 
 /**
- * Recommended default image tier for stickers. The backend `CDZIMAGE_TIERS`
- * table (clickdz-bridge.controller.ts) accepts this gemini engine id directly
- * as a tier; it routes to Google `generateContent` and returns the OpenAI
- * `{ data: [{ url }] }` shape after normalization. Kept as a plain string so
- * this module has no dependency on the bridge MODELS list.
+ * Recommended default image tier for stickers.
+ *
+ * P5/E1 NOTE: gemini tiers are currently broken in production (GEMINI_API_KEY
+ * missing on humanizily-backend — see plans/p5.md Part C). Until Part C lands,
+ * default to a known-working GPT tier so the sticker generator actually
+ * produces images. Switch back to 'gemini-3.1-flash-image' once the Gemini key
+ * fix is deployed.
  */
-export const STICKER_IMAGE_MODEL = 'gemini-3.1-flash-image';
+export const STICKER_IMAGE_MODEL = 'cdzimage-2.0';
 
 /** Square sticker canvas — matches the sticker block's default 96×96 aspect. */
 export const STICKER_IMAGE_SIZE = '1024x1024';
