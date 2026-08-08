@@ -29,16 +29,26 @@ function courseProInstanceUrl(): string {
 export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [status, setStatus] = useState<'loading' | 'ready' | 'degraded' | 'error'>('loading');
   const [iframeSrc, setIframeSrc] = useState('');
 
   // Robust flow: provision the app, then iframe the shim loginUrl (preferred) or
   // the bridge-code URL. The iframe load IS the health check — no CORS probe.
+  // E1.1: on provision failure, fall back to the bare shim URL (degraded mode)
+  // so the user sees the app (with its own login flow) instead of a hard red
+  // banner. Only show the error state if there is no URL at all to iframe.
   const load = useCallback(async () => {
     setStatus('loading');
     const p = await provisionApp('coursepro');
     if (!p) {
-      setStatus('error');
+      // E1.1 fallback: iframe the bare shim URL so the panel is still usable.
+      const fallback = courseProInstanceUrl();
+      if (fallback) {
+        setIframeSrc(fallback);
+        setStatus('degraded');
+      } else {
+        setStatus('error');
+      }
       return;
     }
     setIframeSrc(p.loginUrl || withBridgeCode(courseProInstanceUrl(), p.code));
@@ -60,7 +70,7 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         </div>
         <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
-      <div style={status === 'ready'
+      <div style={(status === 'ready' || status === 'degraded')
         ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
         : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
         {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à CoursePro…</div>
@@ -70,6 +80,13 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
           /* The iframe fills the pane (flex:1, height:100%); the explainer is a
              slim footer strip so it never eats the iframe's space. */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+            {/* E1.1: soft notice when running in degraded (no auto-login) mode */}
+            {status === 'degraded' && (
+              <Banner tone="warn">
+                La connexion automatique est temporairement indisponible — CoursePro s&apos;ouvre en mode basique.{' '}
+                <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button>
+              </Banner>
+            )}
             <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
               <iframe
                 src={iframeSrc}

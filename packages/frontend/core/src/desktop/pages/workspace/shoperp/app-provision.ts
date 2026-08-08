@@ -14,27 +14,27 @@ export interface ProvisionedApp {
   loginUrl?: string;
 }
 
-/**
- * Ask the backend for a one-time bridge code for `app`
- * ('slidepro' | 'socialplus' | 'coursepro' | 'zoomplus').
- *
- * Returns null on ANY failure (network error, non-2xx, malformed body) — the
- * caller must treat provisioning as optional and still load the bare URL.
- */
-export async function provisionApp(app: string): Promise<ProvisionedApp | null> {
+// E1.1: backend provisioning does synchronous server-to-server work:
+//   SlidePro  → admin-login + ensure-user + user-login (3 × up to 5 s = ≤15 s)
+//   CoursePro → sign-up + login                        (2 × up to 5 s = ≤10 s)
+// The old 4 s abort killed every cold-service call. Raise to 25 s (comfortably
+// covers the worst case with margin) and add one automatic retry so a transient
+// cold-start doesn't permanently show the red banner.
+const PROVISION_TIMEOUT_MS = 25_000;
+const PROVISION_MAX_ATTEMPTS = 2;
+
+async function provisionOnce(app: string): Promise<ProvisionedApp | null> {
   try {
     const resp = await fetch('/api/v1/apps/provision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ app }),
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(PROVISION_TIMEOUT_MS),
     });
     if (!resp.ok) return null;
     const data = await resp.json().catch(() => null);
     const code = data?.code;
     if (typeof code !== 'string' || !code) return null;
-    // PostHog key action (no-op unless CDZ_POSTHOG_KEY/HOST configured).
-    trackCdzEvent('app_provisioned', { app });
     return {
       code,
       username: data?.account?.username ?? '',
@@ -43,6 +43,29 @@ export async function provisionApp(app: string): Promise<ProvisionedApp | null> 
   } catch {
     return null;
   }
+}
+
+/**
+ * Ask the backend for a one-time bridge code for `app`
+ * ('slidepro' | 'socialplus' | 'coursepro' | 'zoomplus').
+ *
+ * Returns null on ANY failure (network error, non-2xx, malformed body) — the
+ * caller must treat provisioning as optional and still load the bare URL.
+ *
+ * E1.1 changes vs original:
+ *  - Timeout raised from 4 s → 25 s (backend chain can take up to ~30 s cold).
+ *  - One automatic retry so a cold-start transient doesn't hard-fail the panel.
+ */
+export async function provisionApp(app: string): Promise<ProvisionedApp | null> {
+  for (let attempt = 0; attempt < PROVISION_MAX_ATTEMPTS; attempt++) {
+    const result = await provisionOnce(app);
+    if (result !== null) {
+      // PostHog key action (no-op unless CDZ_POSTHOG_KEY/HOST configured).
+      trackCdzEvent('app_provisioned', { app });
+      return result;
+    }
+  }
+  return null;
 }
 
 /** Append `bridge_code` to a base URL, respecting any existing query string. */
