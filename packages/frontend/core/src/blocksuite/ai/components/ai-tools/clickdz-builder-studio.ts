@@ -836,6 +836,26 @@ export class ClickDzBuilderStudio extends LitElement {
       pointer-events: none;
     }
 
+    /* WS1 — inline preview parse-error banner. Pinned to the top of the preview
+       pane, above the (raw-source) iframe, so a malformed edit is explained
+       rather than silently showing a blank frame. */
+    .cdz-preview-error {
+      position: absolute;
+      top: 10px;
+      left: 12px;
+      right: 12px;
+      z-index: 5;
+      padding: 10px 14px;
+      border-radius: 10px;
+      color: #7f1d1d;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.5;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    }
+
     /* ── edit panel (floating, over preview) ─────────────── */
     .cdz-edit-panel {
       position: absolute;
@@ -1459,6 +1479,15 @@ export class ClickDzBuilderStudio extends LitElement {
   @state()
   private accessor previewSrc = '';
 
+  // WS1 — inline preview parse-error notice. Set when buildPreviewNow's
+  // DOMParser walk yields no usable <body> (a malformed AI/code edit): the raw
+  // source is still shown as a best-effort fallback, but an inline banner now
+  // tells the merchant the preview could not be rendered as an app instead of
+  // silently showing a blank/near-blank frame with no explanation. Empty when
+  // the preview built cleanly.
+  @state()
+  private accessor previewError = '';
+
   // Non-reactive timers/draft for the export "copied" flash + token editor.
   private copiedTimer: ReturnType<typeof setTimeout> | null = null;
   private tokenTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1737,12 +1766,18 @@ export class ClickDzBuilderStudio extends LitElement {
     if (!doc) {
       // No usable body → degrade gracefully: show the raw source, and force
       // inspect off so the UI never advertises a click-to-edit mode that has
-      // no bridge script behind it.
+      // no bridge script behind it. WS1 — ALSO surface an inline banner so the
+      // failure is legible (previously this was a silent blank frame).
       this.inspect = false;
       this.selected = null;
       this.previewSrc = source;
+      this.previewError = source.trim()
+        ? "Aperçu impossible : le code ne contient pas de page HTML valide (<body> introuvable). Le code brut est affiché ci-dessous. Corrigez le code ou reformulez votre demande à l'IA."
+        : 'Aperçu vide : aucun code à afficher pour le moment.';
       return;
     }
+    // Cleared on every successful build so a fixed edit dismisses the banner.
+    this.previewError = '';
 
     // Console/error capture — injected FIRST in <head> so it catches errors
     // from the app's very first line; posts cdz-console messages to the parent.
@@ -3546,7 +3581,12 @@ export class ClickDzBuilderStudio extends LitElement {
         </div>
       </div>
       <div class="cdz-preview-wrap">
-        ${this.inspect
+        ${this.previewError
+          ? html`<div class="cdz-preview-error" role="alert">
+              ${this.previewError}
+            </div>`
+          : nothing}
+        ${this.inspect && !this.previewError
           ? html`<div class="cdz-inspect-banner">
               Inspect mode — click any element to edit
             </div>`

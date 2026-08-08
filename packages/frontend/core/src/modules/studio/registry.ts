@@ -36,7 +36,8 @@ export type StudioId =
   | 'slidepro'
   | 'coursepro'
   | 'socialplus'
-  | 'zoomplus';
+  | 'zoomplus'
+  | 'whatsappmax';
 
 export type StudioGroup = 'create' | 'commerce' | 'agents' | 'connect';
 
@@ -52,7 +53,7 @@ export type StudioGroup = 'create' | 'commerce' | 'agents' | 'connect';
  * A string-literal union (not `string`) so a typo can't silently mint a
  * never-visible entry.
  */
-export type StudioFlag = 'agents-multi' | 'vpic';
+export type StudioFlag = 'agents-multi' | 'vpic' | 'whatsappmax';
 
 export interface StudioDef {
   id: StudioId;
@@ -233,7 +234,10 @@ export const STUDIOS: StudioDef[] = [
   },
   {
     id: 'socialplus',
-    label: 'Social+',
+    // WS9: label renamed 'Social+' → 'Social' (native Composio studio, no
+    // Postiz). id + route kept as 'socialplus'/'/socialplus' to avoid router,
+    // i18n, notify and command-palette churn.
+    label: 'Social',
     route: '/socialplus',
     icon: () => createElement(BlockLinkIcon),
     group: 'commerce',
@@ -246,6 +250,21 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(VoiceIcon),
     group: 'commerce',
     testId: 'slider-bar-zoomplus-button',
+  },
+  {
+    // WS14 — WhatsappMax studio. flag-gated on caps.whatsappmaxEnabled
+    // (CDZ_WHATSAPPMAX_ENABLED): hidden by visibleStudios() until the flag is on,
+    // so flags-off is a no-op (byte-identical sidebar). Appended LAST so a
+    // flags-off roster is untouched. Grouped under 'connect' (a channel surface,
+    // alongside Integrations). Reuses ChatWithAiIcon (already boot-safe imported —
+    // a missing rc icon crashes React at boot) — no new icon import.
+    id: 'whatsappmax',
+    label: 'WhatsappMax',
+    route: '/whatsappmax',
+    icon: () => createElement(ChatWithAiIcon),
+    group: 'connect',
+    testId: 'slider-bar-whatsappmax-button',
+    flag: 'whatsappmax',
   },
 ];
 
@@ -282,6 +301,7 @@ export const STUDIOS: StudioDef[] = [
 export function visibleStudios(caps?: {
   multi?: boolean;
   vpicEnabled?: boolean;
+  whatsappmaxEnabled?: boolean;
 }): StudioDef[] {
   return STUDIOS.filter(studio => {
     if (studio.flag === 'agents-multi') {
@@ -289,6 +309,11 @@ export function visibleStudios(caps?: {
     }
     if (studio.flag === 'vpic') {
       return !!caps?.vpicEnabled;
+    }
+    if (studio.flag === 'whatsappmax') {
+      // WS14: gated on caps.whatsappmaxEnabled (env CDZ_WHATSAPPMAX_ENABLED).
+      // Absent/false ⇒ hidden (feature dark), byte-identical to today.
+      return !!caps?.whatsappmaxEnabled;
     }
     return true;
   });

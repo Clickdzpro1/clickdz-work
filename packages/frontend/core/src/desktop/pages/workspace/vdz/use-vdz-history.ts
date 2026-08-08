@@ -52,6 +52,31 @@ interface HistoryState {
   cursor: number;
 }
 
+/**
+ * Compose a legible batch-apply error that names the FAILING op — its 1-based
+ * position and its `op` name — ahead of the reason `applyOps` returned. This is
+ * what the AI-dock proposal card renders, so an invalid/failed timeline op the
+ * model proposed reads as e.g. `Edit 2 (addClip) failed: track not found: t9`
+ * instead of a bare `track not found: t9`. Falls back to the raw reason when the
+ * index/op can't be resolved (kept fail-soft — never throws).
+ */
+function formatBatchError(
+  errorIndex: number | undefined,
+  ops: VdzOp[],
+  reason: string
+): string {
+  if (
+    typeof errorIndex === 'number' &&
+    errorIndex >= 0 &&
+    errorIndex < ops.length
+  ) {
+    const op = ops[errorIndex];
+    const name = op && typeof op.op === 'string' ? op.op : 'op';
+    return `Edit ${errorIndex + 1} (${name}) failed: ${reason}`;
+  }
+  return reason;
+}
+
 export function useVdzHistory(initial: () => VdzTimeline): VdzHistory {
   const [state, setState] = useState<HistoryState>(() => ({
     past: [initial()],
@@ -92,7 +117,11 @@ export function useVdzHistory(initial: () => VdzTimeline): VdzHistory {
       if (ops.length === 0) return false;
       const result = applyOps(timeline, ops);
       if (result.error) {
-        setError(result.error);
+        // `applyOps` reports WHICH op failed (`errorIndex`) alongside the
+        // reason. Fold both into the surfaced error so the proposal card can
+        // show a legible "op #N (name): why" instead of a bare reason — model
+        // mistakes (invalid/failed timeline ops) become debuggable.
+        setError(formatBatchError(result.errorIndex, ops, result.error));
         return false;
       }
       setError(null);

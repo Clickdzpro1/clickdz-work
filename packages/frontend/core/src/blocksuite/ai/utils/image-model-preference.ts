@@ -13,12 +13,14 @@
  * (packages/frontend/core/src/clickdz/cdzim.ts) instead of being hand-rolled,
  * so newly-added CDZIM tiers surface here automatically. This is also how the
  * previously-orphaned CDZIM_MODELS registry (zero consumers before this
- * change) becomes actually selectable. Only CDZIM's verified-backend-accepted
- * 'openai-economy' tier (gpt-image-1-mini, backend tier id "cdzimage-1.0")
- * was newly exposed this way — the four Gemini tiers already in CDZIM are
- * NOT included here because no backend route accepts a Gemini image model id
- * (see the long comment in cdzim.ts for the full grounding); listing them
- * would make them appear selectable while every request would 400.
+ * change) becomes actually selectable.
+ *
+ * 2026-08: the four CDZIM Gemini tiers (Pro/Flash/Lite/Classic) are now
+ * backend-accepted (clickdz-bridge.controller.ts CDZIMAGE_TIERS routes them to
+ * Google's generateContent API, guarded by GEMINI_API_KEY || CDZIM_API_KEY)
+ * and are advertised by /v1/models — so they are exposed here alongside the
+ * OpenAI (CDZIMAGE) tiers. Ids are the raw Gemini engine ids the backend maps
+ * back to their tier via the 'raw-engine' resolution branch.
  */
 import { cdzimByTier } from '@affine/core/clickdz/cdzim';
 
@@ -34,6 +36,12 @@ const CDZIM_ECONOMY_MODEL_ID = (cdzimByTier('openai-economy')?.modelId ??
   'gpt-image-1-mini') as 'gpt-image-1-mini';
 
 export const CDZ_IMAGE_MODEL_OPTIONS = [
+  // CDZIM (Gemini) tiers — backend routes these to Google's generateContent
+  { id: 'gemini-3-pro-image', label: 'CDZIM Pro · best' },
+  { id: 'gemini-3.1-flash-image', label: 'CDZIM Flash · balanced' },
+  { id: 'gemini-3.1-flash-lite-image', label: 'CDZIM Lite · fastest' },
+  { id: 'gemini-2.5-flash-image', label: 'CDZIM Classic' },
+  // CDZIMAGE (OpenAI) tiers
   { id: 'gpt-image-2', label: 'CDZIMAGE 2.0 · best' },
   { id: 'gpt-image-1.5', label: 'CDZIMAGE 1.5 · balanced' },
   { id: CDZIM_ECONOMY_MODEL_ID, label: 'CDZIM Economy · cheapest' },

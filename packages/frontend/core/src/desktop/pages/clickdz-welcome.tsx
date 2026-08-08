@@ -1,10 +1,17 @@
 // ClickDz Work — Premium app onboarding (/welcome)
-// Redesigned: workspace name + language + feature briefing.
+// Redesigned: workspace name + language + a suite-level app showcase driven by
+// the canonical studio registry (single source of truth), grouped by area.
 // No shop creation here — that happens in DzOS ERP tab when the user is ready.
 import { getOrCreateI18n } from '@affine/i18n';
 import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ONBOARDED_KEY } from '../../clickdz/niches';
+import {
+  type StudioDef,
+  type StudioGroup,
+  type StudioId,
+  visibleStudios,
+} from '../../modules/studio/registry';
 
 export const PENDING_SHOP_KEY = 'clickdz:pending-shop:v1';
 export interface PendingShop { shopName: string; whatsapp: string; lang: 'fr' | 'en' | 'ar'; }
@@ -15,68 +22,139 @@ const C = {
   accent: '#0f766e', accentSoft: '#ecfdf5',
 };
 
-// All app features for the briefing carousel
-const FEATURES = [
-  { icon: '⚡', titleFr: 'DzOS ERP', titleEn: 'DzOS ERP', titleAr: 'DzOS ERP',
-    descFr: 'Gérez votre business : commandes, stock, caisse, clients, facturation.',
-    descEn: 'Run your business: orders, inventory, cash register, clients, invoicing.',
-    descAr: 'أدر عملك: الطلبات، المخزون، الصندوق، الزبائن، الفواتير.' },
-  { icon: '🤖', titleFr: 'Agents IA', titleEn: 'AI Agents', titleAr: 'وكلاء الذكاء',
-    descFr: 'Créez des agents IA qui travaillent pour vous 24/7.',
-    descEn: 'Create AI agents that work for you 24/7.',
-    descAr: 'أنشئ وكلاء ذكاء اصطناعي يعملون لك على مدار الساعة.' },
-  { icon: '📽️', titleFr: 'SlidePro', titleEn: 'SlidePro', titleAr: 'سلايد برو',
-    descFr: 'Générez des présentations professionnelles avec l\'IA.',
-    descEn: 'Generate professional presentations with AI.',
-    descAr: 'أنشئ عروض تقديمية احترافية بالذكاء الاصطناعي.' },
-  { icon: '🎨', titleFr: 'Studio Image', titleEn: 'Image Studio', titleAr: 'استوديو الصور',
-    descFr: 'CDZIM3.0 + OpenAI : génération d\'images par IA.',
-    descEn: 'CDZIM3.0 + OpenAI: AI-powered image generation.',
-    descAr: 'CDZIM3.0 + OpenAI: توليد الصور بالذكاء الاصطناعي.' },
-  { icon: '🎬', titleFr: 'Vdz Studio', titleEn: 'Vdz Studio', titleAr: 'استوديو Vdz',
-    descFr: 'Création vidéo IA : scripts, voix, et rendu automatique.',
-    descEn: 'AI video creation: scripts, voice, and automatic rendering.',
-    descAr: 'إنشاء فيديو بالذكاء الاصطناعي: نصوص، صوت، وتصيير تلقائي.' },
-  { icon: '💬', titleFr: 'Hermes', titleEn: 'Hermes', titleAr: 'هيرمس',
-    descFr: 'Assistant IA conversationnel pour votre entreprise.',
-    descEn: 'Conversational AI assistant for your business.',
-    descAr: 'مساعد ذكاء اصطناعي محادثة لعملك.' },
-  { icon: '🔧', titleFr: 'OpenClaw', titleEn: 'OpenClaw', titleAr: 'أوبنكلو',
-    descFr: 'Sandbox de code IA : exécutez Python, Node, et plus.',
-    descEn: 'AI code sandbox: run Python, Node, and more.',
-    descAr: 'صندوق رمز ذكاء اصطناعي: شغّل Python و Node والمزيد.' },
-  { icon: '🔗', titleFr: 'Intégrations', titleEn: 'Integrations', titleAr: 'تكاملات',
-    descFr: 'Connectez WhatsApp, Make.com, et vos outils préférés.',
-    descEn: 'Connect WhatsApp, Make.com, and your favorite tools.',
-    descAr: 'اربط واتساب و Make.com وأدواتك المفضلة.' },
-];
+type Lang = 'fr' | 'en' | 'ar';
+
+// -----------------------------------------------------------------------------
+// Per-studio short one-liner descriptions, co-located here (the registry is
+// icon/route-only and carries no copy). Keyed by StudioId so copy stays
+// translatable and can never drift from the roster: a studio without an entry
+// falls back to its label, so adding a studio to the registry never crashes
+// this page — it just shows the label until a description is added here.
+// -----------------------------------------------------------------------------
+const STUDIO_DESC: Partial<Record<StudioId, { fr: string; en: string; ar: string }>> = {
+  vdz: {
+    fr: 'Création vidéo IA : scripts, montage, voix et rendu automatique.',
+    en: 'AI video creation: scripts, editing, voice and automatic rendering.',
+    ar: 'إنشاء فيديو بالذكاء الاصطناعي: نصوص، مونتاج، صوت وتصيير تلقائي.',
+  },
+  apps: {
+    fr: 'Construisez des mini-apps, pages de vente et boutiques (COD) avec l\'IA.',
+    en: 'Build mini-apps, sales pages and shops (COD) with AI.',
+    ar: 'أنشئ تطبيقات مصغرة، صفحات بيع ومتاجر (الدفع عند الاستلام) بالذكاء الاصطناعي.',
+  },
+  integrations: {
+    fr: 'Connectez WhatsApp, Make.com et vos outils préférés.',
+    en: 'Connect WhatsApp, Make.com and your favorite tools.',
+    ar: 'اربط واتساب و Make.com وأدواتك المفضلة.',
+  },
+  shoperp: {
+    fr: 'Gérez votre business : commandes, stock, caisse, clients, facturation.',
+    en: 'Run your business: orders, inventory, cash register, clients, invoicing.',
+    ar: 'أدر عملك: الطلبات، المخزون، الصندوق، الزبائن، الفواتير.',
+  },
+  voice: {
+    fr: 'Voix off, narration et TTS en français et arabe, avec transcription.',
+    en: 'Voiceover, narration and TTS in French & Arabic, with transcription.',
+    ar: 'تعليق صوتي، سرد وتحويل النص إلى كلام بالفرنسية والعربية، مع النسخ.',
+  },
+  hermes: {
+    fr: 'Assistant IA conversationnel pour votre entreprise.',
+    en: 'Conversational AI assistant for your business.',
+    ar: 'مساعد ذكاء اصطناعي محادثة لعملك.',
+  },
+  openclaw: {
+    fr: 'Sandbox de code IA : exécutez Python, Node, et plus.',
+    en: 'AI code sandbox: run Python, Node, and more.',
+    ar: 'صندوق رمز ذكاء اصطناعي: شغّل Python و Node والمزيد.',
+  },
+  agents: {
+    fr: 'Créez des agents IA qui travaillent pour vous 24/7.',
+    en: 'Create AI agents that work for you 24/7.',
+    ar: 'أنشئ وكلاء ذكاء اصطناعي يعملون لك على مدار الساعة.',
+  },
+  vpic: {
+    fr: 'Génération et retouche d\'images par IA.',
+    en: 'AI-powered image generation and editing.',
+    ar: 'توليد وتعديل الصور بالذكاء الاصطناعي.',
+  },
+  slidepro: {
+    fr: 'Générez des présentations professionnelles avec l\'IA.',
+    en: 'Generate professional presentations with AI.',
+    ar: 'أنشئ عروضاً تقديمية احترافية بالذكاء الاصطناعي.',
+  },
+  coursepro: {
+    fr: 'Créez des formations et cours en ligne assistés par IA.',
+    en: 'Create AI-assisted online courses and training.',
+    ar: 'أنشئ دورات وتكوينات عبر الإنترنت بمساعدة الذكاء الاصطناعي.',
+  },
+  socialplus: {
+    fr: 'Créez et publiez du contenu pour vos réseaux sociaux.',
+    en: 'Create and publish content for your social media.',
+    ar: 'أنشئ وانشر محتوى لشبكاتك الاجتماعية.',
+  },
+  zoomplus: {
+    fr: 'Réunions et appels vidéo intégrés à votre espace de travail.',
+    en: 'Meetings and video calls built into your workspace.',
+    ar: 'اجتماعات ومكالمات فيديو مدمجة في مساحة عملك.',
+  },
+};
+
+// Curated emoji per studio id — a warmer visual than the boot-safe rc icons the
+// registry ships (those are reused across studios, so several would collide).
+const STUDIO_EMOJI: Partial<Record<StudioId, string>> = {
+  vdz: '🎬', apps: '🚀', integrations: '🔗', shoperp: '🛍️', voice: '🎙️',
+  hermes: '💬', openclaw: '🔧', agents: '🤖', vpic: '🎨', slidepro: '📽️',
+  coursepro: '🎓', socialplus: '📣', zoomplus: '📹',
+};
+
+// Group display order + per-language group headings.
+const GROUP_ORDER: StudioGroup[] = ['create', 'commerce', 'agents', 'connect'];
+const GROUP_LABEL: Record<StudioGroup, { fr: string; en: string; ar: string }> = {
+  create: { fr: 'Créer', en: 'Create', ar: 'إبداع' },
+  commerce: { fr: 'Commerce', en: 'Commerce', ar: 'تجارة' },
+  agents: { fr: 'Agents IA', en: 'AI Agents', ar: 'وكلاء الذكاء' },
+  connect: { fr: 'Connecter', en: 'Connect', ar: 'ربط' },
+};
+
+// Strip a leading emoji/glyph the registry bakes into some labels (e.g.
+// '🔌 Integrations', '🛍️ DzOS') so the card shows the curated emoji + a clean
+// text label without a doubled glyph.
+function cleanLabel(label: string): string {
+  return label.replace(/^[^\p{L}\p{N}]+/u, '').trim() || label;
+}
+
+function studioDesc(id: StudioId, lang: Lang, fallback: string): string {
+  const d = STUDIO_DESC[id];
+  if (!d) return fallback;
+  return lang === 'en' ? d.en : lang === 'ar' ? d.ar : d.fr;
+}
 
 const T = {
   fr: {
     badge: 'Votre espace de travail — par clickdz.ai',
-    title: 'Bienvenue sur DzOS',
-    subtitle: 'Votre plateforme tout-en-un pour gérer votre business, créer avec l\'IA, et vendre en ligne.',
+    title: 'Bienvenue sur ClickDz Work',
+    subtitle: 'La suite tout-en-un pour créer avec l\'IA, gérer votre business et vendre en ligne — vidéo, apps, voix, agents, commerce et plus.',
     nameLabel: 'Nom de votre espace de travail',
     namePh: 'Ex. : Mon Business',
     nameErr: 'Donnez un nom à votre espace (60 caractères max).',
     langLabel: 'Langue préférée',
     featuresTitle: 'Tout ce que vous pouvez faire',
-    featuresSub: 'Voici un aperçu rapide. Vous explorerez chaque outil quand vous serez prêt.',
+    featuresSub: 'Un aperçu de la suite. Vous explorerez chaque outil quand vous serez prêt.',
     go: 'Commencer →',
     step1: 'Votre espace',
     step2: 'Découverte',
-    darja: 'دير بزنسك من قاع واحد — الذكاء الاصطناعي، البيع، و كلش.',
+    darja: 'دير بزنسك من قاع واحد — الفيديو، الأبس، الصوت، الوكلاء، البيع و كلش.',
   },
   en: {
     badge: 'Your workspace — by clickdz.ai',
-    title: 'Welcome to DzOS',
-    subtitle: 'Your all-in-one platform to run your business, create with AI, and sell online.',
+    title: 'Welcome to ClickDz Work',
+    subtitle: 'The all-in-one suite to create with AI, run your business and sell online — video, apps, voice, agents, commerce and more.',
     nameLabel: 'Your workspace name',
     namePh: 'e.g. My Business',
     nameErr: 'Give your workspace a name (60 characters max).',
     langLabel: 'Preferred language',
     featuresTitle: 'Everything you can do',
-    featuresSub: 'Here\'s a quick overview. You\'ll explore each tool when you\'re ready.',
+    featuresSub: 'A quick tour of the suite. You\'ll explore each tool when you\'re ready.',
     go: 'Get started →',
     step1: 'Your workspace',
     step2: 'Discovery',
@@ -84,14 +162,14 @@ const T = {
   },
   ar: {
     badge: 'مساحة عملك — من clickdz.ai',
-    title: 'مرحباً بك في DzOS',
-    subtitle: 'منصتك المتكاملة لإدارة عملك، الإبداع بالذكاء الاصطناعي، والبيع عبر الإنترنت.',
+    title: 'مرحباً بك في ClickDz Work',
+    subtitle: 'الحزمة المتكاملة للإبداع بالذكاء الاصطناعي، إدارة عملك والبيع عبر الإنترنت — فيديو، تطبيقات، صوت، وكلاء، تجارة والمزيد.',
     nameLabel: 'اسم مساحة عملك',
     namePh: 'مثال: عملي',
     nameErr: 'أعطِ اسماً لمساحتك (60 حرفاً كحد أقصى).',
     langLabel: 'اللغة المفضلة',
     featuresTitle: 'كل ما يمكنك فعله',
-    featuresSub: 'إليك نظرة سريعة. ستستكشف كل أداة عندما تكون جاهزاً.',
+    featuresSub: 'جولة سريعة في الحزمة. ستستكشف كل أداة عندما تكون جاهزاً.',
     go: 'ابدأ ←',
     step1: 'مساحتك',
     step2: 'الاكتشاف',
@@ -107,7 +185,7 @@ const pageStyle: React.CSSProperties = {
 };
 
 const cardStyle: React.CSSProperties = {
-  width: '100%', maxWidth: 600, background: '#fff', border: '1px solid ' + C.border,
+  width: '100%', maxWidth: 720, background: '#fff', border: '1px solid ' + C.border,
   borderRadius: 24, boxShadow: '0 18px 60px rgba(15,23,42,.08)',
   padding: 'clamp(20px, 5vw, 44px)', boxSizing: 'border-box',
 };
@@ -124,15 +202,14 @@ type Step = 'name' | 'features';
 
 export const Component = () => {
   const navigate = useNavigate();
-  const [lang, setLang] = useState<'fr' | 'en' | 'ar'>('fr');
+  const [lang, setLang] = useState<Lang>('fr');
   const [workspaceName, setWorkspaceName] = useState('');
   const [step, setStep] = useState<Step>('name');
   const [touched, setTouched] = useState(false);
-  const [featureIdx, setFeatureIdx] = useState(0);
   const t = T[lang];
   const nameOk = workspaceName.trim().length > 0 && workspaceName.trim().length <= 60;
 
-  const applyLang = useCallback((next: 'fr' | 'en' | 'ar') => {
+  const applyLang = useCallback((next: Lang) => {
     setLang(next);
     getOrCreateI18n().changeLanguage(next).catch(() => {});
   }, []);
@@ -152,6 +229,15 @@ export const Component = () => {
   };
 
   const isRtl = lang === 'ar';
+
+  // The visible roster, straight from the registry (single source of truth).
+  // caps are not resolved this early in onboarding, so pass none: visibleStudios
+  // then returns the legacy always-visible roster (drops the two flag-gated
+  // studios — agents/vpic — exactly as the sidebar would with flags off).
+  const studios = visibleStudios();
+  const grouped: { group: StudioGroup; items: StudioDef[] }[] = GROUP_ORDER
+    .map(group => ({ group, items: studios.filter(s => s.group === group) }))
+    .filter(g => g.items.length > 0);
 
   return (
     <div style={pageStyle} dir={isRtl ? 'rtl' : 'ltr'} lang={lang === 'ar' ? 'ar' : lang === 'en' ? 'en' : 'fr'}>
@@ -200,37 +286,57 @@ export const Component = () => {
           </>
         ) : (
           <>
-            {/* Feature briefing — carousel */}
+            {/* Feature showcase — a per-app card grid grouped by area, driven by
+                the registry so it can never drift from the real roster. */}
             <h2 style={{ fontSize: 22, fontWeight: 800, margin: '0 0 4px' }}>{t.featuresTitle}</h2>
-            <p style={{ color: C.muted, fontSize: 13.5, margin: '0 0 24px' }}>{t.featuresSub}</p>
+            <p style={{ color: C.muted, fontSize: 13.5, margin: '0 0 20px' }}>{t.featuresSub}</p>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {FEATURES.map((f, i) => {
-                const title = lang === 'en' ? f.titleEn : lang === 'ar' ? f.titleAr : f.titleFr;
-                const desc = lang === 'en' ? f.descEn : lang === 'ar' ? f.descAr : f.descFr;
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+              {grouped.map(({ group, items }) => {
+                const heading = GROUP_LABEL[group];
                 return (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 14, padding: '14px 16px',
-                    borderRadius: 14, border: '1px solid ' + C.border, background: i === featureIdx ? C.soft : '#fff',
-                    transition: 'background 200ms', cursor: 'pointer', onClick: () => setFeatureIdx(i),
-                  }}>
-                    <div style={{ fontSize: 28, flexShrink: 0, width: 48, height: 48, borderRadius: 12, display: 'grid', placeItems: 'center', background: 'linear-gradient(135deg, ' + C.soft + ', #fff)' }}>{f.icon}</div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 15, fontWeight: 700, color: C.fg, marginBottom: 3 }}>{title}</div>
-                      <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.5 }}>{desc}</div>
+                  <div key={group}>
+                    <div style={{
+                      fontSize: 12, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+                      color: C.accent, marginBottom: 10,
+                    }}>
+                      {lang === 'en' ? heading.en : lang === 'ar' ? heading.ar : heading.fr}
+                    </div>
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+                      gap: 12,
+                    }}>
+                      {items.map(studio => {
+                        const label = cleanLabel(studio.label);
+                        const desc = studioDesc(studio.id, lang, label);
+                        const emoji = STUDIO_EMOJI[studio.id] ?? '✨';
+                        return (
+                          <div key={studio.id} data-testid={`welcome-studio-${studio.id}`} style={{
+                            display: 'flex', alignItems: 'flex-start', gap: 12, padding: '13px 14px',
+                            borderRadius: 14, border: '1px solid ' + C.border, background: '#fff',
+                            transition: 'border-color 160ms, box-shadow 160ms',
+                          }}>
+                            <div style={{
+                              fontSize: 22, flexShrink: 0, width: 42, height: 42, borderRadius: 11,
+                              display: 'grid', placeItems: 'center',
+                              background: 'linear-gradient(135deg, ' + C.soft + ', #fff)',
+                            }}>{emoji}</div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 14.5, fontWeight: 700, color: C.fg, marginBottom: 3 }}>{label}</div>
+                              <div style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.5 }}>{desc}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* Progress dots */}
-            <div style={{ display: 'flex', gap: 5, justifyContent: 'center', marginTop: 20 }}>
-              {FEATURES.map((_, i) => <span key={i} style={{ width: 6, height: 6, borderRadius: 3, background: i === featureIdx ? C.primary : C.border, transition: 'background 200ms' }} />)}
-            </div>
-
             <button type="button" onClick={finish} style={{
-              marginTop: 24, width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
+              marginTop: 26, width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
               color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
               cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)',
             }}>{t.go}</button>

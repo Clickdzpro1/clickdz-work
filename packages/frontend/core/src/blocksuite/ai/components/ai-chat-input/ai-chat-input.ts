@@ -2054,6 +2054,53 @@ export class AIChatInput extends SignalWatcher(
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    /* Smart starter chips — a context-aware row above the static catalog. RTL
+       inherits from the composer's dir; the flex row + logical padding stay
+       correct in both directions. */
+    .cdz-slash-smart {
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      padding: 4px 6px 8px;
+      margin-bottom: 2px;
+      border-bottom: 1px solid color-mix(in srgb, #6e56cf 18%, transparent);
+    }
+    .cdz-slash-smart-title {
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      color: var(--affine-v2-text-secondary);
+      opacity: 0.85;
+    }
+    .cdz-slash-smart-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .cdz-slash-smart-chip {
+      border: 1px solid color-mix(in srgb, #6e56cf 32%, transparent);
+      border-radius: 999px;
+      padding: 5px 11px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.3;
+      color: var(--affine-v2-text-primary);
+      background: color-mix(in srgb, #6e56cf 8%, transparent);
+      cursor: pointer;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      transition:
+        background-color 0.14s ease,
+        border-color 0.14s ease;
+    }
+    .cdz-slash-smart-chip:hover {
+      background: color-mix(in srgb, #6e56cf 18%, transparent);
+      border-color: color-mix(in srgb, #6e56cf 48%, transparent);
+    }
   `;
 
   @property({ attribute: false })
@@ -2213,6 +2260,21 @@ export class AIChatInput extends SignalWatcher(
   @state()
   accessor _slashActiveIndex = 0;
 
+  // Context-aware STARTER chips fetched once from
+  // POST /api/v1/ai/prompt-suggestions (studio:'chat'). Null until the fetch
+  // lands or fails; the static CDZ_SLASH_COMMANDS below always render first, so
+  // this is a pure upgrade layer — a failed/slow fetch just leaves the static
+  // slash catalog exactly as it was (fail-soft, cosmetic).
+  @state()
+  private accessor _smartStarters: Array<{
+    label: string;
+    prompt: string;
+  }> | null = null;
+
+  // Guards against a double-fetch (connect can fire more than once) and a
+  // late response landing after teardown.
+  private _smartStartersRequested = false;
+
   // Static quick-action catalog. `prefix` rewrites the input (caret at end);
   // `togglePlan` items flip plan mode when a toggle exists instead of inserting
   // text. Selecting a command NEVER auto-sends — it only rewrites the input.
@@ -2277,6 +2339,9 @@ export class AIChatInput extends SignalWatcher(
   // any other leading text (including a space before '/') keeps it closed.
   private _syncSlashPalette(rawValue: string) {
     if (rawValue.startsWith('/')) {
+      // Lazy: first time the palette opens, fetch context-aware starters. The
+      // static catalog renders immediately regardless, so this only ever adds.
+      void this._fetchSmartStarters();
       const query = rawValue.slice(1).split(/\s/, 1)[0].toLowerCase();
       const wasOpen = this._slashPaletteOpen;
       const prevQuery = this._slashQuery;
@@ -2363,6 +2428,55 @@ export class AIChatInput extends SignalWatcher(
     return false;
   }
 
+  // Fetch context-aware starter chips for the generic chat composer. Fail-soft:
+  // any error/slow response leaves _smartStarters null and the static slash
+  // catalog untouched. Recent artifact titles (already in memory on this
+  // component) ground the suggestions in what the user actually built.
+  private async _fetchSmartStarters() {
+    if (this._smartStartersRequested) return;
+    this._smartStartersRequested = true;
+    const recentTitles = (this.artifacts ?? [])
+      .map(a => (typeof a?.title === 'string' ? a.title : ''))
+      .filter(Boolean)
+      .slice(0, 6);
+    try {
+      const res = await fetch(cdzApiUrl('/api/v1/ai/prompt-suggestions'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ context: { studio: 'chat', recentTitles } }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { suggestions?: unknown };
+      const list = Array.isArray(data?.suggestions) ? data.suggestions : [];
+      const cleaned: Array<{ label: string; prompt: string }> = [];
+      for (const s of list) {
+        if (!s || typeof s !== 'object') continue;
+        const label = String((s as any).label ?? '').trim();
+        const prompt = String((s as any).prompt ?? '').trim();
+        if (label && prompt) cleaned.push({ label, prompt });
+        if (cleaned.length >= 4) break;
+      }
+      if (cleaned.length) this._smartStarters = cleaned;
+    } catch {
+      // Cosmetic — keep the static slash catalog on any failure.
+    }
+  }
+
+  // Apply a smart starter: drop its rich prompt into the composer (never
+  // auto-send) and close the palette — same contract as _applySlashCommand.
+  private _applySmartStarter(prompt: string) {
+    this._closeSlashPalette();
+    this.textarea.value = prompt;
+    this.isInputEmpty = !this.textarea.value.trim();
+    void this._handleInput();
+    void this.updateComplete.then(() => {
+      const end = this.textarea.value.length;
+      this.textarea.focus();
+      this.textarea.setSelectionRange(end, end);
+    });
+  }
+
   private _renderSlashPalette() {
     if (!this._slashPaletteOpen) return nothing;
     const items = this._filteredSlashCommands;
@@ -2370,7 +2484,33 @@ export class AIChatInput extends SignalWatcher(
       this._slashActiveIndex,
       Math.max(0, items.length - 1)
     );
+    // Smart starters only show at the top level (empty query) so typing a
+    // command still filters the static catalog exactly as before.
+    const smart =
+      !this._slashQuery && this._smartStarters?.length
+        ? this._smartStarters
+        : null;
     return html`<div class="cdz-slash-palette" data-testid="cdz-slash-palette">
+      ${smart
+        ? html`<div class="cdz-slash-smart" data-testid="cdz-slash-smart">
+            <div class="cdz-slash-smart-title">✦ Suggestions pour vous</div>
+            <div class="cdz-slash-smart-row">
+              ${repeat(
+                smart,
+                s => s.label,
+                s => html`<button
+                  type="button"
+                  class="cdz-slash-smart-chip"
+                  title=${s.prompt}
+                  @mousedown=${(e: MouseEvent) => e.preventDefault()}
+                  @click=${() => this._applySmartStarter(s.prompt)}
+                >
+                  ${s.label}
+                </button>`
+              )}
+            </div>
+          </div>`
+        : nothing}
       <div class="cdz-slash-list">
         ${items.length
           ? repeat(

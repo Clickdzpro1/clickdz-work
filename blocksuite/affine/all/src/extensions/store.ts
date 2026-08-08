@@ -15,6 +15,7 @@ import { ListStoreExtension } from '@blocksuite/affine-block-list/store';
 import { NoteStoreExtension } from '@blocksuite/affine-block-note/store';
 import { ParagraphStoreExtension } from '@blocksuite/affine-block-paragraph/store';
 import { RootStoreExtension } from '@blocksuite/affine-block-root/store';
+import { StickerStoreExtension } from '@blocksuite/affine-block-sticker/store';
 import { SurfaceStoreExtension } from '@blocksuite/affine-block-surface/store';
 import { SurfaceRefStoreExtension } from '@blocksuite/affine-block-surface-ref/store';
 import { TableStoreExtension } from '@blocksuite/affine-block-table/store';
@@ -51,6 +52,7 @@ export function getInternalStoreExtensions() {
     ListStoreExtension,
     NoteStoreExtension,
     ParagraphStoreExtension,
+    StickerStoreExtension,
     SurfaceRefStoreExtension,
     TableStoreExtension,
     SurfaceStoreExtension,

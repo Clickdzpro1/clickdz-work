@@ -28,6 +28,8 @@ import {
   useState,
 } from 'react';
 
+import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
+
 import {
   C,
   concatBlobs,
@@ -84,6 +86,42 @@ const makeSegment = (voice: string): Segment => ({
   error: null,
 });
 
+/** One context-aware starter chip { label, prompt } (mirrors the backend). */
+interface VoiceStarter {
+  label: string;
+  prompt: string;
+}
+
+/**
+ * Static Voice Studio starter chips — the fail-soft fallback. The context-aware
+ * endpoint (POST /api/v1/ai/prompt-suggestions, studio:'voice') upgrades these
+ * when it can; on any failure/slow response these render unchanged. Each chip's
+ * `prompt` is a ready-to-speak French line dropped into the first empty
+ * segment, so the merchant can generate immediately.
+ */
+const VOICE_STATIC_STARTERS: VoiceStarter[] = [
+  {
+    label: 'Spot radio 20s',
+    prompt:
+      'Profitez de notre offre spéciale cette semaine seulement — des prix imbattables et une livraison rapide partout. Passez commande dès maintenant !',
+  },
+  {
+    label: 'Voix off produit',
+    prompt:
+      'Découvrez notre nouveau produit, conçu pour vous simplifier la vie. Qualité, confort et style, le tout à un prix accessible.',
+  },
+  {
+    label: 'Message d’accueil',
+    prompt:
+      'Bonjour et bienvenue ! Merci de nous contacter. Un de nos conseillers vous répondra dans les plus brefs délais.',
+  },
+  {
+    label: 'Annonce livraison',
+    prompt:
+      'Bonne nouvelle ! Votre commande est en route et sera livrée très bientôt. Merci de votre confiance.',
+  },
+];
+
 export const StudioTab = ({ caps }: StudioTabProps) => {
   const providers = caps.tts.providers;
   const formats = useMemo(
@@ -123,6 +161,14 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
   // ---- history ----
   const [history, setHistory] = useState<GenerationHistoryItem[]>([]);
 
+  // ---- context-aware starter chips ----
+  // Seeded with the static fallback so the row is never empty; upgraded in
+  // place once POST /api/v1/ai/prompt-suggestions answers. Fail-soft: a
+  // failed/slow fetch leaves the static chips untouched (cosmetic).
+  const [starters, setStarters] = useState<VoiceStarter[]>(
+    VOICE_STATIC_STARTERS
+  );
+
   // Track every object URL we mint so we can revoke on unmount.
   const urlsRef = useRef<Set<string>>(new Set());
   const trackUrl = useCallback((url: string | null) => {
@@ -131,6 +177,38 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
 
   useEffect(() => {
     setHistory(readHistory());
+  }, []);
+
+  // Fetch context-aware starter chips once on mount. Fail-soft: any error/slow
+  // response keeps the static fallback. Aborts cleanly on unmount.
+  useEffect(() => {
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(cdzApiUrl('/api/v1/ai/prompt-suggestions'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ context: { studio: 'voice' } }),
+          signal: controller.signal,
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { suggestions?: unknown };
+        const list = Array.isArray(data?.suggestions) ? data.suggestions : [];
+        const cleaned: VoiceStarter[] = [];
+        for (const s of list) {
+          if (!s || typeof s !== 'object') continue;
+          const label = String((s as { label?: unknown }).label ?? '').trim();
+          const prompt = String((s as { prompt?: unknown }).prompt ?? '').trim();
+          if (label && prompt) cleaned.push({ label, prompt });
+          if (cleaned.length >= 4) break;
+        }
+        if (cleaned.length) setStarters(cleaned);
+      } catch {
+        // Cosmetic — keep the static fallback on any failure/abort.
+      }
+    })();
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -210,6 +288,26 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
       activeProvider?.defaultVoice || activeProvider?.voices[0] || '';
     setSegments(prev => [...prev, makeSegment(voice)]);
   }, [activeProvider]);
+
+  // Drop a starter chip's ready-to-speak line into the FIRST empty segment
+  // (or append a fresh one if every segment already has text). Never generates
+  // on its own — the merchant reviews the text, then hits Generate.
+  const useStarter = useCallback(
+    (prompt: string) => {
+      const voice =
+        activeProvider?.defaultVoice || activeProvider?.voices[0] || '';
+      setSegments(prev => {
+        const emptyIdx = prev.findIndex(s => !s.text.trim());
+        if (emptyIdx >= 0) {
+          const next = [...prev];
+          next[emptyIdx] = { ...next[emptyIdx], text: prompt };
+          return next;
+        }
+        return [...prev, { ...makeSegment(voice), text: prompt }];
+      });
+    },
+    [activeProvider]
+  );
 
   const removeSegment = useCallback((id: string) => {
     setSegments(prev =>
@@ -557,6 +655,24 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
               : `${activeProvider.label} uses preset voices only — emotion/instructions steering isn't available for this provider.`}
           </div>
         ) : null}
+      </section>
+
+      {/* ---- Smart starters (context-aware) ---- */}
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <span style={sectionLabel}>✦ Idées pour démarrer</span>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {starters.map(chip => (
+            <button
+              key={chip.label}
+              type="button"
+              onClick={() => useStarter(chip.prompt)}
+              title={chip.prompt}
+              style={starterChip}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
       </section>
 
       {/* ---- Segment timeline ---- */}
@@ -1162,6 +1278,21 @@ const presetChip: CSSProperties = {
   color: C.text,
   fontSize: 11.5,
   fontWeight: 600,
+  cursor: 'pointer',
+  transition: 'background 140ms ease, border-color 140ms ease',
+};
+
+// Context-aware starter chip — accented (vs. the neutral presetChip) so the
+// "AI-suggested" affordance reads at a glance; matches the studio's accent.
+const starterChip: CSSProperties = {
+  appearance: 'none',
+  padding: '7px 13px',
+  borderRadius: 999,
+  border: `1px solid ${C.accent}`,
+  background: C.accentSoft,
+  color: C.accent,
+  fontSize: 12,
+  fontWeight: 700,
   cursor: 'pointer',
   transition: 'background 140ms ease, border-color 140ms ease',
 };

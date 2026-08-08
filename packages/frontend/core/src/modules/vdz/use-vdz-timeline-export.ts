@@ -1,14 +1,20 @@
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import { useService } from '@toeverything/infra';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 // Type-only: the compiler implementation is LAZY-imported inside `start()` so
 // the (sizeable) compile+inline pipeline stays out of the editor's initial
 // chunk — it loads on the first Export click (C3 chunk diet).
 import type { CompileTimelineResult } from './compile-timeline';
 import type { VdzTimeline } from './schema';
-import { useVdzExport, type UseVdzExport } from './use-vdz-export';
+import {
+  DEFAULT_RENDER_CAPABILITIES,
+  fetchRenderCapabilities,
+  useVdzExport,
+  type UseVdzExport,
+  type VdzRenderCapabilities,
+} from './use-vdz-export';
 import { blobIdFromSrc, isVdzBlobSrc } from './use-vdz-media';
 
 /**
@@ -386,6 +392,20 @@ export function makeSignedSrcResolver(
 export interface UseVdzTimelineExport {
   /** The underlying export transport (status/progress/error/fileUrl/reset). */
   export: UseVdzExport;
+  /**
+   * The render engines this deployment can offer right now (probed once on
+   * mount). The export dialog gates the Remotion option and shows the Classic
+   * duration cap from this; {@link start} uses it to auto-fall back to Classic
+   * when Remotion was chosen but is unavailable. Starts as the conservative
+   * default (classic-only) until the probe resolves.
+   */
+  capabilities: VdzRenderCapabilities;
+  /**
+   * True when the chosen engine had to be transparently downgraded to Classic
+   * because Remotion is unavailable on this deployment (so the UI can show a
+   * brief "exported with Classic instead" note). Cleared on each {@link start}.
+   */
+  fellBackToClassic: boolean;
   /** True while compiling + inlining media (before the render enqueue). */
   preparing: boolean;
   /**
@@ -441,8 +461,27 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
   // export UI to render a pre-render failure.
   const [prepareError, setPrepareError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // Render engines this deployment can offer. Probed once on mount (fail-soft:
+  // resolves to the classic-only default on any failure) so the dialog can gate
+  // the Remotion option and `start` can auto-fall back to Classic.
+  const [capabilities, setCapabilities] = useState<VdzRenderCapabilities>(
+    DEFAULT_RENDER_CAPABILITIES
+  );
+  const [fellBackToClassic, setFellBackToClassic] = useState(false);
 
   const { start: startRender } = exporter;
+
+  // Probe capabilities once on mount. `fetchRenderCapabilities` never throws, so
+  // no try/catch is needed; the guard just avoids a setState after unmount.
+  useEffect(() => {
+    let alive = true;
+    void fetchRenderCapabilities().then(caps => {
+      if (alive) setCapabilities(caps);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const openDialog = useCallback(() => setDialogOpen(true), []);
   const closeDialog = useCallback(() => setDialogOpen(false), []);
@@ -457,6 +496,26 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
       setPreparing(true);
       setSkippedMedia([]);
       setPrepareError(null);
+      setFellBackToClassic(false);
+
+      // AUTO-FALLBACK. When Remotion is requested but this deployment cannot
+      // offer it, transparently downgrade to the working Classic engine rather
+      // than dead-ending the user on an "unavailable / coming online" state. We
+      // re-probe capabilities FRESH here (fail-soft) so a stale mount-time value
+      // can't strand the user, and merge it with the mount-time value. Persist
+      // Classic as the new default so the next open reflects reality, and flag
+      // the downgrade so the UI can note it.
+      let effectiveEngine = engine;
+      if (engine === 'remotion') {
+        const freshCaps = await fetchRenderCapabilities();
+        setCapabilities(freshCaps);
+        if (!freshCaps.remotion) {
+          effectiveEngine = 'classic';
+          persistExportEngine('classic');
+          setFellBackToClassic(true);
+        }
+      }
+
       try {
         // Code-split: the compiler only exists in memory once an export is
         // actually requested. Parallel to the media resolution below in
@@ -474,9 +533,10 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
         const height = timeline.height || 1080;
 
         // Base body fields (C2), sent for BOTH engines. The Remotion branch adds
-        // the render manifest (C3/C4) on top.
+        // the render manifest (C3/C4) on top. Uses `effectiveEngine` so an
+        // auto-fallback (remotion → classic) actually routes to Classic.
         const extra: Record<string, unknown> = {
-          engine,
+          engine: effectiveEngine,
           width,
           height,
           fps,
@@ -485,7 +545,7 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
 
         let compiled: CompileTimelineResult;
 
-        if (engine === 'remotion') {
+        if (effectiveEngine === 'remotion') {
           // REMOTION (C4). The worker fetches media over the network, so we do
           // NOT inline `data:` URIs here (no MAX_INLINE_BYTES cap): instead we
           // mint backend-SIGNED absolute https URLs for the workspace blobs on
@@ -556,6 +616,8 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
   return useMemo(
     () => ({
       export: exporter,
+      capabilities,
+      fellBackToClassic,
       preparing,
       lastCompile,
       skippedMedia,
@@ -567,6 +629,8 @@ export function useVdzTimelineExport(): UseVdzTimelineExport {
     }),
     [
       exporter,
+      capabilities,
+      fellBackToClassic,
       preparing,
       lastCompile,
       skippedMedia,

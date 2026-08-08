@@ -121,6 +121,15 @@ const STEP_PREVIEW_CHAR_CAP = 2_000;
 const RESULT_FEEDBACK_CHAR_CAP = 2_000;
 const PLANNER_MAX_TOKENS = 700;
 
+// --- /social/compose (cdz-flash content drafting) budgets (WS9) ---
+// A single cdz-flash turn that drafts/rewrites social post copy — NO tool loop,
+// NO Composio, just the OpenAI-compatible planner. The FE then sends the
+// approved text through /api/v1/integrations/run for per-user posting, so the
+// per-user Composio isolation model is untouched by this route.
+const COMPOSE_BRIEF_MIN = 1;
+const COMPOSE_BRIEF_MAX = 2_000;
+const COMPOSE_TIMEOUT_MS = 12_000;
+
 // ---------------------------------------------------------------------------
 // C2/C3 — Flows (persisted graph) + run observability + retry/backoff/DLQ.
 // All persisted per-user through the @Global JSON `Cache` provider. Keys are
@@ -1567,6 +1576,78 @@ export class ClickDzIntegrationsController {
       }
     }
     return collected;
+  }
+
+  /**
+   * POST /api/v1/social/compose — draft/rewrite social post copy with cdz-flash.
+   *
+   * WS9: the native Social studio's "generate content" button. This is a THIN
+   * wrapper over the SAME planner path the /run loop uses (`callPlanner` →
+   * CDZ_AI_BASE_URL + /v1/chat/completions, model cdz-flash) — a single turn,
+   * NO Composio, NO tool loop. The FE takes the returned draft, lets the owner
+   * edit it, then publishes via the existing /api/v1/integrations/run path
+   * (which injects the per-user `user_id` on every execute). So this route
+   * never touches a connected account and does not weaken per-user isolation.
+   *
+   * Body: { brief: string; channels?: string[]; tone?: string }.
+   * Responses (typed, via @Res — mirrors run()):
+   *   - COMPOSIO/AI key absent (no CDZ_AI_KEY) -> 409 {error:'not_configured'}
+   *   - malformed brief                        -> typed 400 (BadRequest)
+   *   - planner unreachable/empty              -> 502 {error:'planner_unavailable'}
+   *   - ok                                     -> 200 {content}
+   */
+  @Throttle('strict')
+  @Post('/api/v1/social/compose')
+  async compose(
+    @CurrentUser() _user: CurrentUser,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    const brief = typeof body?.brief === 'string' ? body.brief.trim() : '';
+    if (brief.length < COMPOSE_BRIEF_MIN || brief.length > COMPOSE_BRIEF_MAX) {
+      throw new BadRequest(
+        `"brief" must be a string of ${COMPOSE_BRIEF_MIN}..${COMPOSE_BRIEF_MAX} chars`
+      );
+    }
+    // Content generation runs on cdz-flash (CDZ_AI_KEY), not the Composio key —
+    // dark by default when the AI key is absent, exactly like /run is dark
+    // without COMPOSIO_API_KEY.
+    if (!CDZ_AI_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+
+    const channels: string[] = Array.isArray(body?.channels)
+      ? body.channels
+          .filter((s: any) => typeof s === 'string' && s.trim())
+          .map((s: string) => s.trim())
+          .slice(0, RUN_MAX_TOOLKITS)
+      : [];
+    const tone =
+      typeof body?.tone === 'string' ? body.tone.trim().slice(0, 60) : '';
+
+    const channelHint = channels.length
+      ? ` The post is for these platforms: ${channels.join(', ')}. Respect each platform's conventions (length, hashtags).`
+      : '';
+    const toneHint = tone ? ` Tone: ${tone}.` : '';
+
+    const messages: Array<{ role: string; content: string }> = [
+      {
+        role: 'system',
+        content:
+          'You are a social media copywriter for a small business. Write ONE ready-to-post caption from the brief. Output ONLY the caption text — no preamble, no quotes, no markdown, no options list.' +
+          channelHint +
+          toneHint,
+      },
+      { role: 'user', content: brief },
+    ];
+
+    const planned = await this.callPlanner(messages, COMPOSE_TIMEOUT_MS);
+    if (planned === null || !planned.raw.trim()) {
+      res.status(502).json({ error: 'planner_unavailable' });
+      return;
+    }
+    res.status(200).json({ content: planned.raw.trim() });
   }
 
   /**

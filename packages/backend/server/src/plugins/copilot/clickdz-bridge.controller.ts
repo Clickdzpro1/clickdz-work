@@ -523,6 +523,22 @@ const PUBLISHED_APPS_TTL_SECONDS = 90 * 24 * 60 * 60;
 // Redis SET of JSON records `{slug,url,createdAt}`, one entry per published slug.
 const publishedAppsKey = (ownerId: string) =>
   `clickdz:apps:published:${ownerId}`;
+// WS1 — owner-scoped, per-slug DRAFT store. Unlike the published SET this is a
+// single JSON blob `{html,title,updatedAt}` per (owner,slug), holding the last
+// autosaved studio draft so in-progress edits survive reload / a second device
+// (the published `/source` path only ever recovers the last DEPLOYED HTML).
+// Same owner-scoped key convention + rolling TTL as the published set.
+const appDraftKey = (ownerId: string, slug: string) =>
+  `clickdz:apps:draft:${ownerId}:${slug}`;
+// Rolling TTL on a draft (same 90-day window + seconds unit as the published
+// set's `expire`), re-armed on every autosave via ioredis `set ... EX`.
+const APP_DRAFT_TTL_SECONDS = 90 * 24 * 60 * 60;
+// Stored draft shape.
+interface AppDraftRecord {
+  html: string;
+  title: string;
+  updatedAt: string;
+}
 // Slug shape shared by generate/deploy (same as the SLUG_RE the data API uses).
 const APP_SLUG_RE = /^[a-z0-9-]{3,50}$/;
 
@@ -721,6 +737,7 @@ const CDZIMAGE_TIERS: Record<
   // back to these exact entries (quality feeds the clickdz metadata only;
   // nothing Gemini-specific is sent upstream).
   'gemini-3.1-flash-image': { engine: 'gemini-3.1-flash-image', quality: 'medium', label: 'CDZIM Flash' },
+  'gemini-3.1-flash-lite-image': { engine: 'gemini-3.1-flash-lite-image', quality: 'low', label: 'CDZIM Lite' },
   'gemini-3-pro-image': { engine: 'gemini-3-pro-image', quality: 'high', label: 'CDZIM Pro' },
   'gemini-2.5-flash-image': { engine: 'gemini-2.5-flash-image', quality: 'low', label: 'CDZIM Classic' },
 };
@@ -902,6 +919,11 @@ const MODELS = [
   'cdzimage-2.0',
   'cdzimage-1.5',
   'cdzimage-1.0',
+  // CDZIM (Gemini) image tiers — engine id == tier id (see CDZIMAGE_TIERS)
+  'gemini-3-pro-image',
+  'gemini-3.1-flash-image',
+  'gemini-3.1-flash-lite-image',
+  'gemini-2.5-flash-image',
 ];
 
 function now() {
@@ -2344,7 +2366,12 @@ export class ClickDzBridgeController {
         id,
         object: 'model',
         created: now(),
-        owned_by: id.startsWith('cdzimage-') ? 'openai-images' : 'make.com',
+        owned_by:
+          id.startsWith('gemini-') && id.endsWith('-image')
+            ? 'clickdz-images'
+            : id.startsWith('cdzimage-')
+              ? 'openai-images'
+              : 'make.com',
       })),
     };
   }
@@ -4183,6 +4210,125 @@ export class ClickDzBridgeController {
       `[apps] source slug=${slug} user=${user.id} via=${resolved.source} bytes=${resolved.bytes}`
     );
     return { slug, html: resolved.html, source: resolved.source };
+  }
+
+  /**
+   * WS1 — GET /api/v1/apps/:slug/draft (auth'd, owner-only). Returns the last
+   * autosaved studio draft for this owner+slug, or 404 when there is none.
+   *
+   * This is the CROSS-DEVICE / post-eviction recovery path for UNPUBLISHED
+   * edits: `/source` only ever recovers the last *deployed* HTML, so a merchant
+   * who edits on device A and reopens on device B (or after localStorage
+   * eviction) would otherwise lose in-progress work. The studio prefers this
+   * draft over `/source` on open.
+   *
+   * Auth is owner-scoped purely by the Redis key (`appDraftKey(user.id, slug)`)
+   * — a draft is only ever visible to the user that wrote it, so no
+   * published-set membership check is needed (a draft can exist for a slug that
+   * was never published). Same env flag as `/source` so the pair ships together;
+   * OFF → typed 404, byte-identical to today.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/apps/:slug/draft')
+  async getAppDraft(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string
+  ) {
+    if (!CDZ_SHOP_AI_EDIT) {
+      throw new NotFound('App not found');
+    }
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      throw new BadRequest('Invalid app slug');
+    }
+    // `this.redis` is a raw ioredis client (CacheRedis extends Redis), so `get`
+    // returns the stored string (or null) — parse it defensively.
+    const rawDraft = await this.redis
+      .get(appDraftKey(user.id, slug))
+      .catch(() => null);
+    let draft: AppDraftRecord | null = null;
+    if (rawDraft) {
+      try {
+        draft = JSON.parse(rawDraft) as AppDraftRecord;
+      } catch {
+        draft = null;
+      }
+    }
+    if (!draft || typeof draft.html !== 'string' || !draft.html) {
+      throw new NotFound('No draft found');
+    }
+    return {
+      slug,
+      html: draft.html,
+      title: typeof draft.title === 'string' ? draft.title : '',
+      updatedAt:
+        typeof draft.updatedAt === 'string'
+          ? draft.updatedAt
+          : new Date().toISOString(),
+    };
+  }
+
+  /**
+   * WS1 — POST /api/v1/apps/:slug/draft (auth'd, owner-only). Upserts the
+   * owner-scoped studio draft `{html,title}` under a rolling 90-day TTL. The
+   * studio's debounced autosave calls this; the record is keyed exclusively by
+   * the authenticated user + slug so drafts are private and never collide across
+   * owners. Additive and idempotent — it never publishes and never touches the
+   * published SET, so it cannot affect CREATE or DEPLOY. Mirrors the deploy
+   * route's html validation (typed 400 for non-string / empty, 413 for oversize).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/draft')
+  async saveAppDraft(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any
+  ) {
+    if (!CDZ_SHOP_AI_EDIT) {
+      throw new NotFound('App not found');
+    }
+    if (typeof slug !== 'string' || !APP_SLUG_RE.test(slug)) {
+      throw new BadRequest('Invalid app slug');
+    }
+    if (body?.html != null && typeof body.html !== 'string') {
+      throw new BadRequest('"html" must be a string');
+    }
+    const html = String(body?.html || '');
+    if (html.length < 1) {
+      throw new BadRequest('No app HTML to save');
+    }
+    if (html.length > MAX_HTML_CHARS) {
+      throw new PayloadTooLargeException(
+        `App HTML is too large (max ${MAX_HTML_CHARS} characters)`
+      );
+    }
+    const title =
+      typeof body?.title === 'string' ? body.title.slice(0, 200) : '';
+    const record: AppDraftRecord = {
+      html,
+      title,
+      updatedAt: new Date().toISOString(),
+    };
+    // Fail-soft: the studio also keeps a localStorage copy, so a store hiccup
+    // must not surface as a save error. `this.redis` is a raw ioredis client
+    // (CacheRedis extends Redis) — write the JSON blob with a rolling TTL via
+    // `set ... EX <seconds>`, same seconds unit the published set's `expire`
+    // uses. Swallow redis errors and report the write outcome.
+    let ok = false;
+    try {
+      const result = await this.redis.set(
+        appDraftKey(user.id, slug),
+        JSON.stringify(record),
+        'EX',
+        APP_DRAFT_TTL_SECONDS
+      );
+      ok = result === 'OK';
+    } catch {
+      ok = false;
+    }
+    this.logger.log(
+      `[apps] draft ${ok ? 'saved' : 'save-failed'} slug=${slug} user=${user.id} bytes=${html.length}`
+    );
+    return { slug, saved: ok, updatedAt: record.updatedAt };
   }
 
   // POST /api/voice/token (Deepgram short-lived browser grant) was removed

@@ -40,41 +40,112 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     .cdz-followups {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 7px;
       margin: 12px 0 2px;
     }
     .cdz-followups-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.04em;
       text-transform: uppercase;
       color: var(--affine-v2-text-secondary);
-      opacity: 0.7;
+      opacity: 0.72;
+    }
+    /* The "AI-suggested" sparkle before the section title. */
+    .cdz-followups-title::before {
+      content: '✦';
+      font-size: 11px;
+      line-height: 1;
+      color: #6e56cf;
+      opacity: 0.9;
     }
     .cdz-followups-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 7px;
     }
+    /*
+     * Follow-up chips, restyled with a per-intent identity. Every chip carries
+     * an intent class (deepen / actionable / reframe) set by the render from a
+     * light French-keyword heuristic; the class drives a leading glyph (via
+     * ::before) and a per-intent accent used for the left tint, hover fill and
+     * focus ring. RTL-aware: the glyph uses logical margin (margin-inline-end)
+     * and the row/flow inherits the panel's dir, so an Arabic answer flips
+     * the chip order and glyph side automatically.
+     */
     .cdz-followup {
+      --cdz-fu-accent: #2f7bff;
+      display: inline-flex;
+      align-items: center;
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
       border-radius: 999px;
-      padding: 6px 12px;
+      padding: 6px 13px;
       cursor: pointer;
       color: var(--affine-v2-text-secondary);
-      background: transparent;
+      background: color-mix(in srgb, var(--cdz-fu-accent) 5%, transparent);
       font: inherit;
       font-size: 12.5px;
       font-weight: 500;
+      line-height: 1.35;
+      text-align: start;
       transition:
         background 0.15s ease,
         color 0.15s ease,
-        border-color 0.15s ease;
+        border-color 0.15s ease,
+        box-shadow 0.15s ease,
+        transform 0.12s ease;
+    }
+    /* Leading per-intent glyph. */
+    .cdz-followup::before {
+      content: '';
+      font-size: 12px;
+      line-height: 1;
+      margin-inline-end: 6px;
+      opacity: 0.9;
+    }
+    .cdz-followup.cdz-fu-deepen {
+      --cdz-fu-accent: #6e56cf;
+    }
+    .cdz-followup.cdz-fu-deepen::before {
+      content: '🔍';
+    }
+    .cdz-followup.cdz-fu-actionable {
+      --cdz-fu-accent: #10a37f;
+    }
+    .cdz-followup.cdz-fu-actionable::before {
+      content: '⚡';
+    }
+    .cdz-followup.cdz-fu-reframe {
+      --cdz-fu-accent: #2f7bff;
+    }
+    .cdz-followup.cdz-fu-reframe::before {
+      content: '🔁';
     }
     .cdz-followup:hover {
       color: var(--affine-v2-text-primary);
-      background: var(--affine-v2-layer-background-hoverOverlay);
-      border-color: color-mix(in srgb, #2f7bff 40%, transparent);
+      background: color-mix(in srgb, var(--cdz-fu-accent) 14%, transparent);
+      border-color: color-mix(in srgb, var(--cdz-fu-accent) 55%, transparent);
+      transform: translateY(-1px);
+    }
+    .cdz-followup:active {
+      transform: translateY(0);
+    }
+    .cdz-followup:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px
+        color-mix(in srgb, var(--cdz-fu-accent) 45%, transparent);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cdz-followup {
+        transition: none;
+      }
+      .cdz-followup:hover,
+      .cdz-followup:active {
+        transform: none;
+      }
     }
 
     /*
@@ -440,6 +511,36 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     }
   }
 
+  /**
+   * Classify a follow-up into one of three intents for its visual identity:
+   *   · actionable — "turn this into a plan / do it / build / create"
+   *   · reframe    — "summarise / simplify / rephrase / shorter"
+   *   · deepen     — the default (explain more, examples, go further)
+   * A light FR/EN keyword heuristic on the label+prompt; cosmetic only, so a
+   * misclassification just picks a different accent/glyph, never a wrong action.
+   */
+  private _cdzFollowUpIntent(f: {
+    label: string;
+    prompt: string;
+  }): 'deepen' | 'actionable' | 'reframe' {
+    const text = `${f.label} ${f.prompt}`.toLowerCase();
+    if (
+      /(r[ée]sum|simplif|reformul|synth[èe]|plus court|en trois|en 3|shorter|summar)/.test(
+        text
+      )
+    ) {
+      return 'reframe';
+    }
+    if (
+      /(plan d.?action|[ée]tape|transforme|cr[ée]e|construis|g[ée]n[èe]re|ajoute|fais(-| )|action|build|create|turn (this|it) into|step)/.test(
+        text
+      )
+    ) {
+      return 'actionable';
+    }
+    return 'deepen';
+  }
+
   private renderFollowUps() {
     const { isLast, status, host } = this;
     if (!isLast || !host || (status !== 'success' && status !== 'idle')) {
@@ -449,21 +550,22 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     return html`<div class="cdz-followups" data-testid="clickdz-followups">
       <span class="cdz-followups-title">À approfondir</span>
       <div class="cdz-followups-row">
-        ${suggestions.map(
-          s =>
-            html`<button
-              class="cdz-followup"
-              title=${s.prompt}
-              @click=${() =>
-                AIAppEvents.requestOpenWithChat.next({
-                  host,
-                  input: s.prompt,
-                  fromAnswer: true,
-                })}
-            >
-              ${s.label}
-            </button>`
-        )}
+        ${suggestions.map(s => {
+          const intent = this._cdzFollowUpIntent(s);
+          return html`<button
+            class="cdz-followup cdz-fu-${intent}"
+            data-intent=${intent}
+            title=${s.prompt}
+            @click=${() =>
+              AIAppEvents.requestOpenWithChat.next({
+                host,
+                input: s.prompt,
+                fromAnswer: true,
+              })}
+          >
+            ${s.label}
+          </button>`;
+        })}
       </div>
     </div>`;
   }

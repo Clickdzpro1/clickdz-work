@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import {
   computeTimelineDuration,
   type VdzClip,
@@ -8,6 +9,41 @@ import {
   type VdzTimeline,
 } from '../../../../modules/vdz';
 import * as styles from './index.css';
+
+/** One context-aware starter chip { label, prompt } (mirrors the backend). */
+interface StarterChip {
+  label: string;
+  prompt: string;
+}
+
+/**
+ * Static Vdz starter chips — the fail-soft fallback the popover always has on
+ * hand. The context-aware endpoint (POST /api/v1/ai/prompt-suggestions,
+ * studio:'vdz') upgrades these when it can; on any failure/slow response these
+ * render unchanged. French-first, matching the product voice.
+ */
+const VDZ_STATIC_STARTERS: StarterChip[] = [
+  {
+    label: 'Une pub produit courte',
+    prompt:
+      'Aide-moi à monter une courte vidéo publicitaire pour mon produit : accroche, présentation et appel à l’action.',
+  },
+  {
+    label: 'Ajouter des sous-titres',
+    prompt:
+      'Ajoute des sous-titres lisibles et bien synchronisés à ma vidéo, avec un style adapté au mobile.',
+  },
+  {
+    label: 'Un fond animé propre',
+    prompt:
+      'Ajoute un arrière-plan animé sobre derrière mes clips pour un rendu plus professionnel.',
+  },
+  {
+    label: 'Une intro de marque',
+    prompt:
+      'Crée une intro de marque de quelques secondes avec mon logo, un titre et une transition soignée.',
+  },
+];
 
 /**
  * Vdz Studio — quick-actions popover (QUILL / WS11).
@@ -245,6 +281,22 @@ const sepStyle: React.CSSProperties = {
   margin: '0 2px',
 };
 
+const starterChipStyle: React.CSSProperties = {
+  padding: '5px 10px',
+  border: '1px solid rgba(110,86,207,0.45)',
+  borderRadius: 999,
+  background: 'rgba(110,86,207,0.14)',
+  color: '#e7e9ee',
+  font: 'inherit',
+  fontSize: 11,
+  fontWeight: 600,
+  cursor: 'pointer',
+  maxWidth: '100%',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
 export function VdzQuickActions({
   timeline,
   selected,
@@ -256,6 +308,66 @@ export function VdzQuickActions({
   // Custom background color draft (native picker commits on Apply, never
   // per-drag — each Apply is exactly one undoable batch).
   const [draftColor, setDraftColor] = useState('#1b2a4a');
+
+  // Context-aware starter chips. Seeded with the static Vdz fallback so the
+  // section is never empty; upgraded in place once the endpoint answers. A
+  // failed/slow fetch is a no-op (fail-soft, cosmetic). Fetched lazily the
+  // first time the popover opens.
+  const [starters, setStarters] = useState<StarterChip[]>(VDZ_STATIC_STARTERS);
+  const startersRequested = useRef(false);
+  // Which chip was just copied (index), for a brief "Copié" affirmation.
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    },
+    []
+  );
+
+  const fetchStarters = useCallback(async () => {
+    if (startersRequested.current) return;
+    startersRequested.current = true;
+    try {
+      const res = await fetch(cdzApiUrl('/api/v1/ai/prompt-suggestions'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ context: { studio: 'vdz' } }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { suggestions?: unknown };
+      const list = Array.isArray(data?.suggestions) ? data.suggestions : [];
+      const cleaned: StarterChip[] = [];
+      for (const s of list) {
+        if (!s || typeof s !== 'object') continue;
+        const label = String((s as { label?: unknown }).label ?? '').trim();
+        const prompt = String((s as { prompt?: unknown }).prompt ?? '').trim();
+        if (label && prompt) cleaned.push({ label, prompt });
+        if (cleaned.length >= 4) break;
+      }
+      if (cleaned.length) setStarters(cleaned);
+    } catch {
+      // Cosmetic — keep the static fallback on any failure.
+    }
+  }, []);
+
+  // Copy a ready-to-use prompt to the clipboard so the merchant can paste it
+  // straight into the Vdz AI dock composer. Self-contained (the popover has no
+  // handle on the dock's controlled input) and honest: a brief "Copié" state.
+  const useStarter = useCallback((chip: StarterChip, idx: number) => {
+    const done = () => {
+      setCopiedIdx(idx);
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopiedIdx(null), 1600);
+    };
+    try {
+      void navigator.clipboard?.writeText(chip.prompt).then(done, done);
+    } catch {
+      done();
+    }
+  }, []);
 
   // Close on outside click or Escape — the RatioPicker mechanics, verbatim.
   useEffect(() => {
@@ -337,7 +449,13 @@ export function VdzQuickActions({
       <button
         type="button"
         className={styles.toolButton}
-        onClick={() => setOpen(o => !o)}
+        onClick={() => {
+          setOpen(o => {
+            const next = !o;
+            if (next) void fetchStarters();
+            return next;
+          });
+        }}
         aria-haspopup="true"
         aria-expanded={open}
         title="Quick actions — canvas background & align selected clip"
@@ -346,6 +464,34 @@ export function VdzQuickActions({
       </button>
       {open ? (
         <div role="menu" aria-label="Quick actions" style={menuStyle}>
+          {/* ---- Smart starters (context-aware) --------------------------- */}
+          <div style={sectionLabelStyle}>✦ Idées pour votre vidéo</div>
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+            }}
+          >
+            {starters.map((chip, i) => (
+              <button
+                key={chip.label}
+                type="button"
+                onClick={() => useStarter(chip, i)}
+                title={`${chip.prompt}\n\n(Cliquez pour copier — collez dans le chat IA)`}
+                style={starterChipStyle}
+              >
+                {copiedIdx === i ? '✓ Copié' : chip.label}
+              </button>
+            ))}
+          </div>
+          <div style={hintStyle}>
+            Cliquez pour copier une idée prête à l’emploi, puis collez-la dans le
+            chat IA.
+          </div>
+
+          <div style={sepStyle} />
+
           {/* ---- Canvas background ---------------------------------------- */}
           <div style={sectionLabelStyle}>Canvas background</div>
           <div

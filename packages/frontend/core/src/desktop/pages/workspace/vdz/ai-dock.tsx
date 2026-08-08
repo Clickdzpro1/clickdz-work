@@ -93,10 +93,34 @@ interface AiReplyMeta {
   invalidCount: number;
   /** The client-validated ops for this turn (drives the op-preview list). */
   ops?: VdzOp[];
+  /**
+   * Human-readable reasons the schema rejected an op this turn (one per invalid
+   * op, in order). Surfaced under the op-count so a model mistake is legible
+   * rather than a bare "N skipped (invalid)". Capped to keep the bubble compact.
+   */
+  invalidReasons?: string[];
   /** A plan checklist when this turn was a plan-mode reply. */
   plan?: VdzPlanStep[];
   /** First-2k raw text when the model returned an unparseable response. */
   raw?: string;
+}
+
+/** Cap on how many per-op invalid reasons we keep/show for one reply. */
+const MAX_INVALID_REASONS = 6;
+
+/**
+ * Turn a Zod parse error for a single op into a short, legible reason. Prefers
+ * the first issue's path + message (e.g. `atSeconds: Expected number`) and falls
+ * back to the raw message. Kept defensive — never throws.
+ */
+function describeInvalidOp(candidate: unknown, message: string): string {
+  const opName =
+    candidate && typeof candidate === 'object' && candidate !== null
+      ? (candidate as { op?: unknown }).op
+      : undefined;
+  const label = typeof opName === 'string' && opName ? opName : 'op';
+  const reason = message.trim().split('\n')[0] || 'invalid op';
+  return `${label}: ${reason}`;
 }
 
 // The Web Speech API is not in the ambient DOM lib types here; declare the
@@ -201,13 +225,23 @@ export function VdzAiDock({
       }
 
       // Edit mode: validate each op client-side with the same schema the host
-      // applies with, then stage the valid ones.
+      // applies with, then stage the valid ones. Capture a short reason per
+      // rejected op so the reply can show WHY the model's op was skipped.
       const valid: VdzOp[] = [];
       let invalid = 0;
+      const invalidReasons: string[] = [];
       for (const candidate of result.ops) {
         const parsed = vdzOpSchema.safeParse(candidate);
-        if (parsed.success) valid.push(parsed.data);
-        else invalid += 1;
+        if (parsed.success) {
+          valid.push(parsed.data);
+        } else {
+          invalid += 1;
+          if (invalidReasons.length < MAX_INVALID_REASONS) {
+            invalidReasons.push(
+              describeInvalidOp(candidate, parsed.error.message)
+            );
+          }
+        }
       }
 
       setReplyMeta(prev => [
@@ -216,6 +250,7 @@ export function VdzAiDock({
           validCount: valid.length,
           invalidCount: invalid,
           ops: valid.length > 0 ? valid : undefined,
+          invalidReasons: invalidReasons.length > 0 ? invalidReasons : undefined,
           raw: result.raw,
         },
       ]);
@@ -952,6 +987,23 @@ function ChatBubble({
             ? ` · ${meta.invalidCount} skipped (invalid)`
             : ''}
         </div>
+      ) : null}
+      {/* Per-op reasons for the skipped (schema-invalid) ops, so a model
+          mistake is legible instead of an opaque "N skipped". */}
+      {meta && meta.invalidReasons && meta.invalidReasons.length > 0 ? (
+        <details className={styles.rawDetails}>
+          <summary className={styles.rawSummary}>
+            Why {meta.invalidCount} op{meta.invalidCount === 1 ? '' : 's'}{' '}
+            skipped
+          </summary>
+          <ul className={styles.invalidReasonList}>
+            {meta.invalidReasons.map((reason, i) => (
+              <li key={i} className={styles.invalidReasonItem}>
+                {reason}
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       {unparseable && meta?.raw ? (
         <details className={styles.rawDetails}>
