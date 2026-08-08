@@ -3,7 +3,7 @@
 // the canonical studio registry (single source of truth), grouped by area.
 // No shop creation here — that happens in DzOS ERP tab when the user is ready.
 import { getOrCreateI18n } from '@affine/i18n';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ONBOARDED_KEY } from '../../clickdz/niches';
 import {
@@ -15,6 +15,71 @@ import {
 
 export const PENDING_SHOP_KEY = 'clickdz:pending-shop:v1';
 export interface PendingShop { shopName: string; whatsapp: string; lang: 'fr' | 'en' | 'ar'; }
+
+// ─── Responsive CSS injector ─────────────────────────────────────────────────
+// Scoped under .clickdz-welcome-page (the card element).
+// Breakpoint 640px: covers portrait tablet + phone; landscape tablet ≥768 keeps
+// the desktop 2-column grid. Follows the same idempotent injector shape as
+// ensureClickDzResponsiveCss() in clickdz/responsive.ts.
+const WELCOME_STYLE_ID = 'cdz-welcome-css';
+
+const WELCOME_CSS = `
+/* ── Welcome grid: base (2 col auto-fill) and 1-col collapse ──────────── */
+.cdz-welcome-grid {
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+@media (max-width: 640px) {
+  .cdz-welcome-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ── Action bar: static in-flow on desktop/tablet ─────────────────────── */
+.cdz-welcome-actionbar {
+  position: static;
+}
+
+/* ── Action bar: sticky footer on small screens ───────────────────────── */
+@media (max-width: 640px) {
+  .cdz-welcome-actionbar {
+    position: sticky;
+    bottom: 0;
+    /* Symmetric negative margins cancel card padding on both sides (RTL-safe). */
+    margin-block-start: 12px;
+    margin-inline: calc(-1 * clamp(20px, 5vw, 44px));
+    margin-block-end: calc(-1 * clamp(20px, 5vw, 44px));
+    padding-inline: 16px;
+    padding-block-start: 12px;
+    padding-block-end: max(12px, env(safe-area-inset-bottom));
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid #E2E8F0;
+  }
+}
+
+/* ── Card padding/radius reduction on small screens ──────────────────── */
+@media (max-width: 640px) {
+  .clickdz-welcome-page {
+    padding: 20px 16px !important;
+    border-radius: 16px !important;
+  }
+}
+`;
+
+/**
+ * Inject the welcome page responsive stylesheet once per document. Idempotent
+ * and SSR-safe — mirrors the shape of ensureClickDzResponsiveCss().
+ */
+function ensureWelcomeCss(): void {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(WELCOME_STYLE_ID)) return;
+  const el = document.createElement('style');
+  el.id = WELCOME_STYLE_ID;
+  el.textContent = WELCOME_CSS;
+  document.head.appendChild(el);
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 const C = {
   primary: '#2B7FFF', sky: '#0EA5E9', fg: '#0F172A', muted: '#5B6B82',
@@ -180,7 +245,15 @@ const T = {
 const pageStyle: React.CSSProperties = {
   minHeight: '100vh',
   background: 'radial-gradient(1100px 480px at 70% -10%, #E8F1FF 0%, transparent 60%), linear-gradient(180deg,#FFFFFF,#F7FAFF 55%,#FFFFFF)',
-  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+  // Changed from alignItems:'center' to 'flex-start' + overflowY:'auto' to fix
+  // the centered-overflow root cause: a flex child taller than the viewport when
+  // centered overflows equally above AND below, making the bottom (finish button)
+  // unreachable — there is effectively no scroll distance. Top-aligned + auto
+  // overflow makes the page scroll normally so every element is reachable.
+  display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+  overflowY: 'auto',
+  paddingInline: 16,
+  paddingBlock: 'clamp(16px, 4vh, 48px)',
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", color: C.fg,
 };
 
@@ -208,6 +281,10 @@ export const Component = () => {
   const [touched, setTouched] = useState(false);
   const t = T[lang];
   const nameOk = workspaceName.trim().length > 0 && workspaceName.trim().length <= 60;
+
+  // Inject responsive CSS once (idempotent). Must be in an effect so it only
+  // runs client-side (document is unavailable during SSR/prerender).
+  useEffect(() => { ensureWelcomeCss(); }, []);
 
   const applyLang = useCallback((next: Lang) => {
     setLang(next);
@@ -278,11 +355,13 @@ export const Component = () => {
               ))}
             </div>
 
-            <button type="button" onClick={nextFromName} style={{
-              marginTop: 28, width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
-              color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
-              cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)', opacity: nameOk ? 1 : 0.85,
-            }}>{t.go}</button>
+            <div className="cdz-welcome-actionbar" style={{ marginTop: 28 }}>
+              <button type="button" onClick={nextFromName} className="cdz-welcome-cta" style={{
+                width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
+                color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
+                cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)', opacity: nameOk ? 1 : 0.85,
+              }}>{t.go}</button>
+            </div>
           </>
         ) : (
           <>
@@ -302,9 +381,10 @@ export const Component = () => {
                     }}>
                       {lang === 'en' ? heading.en : lang === 'ar' ? heading.ar : heading.fr}
                     </div>
-                    <div style={{
+                    <div className="cdz-welcome-grid" style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+                      // gridTemplateColumns is driven by .cdz-welcome-grid in WELCOME_CSS
+                      // so the media query can override to 1fr at ≤640px.
                       gap: 12,
                     }}>
                       {items.map(studio => {
@@ -335,11 +415,13 @@ export const Component = () => {
               })}
             </div>
 
-            <button type="button" onClick={finish} style={{
-              marginTop: 26, width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
-              color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
-              cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)',
-            }}>{t.go}</button>
+            <div className="cdz-welcome-actionbar" style={{ marginTop: 26 }}>
+              <button type="button" onClick={finish} className="cdz-welcome-cta" style={{
+                width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
+                color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
+                cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)',
+              }}>{t.go}</button>
+            </div>
           </>
         )}
       </div>
