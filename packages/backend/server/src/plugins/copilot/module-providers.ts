@@ -177,12 +177,16 @@ export const COPILOT_FEATURE_PROVIDERS = [
   ...COPILOT_CONTEXT_PROVIDERS,
   ...COPILOT_TRANSCRIPT_PROVIDERS,
   ...COPILOT_WORKSPACE_PROVIDERS,
+  // P3 — Social service lives in the FEATURE module (same scope as the job
+  // worker in COPILOT_JOB_PROVIDERS, and exported so the controller can inject
+  // it too). It must NOT sit only in the API module: the job is in the feature
+  // module, which API imports (not vice-versa), so a service registered only in
+  // API is invisible to the job → Nest boot-time UnknownDependenciesException.
+  ...COPILOT_SOCIAL_PROVIDERS,
   ...COPILOT_JOB_PROVIDERS,
 ];
 
 export const COPILOT_API_PROVIDERS = [
   ...COPILOT_RESOLVER_PROVIDERS,
   ...COPILOT_MCP_PROVIDERS,
-  // P3 — Social studio service (injectable into the controller + job worker).
-  ...COPILOT_SOCIAL_PROVIDERS,
 ];
