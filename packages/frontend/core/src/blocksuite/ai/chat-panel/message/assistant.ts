@@ -73,7 +73,7 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
      * light French-keyword heuristic; the class drives a leading glyph (via
      * ::before) and a per-intent accent used for the left tint, hover fill and
      * focus ring. RTL-aware: the glyph uses logical margin (margin-inline-end)
-     * and the row/flow inherits the panel's `dir`, so an Arabic answer flips
+     * and the row/flow inherits the panel's dir, so an Arabic answer flips
      * the chip order and glyph side automatically.
      */
     .cdz-followup {
