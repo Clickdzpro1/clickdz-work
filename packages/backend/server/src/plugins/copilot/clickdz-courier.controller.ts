@@ -40,6 +40,7 @@ import {
   type CourierCredentials,
   type CourierError,
   type CourierProvider,
+  type CourierProviderId,
   type CourierReferenceKind,
   type CourierStatus,
   type ParcelInput,
@@ -135,6 +136,17 @@ import {
 
 // --- Config (read once at module load, same idiom as the sibling controllers).
 const CDZ_COURIERS_ENABLED = process.env.CDZ_COURIERS_ENABLED || '';
+
+// E2 — tolerant env-flag helper. Matches the house idiom already used by the
+// app-provision controller (clickdz-app-provision.controller.ts:289) — accepts
+// '1', 'true', 'yes', or 'on' (case-insensitive) so Railway env values like
+// 'true' work without requiring a redeploy to normalise them to '1'. An unset
+// or empty string is always falsy. Applied at both gate sites (couriersEnabled
+// and providerAllowed) so CDZ_COURIERS_ENABLED=true and CDZ_COURIER_*=true in
+// the existing Railway env light up without any env-value changes.
+function envEnabled(name: string): boolean {
+  return /^(1|true|yes|on)$/i.test(process.env[name] ?? '');
+}
 
 // Slug shape shared by the whole app (identical to the bridge's APP_SLUG_RE /
 // the data API's SLUG_RE). Validated before any Redis/data touch.
@@ -421,7 +433,12 @@ export class ClickDzCourierController {
   // channelsEnabled(). Off ⇒ every route 404s.
   // -------------------------------------------------------------------------
   private couriersEnabled(): boolean {
-    return CDZ_COURIERS_ENABLED === '1' && secretBoxReady();
+    // E2 — tolerant check: CDZ_COURIERS_ENABLED=true (Railway's existing value)
+    // is accepted alongside the canonical '1'. envEnabled() applies
+    // /^(1|true|yes|on)$/i so any reasonable truthy string works. The module-
+    // level CDZ_COURIERS_ENABLED const (read at load) is reused for the read, but
+    // the comparison is now delegated to the tolerant helper.
+    return envEnabled('CDZ_COURIERS_ENABLED') && secretBoxReady();
   }
 
   /** Typed 404 when the feature is off — never leaks that the route exists. */
@@ -465,7 +482,10 @@ export class ClickDzCourierController {
    */
   private providerAllowed(id: CourierProviderId): boolean {
     if (id === 'yalidine') return true;
-    return (process.env[`CDZ_COURIER_${id.toUpperCase()}`] || '') === '1';
+    // E2 — tolerant check: CDZ_COURIER_ZREXPRESS=true / CDZ_COURIER_NOEST=true /
+    // CDZ_COURIER_ECOTRACK=true (Railway's existing values) are accepted alongside
+    // the canonical '1'. envEnabled() applies /^(1|true|yes|on)$/i.
+    return envEnabled(`CDZ_COURIER_${id.toUpperCase()}`);
   }
 
   // -------------------------------------------------------------------------
