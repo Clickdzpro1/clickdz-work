@@ -374,14 +374,14 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     // available; the model row upgrades this regardless).
     if (!out.length) {
       add(
-        ‘Approfondir avec des exemples ?’,
-        ‘Peux-tu approfondir cette réponse avec des exemples concrets adaptés à mon activité ?’
+        'Approfondir avec des exemples ?',
+        'Peux-tu approfondir cette réponse avec des exemples concrets adaptés à mon activité ?'
       );
     }
     if (out.length < 2) {
       add(
-        ‘Transformer en plan d’action ?’,
-        ‘Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.’
+        "Transformer en plan d'action ?",
+        "Transforme cette réponse en plan d'action clair, étape par étape, que je peux suivre."
       );
     }
 

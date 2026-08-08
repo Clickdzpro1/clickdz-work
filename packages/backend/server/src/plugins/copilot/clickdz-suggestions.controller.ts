@@ -73,79 +73,79 @@ interface FollowUpContext {
 const FALLBACKS: Record<string, FollowUp[]> = {
   apps: [
     {
-      label: ‘Améliorer la mise en page ?’,
+      label: 'Améliorer la mise en page ?',
       prompt:
-        ‘Améliore la mise en page de cette application : espacement, alignement et lisibilité sur mobile.’,
+        'Améliore la mise en page de cette application : espacement, alignement et lisibilité sur mobile.',
     },
     {
-      label: ‘Ajouter un formulaire COD ?’,
+      label: 'Ajouter un formulaire COD ?',
       prompt:
-        ‘Ajoute un formulaire de commande à la livraison (nom, téléphone, wilaya) à cette page, avec validation simple.’,
+        'Ajoute un formulaire de commande à la livraison (nom, téléphone, wilaya) à cette page, avec validation simple.',
     },
     {
-      label: ‘Rendre ça plus convaincant ?’,
+      label: 'Rendre ça plus convaincant ?',
       prompt:
-        ‘Rends cette page plus convaincante : titre accrocheur, liste d’avantages et appel à l’action clair.’,
+        'Rends cette page plus convaincante : titre accrocheur, liste d’avantages et appel à l’action clair.',
     },
   ],
   vdz: [
     {
-      label: ‘Créer une variante de ce clip ?’,
+      label: 'Créer une variante de ce clip ?',
       prompt:
-        ‘Crée une variante de ce résultat avec un angle différent ou un ton plus dynamique.’,
+        'Crée une variante de ce résultat avec un angle différent ou un ton plus dynamique.',
     },
     {
-      label: ‘Ajouter une voix off ?’,
+      label: 'Ajouter une voix off ?',
       prompt:
-        ‘Génère une courte voix off en français qui accompagne ce contenu vidéo.’,
+        'Génère une courte voix off en français qui accompagne ce contenu vidéo.',
     },
     {
-      label: ‘Résumer en une accroche ?’,
+      label: 'Résumer en une accroche ?',
       prompt:
-        ‘Résume l’essentiel de cette réponse en une accroche percutante de moins de 10 mots.’,
+        'Résume l’essentiel de cette réponse en une accroche percutante de moins de 10 mots.',
     },
   ],
   voice: [
     {
-      label: ‘Réécrire avec un ton plus chaleureux ?’,
+      label: 'Réécrire avec un ton plus chaleureux ?',
       prompt:
-        ‘Réécris ce texte avec un ton plus chaleureux et rassurante, adapté à un message client.’,
+        'Réécris ce texte avec un ton plus chaleureux et rassurante, adapté à un message client.',
     },
     {
-      label: ‘Transformer en spot 20s ?’,
+      label: 'Transformer en spot 20s ?',
       prompt:
-        ‘Transforme ce contenu en un spot audio de 20 secondes, dynamique et accrocheur.’,
+        'Transforme ce contenu en un spot audio de 20 secondes, dynamique et accrocheur.',
     },
     {
-      label: ‘Proposer une version plus courte ?’,
+      label: 'Proposer une version plus courte ?',
       prompt:
-        ‘Propose une version condensée de ce texte, en gardant l’essentiel, pour une lecture rapide.’,
+        'Propose une version condensée de ce texte, en gardant l’essentiel, pour une lecture rapide.',
     },
   ],
   default: [
     {
-      label: ‘Approfondir avec des exemples ?’,
+      label: 'Approfondir avec des exemples ?',
       prompt:
-        ‘Peux-tu approfondir cette réponse avec des exemples concrets et adaptés à mon activité ?’,
+        'Peux-tu approfondir cette réponse avec des exemples concrets et adaptés à mon activité ?',
     },
     {
-      label: ‘Transformer en plan d’action ?’,
+      label: 'Transformer en plan d’action ?',
       prompt:
-        ‘Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.’,
+        'Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.',
     },
     {
-      label: ‘Résumer en trois points ?’,
-      prompt: ‘Résume cette réponse en trois points clés, simples et directs.’,
+      label: 'Résumer en trois points ?',
+      prompt: 'Résume cette réponse en trois points clés, simples et directs.',
     },
   ],
 };
 
 /** Human-readable description of a studio, for grounding the model. */
 const STUDIO_BLURB: Record<string, string> = {
-  apps: ‘the ClickDz App Builder, where the merchant builds small web apps, sales pages and mini-shops (COD-friendly, French-first)’,
-  vdz: ‘Vdz Studio, an AI video editor for short product ads, reels and promos (timeline, captions, voiceover)’,
-  voice: ‘Voice Studio, a text-to-speech studio for narration, ads and voiceovers in French/Arabic’,
-  chat: ‘the main AI chat, a general assistant for an Algerian merchant’,
+  apps: 'the ClickDz App Builder, where the merchant builds small web apps, sales pages and mini-shops (COD-friendly, French-first)',
+  vdz: 'Vdz Studio, an AI video editor for short product ads, reels and promos (timeline, captions, voiceover)',
+  voice: 'Voice Studio, a text-to-speech studio for narration, ads and voiceovers in French/Arabic',
+  chat: 'the main AI chat, a general assistant for an Algerian merchant',
 };
 
 /** Pick the fallback set for a studio, falling back to default. */
@@ -156,23 +156,23 @@ function fallbackFor(studio: string): FollowUp[] {
 /** Normalise the incoming context envelope defensively. */
 function readContext(body: Record<string, unknown>): FollowUpContext {
   const rawCtx =
-    body.context && typeof body.context === ‘object’
+    body.context && typeof body.context === 'object'
       ? (body.context as Record<string, unknown>)
       : body;
   const studio =
-    typeof rawCtx.studio === ‘string’
+    typeof rawCtx.studio === 'string'
       ? rawCtx.studio.trim().toLowerCase().slice(0, MAX_STUDIO_CHARS)
-      : ‘’;
+      : '';
   const niche =
-    typeof rawCtx.niche === ‘string’
-      ? rawCtx.niche.replace(/\s+/g, ‘ ‘).trim().slice(0, MAX_NICHE_CHARS)
-      : ‘’;
+    typeof rawCtx.niche === 'string'
+      ? rawCtx.niche.replace(/\s+/g, ' ').trim().slice(0, MAX_NICHE_CHARS)
+      : '';
   const lang =
-    typeof rawCtx.lang === ‘string’ ? rawCtx.lang.trim().slice(0, 8) : ‘’;
+    typeof rawCtx.lang === 'string’ ? rawCtx.lang.trim().slice(0, 8) : '';
   const recentTitles = Array.isArray(rawCtx.recentTitles)
     ? rawCtx.recentTitles
-        .filter((t): t is string => typeof t === ‘string’)
-        .map(t => t.replace(/\s+/g, ‘ ‘).trim().slice(0, MAX_TITLE_CHARS))
+        .filter((t): t is string => typeof t === 'string')
+        .map(t => t.replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE_CHARS))
         .filter(Boolean)
         .slice(0, MAX_TITLES)
     : [];
@@ -181,26 +181,26 @@ function readContext(body: Record<string, unknown>): FollowUpContext {
 
 /** Build the system prompt for the fast suggestion model. */
 function buildSystemPrompt(ctx: FollowUpContext): string {
-  const studio = ctx.studio || ‘chat’;
+  const studio = ctx.studio || 'chat';
   const blurb = STUDIO_BLURB[studio] ?? STUDIO_BLURB.chat;
   const lines = [
-    ‘You generate follow-up suggestions for an AI workspace chat used by Algerian merchants (French-first).’,
+    'You generate follow-up suggestions for an AI workspace chat used by Algerian merchants (French-first).',
     `The merchant is currently in ${blurb}.`,
     ctx.niche
       ? `Their business / niche is: "${ctx.niche}". Tailor every suggestion to this niche.`
-      : ‘Their niche is unknown — keep suggestions broadly useful for a small merchant.’,
+      : 'Their niche is unknown — keep suggestions broadly useful for a small merchant.',
     ctx.recentTitles?.length
-      ? `They recently worked on: ${ctx.recentTitles.map(t => ‘"’ + t + ‘"’).join(‘, ‘)}. You may reference these.`
-      : ‘’,
+      ? `They recently worked on: ${ctx.recentTitles.map(t => '"’ + t + '"').join(', ')}. You may reference these.`
+      : '',
     `Given the user’s question and the assistant’s answer, produce exactly ${COUNT} follow-up suggestions as a JSON array of objects with "label" and "prompt" string fields.`,
-    ‘"label": a SHORT French question (9 words max) shown on a chip — scannable, natural, interrogative.’,
-    ‘"prompt": a RICH, self-contained French instruction (1-2 sentences) that is what actually gets sent when the chip is clicked. It must fully stand alone and pick up where the answer left off.’,
-    ‘Make the three suggestions DISTINCT and genuinely useful: one that deepens, one that turns it into something actionable, one that reframes or simplifies.’,
-    ‘Ground every suggestion in what the answer actually contains — never invent features, numbers, or entities not present.’,
-    ‘Write EVERYTHING in French (labels and prompts).’,
-    ‘Output ONLY the JSON array, nothing else — no markdown fences, no commentary.’,
+    '"label": a SHORT French question (9 words max) shown on a chip — scannable, natural, interrogative.',
+    '"prompt": a RICH, self-contained French instruction (1-2 sentences) that is what actually gets sent when the chip is clicked. It must fully stand alone and pick up where the answer left off.',
+    'Make the three suggestions DISTINCT and genuinely useful: one that deepens, one that turns it into something actionable, one that reframes or simplifies.',
+    'Ground every suggestion in what the answer actually contains — never invent features, numbers, or entities not present.',
+    'Write EVERYTHING in French (labels and prompts).',
+    'Output ONLY the JSON array, nothing else — no markdown fences, no commentary.',
   ];
-  return lines.filter(Boolean).join(‘\n’);
+  return lines.filter(Boolean).join('\n');
 }
 
 /** Clean a single string field: strip quotes/backticks, collapse space, cap. */
