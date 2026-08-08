@@ -168,7 +168,7 @@ function readContext(body: Record<string, unknown>): FollowUpContext {
       ? rawCtx.niche.replace(/\s+/g, ' ').trim().slice(0, MAX_NICHE_CHARS)
       : '';
   const lang =
-    typeof rawCtx.lang === 'string’ ? rawCtx.lang.trim().slice(0, 8) : '';
+    typeof rawCtx.lang === 'string' ? rawCtx.lang.trim().slice(0, 8) : '';
   const recentTitles = Array.isArray(rawCtx.recentTitles)
     ? rawCtx.recentTitles
         .filter((t): t is string => typeof t === 'string')
@@ -190,7 +190,7 @@ function buildSystemPrompt(ctx: FollowUpContext): string {
       ? `Their business / niche is: "${ctx.niche}". Tailor every suggestion to this niche.`
       : 'Their niche is unknown — keep suggestions broadly useful for a small merchant.',
     ctx.recentTitles?.length
-      ? `They recently worked on: ${ctx.recentTitles.map(t => '"’ + t + '"').join(', ')}. You may reference these.`
+      ? `They recently worked on: ${ctx.recentTitles.map(t => '"' + t + '"').join(', ')}. You may reference these.`
       : '',
     `Given the user’s question and the assistant’s answer, produce exactly ${COUNT} follow-up suggestions as a JSON array of objects with "label" and "prompt" string fields.`,
     '"label": a SHORT French question (9 words max) shown on a chip — scannable, natural, interrogative.',
