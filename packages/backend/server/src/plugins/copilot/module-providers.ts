@@ -68,6 +68,9 @@ import {
   CopilotWorkspaceEmbeddingResolver,
   CopilotWorkspaceService,
 } from './workspace';
+// P3 — Social studio: shared publish service + scheduled-job worker.
+import { ClickDzSocialService } from './clickdz-social.service';
+import { ClickDzSocialJob } from './clickdz-social.job';
 
 export const COPILOT_PROVIDER_PROVIDERS = [
   ...CopilotProviders,
@@ -152,7 +155,14 @@ export const COPILOT_JOB_PROVIDERS = [
   CopilotCronJobs,
   ClickDzAgentRunJob,
   ClickDzAgentTriggerSweep,
+  // P3 — Social studio: job worker (schedules delayed publish jobs via BullMQ).
+  ClickDzSocialJob,
 ];
+
+// P3 — Social service is registered separately (not a job, not a kernel provider)
+// so it can be injected by BOTH the controller and the job worker. Register it
+// in COPILOT_API_PROVIDERS so it's in the CopilotModule DI container.
+export const COPILOT_SOCIAL_PROVIDERS = [ClickDzSocialService];
 
 export const COPILOT_MCP_PROVIDERS = [WorkspaceMcpProvider];
 
@@ -173,4 +183,6 @@ export const COPILOT_FEATURE_PROVIDERS = [
 export const COPILOT_API_PROVIDERS = [
   ...COPILOT_RESOLVER_PROVIDERS,
   ...COPILOT_MCP_PROVIDERS,
+  // P3 — Social studio service (injectable into the controller + job worker).
+  ...COPILOT_SOCIAL_PROVIDERS,
 ];

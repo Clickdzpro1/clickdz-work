@@ -27,6 +27,18 @@ import { CurrentUser } from '../../core/auth';
 // (hermesConfigKey idiom). Flows/runs/DLQ are persisted per-user through it.
 import { BadRequest, Cache, NotFound, Throttle } from '../../base';
 
+// P3 — Social studio backend: shared service + job (scheduler).
+import {
+  ClickDzSocialService,
+  SOCIAL_TEXT_MAX,
+  SOCIAL_TARGETS_MAX,
+  SOCIAL_MEDIA_MAX,
+  SOCIAL_SCHEDULE_MAX_AHEAD_MS,
+  SOCIAL_NETWORKS,
+} from './clickdz-social.service';
+import type { SocialPost, PublishedLogEntry } from './clickdz-social.service';
+import { ClickDzSocialJob } from './clickdz-social.job';
+
 // SECURITY / CONFIG: the ONE switch. Without COMPOSIO_API_KEY every enabled
 // code path below is unreachable — the controller reports {enabled:false} and
 // never calls Composio. Read once at module load (same idiom as the bridge's
@@ -918,7 +930,12 @@ export class ClickDzIntegrationsController {
   // map/list ops) is injected for per-user flow/run/DLQ persistence. Constructor
   // DI works without a CopilotModule change because Cache is a @Global provider
   // (same as ClickDzHermesController). Fail-soft by contract — never throws.
-  constructor(private readonly cache: Cache) {}
+  constructor(
+    private readonly cache: Cache,
+    // P3 — Social studio: service (shared publish logic) + job (scheduler).
+    private readonly socialService: ClickDzSocialService,
+    private readonly socialJob: ClickDzSocialJob
+  ) {}
 
   /** Small helper: fetch with a hard AbortController timeout (default 8s). */
   private async fetchWithTimeout(
@@ -1617,37 +1634,75 @@ export class ClickDzIntegrationsController {
       return;
     }
 
-    const channels: string[] = Array.isArray(body?.channels)
-      ? body.channels
+    const channels: string[] = Array.isArray(body?.channels ?? body?.networks)
+      ? (body.channels ?? body.networks)
           .filter((s: any) => typeof s === 'string' && s.trim())
           .map((s: string) => s.trim())
           .slice(0, RUN_MAX_TOOLKITS)
       : [];
     const tone =
       typeof body?.tone === 'string' ? body.tone.trim().slice(0, 60) : '';
+    // P3 — extended fields: per-network variants, hashtag/emoji hints.
+    const perNetwork = body?.perNetwork === true && channels.length > 0;
+    const hashtagHint = body?.hashtags === true ? ' Add relevant hashtags.' : '';
+    const emojiHint = body?.emoji === true ? ' Use relevant emoji.' : '';
 
     const channelHint = channels.length
       ? ` The post is for these platforms: ${channels.join(', ')}. Respect each platform's conventions (length, hashtags).`
       : '';
     const toneHint = tone ? ` Tone: ${tone}.` : '';
 
-    const messages: Array<{ role: string; content: string }> = [
+    // Base content (always generated — back-compat).
+    const baseMessages: Array<{ role: string; content: string }> = [
       {
         role: 'system',
         content:
           'You are a social media copywriter for a small business. Write ONE ready-to-post caption from the brief. Output ONLY the caption text — no preamble, no quotes, no markdown, no options list.' +
           channelHint +
-          toneHint,
+          toneHint +
+          hashtagHint +
+          emojiHint,
       },
       { role: 'user', content: brief },
     ];
 
-    const planned = await this.callPlanner(messages, COMPOSE_TIMEOUT_MS);
+    const planned = await this.callPlanner(baseMessages, COMPOSE_TIMEOUT_MS);
     if (planned === null || !planned.raw.trim()) {
       res.status(502).json({ error: 'planner_unavailable' });
       return;
     }
-    res.status(200).json({ content: planned.raw.trim() });
+    const content = planned.raw.trim();
+
+    // Per-network variants: one cdz-flash turn per network (bounded).
+    if (perNetwork) {
+      const variants: Record<string, string> = {};
+      const perNetworkBudget = Math.max(
+        1000,
+        COMPOSE_TIMEOUT_MS - (COMPOSE_TIMEOUT_MS / (channels.length + 1))
+      );
+      for (const channel of channels) {
+        const vMessages: Array<{ role: string; content: string }> = [
+          {
+            role: 'system',
+            content:
+              `You are a social media copywriter. Adapt the following caption specifically for ${channel}. ` +
+              `Respect ${channel}'s conventions (character limit, hashtag style, tone, media requirements). ` +
+              `Output ONLY the adapted caption — no preamble, no quotes, no markdown.` +
+              toneHint +
+              hashtagHint +
+              emojiHint,
+          },
+          { role: 'user', content: `Base caption:\n${content}` },
+        ];
+        const vPlanned = await this.callPlanner(vMessages, perNetworkBudget);
+        if (vPlanned?.raw.trim()) {
+          variants[channel] = vPlanned.raw.trim();
+        }
+      }
+      res.status(200).json({ content, variants });
+    } else {
+      res.status(200).json({ content });
+    }
   }
 
   /**
@@ -2435,5 +2490,497 @@ export class ClickDzIntegrationsController {
       await this.cache.mapDelete(flowDlqKey(user.id), runId);
     }
     res.status(200).json(replay);
+  }
+
+  // =========================================================================
+  // P3 — SOCIAL STUDIO BACKEND
+  //
+  // All routes:
+  //  - Auth'd (global AuthGuard + @CurrentUser — same as every route above).
+  //  - @Throttle('strict') on mutating + cost paths.
+  //  - Dark-by-default via COMPOSIO_API_KEY: 409 {error:'not_configured'}.
+  //  - Per-user isolation: every Redis key + Composio execute uses user.id.
+  //  - Fail-soft reads: degrade to [] / undefined on cache errors.
+  //
+  // Endpoint contract (must match E2 frontend api.ts — see /agent/workspace/fixes/p3e1.md):
+  //   GET    /api/v1/social/accounts                   → {enabled, accounts:[{network,connected}]}
+  //   POST   /api/v1/social/accounts/:network/connect  → {redirectUrl} | 502
+  //   DELETE /api/v1/social/accounts/:network          → {ok}
+  //   POST   /api/v1/social/compose                    → {content, variants?}  (extended above)
+  //   POST   /api/v1/social/posts                      → SocialPost
+  //   GET    /api/v1/social/posts                      → SocialPostSummary[]
+  //   GET    /api/v1/social/posts/:id                  → SocialPost | 404
+  //   DELETE /api/v1/social/posts/:id                  → {ok}
+  //   POST   /api/v1/social/posts/:id/reschedule       → SocialPost
+  //   POST   /api/v1/social/posts/:id/retry            → SocialPost
+  //   GET    /api/v1/social/log                        → PublishedLogEntry[]
+  //   GET    /api/v1/social/analytics/:network         → {available:boolean, ...}
+  // =========================================================================
+
+  // ---- Accounts (connections) ---------------------------------------------
+
+  /**
+   * GET /social/accounts — per-user connections for the 10 social networks.
+   * One call replaces the FE's 10x toolkit-search fan-out. Returns
+   * [{network, connected}] for exactly the 10 social slugs.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/social/accounts')
+  async socialAccounts(
+    @CurrentUser() user: CurrentUser,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(200).json({ enabled: false, accounts: [] });
+      return;
+    }
+    const connectedSlugs = await this.socialService.fetchConnectedSlugsForSocial(user.id);
+    const accounts = SOCIAL_NETWORKS.map(network => ({
+      network,
+      connected: connectedSlugs.has(network),
+    }));
+    res.status(200).json({ enabled: true, accounts });
+  }
+
+  /**
+   * POST /social/accounts/:network/connect — alias of the existing /integrations/connect
+   * path kept for Social API cohesion. Delegates to ensureAuthConfig + initiateConnect.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/social/accounts/:network/connect')
+  async socialConnect(
+    @CurrentUser() user: CurrentUser,
+    @Param('network') network: string,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+    const toolkit = network.trim().toLowerCase();
+    if (!toolkit) {
+      throw new BadRequest('"network" param is required');
+    }
+    const callbackUrl =
+      typeof body?.callbackUrl === 'string' && body.callbackUrl.length
+        ? body.callbackUrl
+        : undefined;
+    try {
+      let authConfigId = await this.ensureAuthConfig(toolkit) ?? toolkit;
+      let attempt = await this.initiateConnect(authConfigId, user.id, callbackUrl);
+      if (!attempt.ok && attempt.authNotFound) {
+        const ensuredId = await this.ensureAuthConfig(toolkit);
+        if (ensuredId && ensuredId !== authConfigId) {
+          authConfigId = ensuredId;
+          attempt = await this.initiateConnect(authConfigId, user.id, callbackUrl);
+        }
+      }
+      if (attempt.ok && attempt.redirectUrl) {
+        res.status(200).json({ redirectUrl: attempt.redirectUrl });
+        return;
+      }
+      if (attempt.authNotFound) {
+        res.status(502).json({ error: 'toolkit_auth_unconfigured', toolkit });
+        return;
+      }
+      res.status(502).json({ error: 'composio_error', detail: attempt.detail ?? 'composio_request_failed' });
+    } catch (err) {
+      res.status(502).json({ error: 'composio_error', detail: (err as Error)?.message ?? 'composio_request_failed' });
+    }
+  }
+
+  /**
+   * DELETE /social/accounts/:network — disconnect: list the user's connected
+   * accounts for this network, then DELETE each from Composio. 200 {ok} always
+   * (idempotent — already-disconnected is fine). Never hard-fails.
+   */
+  @Throttle('strict')
+  @Delete('/api/v1/social/accounts/:network')
+  async socialDisconnect(
+    @CurrentUser() user: CurrentUser,
+    @Param('network') network: string,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+    const toolkit = network.trim().toLowerCase();
+    const ids = await this.socialService.fetchConnectedAccountIds(user.id, toolkit);
+    let allOk = true;
+    for (const id of ids) {
+      const ok = await this.socialService.deleteConnectedAccount(id);
+      if (!ok) allOk = false;
+    }
+    res.status(200).json({ ok: allOk, disconnected: ids.length });
+  }
+
+  // ---- Social posts CRUD --------------------------------------------------
+
+  /**
+   * POST /social/posts — create / schedule / publish-now.
+   *
+   * Body:
+   *   { id?, text, media?, targets, scheduledAt?, publishNow? }
+   *   - id: supply an existing postId to UPDATE (upsert semantics for draft edits).
+   *   - text: string, 1..SOCIAL_TEXT_MAX.
+   *   - media: SocialMedia[] (optional, max SOCIAL_MEDIA_MAX).
+   *   - targets: [{network, text?}] (1..SOCIAL_TARGETS_MAX, required).
+   *   - scheduledAt: epoch ms (future, max SOCIAL_SCHEDULE_MAX_AHEAD_MS ahead).
+   *   - publishNow: boolean — publish inline in this request.
+   *
+   * Returns SocialPost.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/social/posts')
+  async createPost(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+
+    // --- validate body ---
+    const text = typeof body?.text === 'string' ? body.text.trim() : '';
+    if (!text || text.length > SOCIAL_TEXT_MAX) {
+      throw new BadRequest(`"text" must be 1..${SOCIAL_TEXT_MAX} chars`);
+    }
+
+    const rawTargets = Array.isArray(body?.targets) ? body.targets : [];
+    if (!rawTargets.length) {
+      throw new BadRequest('"targets" must be a non-empty array of {network}');
+    }
+    const targets = this.socialService.normalizeTargets(rawTargets);
+    if (!targets.length) {
+      throw new BadRequest('"targets" contains no valid network slugs');
+    }
+    if (targets.length > SOCIAL_TARGETS_MAX) {
+      throw new BadRequest(`max ${SOCIAL_TARGETS_MAX} targets`);
+    }
+
+    const rawMedia = Array.isArray(body?.media) ? body.media : [];
+    const media = this.socialService.normalizeMedia(rawMedia);
+
+    const now = Date.now();
+    let scheduledAt: number | undefined;
+    if (body?.scheduledAt != null) {
+      const ts = Number(body.scheduledAt);
+      if (!Number.isFinite(ts) || ts <= now) {
+        throw new BadRequest('"scheduledAt" must be a future epoch ms');
+      }
+      if (ts - now > SOCIAL_SCHEDULE_MAX_AHEAD_MS) {
+        throw new BadRequest(`"scheduledAt" must be within 180 days`);
+      }
+      scheduledAt = ts;
+    }
+
+    const publishNow = body?.publishNow === true;
+
+    // --- resolve existing post (upsert) ---
+    const existingId = typeof body?.id === 'string' ? body.id.trim() : null;
+    let post: SocialPost;
+
+    if (existingId) {
+      const existing = await this.socialService.readPost(user.id, existingId);
+      if (existing) {
+        // Update existing (cancel old job if rescheduling).
+        if (existing.status === 'scheduled' && existing.jobId) {
+          await this.socialJob.removeJob(user.id, existing.id);
+        }
+        existing.text = text;
+        existing.media = media;
+        existing.targets = targets;
+        existing.scheduledAt = scheduledAt;
+        existing.jobId = undefined;
+        existing.status = scheduledAt ? 'scheduled' : publishNow ? 'publishing' : 'draft';
+        post = existing;
+      } else {
+        // ID supplied but not found — mint fresh.
+        post = this.socialService.mintPost(user.id, { text, media, targets, scheduledAt });
+      }
+    } else {
+      post = this.socialService.mintPost(user.id, { text, media, targets, scheduledAt });
+    }
+
+    if (publishNow) {
+      // Inline publish: persist as publishing → run → update.
+      post.status = 'publishing';
+      await this.socialService.writePost(user.id, post);
+      const updated = await this.socialService.publishPost(post);
+      await this.socialService.writePost(user.id, updated);
+      // Append to published log.
+      const logEntry: PublishedLogEntry = {
+        postId: updated.id,
+        publishedAt: updated.publishedAt ?? Date.now(),
+        results: updated.targets.map(t => ({
+          network: t.network,
+          ok: t.status === 'ok',
+          externalUrl: t.externalUrl,
+        })),
+      };
+      await this.socialService.appendPublishedLog(user.id, logEntry);
+      res.status(200).json(updated);
+      return;
+    }
+
+    if (scheduledAt) {
+      // Schedule: persist as scheduled + enqueue delayed job.
+      post.status = 'scheduled';
+      await this.socialService.writePost(user.id, post);
+      const jobId = await this.socialJob.enqueuePublish(user.id, post.id, scheduledAt);
+      if (jobId) {
+        post.jobId = jobId;
+        await this.socialService.writePost(user.id, post);
+      }
+      res.status(200).json(post);
+      return;
+    }
+
+    // Draft: persist only.
+    post.status = 'draft';
+    await this.socialService.writePost(user.id, post);
+    res.status(200).json(post);
+  }
+
+  /**
+   * GET /social/posts?status=&from=&to= — list SocialPostSummary[] (newest first).
+   * `from`/`to` filter by scheduledAt epoch ms (for calendar range queries).
+   */
+  @Throttle('strict')
+  @Get('/api/v1/social/posts')
+  async listPosts(
+    @CurrentUser() user: CurrentUser,
+    @Query() query: any
+  ): Promise<any[]> {
+    const status = typeof query?.status === 'string' ? query.status.trim() : undefined;
+    const from = Number.isFinite(Number(query?.from)) ? Number(query.from) : undefined;
+    const to = Number.isFinite(Number(query?.to)) ? Number(query.to) : undefined;
+    return this.socialService.listPostSummaries(user.id, { status, from, to });
+  }
+
+  /** GET /social/posts/:id — full SocialPost, or typed 404. */
+  @Throttle('strict')
+  @Get('/api/v1/social/posts/:id')
+  async getPost(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    const post = await this.socialService.readPost(user.id, id);
+    if (!post) {
+      res.status(404).json({ error: 'post_not_found' });
+      return;
+    }
+    res.status(200).json(post);
+  }
+
+  /**
+   * DELETE /social/posts/:id — remove post + cancel its BullMQ job if scheduled.
+   * Idempotent {ok}.
+   */
+  @Throttle('strict')
+  @Delete('/api/v1/social/posts/:id')
+  async deletePost(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    const post = await this.socialService.readPost(user.id, id);
+    if (post?.status === 'scheduled') {
+      await this.socialJob.removeJob(user.id, id);
+    }
+    await this.socialService.deletePost(user.id, id);
+    res.status(200).json({ ok: true });
+  }
+
+  /**
+   * POST /social/posts/:id/reschedule {scheduledAt} — remove old job + re-add
+   * with new delay. Updates post row. Returns updated SocialPost.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/social/posts/:id/reschedule')
+  async reschedulePost(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+    const post = await this.socialService.readPost(user.id, id);
+    if (!post) {
+      res.status(404).json({ error: 'post_not_found' });
+      return;
+    }
+    const ts = Number(body?.scheduledAt);
+    const now = Date.now();
+    if (!Number.isFinite(ts) || ts <= now) {
+      throw new BadRequest('"scheduledAt" must be a future epoch ms');
+    }
+    if (ts - now > SOCIAL_SCHEDULE_MAX_AHEAD_MS) {
+      throw new BadRequest('"scheduledAt" must be within 180 days');
+    }
+
+    post.scheduledAt = ts;
+    post.status = 'scheduled';
+    // Reset any pending/failed targets for a fresh publish attempt.
+    for (const t of post.targets) {
+      if (t.status === 'failed') {
+        t.status = 'pending';
+        t.error = undefined;
+      }
+    }
+
+    const newJobId = await this.socialJob.reschedulePublish(user.id, post.id, ts);
+    post.jobId = newJobId;
+    await this.socialService.writePost(user.id, post);
+    res.status(200).json(post);
+  }
+
+  /**
+   * POST /social/posts/:id/retry — re-run publishPost() for failed/partial rows,
+   * only re-attempting targets whose status is 'failed' (pending targets are
+   * left as-is). DLQ-style, mirrors replayDlq.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/social/posts/:id/retry')
+  async retryPost(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+    const post = await this.socialService.readPost(user.id, id);
+    if (!post) {
+      res.status(404).json({ error: 'post_not_found' });
+      return;
+    }
+    if (post.status !== 'failed' && post.status !== 'partial') {
+      throw new BadRequest(`"retry" only applies to failed/partial posts (current: ${post.status})`);
+    }
+
+    // Reset failed targets to pending so publishPost() re-attempts them.
+    for (const t of post.targets) {
+      if (t.status === 'failed') {
+        t.status = 'pending';
+        t.error = undefined;
+      }
+    }
+    post.status = 'publishing';
+    await this.socialService.writePost(user.id, post);
+
+    const updated = await this.socialService.publishPost(post);
+    await this.socialService.writePost(user.id, updated);
+
+    // Update published log.
+    const logEntry: PublishedLogEntry = {
+      postId: updated.id,
+      publishedAt: updated.publishedAt ?? Date.now(),
+      results: updated.targets.map(t => ({
+        network: t.network,
+        ok: t.status === 'ok',
+        externalUrl: t.externalUrl,
+      })),
+    };
+    await this.socialService.appendPublishedLog(user.id, logEntry);
+    res.status(200).json(updated);
+  }
+
+  // ---- Published log + analytics ------------------------------------------
+
+  /**
+   * GET /social/log — published log for the user (newest first).
+   * Always available — the analytics floor.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/social/log')
+  async socialLog(@CurrentUser() user: CurrentUser): Promise<PublishedLogEntry[]> {
+    return this.socialService.readPublishedLog(user.id);
+  }
+
+  /**
+   * GET /social/analytics/:network — best-effort per-network insights.
+   * Discovers an analytics/insights action for the toolkit; if found, runs it
+   * and returns the result. Never hard-fails — returns {available:false} when
+   * no analytics action is discoverable.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/social/analytics/:network')
+  async socialAnalytics(
+    @CurrentUser() user: CurrentUser,
+    @Param('network') network: string,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(200).json({ available: false, reason: 'not_configured' });
+      return;
+    }
+    const toolkit = network.trim().toLowerCase();
+    // Discover an insights/analytics action for this toolkit.
+    const analyticsAction = await this.discoverAnalyticsAction(toolkit);
+    if (!analyticsAction) {
+      res.status(200).json({ available: false, network: toolkit });
+      return;
+    }
+    // Execute best-effort (no retry — analytics is read-only, failure is soft).
+    const result = await this.socialService.executeToolRaw(
+      analyticsAction,
+      {},
+      user.id
+    );
+    if (!result.ok) {
+      res.status(200).json({ available: false, network: toolkit, error: result.detail });
+      return;
+    }
+    let parsed: unknown = result.preview;
+    try { parsed = JSON.parse(result.preview); } catch { /* keep string */ }
+    res.status(200).json({ available: true, network: toolkit, data: parsed });
+  }
+
+  /**
+   * Discover an analytics/insights action for a Composio toolkit.
+   * Searches for actions whose slug contains 'analytics', 'insight', 'stats',
+   * or 'metric'. Soft-fail → null when nothing found or Composio unreachable.
+   */
+  private async discoverAnalyticsAction(toolkit: string): Promise<string | null> {
+    if (!COMPOSIO_API_KEY) return null;
+    try {
+      const params = new URLSearchParams({ toolkit_slug: toolkit, limit: '25' });
+      const res = await this.fetchWithTimeout(
+        `${COMPOSIO_TOOLS_URL}?${params}`,
+        {
+          method: 'GET',
+          headers: { 'x-api-key': COMPOSIO_API_KEY, Accept: 'application/json' },
+        },
+        8_000
+      );
+      if (!res.ok) return null;
+      const data: any = await res.json().catch(() => null);
+      const list: any[] = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.tools)
+          ? data.tools
+          : Array.isArray(data?.data)
+            ? data.data
+            : Array.isArray(data)
+              ? data
+              : [];
+      const keywords = /analytics|insight|stat|metric/i;
+      const found = list.find(
+        (t: any) => typeof t?.slug === 'string' && keywords.test(t.slug)
+      );
+      return typeof found?.slug === 'string' ? found.slug : null;
+    } catch {
+      return null;
+    }
   }
 }
