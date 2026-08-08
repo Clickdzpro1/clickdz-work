@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 380" width="200" height="380">
+  <rect width="200" height="380" fill="white"/>
+  <text x="100" y="16" text-anchor="middle" fill="#333" font-size="10" font-family="sans-serif" font-weight="bold">Flowchart Processus</text>
+  <ellipse cx="100" cy="38" rx="50" ry="18" fill="#34a853"/>
+  <text x="100" y="43" text-anchor="middle" fill="white" font-size="10" font-family="sans-serif">DEBUT</text>
+  <line x1="100" y1="56" x2="100" y2="70" stroke="#888" stroke-width="1.5"/>
+  <rect x="50" y="70" width="100" height="35" rx="5" fill="#4285f4"/>
+  <text x="100" y="92" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Recevoir demande</text>
+  <line x1="100" y1="105" x2="100" y2="120" stroke="#888" stroke-width="1.5"/>
+  <rect x="50" y="120" width="100" height="35" rx="5" fill="#4285f4"/>
+  <text x="100" y="142" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Analyser demande</text>
+  <line x1="100" y1="155" x2="100" y2="170" stroke="#888" stroke-width="1.5"/>
+  <polygon points="100,170 145,200 100,230 55,200" fill="#ff7c43"/>
+  <text x="100" y="203" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Complète ?</text>
+  <line x1="100" y1="230" x2="100" y2="250" stroke="#888" stroke-width="1.5"/>
+  <text x="110" y="245" fill="#34a853" font-size="9" font-family="sans-serif">OUI</text>
+  <line x1="145" y1="200" x2="165" y2="200" stroke="#ea4335" stroke-width="1.5"/>
+  <text x="148" y="195" fill="#ea4335" font-size="8" font-family="sans-serif">NON</text>
+  <rect x="50" y="250" width="100" height="35" rx="5" fill="#4285f4"/>
+  <text x="100" y="272" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Traiter livrable</text>
+  <line x1="100" y1="285" x2="100" y2="300" stroke="#888" stroke-width="1.5"/>
+  <rect x="50" y="300" width="100" height="35" rx="5" fill="#34a853"/>
+  <text x="100" y="322" text-anchor="middle" fill="white" font-size="9" font-family="sans-serif">Validation client</text>
+  <line x1="100" y1="335" x2="100" y2="352" stroke="#888" stroke-width="1.5"/>
+  <ellipse cx="100" cy="363" rx="50" ry="15" fill="#ea4335"/>
+  <text x="100" y="368" text-anchor="middle" fill="white" font-size="10" font-family="sans-serif">FIN</text>
+  <rect x="150" y="185" width="45" height="30" rx="4" fill="#ea4335"/>
+  <text x="172" y="203" text-anchor="middle" fill="white" font-size="7" font-family="sans-serif">Infos suppl.</text>
+</svg>
