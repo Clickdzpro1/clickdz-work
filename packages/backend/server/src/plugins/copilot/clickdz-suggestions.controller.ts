@@ -44,50 +44,163 @@ const CDZ_FAST_MODEL = 'cdz-flash';
 // return a wall of text to the chip row.
 // ---------------------------------------------------------------------------
 const MAX_FIELD_CHARS = 2_000;
+const MAX_STUDIO_CHARS = 40;
+const MAX_NICHE_CHARS = 200;
+const MAX_TITLE_CHARS = 120;
+const MAX_TITLES = 6;
 const COUNT = 3;
 const MAX_LABEL_CHARS = 72;
 const MAX_PROMPT_CHARS = 320;
-const MAX_TOKENS = 320;
+const MAX_TOKENS = 380;
 const TEMPERATURE = 0.7;
 const TIMEOUT_MS = 8_000;
 
 export type FollowUp = { label: string; prompt: string };
 
+/** Context the client may supply to ground follow-ups. All optional. */
+interface FollowUpContext {
+  studio?: string;
+  niche?: string;
+  lang?: string;
+  recentTitles?: string[];
+}
+
 /**
- * Generic French fallbacks — returned verbatim whenever the fast model is
- * unconfigured, slow, errors, or returns nothing usable. Labels are short
- * French questions; prompts are self-contained French instructions (they say
- * "this answer / this result" so they work even without the model's context).
+ * Per-studio curated French fallbacks — returned verbatim whenever the fast
+ * model is unconfigured, slow, errors, or returns nothing usable. Each set is
+ * tailored to the active studio so a fallback is never obviously generic.
  */
-const FALLBACK: FollowUp[] = [
-  {
-    label: 'Approfondir avec des exemples ?',
-    prompt:
-      'Peux-tu approfondir cette réponse avec des exemples concrets et adaptés à mon activité ?',
-  },
-  {
-    label: 'Transformer en plan d’action ?',
-    prompt:
-      'Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.',
-  },
-  {
-    label: 'Résumer en trois points ?',
-    prompt: 'Résume cette réponse en trois points clés, simples et directs.',
-  },
-];
+const FALLBACKS: Record<string, FollowUp[]> = {
+  apps: [
+    {
+      label: ‘Améliorer la mise en page ?’,
+      prompt:
+        ‘Améliore la mise en page de cette application : espacement, alignement et lisibilité sur mobile.’,
+    },
+    {
+      label: ‘Ajouter un formulaire COD ?’,
+      prompt:
+        ‘Ajoute un formulaire de commande à la livraison (nom, téléphone, wilaya) à cette page, avec validation simple.’,
+    },
+    {
+      label: ‘Rendre ça plus convaincant ?’,
+      prompt:
+        ‘Rends cette page plus convaincante : titre accrocheur, liste d’avantages et appel à l’action clair.’,
+    },
+  ],
+  vdz: [
+    {
+      label: ‘Créer une variante de ce clip ?’,
+      prompt:
+        ‘Crée une variante de ce résultat avec un angle différent ou un ton plus dynamique.’,
+    },
+    {
+      label: ‘Ajouter une voix off ?’,
+      prompt:
+        ‘Génère une courte voix off en français qui accompagne ce contenu vidéo.’,
+    },
+    {
+      label: ‘Résumer en une accroche ?’,
+      prompt:
+        ‘Résume l’essentiel de cette réponse en une accroche percutante de moins de 10 mots.’,
+    },
+  ],
+  voice: [
+    {
+      label: ‘Réécrire avec un ton plus chaleureux ?’,
+      prompt:
+        ‘Réécris ce texte avec un ton plus chaleureux et rassurante, adapté à un message client.’,
+    },
+    {
+      label: ‘Transformer en spot 20s ?’,
+      prompt:
+        ‘Transforme ce contenu en un spot audio de 20 secondes, dynamique et accrocheur.’,
+    },
+    {
+      label: ‘Proposer une version plus courte ?’,
+      prompt:
+        ‘Propose une version condensée de ce texte, en gardant l’essentiel, pour une lecture rapide.’,
+    },
+  ],
+  default: [
+    {
+      label: ‘Approfondir avec des exemples ?’,
+      prompt:
+        ‘Peux-tu approfondir cette réponse avec des exemples concrets et adaptés à mon activité ?’,
+    },
+    {
+      label: ‘Transformer en plan d’action ?’,
+      prompt:
+        ‘Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.’,
+    },
+    {
+      label: ‘Résumer en trois points ?’,
+      prompt: ‘Résume cette réponse en trois points clés, simples et directs.’,
+    },
+  ],
+};
+
+/** Human-readable description of a studio, for grounding the model. */
+const STUDIO_BLURB: Record<string, string> = {
+  apps: ‘the ClickDz App Builder, where the merchant builds small web apps, sales pages and mini-shops (COD-friendly, French-first)’,
+  vdz: ‘Vdz Studio, an AI video editor for short product ads, reels and promos (timeline, captions, voiceover)’,
+  voice: ‘Voice Studio, a text-to-speech studio for narration, ads and voiceovers in French/Arabic’,
+  chat: ‘the main AI chat, a general assistant for an Algerian merchant’,
+};
+
+/** Pick the fallback set for a studio, falling back to default. */
+function fallbackFor(studio: string): FollowUp[] {
+  return FALLBACKS[studio] ?? FALLBACKS.default;
+}
+
+/** Normalise the incoming context envelope defensively. */
+function readContext(body: Record<string, unknown>): FollowUpContext {
+  const rawCtx =
+    body.context && typeof body.context === ‘object’
+      ? (body.context as Record<string, unknown>)
+      : body;
+  const studio =
+    typeof rawCtx.studio === ‘string’
+      ? rawCtx.studio.trim().toLowerCase().slice(0, MAX_STUDIO_CHARS)
+      : ‘’;
+  const niche =
+    typeof rawCtx.niche === ‘string’
+      ? rawCtx.niche.replace(/\s+/g, ‘ ‘).trim().slice(0, MAX_NICHE_CHARS)
+      : ‘’;
+  const lang =
+    typeof rawCtx.lang === ‘string’ ? rawCtx.lang.trim().slice(0, 8) : ‘’;
+  const recentTitles = Array.isArray(rawCtx.recentTitles)
+    ? rawCtx.recentTitles
+        .filter((t): t is string => typeof t === ‘string’)
+        .map(t => t.replace(/\s+/g, ‘ ‘).trim().slice(0, MAX_TITLE_CHARS))
+        .filter(Boolean)
+        .slice(0, MAX_TITLES)
+    : [];
+  return { studio, niche, lang, recentTitles };
+}
 
 /** Build the system prompt for the fast suggestion model. */
-function buildSystemPrompt(): string {
-  return [
-    'You generate follow-up suggestions for an AI workspace chat used by Algerian merchants (French-first).',
-    `Given the user's question and the assistant's answer, produce exactly ${COUNT} follow-up suggestions as a JSON array of objects with "label" and "prompt" string fields.`,
-    '"label": a SHORT French question (≤ 9 words) shown on a chip — scannable, natural, interrogative (e.g. "Approfondir avec un exemple ?").',
-    '"prompt": a RICH, self-contained French instruction (1-2 sentences) that is what actually gets sent when the chip is clicked. It must fully stand alone and pick up where the answer left off (say "cette réponse" / "ce résultat" so it works without extra context).',
-    'Make the three suggestions DISTINCT and genuinely useful: one that deepens, one that turns it into something actionable, one that reframes or simplifies.',
-    'Ground every suggestion in what the answer actually contains — never invent features, numbers, or entities not present in the answer.',
-    'Write EVERYTHING in French (labels and prompts).',
-    'Output ONLY the JSON array, nothing else — no markdown fences, no commentary.',
-  ].join('\n');
+function buildSystemPrompt(ctx: FollowUpContext): string {
+  const studio = ctx.studio || ‘chat’;
+  const blurb = STUDIO_BLURB[studio] ?? STUDIO_BLURB.chat;
+  const lines = [
+    ‘You generate follow-up suggestions for an AI workspace chat used by Algerian merchants (French-first).’,
+    `The merchant is currently in ${blurb}.`,
+    ctx.niche
+      ? `Their business / niche is: "${ctx.niche}". Tailor every suggestion to this niche.`
+      : ‘Their niche is unknown — keep suggestions broadly useful for a small merchant.’,
+    ctx.recentTitles?.length
+      ? `They recently worked on: ${ctx.recentTitles.map(t => ‘"’ + t + ‘"’).join(‘, ‘)}. You may reference these.`
+      : ‘’,
+    `Given the user’s question and the assistant’s answer, produce exactly ${COUNT} follow-up suggestions as a JSON array of objects with "label" and "prompt" string fields.`,
+    ‘"label": a SHORT French question (9 words max) shown on a chip — scannable, natural, interrogative.’,
+    ‘"prompt": a RICH, self-contained French instruction (1-2 sentences) that is what actually gets sent when the chip is clicked. It must fully stand alone and pick up where the answer left off.’,
+    ‘Make the three suggestions DISTINCT and genuinely useful: one that deepens, one that turns it into something actionable, one that reframes or simplifies.’,
+    ‘Ground every suggestion in what the answer actually contains — never invent features, numbers, or entities not present.’,
+    ‘Write EVERYTHING in French (labels and prompts).’,
+    ‘Output ONLY the JSON array, nothing else — no markdown fences, no commentary.’,
+  ];
+  return lines.filter(Boolean).join(‘\n’);
 }
 
 /** Clean a single string field: strip quotes/backticks, collapse space, cap. */
@@ -159,8 +272,8 @@ export class ClickDzSuggestionsController {
 
   /**
    * POST /api/v1/ai/suggestions
-   * Body: { question: string, answer: string }
-   * Returns: { suggestions: { label, prompt }[] } — ALWAYS 200, ≥1 item.
+   * Body: { question: string, answer: string, context?: { studio?, niche?, lang?, recentTitles? } }
+   * Returns: { suggestions: { label, prompt }[] } — ALWAYS 200, >= 1 item.
    */
   @Throttle('strict')
   @Post('/api/v1/ai/suggestions')
@@ -175,8 +288,15 @@ export class ClickDzSuggestionsController {
         ? payload.answer.replace(/\s+/g, ' ').trim().slice(0, MAX_FIELD_CHARS)
         : '';
 
+    // Read context envelope (studio / niche / recentTitles / lang). Mirrors the
+    // prompt-suggestions sibling so follow-ups are grounded in the same surface
+    // metadata, not just raw Q/A.
+    const ctx = readContext(payload);
+    const studioKey = ctx.studio || 'default';
+    const fallback = fallbackFor(studioKey);
+
     if (!CDZ_AI_KEY || !answer) {
-      return { suggestions: FALLBACK };
+      return { suggestions: fallback };
     }
 
     try {
@@ -189,7 +309,7 @@ export class ClickDzSuggestionsController {
         body: JSON.stringify({
           model: CDZ_FAST_MODEL,
           messages: [
-            { role: 'system', content: buildSystemPrompt() },
+            { role: 'system', content: buildSystemPrompt(ctx) },
             {
               role: 'user',
               content: `Question: ${question || '(non fournie)'}\n\nAnswer: ${answer}`,
@@ -207,9 +327,9 @@ export class ClickDzSuggestionsController {
       if (response.ok && typeof content === 'string' && content.trim()) {
         const parsed = parseFollowUps(content);
         if (parsed.length) {
-          // Pad from the fallback so the row always has COUNT items.
+          // Pad from the studio fallback so the row always has COUNT items.
           const merged = [...parsed];
-          for (const extra of FALLBACK) {
+          for (const extra of fallback) {
             if (merged.length >= COUNT) break;
             if (!merged.some(f => f.label.toLowerCase() === extra.label.toLowerCase())) {
               merged.push(extra);
@@ -221,8 +341,8 @@ export class ClickDzSuggestionsController {
     } catch {
       // network error, timeout, or JSON error → static fallback. Swallow it:
       // a failed suggestion call must never surface as a request failure.
-      this.logger.debug?.(`[suggestions] fast model unavailable; serving fallback`);
+      this.logger.debug?.(`[suggestions] fast model unavailable; serving ${studioKey} fallback`);
     }
-    return { suggestions: FALLBACK };
+    return { suggestions: fallback };
   }
 }
