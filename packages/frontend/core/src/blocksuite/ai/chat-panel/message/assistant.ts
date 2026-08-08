@@ -54,28 +54,11 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       color: var(--affine-v2-text-secondary);
       opacity: 0.72;
     }
-    /* The "AI-suggested" sparkle before the section title. */
-    .cdz-followups-title::before {
-      content: '✦';
-      font-size: 11px;
-      line-height: 1;
-      color: #6e56cf;
-      opacity: 0.9;
-    }
     .cdz-followups-row {
       display: flex;
       flex-wrap: wrap;
       gap: 7px;
     }
-    /*
-     * Follow-up chips, restyled with a per-intent identity. Every chip carries
-     * an intent class (deepen / actionable / reframe) set by the render from a
-     * light French-keyword heuristic; the class drives a leading glyph (via
-     * ::before) and a per-intent accent used for the left tint, hover fill and
-     * focus ring. RTL-aware: the glyph uses logical margin (margin-inline-end)
-     * and the row/flow inherits the panel's dir, so an Arabic answer flips
-     * the chip order and glyph side automatically.
-     */
     .cdz-followup {
       --cdz-fu-accent: #2f7bff;
       display: inline-flex;
@@ -85,7 +68,7 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       padding: 6px 13px;
       cursor: pointer;
       color: var(--affine-v2-text-secondary);
-      background: color-mix(in srgb, var(--cdz-fu-accent) 5%, transparent);
+      background: transparent;
       font: inherit;
       font-size: 12.5px;
       font-weight: 500;
@@ -94,118 +77,21 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       transition:
         background 0.15s ease,
         color 0.15s ease,
-        border-color 0.15s ease,
-        box-shadow 0.15s ease,
-        transform 0.12s ease;
-    }
-    /* Leading per-intent glyph. */
-    .cdz-followup::before {
-      content: '';
-      font-size: 12px;
-      line-height: 1;
-      margin-inline-end: 6px;
-      opacity: 0.9;
-    }
-    .cdz-followup.cdz-fu-deepen {
-      --cdz-fu-accent: #6e56cf;
-    }
-    .cdz-followup.cdz-fu-deepen::before {
-      content: '🔍';
-    }
-    .cdz-followup.cdz-fu-actionable {
-      --cdz-fu-accent: #10a37f;
-    }
-    .cdz-followup.cdz-fu-actionable::before {
-      content: '⚡';
-    }
-    .cdz-followup.cdz-fu-reframe {
-      --cdz-fu-accent: #2f7bff;
-    }
-    .cdz-followup.cdz-fu-reframe::before {
-      content: '🔁';
+        border-color 0.15s ease;
     }
     .cdz-followup:hover {
       color: var(--affine-v2-text-primary);
-      background: color-mix(in srgb, var(--cdz-fu-accent) 14%, transparent);
-      border-color: color-mix(in srgb, var(--cdz-fu-accent) 55%, transparent);
-      transform: translateY(-1px);
-    }
-    .cdz-followup:active {
-      transform: translateY(0);
+      background: color-mix(in srgb, var(--cdz-fu-accent) 8%, transparent);
+      border-color: color-mix(in srgb, var(--cdz-fu-accent) 40%, transparent);
     }
     .cdz-followup:focus-visible {
       outline: none;
       box-shadow: 0 0 0 2px
-        color-mix(in srgb, var(--cdz-fu-accent) 45%, transparent);
+        color-mix(in srgb, var(--cdz-fu-accent) 35%, transparent);
     }
     @media (prefers-reduced-motion: reduce) {
       .cdz-followup {
         transition: none;
-      }
-      .cdz-followup:hover,
-      .cdz-followup:active {
-        transform: none;
-      }
-    }
-
-    /*
-     * Streaming tail caret.
-     *
-     * While the answer is actively streaming (host reflects
-     * data-status="transmitting") a soft gradient caret pulses at the very end
-     * of the flowed content. It is an inline ::after on the content wrapper, so
-     * it naturally trails the last streamed token; when the stream finishes the
-     * status attribute flips and the pseudo-element (and its animation) is
-     * dropped in the same frame — no teardown code, no leftover node. Only
-     * opacity/transform animate, so it stays on the GPU compositor. During the
-     * pre-token "loading" phase <ai-loading> is shown instead, so the caret is
-     * correctly scoped to transmitting only.
-     */
-    chat-message-assistant[data-status='transmitting'] .item-wrapper::after {
-      content: '';
-      display: inline-block;
-      width: 0.5em;
-      height: 1.05em;
-      margin-left: 2px;
-      vertical-align: text-bottom;
-      border-radius: 2px;
-      background: linear-gradient(
-        180deg,
-        #2f7bff,
-        #8b5cf6 55%,
-        color-mix(in srgb, #10a37f 85%, transparent)
-      );
-      background-size: 100% 220%;
-      box-shadow: 0 0 8px color-mix(in srgb, #2f7bff 55%, transparent);
-      transform-origin: center bottom;
-      animation:
-        cdz-caret-pulse 1.05s ease-in-out infinite,
-        cdz-caret-sheen 2.4s linear infinite;
-    }
-    @keyframes cdz-caret-pulse {
-      0%,
-      100% {
-        opacity: 0.35;
-        transform: scaleY(0.82);
-      }
-      50% {
-        opacity: 1;
-        transform: scaleY(1);
-      }
-    }
-    @keyframes cdz-caret-sheen {
-      from {
-        background-position: 0 0;
-      }
-      to {
-        background-position: 0 -220%;
-      }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      chat-message-assistant[data-status='transmitting'] .item-wrapper::after {
-        animation: none;
-        opacity: 0.7;
-        transform: none;
       }
     }
   `;
@@ -269,8 +155,24 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
   @property({ attribute: false })
   accessor pulseTask = '';
 
+  // Surface context forwarded to the follow-ups route so suggestions are
+  // grounded in the active studio, recent work and niche — not just raw Q/A.
+  // All optional; the route degrades gracefully when absent.
+  @property({ attribute: false })
+  accessor cdzStudio: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzNiche: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzLang: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzRecentTitles: string[] | undefined;
+
   // AI-upgraded follow-up pairs for THIS message; null until the fetch lands
-  // (the deterministic French heuristic row renders in the meantime).
+  // (the deterministic row renders in the meantime, or nothing when the model
+  // row arrives fast).
   @state()
   private accessor _followUps: Array<{ label: string; prompt: string }> | null =
     null;
@@ -467,15 +369,21 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       );
     }
 
-    // 4. Backstop, so the row is never empty.
-    add(
-      'Approfondir avec des exemples ?',
-      'Peux-tu approfondir cette réponse avec des exemples concrets adaptés à mon activité ?'
-    );
-    add(
-      'Transformer en plan d’action ?',
-      'Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.'
-    );
+    // 4. Backstop: only add generic prompts if the row is still empty after
+    // signal-based heuristics (keeps first-paint non-generic when context is
+    // available; the model row upgrades this regardless).
+    if (!out.length) {
+      add(
+        ‘Approfondir avec des exemples ?’,
+        ‘Peux-tu approfondir cette réponse avec des exemples concrets adaptés à mon activité ?’
+      );
+    }
+    if (out.length < 2) {
+      add(
+        ‘Transformer en plan d’action ?’,
+        ‘Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.’
+      );
+    }
 
     return out;
   }
@@ -486,11 +394,21 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     const answer = (item.content ?? '').slice(0, 2000);
     if (!answer) return;
     const question = (this.pulseTask ?? '').slice(0, 2000);
+
+    // Build the context envelope the follow-ups route accepts (mirrors the
+    // prompt-suggestions route). Passing studio + recentTitles + niche/lang
+    // grounds suggestions in the active surface and recent work, not just Q/A.
+    const context: Record<string, unknown> = {};
+    if (this.cdzStudio) context.studio = this.cdzStudio;
+    if (this.cdzNiche) context.niche = this.cdzNiche;
+    if (this.cdzLang) context.lang = this.cdzLang;
+    if (this.cdzRecentTitles?.length) context.recentTitles = this.cdzRecentTitles;
+
     try {
       const res = await fetch(cdzApiUrl('/api/v1/ai/suggestions'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, answer }),
+        body: JSON.stringify({ question, answer, context }),
       });
       if (!res.ok) return;
       const data = (await res.json()) as { suggestions?: unknown };
@@ -511,50 +429,19 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
     }
   }
 
-  /**
-   * Classify a follow-up into one of three intents for its visual identity:
-   *   · actionable — "turn this into a plan / do it / build / create"
-   *   · reframe    — "summarise / simplify / rephrase / shorter"
-   *   · deepen     — the default (explain more, examples, go further)
-   * A light FR/EN keyword heuristic on the label+prompt; cosmetic only, so a
-   * misclassification just picks a different accent/glyph, never a wrong action.
-   */
-  private _cdzFollowUpIntent(f: {
-    label: string;
-    prompt: string;
-  }): 'deepen' | 'actionable' | 'reframe' {
-    const text = `${f.label} ${f.prompt}`.toLowerCase();
-    if (
-      /(r[ée]sum|simplif|reformul|synth[èe]|plus court|en trois|en 3|shorter|summar)/.test(
-        text
-      )
-    ) {
-      return 'reframe';
-    }
-    if (
-      /(plan d.?action|[ée]tape|transforme|cr[ée]e|construis|g[ée]n[èe]re|ajoute|fais(-| )|action|build|create|turn (this|it) into|step)/.test(
-        text
-      )
-    ) {
-      return 'actionable';
-    }
-    return 'deepen';
-  }
-
   private renderFollowUps() {
     const { isLast, status, host } = this;
     if (!isLast || !host || (status !== 'success' && status !== 'idle')) {
       return nothing;
     }
     const suggestions = this._followUps ?? this._cdzHeuristicFollowUps();
+    if (!suggestions.length) return nothing;
     return html`<div class="cdz-followups" data-testid="clickdz-followups">
-      <span class="cdz-followups-title">À approfondir</span>
+      <span class="cdz-followups-title">Suggestions</span>
       <div class="cdz-followups-row">
-        ${suggestions.map(s => {
-          const intent = this._cdzFollowUpIntent(s);
-          return html`<button
-            class="cdz-followup cdz-fu-${intent}"
-            data-intent=${intent}
+        ${suggestions.map(
+          s => html`<button
+            class="cdz-followup"
             title=${s.prompt}
             @click=${() =>
               AIAppEvents.requestOpenWithChat.next({
@@ -564,8 +451,8 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
               })}
           >
             ${s.label}
-          </button>`;
-        })}
+          </button>`
+        )}
       </div>
     </div>`;
   }

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 280" width="400" height="280">
+  <rect width="400" height="280" fill="white"/>
+  <text x="200" y="22" text-anchor="middle" fill="#333" font-size="13" font-family="sans-serif" font-weight="bold">Tableau Kanban</text>
+  <rect x="5" y="30" width="90" height="30" rx="5" fill="#888"/>
+  <text x="50" y="50" text-anchor="middle" fill="white" font-size="11" font-family="sans-serif">A faire</text>
+  <rect x="5" y="65" width="90" height="200" rx="4" fill="#f0f0f0"/>
+  <rect x="10" y="70" width="80" height="40" rx="4" fill="#ddd"/>
+  <text x="50" y="93" text-anchor="middle" fill="#555" font-size="9" font-family="sans-serif">Définir besoins</text>
+  <rect x="10" y="115" width="80" height="40" rx="4" fill="#ddd"/>
+  <text x="50" y="138" text-anchor="middle" fill="#555" font-size="9" font-family="sans-serif">Maquette</text>
+  <rect x="103" y="30" width="90" height="30" rx="5" fill="#4285f4"/>
+  <text x="148" y="50" text-anchor="middle" fill="white" font-size="11" font-family="sans-serif">En cours</text>
+  <rect x="103" y="65" width="90" height="200" rx="4" fill="#e8f0fe"/>
+  <rect x="108" y="70" width="80" height="50" rx="4" fill="#c5d9fb"/>
+  <text x="148" y="97" text-anchor="middle" fill="#1a3a6e" font-size="9" font-family="sans-serif">Module paiement</text>
+  <rect x="201" y="30" width="90" height="30" rx="5" fill="#ff7c43"/>
+  <text x="246" y="50" text-anchor="middle" fill="white" font-size="11" font-family="sans-serif">En révision</text>
+  <rect x="201" y="65" width="90" height="200" rx="4" fill="#fff3e8"/>
+  <rect x="206" y="70" width="80" height="40" rx="4" fill="#ffd5b5"/>
+  <text x="246" y="93" text-anchor="middle" fill="#7a3500" font-size="9" font-family="sans-serif">Tests fonctions</text>
+  <rect x="299" y="30" width="96" height="30" rx="5" fill="#34a853"/>
+  <text x="347" y="50" text-anchor="middle" fill="white" font-size="11" font-family="sans-serif">Terminé</text>
+  <rect x="299" y="65" width="96" height="200" rx="4" fill="#e6f4ea"/>
+  <rect x="304" y="70" width="86" height="35" rx="4" fill="#b7dfbf"/>
+  <text x="347" y="92" text-anchor="middle" fill="#1a5c2e" font-size="9" font-family="sans-serif">Onboarding</text>
+  <rect x="304" y="110" width="86" height="35" rx="4" fill="#b7dfbf"/>
+  <text x="347" y="132" text-anchor="middle" fill="#1a5c2e" font-size="9" font-family="sans-serif">Landing page</text>
+</svg>
