@@ -5,7 +5,16 @@
 import { getOrCreateI18n } from '@affine/i18n';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ONBOARDED_KEY } from '../../clickdz/niches';
+import { cdzApiUrl } from '../../blocksuite/ai/provider';
+import {
+  CDZ_PROFILE_KEY,
+  GOALS,
+  NICHES,
+  ONBOARDED_KEY,
+  PENDING_PERSONALIZE_KEY,
+  type CdzOnboardingProfile,
+  type Goal,
+} from '../../clickdz/niches';
 import {
   type StudioDef,
   type StudioGroup,
@@ -207,8 +216,18 @@ const T = {
     featuresSub: 'Un aperçu de la suite. Vous explorerez chaque outil quand vous serez prêt.',
     go: 'Commencer →',
     step1: 'Votre espace',
-    step2: 'Découverte',
+    step2: 'Personnalisation',
+    step3: 'Découverte',
     darja: 'دير بزنسك من قاع واحد — الفيديو، الأبس، الصوت، الوكلاء، البيع و كلش.',
+    profileTitle: 'Personnalisez votre espace',
+    profileSub: 'Quelques secondes pour adapter ClickDz Work à votre activité.',
+    nicheLabel: 'Votre secteur d\'activité',
+    nicheHint: 'Choisissez jusqu\'à 3 secteurs.',
+    goalsLabel: 'Vos objectifs principaux',
+    oneLinerLabel: 'Ce que vous vendez / faites (facultatif)',
+    oneLinerPh: 'Ex. : Je vends des vêtements en ligne avec livraison COD',
+    skip: 'Passer cette étape',
+    next: 'Suivant →',
   },
   en: {
     badge: 'Your workspace — by clickdz.ai',
@@ -222,8 +241,18 @@ const T = {
     featuresSub: 'A quick tour of the suite. You\'ll explore each tool when you\'re ready.',
     go: 'Get started →',
     step1: 'Your workspace',
-    step2: 'Discovery',
+    step2: 'Personalization',
+    step3: 'Discovery',
     darja: '',
+    profileTitle: 'Personalize your workspace',
+    profileSub: 'A few seconds to tailor ClickDz Work to your business.',
+    nicheLabel: 'Your industry / niche',
+    nicheHint: 'Choose up to 3 niches.',
+    goalsLabel: 'Your main goals',
+    oneLinerLabel: 'What you sell / do (optional)',
+    oneLinerPh: 'e.g. I sell clothes online with COD delivery',
+    skip: 'Skip this step',
+    next: 'Next →',
   },
   ar: {
     badge: 'مساحة عملك — من clickdz.ai',
@@ -237,8 +266,18 @@ const T = {
     featuresSub: 'جولة سريعة في الحزمة. ستستكشف كل أداة عندما تكون جاهزاً.',
     go: 'ابدأ ←',
     step1: 'مساحتك',
-    step2: 'الاكتشاف',
+    step2: 'التخصيص',
+    step3: 'الاكتشاف',
     darja: '',
+    profileTitle: 'خصّص مساحتك',
+    profileSub: 'ثوانٍ لتكييف ClickDz Work مع نشاطك التجاري.',
+    nicheLabel: 'قطاع نشاطك',
+    nicheHint: 'اختر حتى 3 قطاعات.',
+    goalsLabel: 'أهدافك الرئيسية',
+    oneLinerLabel: 'ما تبيعه / ما تفعله (اختياري)',
+    oneLinerPh: 'مثال: أبيع ملابس عبر الإنترنت مع توصيل COD',
+    skip: 'تخطّ هذه الخطوة',
+    next: 'التالي ←',
   },
 };
 
@@ -271,7 +310,7 @@ const inputStyle: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = { display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 8 };
 
-type Step = 'name' | 'features';
+type Step = 'name' | 'profile' | 'features';
 
 export const Component = () => {
   const navigate = useNavigate();
@@ -279,6 +318,10 @@ export const Component = () => {
   const [workspaceName, setWorkspaceName] = useState('');
   const [step, setStep] = useState<Step>('name');
   const [touched, setTouched] = useState(false);
+  // E2 profile state
+  const [selectedNiches, setSelectedNiches] = useState<string[]>([]);
+  const [selectedGoals, setSelectedGoals] = useState<string[]>([]);
+  const [bizOneLiner, setBizOneLiner] = useState('');
   const t = T[lang];
   const nameOk = workspaceName.trim().length > 0 && workspaceName.trim().length <= 60;
 
@@ -291,18 +334,59 @@ export const Component = () => {
     getOrCreateI18n().changeLanguage(next).catch(() => {});
   }, []);
 
+  // Toggle a niche chip (max 3 primary + secondary selections)
+  const toggleNiche = useCallback((id: string) => {
+    setSelectedNiches(prev => {
+      if (prev.includes(id)) return prev.filter(n => n !== id);
+      if (prev.length >= 3) return prev;
+      return [...prev, id];
+    });
+  }, []);
+
+  // Toggle a goal chip (multi-select, no cap)
+  const toggleGoal = useCallback((id: string) => {
+    setSelectedGoals(prev =>
+      prev.includes(id) ? prev.filter(g => g !== id) : [...prev, id]
+    );
+  }, []);
+
   const finish = useCallback(() => {
     applyLang(lang);
+    // Build and persist the profile
+    const profile: CdzOnboardingProfile = {
+      v: 1,
+      lang,
+      brandName: workspaceName.trim(),
+      bizOneLiner: bizOneLiner.trim() || undefined,
+      niches: selectedNiches,
+      goals: selectedGoals,
+      updatedAt: new Date().toISOString(),
+    };
     try {
       localStorage.setItem(ONBOARDED_KEY, '1');
       localStorage.setItem('cdz:workspace-name', workspaceName.trim());
+      localStorage.setItem(CDZ_PROFILE_KEY, JSON.stringify(profile));
+      // One-shot trigger: workspace-boot will POST this to personalize/templates
+      localStorage.setItem(PENDING_PERSONALIZE_KEY, JSON.stringify(profile));
     } catch {}
+    // Fire-and-forget PUT profile to backend (best-effort, never blocks finish)
+    fetch(cdzApiUrl('/api/v1/cdz/profile'), {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile),
+    }).catch(() => {});
     navigate('/', { replace: true });
-  }, [workspaceName, lang, applyLang, navigate]);
+  }, [workspaceName, lang, bizOneLiner, selectedNiches, selectedGoals, applyLang, navigate]);
 
   const nextFromName = () => {
     setTouched(true);
-    if (nameOk) { setStep('features'); setTouched(false); }
+    if (nameOk) { setStep('profile'); setTouched(false); }
+  };
+
+  const nextFromProfile = () => {
+    // Profile step is always skippable; proceed to features regardless
+    setStep('features');
   };
 
   const isRtl = lang === 'ar';
@@ -326,9 +410,10 @@ export const Component = () => {
           <span style={{ marginInlineStart: 'auto', fontSize: 12, color: C.muted, background: C.soft, border: '1px solid ' + C.border, borderRadius: 999, padding: '4px 12px' }}>{t.badge}</span>
         </div>
 
-        {/* Step indicator */}
+        {/* Step indicator — 3 steps: name, profile, features */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
           <div style={{ flex: 1, height: 4, borderRadius: 2, background: step === 'name' ? C.primary : C.border, transition: 'background 200ms' }} />
+          <div style={{ flex: 1, height: 4, borderRadius: 2, background: step === 'profile' ? C.primary : (step === 'features' ? C.border : C.border), transition: 'background 200ms' }} />
           <div style={{ flex: 1, height: 4, borderRadius: 2, background: step === 'features' ? C.primary : C.border, transition: 'background 200ms' }} />
         </div>
 
@@ -361,6 +446,97 @@ export const Component = () => {
                 color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
                 cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)', opacity: nameOk ? 1 : 0.85,
               }}>{t.go}</button>
+            </div>
+          </>
+        ) : step === 'profile' ? (
+          <>
+            {/* E2 Profile step — niche chips, goal chips, optional biz one-liner */}
+            <h2 style={{ fontSize: 22, fontWeight: 800, margin: '0 0 4px' }}>{t.profileTitle}</h2>
+            <p style={{ color: C.muted, fontSize: 13.5, margin: '0 0 20px' }}>{t.profileSub}</p>
+
+            {/* Niche chips */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ ...labelStyle, marginBottom: 4 }}>{t.nicheLabel}</div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 10 }}>{t.nicheHint}</div>
+              <div className="cdz-welcome-grid" style={{ display: 'grid', gap: 8 }}>
+                {NICHES.map(niche => {
+                  const label = lang === 'en' ? niche.en : lang === 'ar' ? niche.ar : niche.fr;
+                  const selected = selectedNiches.includes(niche.id);
+                  return (
+                    <button
+                      key={niche.id}
+                      type="button"
+                      onClick={() => toggleNiche(niche.id)}
+                      aria-pressed={selected}
+                      data-testid={`niche-chip-${niche.id}`}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px',
+                        borderRadius: 12, border: '1.5px solid ' + (selected ? C.primary : C.border),
+                        background: selected ? '#EEF5FF' : '#fff', cursor: 'pointer',
+                        color: selected ? C.primary : C.fg, fontWeight: selected ? 700 : 500,
+                        fontSize: 13, textAlign: isRtl ? 'right' : 'left', transition: 'border-color 120ms, background 120ms',
+                      }}
+                    >
+                      <span style={{ fontSize: 18, flexShrink: 0 }}>{niche.emoji}</span>
+                      <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Goal chips */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={labelStyle}>{t.goalsLabel}</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                {GOALS.map((goal: Goal) => {
+                  const label = lang === 'en' ? goal.en : lang === 'ar' ? goal.ar : goal.fr;
+                  const selected = selectedGoals.includes(goal.id);
+                  return (
+                    <button
+                      key={goal.id}
+                      type="button"
+                      onClick={() => toggleGoal(goal.id)}
+                      aria-pressed={selected}
+                      data-testid={`goal-chip-${goal.id}`}
+                      style={{
+                        padding: '9px 16px', borderRadius: 999, fontSize: 13, cursor: 'pointer',
+                        border: '1.5px solid ' + (selected ? C.primary : C.border),
+                        background: selected ? '#EEF5FF' : '#fff',
+                        color: selected ? C.primary : C.fg, fontWeight: selected ? 700 : 500,
+                        transition: 'border-color 120ms, background 120ms',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Optional biz one-liner */}
+            <div style={{ marginBottom: 24 }}>
+              <label htmlFor="cdz-biz-oneliner" style={labelStyle}>{t.oneLinerLabel}</label>
+              <input
+                id="cdz-biz-oneliner"
+                value={bizOneLiner}
+                maxLength={120}
+                onChange={e => setBizOneLiner(e.target.value)}
+                placeholder={t.oneLinerPh}
+                style={inputStyle}
+              />
+            </div>
+
+            <div className="cdz-welcome-actionbar" style={{ marginTop: 4 }}>
+              <button type="button" onClick={nextFromProfile} className="cdz-welcome-cta" style={{
+                width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
+                color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
+                cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)',
+              }}>{t.next}</button>
+              <button type="button" onClick={nextFromProfile} style={{
+                width: '100%', marginTop: 10, background: 'none', border: 'none', color: C.muted,
+                fontSize: 13.5, cursor: 'pointer', padding: '8px', textDecoration: 'underline',
+              }}>{t.skip}</button>
             </div>
           </>
         ) : (
