@@ -179,7 +179,7 @@ import {
 import * as Shipping from './clickdz-erp-shipping';
 // WS17: shared Voice Library index helpers so the bulk-TTS route appends its
 // clip to the SAME Redis index the Library tab reads (clickdz-audio-library).
-import { CDZ_VOICE_LIBRARY, type LibraryRecord } from './clickdz-audio-library';
+import { CDZ_VOICE_LIBRARY, type LibraryRecord } from './clickdz-audio-library.controller';
 
 // SECURITY: input caps for cost/side-effecting routes (images, apps, plan).
 // Non-breaking for normal use; reject oversized/abusive payloads early.
