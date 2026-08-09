@@ -323,11 +323,11 @@ export const VdzGeneratePanel = ({
   return (
     <div className={styles.root}>
       <div className={styles.header}>
-        <h2 className={styles.title}>AI Video Generator</h2>
+        <h2 className={styles.title}>Générateur Vidéo IA</h2>
         <p className={styles.subtitle}>
           {editorMode
-            ? 'Describe a video — land in the timeline editor with an editable AI proposal.'
-            : 'Describe a video and watch it play — then refine it in words.'}
+            ? 'Décrivez une vidéo — arrivez dans l'éditeur de chronologie avec une proposition IA modifiable.'
+            : 'Décrivez une vidéo et regardez-la jouer — puis affinez-la avec des mots.'}
         </p>
       </div>
 
@@ -335,7 +335,7 @@ export const VdzGeneratePanel = ({
         <div
           className={styles.modeSwitch}
           role="radiogroup"
-          aria-label="Generation mode"
+          aria-label="Mode de génération"
         >
           <button
             type="button"
@@ -345,9 +345,9 @@ export const VdzGeneratePanel = ({
             data-active={genMode === 'editor'}
             onClick={() => setGenMode('editor')}
           >
-            <span className={styles.modeOptionTitle}>In editor</span>
+            <span className={styles.modeOptionTitle}>Dans l'éditeur</span>
             <span className={styles.modeOptionHint}>
-              Editable timeline — recommended
+              Chronologie modifiable — recommandé
             </span>
           </button>
           <button
@@ -360,7 +360,7 @@ export const VdzGeneratePanel = ({
           >
             <span className={styles.modeOptionTitle}>Motion HTML</span>
             <span className={styles.modeOptionHint}>
-              Export-quality composition
+              Composition qualité export
             </span>
           </button>
         </div>
@@ -371,8 +371,8 @@ export const VdzGeneratePanel = ({
           className={styles.textarea}
           placeholder={
             editorMode
-              ? 'e.g. Make a 20s product promo for a running shoe called AERO — title reveal, three specs, a closing logo.'
-              : 'e.g. A 20-second dark, cinematic product teaser for a running shoe called AERO — bold type reveals, three key specs, a closing logo lockup.'
+              ? 'Ex : Créer une promo produit de 20s pour une chaussure de running appelée AERO — révélation du titre, trois caractéristiques, logo de fin.'
+              : 'Ex : Un teaser produit sombre et cinématographique de 20 secondes pour une chaussure de running appelée AERO — révélations de texte en gras, trois caractéristiques clés, un logo de fin.'
           }
           value={prompt}
           disabled={busy && !editorMode}
@@ -391,14 +391,14 @@ export const VdzGeneratePanel = ({
             {busy && !hasVideo && !editorMode ? (
               <>
                 <span className={styles.spinner} aria-hidden="true" />
-                Generating…
+                Génération…
               </>
             ) : editorMode ? (
-              'Generate in editor'
+              'Générer dans l'éditeur'
             ) : hasVideo ? (
-              'Regenerate'
+              'Régénérer'
             ) : (
-              'Generate video'
+              'Générer la vidéo'
             )}
           </button>
           {hasVideo ? (
@@ -408,7 +408,7 @@ export const VdzGeneratePanel = ({
               disabled={busy}
               type="button"
             >
-              Download .html
+              Télécharger .html
             </button>
           ) : null}
           {hasVideo ? (
@@ -419,17 +419,17 @@ export const VdzGeneratePanel = ({
               type="button"
               title={
                 exportUnavailable
-                  ? 'Render service coming online soon'
-                  : 'Render this composition to an MP4 video'
+                  ? 'Service de rendu bientôt disponible'
+                  : 'Rendre cette composition en vidéo MP4'
               }
             >
               {exporting ? (
                 <>
                   <span className={styles.spinner} aria-hidden="true" />
-                  Rendering…
+                  Rendu…
                 </>
               ) : (
-                'Export MP4'
+                'Exporter MP4'
               )}
             </button>
           ) : null}
@@ -458,15 +458,15 @@ export const VdzGeneratePanel = ({
                 href={exportFileUrl}
                 download
               >
-                ⬇ Download MP4
+                ⬇ Télécharger MP4
               </a>
             ) : exportUnavailable ? (
               <span className={styles.exportHint}>
-                MP4 export is coming online soon.
+                L'export MP4 sera bientôt disponible.
               </span>
             ) : exportStatus === 'error' ? (
               <span className={styles.exportHint}>
-                {exportError || 'Export failed. Please try again.'}
+                {exportError || 'Échec de l'export. Veuillez réessayer.'}
               </span>
             ) : null}
           </div>
@@ -484,11 +484,11 @@ export const VdzGeneratePanel = ({
           <div className={styles.stageWrap}>
             <div className={styles.empty}>
               <span>
-                Your video is built as an editable timeline in the editor.
+                Votre vidéo est construite comme une chronologie modifiable dans l'éditeur.
               </span>
               <span>
-                Hit Generate and you’ll jump to Edit with an AI proposal to
-                Accept or tweak.
+                Appuyez sur Générer et vous passerez en Édition avec une proposition IA à
+                accepter ou ajuster.
               </span>
             </div>
           </div>
@@ -522,8 +522,8 @@ export const VdzGeneratePanel = ({
             </div>
           ) : (
             <div className={styles.empty}>
-              <span>Your generated video will play here.</span>
-              <span>Write a brief above and hit Generate.</span>
+              <span>Votre vidéo générée se jouera ici.</span>
+              <span>Écrivez une description ci-dessus et appuyez sur Générer.</span>
             </div>
           )}
         </div>
@@ -536,7 +536,7 @@ export const VdzGeneratePanel = ({
                 onClick={togglePlay}
                 disabled={duration <= 0}
                 type="button"
-                aria-label={playing ? 'Pause' : 'Play'}
+                aria-label={playing ? 'Pause' : 'Lecture'}
               >
                 {playing ? '❚❚' : '►'}
               </button>
@@ -549,7 +549,7 @@ export const VdzGeneratePanel = ({
                 value={Math.min(current, duration)}
                 disabled={duration <= 0}
                 onChange={onScrub}
-                aria-label="Scrub timeline"
+                aria-label="Parcourir la chronologie"
               />
               <span className={styles.timecode}>{timecodeText}</span>
             </div>
@@ -557,7 +557,7 @@ export const VdzGeneratePanel = ({
             <div className={styles.refineRow}>
               <input
                 className={styles.refineInput}
-                placeholder="Refine: e.g. make the title bigger, slow the intro, use a teal accent"
+                placeholder="Affiner : ex. agrandir le titre, ralentir l'intro, utiliser un accent turquoise"
                 value={instruction}
                 disabled={busy}
                 onChange={e => {
@@ -577,10 +577,10 @@ export const VdzGeneratePanel = ({
                 {busy && hasVideo ? (
                   <>
                     <span className={styles.spinner} aria-hidden="true" />
-                    Refining…
+                    Affinement…
                   </>
                 ) : (
-                  'Refine'
+                  'Affiner'
                 )}
               </button>
             </div>
