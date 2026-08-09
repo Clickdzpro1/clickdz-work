@@ -19,7 +19,7 @@ import {
   listUsersQuery,
 } from '@affine/graphql';
 import { ActivityIcon, AppWindowIcon, UserPlusIcon, UsersIcon } from 'lucide-react';
-import { Suspense, useMemo } from 'react';
+import { Component, type ErrorInfo, type ReactNode, Suspense, useMemo } from 'react';
 import {
   Area,
   Bar,
@@ -433,11 +433,69 @@ function AnalyticsPageSkeleton() {
   );
 }
 
+interface AnalyticsErrorBoundaryState {
+  error: Error | null;
+}
+
+/**
+ * Error boundary for the analytics page. Without this, any error thrown
+ * during the SWR-suspense queries (e.g. a GraphQL validation error, a 401,
+ * or a network error) propagates to the root and renders the whole admin
+ * app blank. This boundary catches the error and shows a French error
+ * message with a retry button, and logs the error message so the cause is
+ * visible in the console.
+ */
+class AnalyticsErrorBoundary extends Component<
+  { children: ReactNode },
+  AnalyticsErrorBoundaryState
+> {
+  state: AnalyticsErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): AnalyticsErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    // eslint-disable-next-line no-console
+    console.error('[admin/analytics] render error:', error, info);
+  }
+
+  handleRetry = (): void => {
+    this.setState({ error: null });
+  };
+
+  render(): ReactNode {
+    if (this.state.error) {
+      return (
+        <div className="flex h-dvh flex-1 flex-col items-center justify-center gap-4 p-6">
+          <div className="text-center space-y-2">
+            <h2 className="text-lg font-semibold">
+              Une erreur est survenue lors du chargement de l’analytique.
+            </h2>
+            <p className="text-sm text-muted-foreground max-w-md">
+              {this.state.error.message || 'Erreur inconnue.'}
+            </p>
+            <button
+              className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
+              onClick={this.handleRetry}
+            >
+              Réessayer
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function AnalyticsPage() {
   return (
-    <Suspense fallback={<AnalyticsPageSkeleton />}>
-      <AnalyticsPageContent />
-    </Suspense>
+    <AnalyticsErrorBoundary>
+      <Suspense fallback={<AnalyticsPageSkeleton />}>
+        <AnalyticsPageContent />
+      </Suspense>
+    </AnalyticsErrorBoundary>
   );
 }
 
