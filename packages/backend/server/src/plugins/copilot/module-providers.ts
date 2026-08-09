@@ -38,6 +38,7 @@ import {
 import { CopilotResolver, UserCopilotResolver } from './resolver';
 import { ActionRuntimeBridge } from './runtime/action-runtime-bridge';
 import { CapabilityRuntime } from './runtime/capability-runtime';
+import { CdzModelHealthService } from './runtime/cdz-model-health.service';
 import { CopilotExecutionMetrics } from './runtime/execution-metrics';
 import { ExecutionPlanBuilder } from './runtime/execution-plan';
 import { ActionStreamHost } from './runtime/hosts/action-stream-host';
@@ -101,6 +102,7 @@ export const COPILOT_RUNTIME_PROVIDERS = [
   CopilotExecutionMetrics,
   ExecutionPlanBuilder,
   PromptRuntime,
+  CdzModelHealthService,
   CapabilityPolicyHost,
   ConversationHost,
   CapabilityRuntime,
@@ -190,3 +192,4 @@ export const COPILOT_API_PROVIDERS = [
   ...COPILOT_RESOLVER_PROVIDERS,
   ...COPILOT_MCP_PROVIDERS,
 ];
+
