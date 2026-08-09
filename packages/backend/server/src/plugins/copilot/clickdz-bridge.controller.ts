@@ -4781,10 +4781,13 @@ export class ClickDzBridgeController {
 
     // Sentence-boundary-respecting chunking: pack whole sentences together up
     // to the per-chunk cap; only hard-wrap (best effort) when a single sentence
-    // alone exceeds the cap. ASCII sentence punctuation only.
+    // alone exceeds the cap. WS17: include Arabic/Darija sentence punctuation
+    // (؟ U+061F question mark, ۝ not used here) plus the Arabic comma U+060C as
+    // a secondary split point so non-Latin scripts chunk naturally instead of
+    // being treated as one giant sentence and hard-wrapped mid-word.
     const sentenceParts = trimmed
       .replace(/\s+/g, ' ')
-      .split(/(?<=[.!?])\s+/)
+      .split(/(?<=[.!?؟\u060C])\s+/)
       .map(chunk => chunk.trim())
       .filter(Boolean);
     const chunks: string[] = [];
@@ -5383,18 +5386,34 @@ export class ClickDzBridgeController {
     slug: string,
     id: string
   ): Promise<{ record: InvoiceRecord; collection: string } | null> {
-    // A validated id encodes its year (<type>-<year>-<seq>); a draft id does
-    // not. Scan the last 24 monthly partitions (invoiceCollectionsInRange with
-    // no bounds → current month only, so widen explicitly by passing a range).
-    const now = new Date();
-    const from = new Date(
-      Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), 1)
-    );
-    const cols = invoiceCollectionsInRange(
-      `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}`,
-      `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`,
-      24
-    );
+    // WS17: a validated id encodes its year (<type>-<year>-<seq>, e.g.
+    // facture-2026-00042), so we can scan ONLY that year's 12 monthly partitions
+    // instead of the last 24 — a ~2x reduction in data-API calls and latency on
+    // every invoice lookup. Draft ids (draft-xxxxxx) don't encode a year, but
+    // drafts are always recent, so scan just the current month for them. Fall
+    // back to the 24-month sweep only if the year can't be parsed.
+    const yearMatch = /^[\w-]+-(\d{4})-/.exec(id);
+    const isDraft = /^draft-/i.test(id);
+    let cols: string[];
+    if (yearMatch) {
+      const yr = Number(yearMatch[1]);
+      cols = invoiceCollectionsInRange(`${yr}-01`, `${yr}-12`, 12);
+    } else if (isDraft) {
+      const now = new Date();
+      const curMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
+      cols = invoiceCollectionsInRange(curMonth, curMonth, 1);
+    } else {
+      // Unknown id shape — fall back to the last 24 months (prior behavior).
+      const now = new Date();
+      const from = new Date(
+        Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), 1)
+      );
+      cols = invoiceCollectionsInRange(
+        `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}`,
+        `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`,
+        24
+      );
+    }
     for (const col of cols) {
       const rows = await this.erpList(slug, col);
       if (!rows) continue;
@@ -6304,7 +6323,7 @@ export class ClickDzBridgeController {
       if (Buffer.byteLength(JSON.stringify(mv), 'utf8') > ERP_MAX_WRITE_BYTES) {
         throw new BadRequest('Movement record too large');
       }
-      const created = await this.erpCreateRecord(slug, collection, mv, token);
+      const created = await this.erpCreateRecord(slug, collection, mv as unknown as ErpRecord, token);
       if (!created.ok) {
         this.erpWriteFailed(res, created.status);
         return;
@@ -6522,7 +6541,7 @@ export class ClickDzBridgeController {
       res.status(HttpStatus.CONFLICT).json({ error: 'courier_exists', id: built.courier.id });
       return;
     }
-    const created = await this.erpCreateRecord(slug, 'couriers', built.courier, token);
+    const created = await this.erpCreateRecord(slug, 'couriers', built.courier as unknown as ErpRecord, token);
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
@@ -6567,7 +6586,7 @@ export class ClickDzBridgeController {
     }
     // The stored record's data-API id is the same business id we PUT by.
     const recId = erpStr(found.id);
-    const saved = await this.erpPutRecord(slug, 'couriers', recId, merged.courier, token);
+    const saved = await this.erpPutRecord(slug, 'couriers', recId, merged.courier as unknown as ErpRecord, token);
     if (!saved.ok) {
       this.erpWriteFailed(res, saved.status);
       return;
@@ -6628,7 +6647,7 @@ export class ClickDzBridgeController {
     }
     let written = 0;
     for (const rec of built.records) {
-      const saved = await this.erpPutRecord(slug, 'shipping-rates', rec.id, rec, token);
+      const saved = await this.erpPutRecord(slug, 'shipping-rates', rec.id, rec as unknown as ErpRecord, token);
       if (!saved.ok) {
         this.erpWriteFailed(res, saved.status);
         return;
@@ -6674,7 +6693,7 @@ export class ClickDzBridgeController {
     }
     let written = 0;
     for (const rec of built.records) {
-      const saved = await this.erpPutRecord(slug, 'shipping-rates', rec.id, rec, token);
+      const saved = await this.erpPutRecord(slug, 'shipping-rates', rec.id, rec as unknown as ErpRecord, token);
       if (!saved.ok) {
         this.erpWriteFailed(res, saved.status);
         return;

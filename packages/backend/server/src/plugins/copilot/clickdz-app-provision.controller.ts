@@ -582,8 +582,11 @@ export class ClickDzAppProvisionController {
     }
     // Cookie name per app (Presenton `presenton_session`, Postiz `auth`,
     // ClassroomIO `__Secure-classroomio.session_token`).
+    // WS17: the old `socialplus` branch was dead (socialplus was removed from
+    // APPS in WS9) — remap the `auth` cookie to `postiz`, the service that
+    // actually uses it, so the branch is no longer unreachable.
     const cookieName =
-      app === 'socialplus'
+      app === 'postiz'
         ? 'auth'
         : app === 'coursepro'
           ? '__Secure-classroomio.session_token'

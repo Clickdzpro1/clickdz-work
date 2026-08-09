@@ -398,7 +398,13 @@ export async function registerTelegramFailSoft(
   try {
     const mod: any = await import('./clickdz-agent-telegram');
     if (mod && typeof mod.createTelegramSendTool === 'function') {
-      const def = mod.createTelegramSendTool(deps);
+      // WS17: wrap redis in a Cache so the tool can resolve the per-(user,agent)
+      // channel record it needs to send. Previously `deps` was passed straight
+      // through, so `deps.cache` was undefined in the detached-run path and
+      // every telegram_send call hit a TypeError -> silent {ok:false}. Mirrors
+      // the WhatsApp loader below.
+      const cache = deps?.redis ? new Cache(deps.redis as any) : undefined;
+      const def = mod.createTelegramSendTool(cache as any);
       if (def && typeof def.name === 'string') {
         registry.register(def as AgentToolDef);
       }

@@ -92,7 +92,8 @@ export class ActionStreamHost {
       userId,
       parsedQuery.byokLeaseId,
       prepared.quotaBackedRoutesAllowed,
-      signal
+      signal,
+      parsedQuery.modelId
     );
     const runStream = this.bridge.runStream({
       userId,
@@ -184,7 +185,8 @@ export class ActionStreamHost {
     userId: string,
     byokLeaseId?: string,
     quotaBackedRoutesAllowed?: boolean,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    userImageModelId?: string
   ): Promise<ImageActionRoutePreparation | undefined> {
     if (!isImageAction(actionId)) {
       return undefined;
@@ -199,8 +201,26 @@ export class ActionStreamHost {
       params as Record<string, string>,
       session.config.sessionId
     );
+    // CDZ WS17: honor the user's image-model preference (sent as the modelId
+    // query param by the FE image preference popup) instead of always using the
+    // prompt's default. Map CDZIMAGE/CDZIM tier IDs the native registry doesn't
+    // know to the closest registry-known equivalent (mirrors turn-orchestrator).
+    const CDZIMAGE_TO_NATIVE: Record<string, string> = {
+      'gpt-image-1.5': 'gpt-image-2',
+      'gpt-image-1-mini': 'gpt-image-1',
+      'cdzimage-2.0': 'gpt-image-2',
+      'cdzimage-1.5': 'gpt-image-2',
+      'cdzimage-1.0': 'gpt-image-1',
+      'gemini-3-pro-image': 'gemini-2.5-flash-image',
+      'gemini-3.1-flash-image': 'gemini-2.5-flash-image',
+      'gemini-3.1-flash-lite-image': 'gemini-2.5-flash-image',
+    };
+    const resolvedModelId =
+      typeof userImageModelId === 'string' && userImageModelId
+        ? (CDZIMAGE_TO_NATIVE[userImageModelId] ?? userImageModelId)
+        : prompt.model;
     return {
-      modelId: prompt.model,
+      modelId: resolvedModelId,
       messages: finalMessage,
       options: {
         ...prompt.config,

@@ -26,6 +26,14 @@ import { dirname, join } from 'node:path';
 const KEY = process.env.CDZ_AI_KEY || '';
 const BASE_URL = process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai/v1';
 const IMAGE_KEY = process.env.OPENAI_IMAGE_API_KEY || '';
+// CDZ WS17: Gemini (Nano Banana) image key — the same AQ. key the REST
+// /api/v1/images/generations Gemini branch uses. When set, a Gemini image
+// provider profile is added so the SSE image path (Whiteboard/AI-box native
+// image actions) can route gemini-*-image models to Google's API.
+const GEMINI_IMAGE_KEY =
+  process.env.CDZ_GEMINI_IMAGE_KEY ||
+  process.env.GEMINI_API_KEY ||
+  '';
 
 const CDZ_MODELS = [
   // supermodels
@@ -47,7 +55,7 @@ const CDZ_MODELS = [
   'gpt-5.4-mini',
 ];
 
-const IMAGE_MODELS = ['gpt-image-1'];
+const IMAGE_MODELS = ['gpt-image-1', 'gpt-image-2'];
 
 function main() {
   if (!KEY && !IMAGE_KEY) {
@@ -68,7 +76,7 @@ function main() {
   }
   cfg.copilot ??= {};
   cfg.copilot.providers ??= {};
-  const managedIds = new Set(['cdz-ai', 'openai-images']);
+  const managedIds = new Set(['cdz-ai', 'openai-images', 'cdz-gemini-images']);
   const profiles = Array.isArray(cfg.copilot.providers.profiles)
     ? cfg.copilot.providers.profiles.filter(p => p && !managedIds.has(p.id))
     : [];
@@ -114,6 +122,24 @@ function main() {
       },
     });
   }
+  // CDZ WS17: Gemini image provider (Nano Banana). The native model registry
+  // knows gemini-2.5-flash-image (backendKind gemini_api, protocol gemini), so
+  // a Gemini provider profile lets the SSE image path route Gemini image
+  // models to Google's generativelanguage API. The turn-orchestrator maps the
+  // newer gemini-3.*-image tier IDs to gemini-2.5-flash-image (the registry
+  // entry) so they resolve here too.
+  if (GEMINI_IMAGE_KEY) {
+    profiles.push({
+      id: 'cdz-gemini-images',
+      type: 'gemini',
+      priority: 85,
+      enabled: true,
+      models: ['gemini-2.5-flash-image'],
+      config: {
+        apiKey: GEMINI_IMAGE_KEY,
+      },
+    });
+  }
   cfg.copilot.providers.profiles = profiles;
 
   mkdirSync(dirname(path), { recursive: true });
@@ -121,7 +147,8 @@ function main() {
   console.log(
     `[cdz-ai-config] wrote provider profiles -> ${path} ` +
       `(cdz-ai: ${KEY ? `${CDZ_MODELS.length} models @ ${BASE_URL}` : 'off'}, ` +
-      `openai-images: ${IMAGE_KEY ? IMAGE_MODELS.join(',') : 'off'})`
+      `openai-images: ${IMAGE_KEY ? IMAGE_MODELS.join(',') : 'off'}, ` +
+      `cdz-gemini-images: ${GEMINI_IMAGE_KEY ? 'gemini-2.5-flash-image' : 'off'})`
   );
 }
 

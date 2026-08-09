@@ -62,8 +62,29 @@ export class TurnOrchestrator {
       sessionId,
       query
     );
-    const { modelId, reasoning, webSearch, toolsConfig, byokLeaseId } =
+    const { modelId: rawModelId, reasoning, webSearch, toolsConfig, byokLeaseId } =
       ChatQuerySchema.parse(query);
+    // CDZ WS17: the frontend image preference popup sends CDZIMAGE/CDZIM tier
+    // IDs (gpt-image-1.5, gemini-3-pro-image, cdzimage-2.0, ...) over the SSE
+    // image path, but the native model registry only knows gpt-image-1,
+    // gpt-image-2, and gemini-2.5-flash-image. Map the tier IDs the registry
+    // doesn't know to the closest registry-known equivalent so the request
+    // routes to a real image provider instead of falling back to the session's
+    // default CHAT model. Scoped to image response mode only.
+    const CDZIMAGE_TO_NATIVE: Record<string, string> = {
+      'gpt-image-1.5': 'gpt-image-2',
+      'gpt-image-1-mini': 'gpt-image-1',
+      'cdzimage-2.0': 'gpt-image-2',
+      'cdzimage-1.5': 'gpt-image-2',
+      'cdzimage-1.0': 'gpt-image-1',
+      'gemini-3-pro-image': 'gemini-2.5-flash-image',
+      'gemini-3.1-flash-image': 'gemini-2.5-flash-image',
+      'gemini-3.1-flash-lite-image': 'gemini-2.5-flash-image',
+    };
+    const modelId =
+      selection.responseMode === 'image' && rawModelId
+        ? (CDZIMAGE_TO_NATIVE[rawModelId] ?? rawModelId)
+        : rawModelId;
     const promptParams = await this.buildPromptParams(sessionId, {
       latestTurn: prepared.latestTurn,
       includeContextFiles: selection.includeContextFiles,
@@ -223,7 +244,7 @@ export class TurnOrchestrator {
         userId,
         sessionId,
         prepared.session,
-        undefined,
+        selection.model,
         hasAttachment,
         finalMessage,
         {

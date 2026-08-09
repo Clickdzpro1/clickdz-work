@@ -30,6 +30,7 @@ import {
   BadRequest,
   BlobNotFound,
   CopilotProviderSideError,
+  NotFound,
   Throttle,
   URLHelper,
 } from '../../base';
@@ -614,7 +615,7 @@ export class ClickDzVdzRenderController {
       );
       const data = await res.json().catch(() => ({}));
       if (res.status === 404) {
-        throw new BadRequest('Unknown render job');
+        throw new NotFound('Unknown render job');
       }
       if (!res.ok) {
         throw new CopilotProviderSideError({
@@ -635,7 +636,7 @@ export class ClickDzVdzRenderController {
     );
     const data = await res.json().catch(() => ({}));
     if (res.status === 404) {
-      throw new BadRequest('Unknown render job');
+      throw new NotFound('Unknown render job');
     }
     if (!res.ok) {
       throw new CopilotProviderSideError({
@@ -689,7 +690,7 @@ export class ClickDzVdzRenderController {
 
     if (upstream.status === 404) {
       // Not done yet (or unknown) — a typed 404 the client polls around.
-      throw new BadRequest('Render is not ready yet');
+      throw new NotFound('Render is not ready yet');
     }
     if (!upstream.ok || !upstream.body) {
       throw new CopilotProviderSideError({

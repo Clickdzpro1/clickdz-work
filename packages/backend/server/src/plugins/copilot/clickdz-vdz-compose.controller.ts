@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Logger, Post } from '@nestjs/common';
 
 // SECURITY: typed AFFiNE errors so the global exception filter emits proper
 // status codes. A raw @nestjs/common HttpException becomes a generic 500 here,
@@ -8,6 +8,7 @@ import { Body, Controller, Post } from '@nestjs/common';
 //    copilot provider error rather than a bare 502.
 // Throttle('strict') is the same hard per-IP cap the paid /apps routes use.
 import { BadRequest, CopilotProviderSideError, Throttle } from '../../base';
+import { CurrentUser } from '../../core/auth';
 import {
   buildComposeContent,
   buildRefineContent,
@@ -94,6 +95,8 @@ function extractVdzHtml(reply: string): string {
  */
 @Controller()
 export class ClickDzVdzComposeController {
+  private readonly logger = new Logger(ClickDzVdzComposeController.name);
+
   private assertMakeReady() {
     if (!MAKE_API_KEY || !MAKE_TEAM_ID || !MAKE_AGENT_ID) {
       throw new CopilotProviderSideError({
@@ -180,7 +183,7 @@ export class ClickDzVdzComposeController {
   /** COMPOSE — describe a video, get a full self-contained composition back. */
   @Throttle('strict')
   @Post('/api/v1/vdz/compose')
-  async compose(@Body() body: any) {
+  async compose(@CurrentUser() user: CurrentUser, @Body() body: any) {
     const prompt = String(body?.prompt || '').trim();
     if (!prompt) {
       throw new BadRequest('A description of the video is required');
@@ -192,6 +195,7 @@ export class ClickDzVdzComposeController {
         `Prompt is too long (max ${MAX_VDZ_PROMPT_CHARS} characters)`
       );
     }
+    this.logger.log(`[vdz-compose] user=${user.id} prompt=${prompt.length}chars`);
     const content = buildComposeContent(prompt);
     const reply = await this.runMakeAgent(content);
     const html = this.toComposition(reply);
@@ -201,7 +205,7 @@ export class ClickDzVdzComposeController {
   /** REFINE — apply a conversational change to an existing composition. */
   @Throttle('strict')
   @Post('/api/v1/vdz/compose/refine')
-  async refine(@Body() body: any) {
+  async refine(@CurrentUser() user: CurrentUser, @Body() body: any) {
     // Reject wrong-typed html before coercion (a non-string that stringifies to
     // garbage should never reach the engine).
     if (body?.html != null && typeof body.html !== 'string') {
@@ -226,6 +230,9 @@ export class ClickDzVdzComposeController {
       );
     }
     const content = buildRefineContent({ html, instruction });
+    this.logger.log(
+      `[vdz-compose] refine user=${user.id} html=${html.length}chars instruction=${instruction.length}chars`
+    );
     const reply = await this.runMakeAgent(content);
     const refined = this.toComposition(reply);
     return { html: refined };
