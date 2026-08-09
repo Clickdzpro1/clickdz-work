@@ -466,6 +466,47 @@ export class CopilotController implements BeforeApplicationShutdown {
   }
 
   /**
+   * WS17 — wrap mapSseError for the chat routes so an upstream cdz-ai
+   * "Scenario failed to complete" 502 (an intermittent Make-scenario flake,
+   * characterized by a sustained probe as model-specific to cdz-sage under
+   * concurrency) surfaces a clear, actionable French message instead of the
+   * generic "An error occurred". The root cause is upstream (the cdz-ai Make
+   * scenario), not a clickdz-work code bug — the durable fix is in the Make
+   * scenario, but the user-facing clarity is the correct UX here. A silent
+   * mid-stream auto-retry is deliberately NOT attempted (it could double-charge
+   * or garble output); instead we tell the user to retry, which re-runs the
+   * turn from a clean state.
+   */
+  private cdzChatSseError(originalError: any, info: object) {
+    const raw =
+      (originalError instanceof Error && originalError.message) ||
+      (typeof originalError === 'string' && originalError) ||
+      '';
+    const isScenarioFailed =
+      /Scenario failed to complete|engine error/i.test(raw) ||
+      /status.*502|502.*Scenario/i.test(raw);
+    if (isScenarioFailed) {
+      this.logger.warn(
+        `[chat] upstream scenario-failed 502 surfaced to user — model=${(info as any)?.model ?? '?'}`
+      );
+      metrics.sse.counter('cdz_scenario_failed').add(1);
+      // Emit a typed error event the FE renders as the red banner, but with a
+      // clear message pointing to retry (the upstream flake is transient).
+      return of({
+        type: 'error' as const,
+        data: {
+          status: 502,
+          code: 'upstream_scenario_failed',
+          name: 'UPSTREAM_SCENARIO_FAILED',
+          message:
+            "Le service IA a rencontré un problème temporaire (scénario en amont). Renvoyez votre message — ça marche généralement du premier coup.",
+        },
+      });
+    }
+    return mapSseError(originalError, info);
+  }
+
+  /**
    * WS2 — normalise the `?contextMode=` query param on the chat SSE endpoints.
    *
    * Valid values are 'recent' | 'compact' | 'fresh'; anything else (including
@@ -533,7 +574,7 @@ export class CopilotController implements BeforeApplicationShutdown {
         catchError(e => {
           metrics.ai.counter('chat_stream_errors').add(1);
           info.throwInStream = true;
-          return mapSseError(e, info);
+          return this.cdzChatSseError(e, info);
         }),
         finalize(() => {
           this.ongoingStreamCount$.next(this.ongoingStreamCount$.value - 1);
@@ -543,7 +584,7 @@ export class CopilotController implements BeforeApplicationShutdown {
       return this.mergePingStream(prepared.messageId || '', source$);
     } catch (err) {
       metrics.ai.counter('chat_stream_errors').add(1, info);
-      return mapSseError(err, info);
+      return this.cdzChatSseError(err, info);
     }
   }
 
@@ -594,7 +635,7 @@ export class CopilotController implements BeforeApplicationShutdown {
         catchError(e => {
           metrics.ai.counter('chat_object_stream_errors').add(1);
           info.throwInStream = true;
-          return mapSseError(e, info);
+          return this.cdzChatSseError(e, info);
         }),
         finalize(() => {
           this.ongoingStreamCount$.next(this.ongoingStreamCount$.value - 1);
@@ -604,7 +645,7 @@ export class CopilotController implements BeforeApplicationShutdown {
       return this.mergePingStream(prepared.messageId || '', source$);
     } catch (err) {
       metrics.ai.counter('chat_object_stream_errors').add(1, info);
-      return mapSseError(err, info);
+      return this.cdzChatSseError(err, info);
     }
   }
 
@@ -639,7 +680,7 @@ export class CopilotController implements BeforeApplicationShutdown {
         catchError(e => {
           metrics.ai.counter('action_stream_errors').add(1, info);
           info.throwInStream = true;
-          return mapSseError(e, info);
+          return this.cdzChatSseError(e, info);
         }),
         finalize(() =>
           this.ongoingStreamCount$.next(this.ongoingStreamCount$.value - 1)
@@ -649,7 +690,7 @@ export class CopilotController implements BeforeApplicationShutdown {
       return this.mergePingStream(prepared.messageId || '', source$);
     } catch (err) {
       metrics.ai.counter('action_stream_errors').add(1, info);
-      return mapSseError(err, info);
+      return this.cdzChatSseError(err, info);
     }
   }
 
