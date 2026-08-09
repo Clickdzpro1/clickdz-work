@@ -114,7 +114,7 @@ const SentenceBlock = memo(function SentenceBlock({
     <div className={tcs.sentence} data-active={active}>
       <span
         className={tcs.timeChip}
-        title="Jump the playhead to this sentence"
+        title="Sauter la tête de lecture à cette phrase"
         onClick={() => onSeekWord(words[sentence.from])}
         role="button"
       >
@@ -134,7 +134,7 @@ const SentenceBlock = memo(function SentenceBlock({
                 className={tcs.word}
                 data-playing={playing}
                 data-picked={picked}
-                title={`${formatTimecode(w.t0)} · click to select, shift-click to extend`}
+                title={`${formatTimecode(w.t0)} · cliquer pour sélectionner, Maj+clic pour étendre`}
                 onMouseDown={e => {
                   // Left button only; keep text selection working otherwise.
                   if (e.button !== 0) return;
@@ -301,21 +301,21 @@ export function TranscriptEdit({
           disabled={busy || !ready}
           title={
             !ready
-              ? 'Media is still loading…'
+              ? 'Le média est encore en cours de chargement…'
               : words && words.length > 0
-                ? 'Transcribe this clip again'
-                : 'Transcribe this clip with speech-to-text'
+                ? 'Retranscrire ce clip'
+                : 'Transcrire ce clip avec la reconnaissance vocale'
           }
         >
           {busy ? (
             <>
               <span className={tcs.spinner} aria-hidden="true" />
-              Transcribing…
+              Transcription…
             </>
           ) : words && words.length > 0 ? (
-            'Re-transcribe'
+            'Retranscrire'
           ) : (
-            'Transcribe'
+            'Transcrire'
           )}
         </button>
       </div>
@@ -357,21 +357,21 @@ export function TranscriptEdit({
           </div>
           {pick ? (
             <div className={tcs.selectionBar}>
-              <span className={tcs.selectionInfo}>Selected: {pickInfo}</span>
+              <span className={tcs.selectionInfo}>Sélection : {pickInfo}</span>
               <button
                 type="button"
                 className={tcs.selectionClear}
                 onClick={clearPick}
               >
-                Clear
+                Effacer
               </button>
               <button
                 type="button"
                 className={tcs.selectionCut}
                 onClick={onCutPick}
-                title="Delete the selected words and cut the clip"
+                title="Supprimer les mots sélectionnés et couper le clip"
               >
-                Cut selection
+                Couper la sélection
               </button>
             </div>
           ) : null}
@@ -379,14 +379,14 @@ export function TranscriptEdit({
       ) : busy ? (
         <div className={tcs.centerState}>
           <span className={tcs.spinner} aria-hidden="true" />
-          Transcribing this clip…
+          Transcription de ce clip…
         </div>
       ) : (
         <div className={tcs.centerState}>
-          <div>No transcript for this clip yet.</div>
+          <div>Aucune transcription pour ce clip pour le moment.</div>
           <div>
-            Click <b>Transcribe</b> to turn its speech into editable sentences —
-            then delete a sentence to cut it from the clip.
+            Cliquez sur <b>Transcrire</b> pour transformer la parole en phrases modifiables —
+            puis supprimez une phrase pour la couper du clip.
           </div>
         </div>
       )}
