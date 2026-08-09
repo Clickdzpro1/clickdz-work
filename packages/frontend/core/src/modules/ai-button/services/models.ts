@@ -17,13 +17,19 @@ const AI_PRE_COUNCIL_MODEL_KEY = 'AIPreCouncilModelId';
 // to select the model id (no client-side member picker).
 export const COUNCIL_MODEL_ID = 'cdz-council';
 
+// WS16 (CHAT SPEED): default the chat to CDZ Flash — the fast model used as the
+// bridge/planner brain — so the common chat turn gets the lowest time-to-first
+// token. CDZ Ultra stays available for users who want depth (picked explicitly).
+// (Note: the backend can still dictate its own default via mergeClickDzModels if
+// a server model is flagged isDefault; this fallback + the merge fallback below
+// keep a fast default when the server does not.)
 const CLICKDZ_FALLBACK_MODELS: AIModel[] = [
-  { name: 'CDZ Ultra', id: 'cdz-ultra', category: 'CDZ', version: 'Ultra', isPro: false, isDefault: true },
+  { name: 'CDZ Ultra', id: 'cdz-ultra', category: 'CDZ', version: 'Ultra', isPro: false, isDefault: false },
   { name: 'CDZ Council', id: 'cdz-council', category: 'CDZ', version: 'Council', isPro: false, isDefault: false },
   { name: 'CDZ Sage', id: 'cdz-sage', category: 'CDZ', version: '4.8', isPro: false, isDefault: false },
   { name: 'CDZ Architect', id: 'cdz-architect', category: 'CDZ', version: '5.5', isPro: false, isDefault: false },
   { name: 'CDZ Scholar', id: 'cdz-scholar', category: 'CDZ', version: '3.1', isPro: false, isDefault: false },
-  { name: 'CDZ Flash', id: 'cdz-flash', category: 'CDZ', version: '3.5', isPro: false, isDefault: false },
+  { name: 'CDZ Flash', id: 'cdz-flash', category: 'CDZ', version: '3.5', isPro: false, isDefault: true },
   { name: 'CDZ Polyglot', id: 'cdz-polyglot', category: 'CDZ', version: '5.4', isPro: false, isDefault: false },
   // raw engine models served through the CDZ AI passthrough (Make engine)
   { name: 'Claude Opus 4.8', id: 'claude-opus-4-8', category: 'Claude', version: 'Opus 4.8', isPro: false, isDefault: false },
@@ -58,8 +64,9 @@ export function mergeClickDzModels(serverModels: AIModel[]): AIModel[] {
     }
   }
   if (!merged.some(model => model.isDefault)) {
-    const defaultId = merged.some(model => model.id === 'cdz-ultra')
-      ? 'cdz-ultra'
+    // WS16: prefer the fast CDZ Flash when nothing is flagged default.
+    const defaultId = merged.some(model => model.id === 'cdz-flash')
+      ? 'cdz-flash'
       : merged[0]?.id;
     return merged.map(model => ({
       ...model,
