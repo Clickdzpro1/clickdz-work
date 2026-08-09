@@ -80,9 +80,9 @@ const OC_BORDER = `color-mix(in srgb, ${OC.accent} 45%, transparent)`;
 
 // The example prompts double as quick-start tasks (same set the console uses).
 const QUICK_TASKS: string[] = [
-  'Construire une petite API Express avec une route /health et la voir s'exécuter',
+  'Construire une petite API Express avec une route /health et la voir s’exécuter',
   'Écrire un script Python qui calcule et affiche les 20 premiers nombres premiers',
-  'Générer une application Vite + React avec un compteur et ouvrir l'aperçu en direct',
+  'Générer une application Vite + React avec un compteur et ouvrir l’aperçu en direct',
   'Écrire une fonction Python fizzbuzz avec un test, puis exécuter le test',
 ];
 
@@ -444,7 +444,7 @@ export const OpenClawDashboard = ({
       {/* Tool permissions (R11) — per-agent toggles via Trame's shared
           <ToolPermissions> grid, fed by Cadenas's OpenClaw tool catalog +
           config.enabledTools. Self-contained (fetches the catalog + saves via
-          Cadenas's api wrappers) so the dashboard's prop signature is unchanged.
+          Cadenas's api wrappers) so the dashboard’s prop signature is unchanged.
           Seeded from the config prop the parent already loaded. */}
       <OpenClawToolsCard config={config} />
 
@@ -560,7 +560,7 @@ export const OpenClawDashboard = ({
                         ? 'Sélectionnez un fichier pour le consulter.'
                         : caps?.sandbox
                           ? 'Aucun fichier pour cette tâche pour le moment.'
-                          : "L'exécution en direct est désactivée — les fichiers apparaîtront une fois qu'une tâche s'exécute dans le sandbox."}
+                          : "L'exécution en direct est désactivée — les fichiers apparaîtront une fois qu’une tâche s’exécute dans le sandbox."}
                     </EmptyNote>
                   )}
                 </div>
@@ -590,7 +590,7 @@ export const OpenClawDashboard = ({
           subtitle={
             caps?.sandbox
               ? "Décrivez une tâche de codage. OpenClaw écrit les fichiers, les exécute dans un sandbox isolé, diffuse la sortie, et (pour les applications web) affiche un aperçu en direct."
-              : "Décrivez une tâche de codage. OpenClaw écrit et explique le code. L'exécution en direct est désactivée sur ce serveur, rien n'est exécuté."
+              : "Décrivez une tâche de codage. OpenClaw écrit et explique le code. L'exécution en direct est désactivée sur ce serveur, rien n’est exécuté."
           }
           examples={QUICK_TASKS}
           onPickExample={seed => onNewTask(seed)}
@@ -662,9 +662,9 @@ function normalizeOpenClawTool(raw: unknown): OpenClawToolItem | null {
 }
 
 const OpenClawToolsCard = ({ config }: { config: OpenClawConfig }) => {
-  // enabledTools isn't in the base OpenClawConfig type until Cadenas's SNIPPET
+  // enabledTools isn't in the base OpenClawConfig type until Cadenas’s SNIPPET
   // lands — read it defensively so this stays byte-safe pre-merge. (We seed the
-  // grid from the catalog's per-tool flags, not this field; it's only a legacy
+  // grid from the catalog's per-tool flags, not this field; it’s only a legacy
   // fallback for a payload that omits the flags.)
   const cfgExtra = config as { enabledTools?: string[] };
 
@@ -673,7 +673,7 @@ const OpenClawToolsCard = ({ config }: { config: OpenClawConfig }) => {
   // initial state value: config.enabledTools is absent for every user who simply
   // provisioned (never opened this grid), which previously produced an empty Set
   // → every tool rendered OFF while the backend treats absent as ALL-ON (Limier
-  // bug). The catalog's per-tool `enabled` flags are the backend's authoritative
+  // bug). The catalog's per-tool `enabled` flags are the backend’s authoritative
   // view (all-on when never-customized, membership when customized, all-off for an
   // explicit []), so the grid mirrors exactly what the console will do. This
   // initial value is a harmless placeholder — the grid only renders once
@@ -744,7 +744,7 @@ const OpenClawToolsCard = ({ config }: { config: OpenClawConfig }) => {
       setSaveMsg(null);
       try {
         // Merge onto the existing config so runtime/preview aren't dropped. Coded
-        // against Cadenas's wrapper (mirrors Hermes's saveConfig contract).
+        // against Cadenas's wrapper (mirrors Hermes’s saveConfig contract).
         await agentApi.saveOpenclawConfig({
           defaultRuntime: config.defaultRuntime,
           previewAutoOpen: config.previewAutoOpen,
