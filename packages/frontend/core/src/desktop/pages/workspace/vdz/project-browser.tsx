@@ -39,13 +39,13 @@ function formatUpdatedAt(iso: string): string {
   if (!Number.isFinite(then)) return '';
   const diffMs = Date.now() - then;
   const min = Math.round(diffMs / 60_000);
-  if (min < 1) return 'Edited just now';
-  if (min < 60) return `Edited ${min}m ago`;
+  if (min < 1) return 'Modifié à l'instant';
+  if (min < 60) return `Modifié il y a ${min} min`;
   const hr = Math.round(min / 60);
-  if (hr < 24) return `Edited ${hr}h ago`;
+  if (hr < 24) return `Modifié il y a ${hr} h`;
   const day = Math.round(hr / 24);
-  if (day < 7) return `Edited ${day}d ago`;
-  return `Edited ${new Date(then).toLocaleDateString()}`;
+  if (day < 7) return `Modifié il y a ${day} j`;
+  return `Modifié le ${new Date(then).toLocaleDateString()}`;
 }
 
 export function ProjectBrowser({
@@ -108,23 +108,23 @@ export function ProjectBrowser({
   return (
     <div className={styles.browserMenu} role="menu" ref={rootRef}>
       <div className={styles.browserHeader}>
-        <span className={styles.browserTitle}>Projects</span>
+        <span className={styles.browserTitle}>Projets</span>
         <button
           type="button"
           className={styles.browserAction}
           onClick={onRefresh}
           disabled={loading}
-          title="Reload the project list"
+          title="Recharger la liste des projets"
         >
-          {loading ? 'Loading…' : 'Refresh'}
+          {loading ? 'Chargement…' : 'Actualiser'}
         </button>
         <button
           type="button"
           className={styles.browserAction}
           onClick={onNewProject}
-          title="Start a new project"
+          title="Créer un nouveau projet"
         >
-          + New
+          + Nouveau
         </button>
       </div>
 
@@ -142,10 +142,10 @@ export function ProjectBrowser({
                   type="button"
                   className={styles.projectOpen}
                   onClick={() => onOpenProject(project.id)}
-                  title={`Open ${project.name}`}
+                  title={`Ouvrir ${project.name}`}
                 >
                   <span className={styles.projectName}>
-                    {project.name || 'Untitled'}
+                    {project.name || 'Sans titre'}
                   </span>
                   <span className={styles.projectMeta}>
                     {formatUpdatedAt(project.updatedAt)}
@@ -156,8 +156,8 @@ export function ProjectBrowser({
                   className={styles.projectDelete}
                   onClick={handleDeleteClick(project.id)}
                   disabled={loading}
-                  title={armed ? 'Click again to delete' : 'Delete project'}
-                  aria-label={`Delete ${project.name}`}
+                  title={armed ? 'Cliquez à nouveau pour supprimer' : 'Supprimer le projet'}
+                  aria-label={`Supprimer ${project.name}`}
                 >
                   {armed ? '✓' : '🗑'}
                 </button>
@@ -167,10 +167,10 @@ export function ProjectBrowser({
         ) : (
           <div className={styles.browserEmpty}>
             {loading
-              ? 'Loading projects…'
+              ? 'Chargement des projets…'
               : projects == null
-                ? 'Open to load your saved projects.'
-                : 'No saved projects yet. Edit the timeline and press Save (⌘S) to keep your work.'}
+                ? 'Ouvrez pour charger vos projets enregistrés.'
+                : "Aucun projet enregistré. Modifiez la chronologie et appuyez sur Enregistrer (⌘S) pour conserver votre travail."}
           </div>
         )}
       </div>
