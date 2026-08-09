@@ -53,7 +53,7 @@ export type StudioGroup = 'create' | 'commerce' | 'agents' | 'connect';
  * A string-literal union (not `string`) so a typo can't silently mint a
  * never-visible entry.
  */
-export type StudioFlag = 'agents-multi' | 'vpic' | 'whatsappmax';
+export type StudioFlag = 'agents-multi' | 'vpic' | 'whatsappmax' | 'zoomplus';
 
 export interface StudioDef {
   id: StudioId;
@@ -75,6 +75,8 @@ export interface StudioDef {
   testId: string;
   /** When true the sidebar renders a <BetaChip /> postfix. */
   beta?: boolean;
+  /** When true the sidebar renders a <NewChip /> postfix (NEW badge). */
+  isNew?: boolean;
   /**
    * Optional capability gate. When set, the entry is visible only if the
    * matching `caps` flag is on (see {@link visibleStudios}); absent ⇒ always
@@ -84,6 +86,18 @@ export interface StudioDef {
    */
   flag?: StudioFlag;
 }
+
+/**
+ * Display order of studio groups in the sidebar. Each group label is the
+ * sub-header shown above its studios. Studios with a group not in this list
+ * are rendered after the known groups in STUDIOS array order.
+ */
+export const STUDIO_GROUP_ORDER: { group: StudioGroup; label: string }[] = [
+  { group: 'create', label: 'Create' },
+  { group: 'commerce', label: 'Commerce' },
+  { group: 'agents', label: 'Agents' },
+  { group: 'connect', label: 'Connect' },
+];
 
 /**
  * The studios, in sidebar display order (so `STUDIOS.map(...)` in
@@ -114,6 +128,7 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(FrameIcon),
     group: 'create',
     testId: 'slider-bar-vdz-studio-button',
+    isNew: true,
   },
   {
     // Routes to the App Builder's own page, NOT to '/chat'. Pointing this at
@@ -130,7 +145,7 @@ export const STUDIOS: StudioDef[] = [
   },
   {
     id: 'integrations',
-    label: 'Integrations',
+    label: 'Integrations Flows',
     route: '/integrations',
     icon: () => createElement(BlockLinkIcon),
     group: 'connect',
