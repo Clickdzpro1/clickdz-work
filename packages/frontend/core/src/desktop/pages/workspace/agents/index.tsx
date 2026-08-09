@@ -68,6 +68,7 @@ import {
   ViewTitle,
   WorkbenchService,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { AiIcon } from '@blocksuite/icons/rc';
 import { useService } from '@toeverything/infra';
 import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
@@ -855,6 +856,7 @@ const AgentsPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="AGENTS">
         <div
           data-cdz-surface=""
           style={{
@@ -880,6 +882,7 @@ const AgentsPage = () => {
             <AgentsHome />
           </div>
         </div>
+        </AppAccessGate>
       </ViewBody>
     </>
   );
