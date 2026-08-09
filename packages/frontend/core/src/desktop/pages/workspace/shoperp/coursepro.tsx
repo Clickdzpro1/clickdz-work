@@ -71,7 +71,7 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
       <div style={(status === 'ready' || status === 'degraded')
-        ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
+        ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg, alignSelf: 'stretch' }
         : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
         {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à CoursePro…</div>
         : status === 'error' ? (
@@ -87,7 +87,10 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
                 <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button>
               </Banner>
             )}
-            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
+            {/* WS12: give the iframe a guaranteed floor height so it never
+                collapses on short viewports / when an ancestor omits a definite
+                height — fills and scales instead of clipping. */}
+            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 520, height: '100%' }}>
               <iframe
                 src={iframeSrc}
                 style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}

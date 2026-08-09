@@ -62,7 +62,7 @@ export const CDZIMAGE_SIZES = [
 export type CdzImageSize = (typeof CDZIMAGE_SIZES)[number]['id'];
 
 /** Which typed, translated message to surface (all keys are pinned in i18n). */
-export type VpicGenerateFail = null | 'error' | 'aiUnavailable';
+export type VpicGenerateFail = null | 'error' | 'aiUnavailable' | 'timeout';
 
 export interface VpicGenerateParams {
   prompt: string;
@@ -93,8 +93,15 @@ export interface UseVpicGenerate {
   generate: (params: VpicGenerateParams) => Promise<Blob | null>;
 }
 
-const DEFAULT_TIER: CdzImageTier = 'cdzimage-2.0';
+const DEFAULT_TIER: CdzImageTier = 'cdzimage-1.5';
 const DEFAULT_SIZE: CdzImageSize = '1024x1024';
+
+// WS12: bounded client-side budget for a generation. The backend allows up to
+// 180s for /v1/images/generations, but gpt-image-2/"high" can genuinely take
+// 60–90s+ and a silent unbounded wait reads as "took forever / not working".
+// We abort at this ceiling so the UI can surface a clear "still working — try a
+// faster tier" state instead of spinning indefinitely, and report elapsed time.
+const GENERATE_TIMEOUT_MS = 120_000;
 
 /**
  * React hook wrapping the text-to-image generation call. Provider-free and
@@ -120,6 +127,11 @@ export function useVpicGenerate(): UseVpicGenerate {
 
       setFail(null);
       setWorking(true);
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(
+        () => controller.abort(),
+        GENERATE_TIMEOUT_MS
+      );
       try {
         // JSON body — matches clickdz-bridge.controller.ts imageGenerations().
         // NO `image` field → the text-to-image generation branch. `model` is an
@@ -136,6 +148,9 @@ export function useVpicGenerate(): UseVpicGenerate {
           headers: { 'Content-Type': 'application/json' },
           // Route is NOT @Public — it authenticates via the session cookie.
           credentials: 'include',
+          // Abort at the bounded ceiling so a slow/hung model resolves to a
+          // clear "still working" state instead of an indefinite spinner.
+          signal: controller.signal,
           body: JSON.stringify(payload),
         });
 
@@ -169,11 +184,18 @@ export function useVpicGenerate(): UseVpicGenerate {
           setFail('error');
           return null;
         }
-      } catch {
-        // Network/abort/anything unexpected: treat AI as unavailable, never throw.
+      } catch (err) {
+        // A deliberate abort from the bounded timeout → surface the clear
+        // "still working, try a faster tier" state, not a generic AI error.
+        if ((err as Error)?.name === 'AbortError') {
+          setFail('timeout');
+          return null;
+        }
+        // Network/anything unexpected: treat AI as unavailable, never throw.
         setFail('aiUnavailable');
         return null;
       } finally {
+        window.clearTimeout(timeoutId);
         setWorking(false);
       }
     },

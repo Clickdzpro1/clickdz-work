@@ -2077,6 +2077,10 @@ export class AIChatInput extends SignalWatcher(
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
+      max-height: 52px; /* ~2 wrapped rows in a narrow sidebar; scroll if more */
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
     }
     .cdz-slash-smart-chip {
       border: 1px solid color-mix(in srgb, #6e56cf 32%, transparent);

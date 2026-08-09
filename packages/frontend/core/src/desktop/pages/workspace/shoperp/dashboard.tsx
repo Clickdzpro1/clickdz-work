@@ -40,8 +40,6 @@ import { ShippingPanel } from './shipping';
 import { CaissePanel } from './caisse';
 import { ReportsPanel } from './reports';
 import { TeamPanel } from './team';
-import { SlideProPanel } from './slidepro';
-import { CourseProPanel } from './coursepro';
 // WS11: Social and ZOOM+ are removed from the DzOS dashboard tab strip. They
 // remain reachable via their standalone /socialplus and /zoomplus routes and
 // the global sidebar, so their panels are no longer imported here.
@@ -101,14 +99,10 @@ export type DashboardSection =
   | 'shipping'
   | 'caisse'
   | 'reports'
-  | 'team'
-  // Companion apps: each wraps a self-hosted open-source service (Presenton,
-  // ClassroomIO) and degrades to a deploy CTA until the merchant's own instance
-  // answers its health check. They sit after the core ERP tabs because none of
-  // them is part of the day-1 selling job. (WS11: Social/ZOOM+ removed from the
-  // DzOS view — reachable via their standalone routes + the global sidebar.)
-  | 'slidepro'
-  | 'coursepro';
+  // WS12: SlidePro/CoursePro removed from the DzOS dashboard — they remain
+  // reachable via their standalone /slidepro and /coursepro routes + the global
+  // sidebar. (WS11 earlier removed Social/ZOOM+ from this tab strip too.)
+  | 'team';
 
 // The tab bar is the merchant's map of their own shop, and this surface is
 // French — 7 of these labels were still the upstream English, which is why the
@@ -132,10 +126,9 @@ const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'caisse', label: 'Caisse', icon: '💰' },
   { id: 'reports', label: 'Rapports', icon: '📈' },
   { id: 'team', label: 'Équipe', icon: '👥' },
+  // WS12: SlidePro/CoursePro removed from the DzOS tab strip (reachable via
+  // their standalone routes + the global sidebar). WS11 removed Social/ZOOM+.
   // Companion apps last before Réglages — brand names, so untranslated.
-  { id: 'slidepro', label: 'SlidePro', icon: '📽️' },
-  { id: 'coursepro', label: 'CoursePro', icon: '🎓' },
-  // WS11: Social/ZOOM+ removed from the DzOS tab strip.
   { id: 'settings', label: 'Réglages', icon: '⚙️' },
 ];
 
@@ -492,10 +485,6 @@ export const ErpDashboard = ({
           <ReportsPanel slug={slug} currency={currency} onWritesBlocked={handleWritesBlocked} />
         ) : section === 'team' ? (
           <TeamPanel slug={slug} settings={summary.settings} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
-        ) : section === 'slidepro' ? (
-          <SlideProPanel slug={slug} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
-        ) : section === 'coursepro' ? (
-          <CourseProPanel slug={slug} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
         ) : section === 'features' ? (
           <ShopFeatures
             slug={slug}

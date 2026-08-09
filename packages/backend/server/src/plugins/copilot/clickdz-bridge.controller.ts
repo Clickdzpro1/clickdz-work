@@ -757,7 +757,13 @@ const CDZIMAGE_TIERS: Record<
   'gemini-3-pro-image': { engine: 'gemini-3-pro-image', quality: 'high', label: 'CDZIM Pro' },
   'gemini-2.5-flash-image': { engine: 'gemini-2.5-flash-image', quality: 'low', label: 'CDZIM Classic' },
 };
-const CDZIMAGE_DEFAULT_TIER = 'cdzimage-2.0';
+// WS12: default tier lowered from cdzimage-2.0 (gpt-image-2 / high) to
+// cdzimage-1.5 (gpt-image-1.5 / medium) so a generation that sends no explicit
+// model is fast (30–60s) rather than the slowest 60–90s+ config. The owner saw
+// "takes forever" from the silent worst-case default; 2.0 stays reachable when
+// a client explicitly asks for it. CDZIMAGE_REQUIRE_MODEL continues to force a
+// pick where the surfaces opt into strict mode.
+const CDZIMAGE_DEFAULT_TIER = 'cdzimage-1.5';
 const CDZIMAGE_LEGACY_ALIASES: Record<string, string> = {
   // the old "ClickDz 1.0 smart image" marketing ids → best tier
   'clickdz-image': CDZIMAGE_DEFAULT_TIER,

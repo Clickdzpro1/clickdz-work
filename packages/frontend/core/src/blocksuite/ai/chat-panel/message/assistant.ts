@@ -63,6 +63,9 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       --cdz-fu-accent: #2f7bff;
       display: inline-flex;
       align-items: center;
+      max-width: 100%;
+      min-width: 0;
+      overflow: hidden;
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
       border-radius: 999px;
       padding: 6px 13px;
@@ -74,6 +77,8 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       font-weight: 500;
       line-height: 1.35;
       text-align: start;
+      white-space: nowrap;
+      text-overflow: ellipsis;
       transition:
         background 0.15s ease,
         color 0.15s ease,

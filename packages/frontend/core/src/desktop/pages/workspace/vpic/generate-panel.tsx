@@ -204,9 +204,11 @@ export default function GeneratePanel(props: GeneratePanelProps): ReactElement {
   const failMessage =
     fail === 'aiUnavailable'
       ? t('vpic.aiUnavailable')
-      : fail === 'error'
-        ? t('vpic.error')
-        : '';
+      : fail === 'timeout'
+        ? t('vpic.timeout')
+        : fail === 'error'
+          ? t('vpic.error')
+          : '';
 
   return (
     <div

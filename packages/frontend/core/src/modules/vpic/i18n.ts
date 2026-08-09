@@ -394,6 +394,12 @@ export const VPIC_STRINGS: Record<string, VpicStringPair> = {
     fr: 'Les outils IA ne sont pas activés sur ce serveur.',
     ar: 'أدوات الذكاء الاصطناعي ماشي مفعّلة على هاد السيرفور.',
   },
+  // WS12: generation exceeded the bounded client budget — the backend may still
+  // be busy, so nudge to a faster tier rather than a hard failure.
+  'vpic.timeout': {
+    fr: 'La génération prend toujours du temps. Réessayez avec un modèle plus rapide (CDZIMAGE 1.0 / Lite).',
+    ar: 'التوليد لسّا كياخد الوقت. عاود جرب بموديل أسرع (CDZIMAGE 1.0 / Lite).',
+  },
   'vpic.imageTooLarge': {
     fr: 'Image trop lourde. Choisissez-en une plus petite.',
     ar: 'الصورة كبيرة بزّاف. اختار وحدة أصغر.',
