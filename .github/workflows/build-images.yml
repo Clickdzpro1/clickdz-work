@@ -288,3 +288,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # PostHog deploy analytics — fire a `deploy_build_succeeded` event after
+      # the Docker image is pushed. Uses CDZ_POSTHOG_KEY / CDZ_POSTHOG_HOST
+      # repo secrets (inherited from the caller workflow). Fire-and-forget:
+      # the `|| true` ensures PostHog issues never block the build.
+      - name: Notify PostHog — build succeeded
+        if: success()
+        run: |
+          curl -sS -X POST "${{ secrets.CDZ_POSTHOG_HOST }}/capture" \
+            -H "Content-Type: application/json" \
+            -d "{\"api_key\":\"${{ secrets.CDZ_POSTHOG_KEY }}\",\"event\":\"deploy_build_succeeded\",\"distinct_id\":\"clickdz-work-ci\",\"properties\":{\"source\":\"github_actions\",\"sha\":\"${{ inputs.git-short-hash }}\",\"branch\":\"${{ inputs.build-type }}\",\"image_tag\":\"${{inputs.build-type}}-${{ inputs.git-short-hash }}\",\"run_id\":\"${{ github.run_id }}\"}}" || true
+
+
