@@ -140,6 +140,16 @@ export class AIChatComposer extends SignalWatcher(
   @property({ attribute: false })
   accessor onAISubscribe!: () => Promise<void>;
 
+  // ClickDz context props — drilled through to ai-chat-input smart starters.
+  @property({ attribute: false })
+  accessor cdzStudio: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzNiche: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzLang: string | undefined;
+
   @state()
   accessor chips: ChatChip[] = [];
 
@@ -191,6 +201,9 @@ export class AIChatComposer extends SignalWatcher(
         .onChatSuccess=${this.onChatSuccess}
         .trackOptions=${this.trackOptions}
         .isContextProcessing=${this.isContextProcessing}
+        .cdzStudio=${this.cdzStudio}
+        .cdzNiche=${this.cdzNiche}
+        .cdzLang=${this.cdzLang}
       ></ai-chat-input>
       <div class="chat-panel-footer">
         <ai-chat-composer-tip
