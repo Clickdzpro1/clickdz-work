@@ -10,6 +10,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import {
   type CSSProperties,
   type PropsWithChildren,
@@ -659,6 +660,7 @@ const IntegrationsPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="INTEGRATIONS">
         <CdzResponsive />
         <div
           data-cdz-surface=""
@@ -1372,6 +1374,7 @@ const IntegrationsPage = () => {
             ) : null}
           </div>
         </div>
+        </AppAccessGate>
       </ViewBody>
     </>
   );
