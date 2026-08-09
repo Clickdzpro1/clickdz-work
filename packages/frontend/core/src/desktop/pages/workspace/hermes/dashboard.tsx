@@ -380,7 +380,7 @@ export const HermesDashboard = ({
 
   // ---- R11: approval inbox (ApprovalInbox) --------------------------------
   // Built from the waiting_approval background runs: list runs, filter to
-  // state === 'waiting_approval', then best-effort fetch each run's full record
+  // state === 'waiting_approval', then best-effort fetch each run’s full record
   // to pull the pending approval's id/title/detail. Fail-soft throughout — a
   // 404 (feature off) or any error yields an empty inbox (the card shows its own
   // calm "rien à approuver" state). The inbox `id` is the approval stepId (falls
@@ -1181,9 +1181,9 @@ const BackgroundComposer = ({
     try {
       const runId = await onStart(trimmed);
       if (runId) setValue('');
-      else setErr('Impossible de démarrer l'exécution — veuillez réessayer.');
+      else setErr('Impossible de démarrer l’exécution — veuillez réessayer.');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Impossible de démarrer l'exécution.');
+      setErr(e instanceof Error ? e.message : 'Impossible de démarrer l’exécution.');
     } finally {
       setBusy(false);
     }
@@ -1322,7 +1322,7 @@ const ExecutionRow = ({
           {preview}
         </span>
         <span style={{ display: 'block', fontSize: 11, color: C.muted }}>
-          {when ? timeAgo(when) : 'à l'instant'}
+          {when ? timeAgo(when) : 'à l’instant'}
         </span>
       </span>
       <RunStateChip state={state} />
