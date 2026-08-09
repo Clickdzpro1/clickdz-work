@@ -29,6 +29,16 @@ jobs:
     steps:
       - id: m
         run: echo "short=${GITHUB_SHA::9}" >> "$GITHUB_OUTPUT"
+      # PostHog deploy analytics — fire a `deploy_build_started` event at the
+      # very beginning of the pipeline. Uses CDZ_POSTHOG_KEY / CDZ_POSTHOG_HOST
+      # repo secrets (already set). Fire-and-forget: the `|| true` ensures a
+      # PostHog outage or network hiccup never blocks or fails the build.
+      - name: Notify PostHog — build started
+        if: always()
+        run: |
+          curl -sS -X POST "${{ secrets.CDZ_POSTHOG_HOST }}/capture" \
+            -H "Content-Type: application/json" \
+            -d "{\"api_key\":\"${{ secrets.CDZ_POSTHOG_KEY }}\",\"event\":\"deploy_build_started\",\"distinct_id\":\"clickdz-work-ci\",\"properties\":{\"source\":\"github_actions\",\"sha\":\"${{ steps.m.outputs.short }}\",\"branch\":\"${{ inputs.revision-tag || 'stable' }}\",\"actor\":\"${{ github.actor }}\",\"run_id\":\"${{ github.run_id }}\"}}" || true
 
   build:
     needs: meta
@@ -38,3 +48,20 @@ jobs:
       build-type: ${{ inputs.revision-tag || 'stable' }}
       app-version: 0.27.3
       git-short-hash: ${{ needs.meta.outputs.short-sha }}
+
+  # PostHog deploy analytics — fire a `deploy_build_failed` event if any job
+  # in the pipeline (including the reusable build-images workflow) fails.
+  # This catch-all job runs only on failure, after the build job completes,
+  # so it covers failures in any sub-job (build-web, build-server, build-images,
+  # etc.) that would otherwise skip the build-images job entirely.
+  notify-failure:
+    needs: [meta, build]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify PostHog — build failed
+        run: |
+          curl -sS -X POST "${{ secrets.CDZ_POSTHOG_HOST }}/capture" \
+            -H "Content-Type: application/json" \
+            -d "{\"api_key\":\"${{ secrets.CDZ_POSTHOG_KEY }}\",\"event\":\"deploy_build_failed\",\"distinct_id\":\"clickdz-work-ci\",\"properties\":{\"source\":\"github_actions\",\"sha\":\"${{ needs.meta.outputs.short-sha }}\",\"branch\":\"${{ inputs.revision-tag || 'stable' }}\",\"actor\":\"${{ github.actor }}\",\"run_id\":\"${{ github.run_id }}\"}}" || true
+
