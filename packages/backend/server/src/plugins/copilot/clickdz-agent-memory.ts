@@ -31,9 +31,9 @@
 // identical current behaviour.
 // ---------------------------------------------------------------------------
 
-// AgentName ('hermes' | 'openclaw') is the ONE agent-name vocabulary the run
-// engine + runtime + FE share — reuse it so memory keys line up with runs.
-import type { AgentName } from './clickdz-agent-runs';
+// WS17: memory keys now accept the raw agent id (string) so custom agents get
+// their own namespace. The builtin ids ('hermes' | 'openclaw') still pass
+// through; the strict AgentName union is no longer imported here.
 // The run-done completion hook + record shape live in the run engine. We import
 // `onAgentRunDone` (registered fail-soft, exactly like Telegramme's run-done
 // push) and the record type so the summarizer reads only the pinned fields.
@@ -106,11 +106,24 @@ export interface AgentMemory {
 // ===========================================================================
 
 /** Primary key holding the JSON AgentMemory blob for `{userId}:{agent}`. */
-export const agentMemoryKey = (userId: string, agent: AgentName): string =>
+// WS17: accept the raw agent id (string) so a custom agent (e.g. cz_abc123)
+// gets its OWN memory namespace instead of being collapsed into 'hermes'.
+// The builtin ids ('hermes' | 'openclaw') pass through unchanged; a custom id
+// is used verbatim (it's already a safe kebab-ish slug from createCustomAgent).
+export const agentMemoryKey = (userId: string, agent: string): string =>
   `clickdz:agentmem:${userId}:${normalizeAgent(agent)}`;
 
-function normalizeAgent(agent: unknown): AgentName {
-  return agent === 'openclaw' ? 'openclaw' : 'hermes';
+/**
+ * WS17: pass through any non-builtin agent id verbatim instead of coercing it
+ * to 'hermes' (which caused cross-agent memory bleed — a custom agent's run
+ * summary overwrote the user's Hermes memory). Returns 'hermes' only for
+ * empty/garbage input (fail-safe to the default agent), not for valid custom ids.
+ */
+function normalizeAgent(agent: unknown): string {
+  if (typeof agent !== 'string') return 'hermes';
+  const a = agent.trim();
+  if (!a) return 'hermes';
+  return a;
 }
 
 // ===========================================================================
@@ -234,7 +247,7 @@ function normalizeMemory(raw: unknown): AgentMemory {
 export async function readAgentMemory(
   redis: MemoryRedis,
   userId: string,
-  agent: AgentName
+  agent: string
 ): Promise<AgentMemory> {
   if (!memoryEnabled() || !validUser(userId)) return emptyMemory();
   let raw: string | null = null;
@@ -257,7 +270,7 @@ export async function readAgentMemory(
 export async function writeAgentMemory(
   redis: MemoryRedis,
   userId: string,
-  agent: AgentName,
+  agent: string,
   mem: AgentMemory
 ): Promise<AgentMemory> {
   const next = normalizeMemory(mem);
@@ -288,7 +301,7 @@ export async function writeAgentMemory(
 export async function appendFact(
   redis: MemoryRedis,
   userId: string,
-  agent: AgentName,
+  agent: string,
   text: string
 ): Promise<AgentMemory> {
   const current = await readAgentMemory(redis, userId, agent);
@@ -313,7 +326,7 @@ export async function appendFact(
 export async function setPref(
   redis: MemoryRedis,
   userId: string,
-  agent: AgentName,
+  agent: string,
   key: string,
   value: string
 ): Promise<AgentMemory> {
@@ -338,7 +351,7 @@ export async function setPref(
 export async function appendRunSummary(
   redis: MemoryRedis,
   userId: string,
-  agent: AgentName,
+  agent: string,
   runId: string,
   text: string
 ): Promise<AgentMemory> {

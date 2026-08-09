@@ -7,10 +7,11 @@ import {
   Logger,
   Param,
   Post,
+  Req,
   Res,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { randomBytes, randomUUID } from 'node:crypto';
 
 // JobQueue is the BullMQ wrapper (base/job barrel) — the SAME provider the
@@ -958,6 +959,7 @@ export class ClickDzAgentTriggersController {
   async webhook(
     @Param('hook') hook: string,
     @Body() body: unknown,
+    @Req() req: Request,
     @Res({ passthrough: true }) res: Response
   ): Promise<{ ok: boolean }> {
     this.gate();
@@ -992,6 +994,32 @@ export class ClickDzAgentTriggersController {
       // Paused webhook: accept the call but do nothing (ack 200 so the caller
       // does not retry-storm), same stance the telegram webhook takes.
       return { ok: true };
+    }
+
+    // WS17: idempotency — external webhook senders (Stripe, GitHub, n8n…) retry
+    // on timeout/5xx/slow-200, and each retry would fire a NEW agent run (new
+    // runId) → duplicate LLM spend + side effects. Dedup on a caller-supplied
+    // event id (X-ClickDz-Event-Id header) or a hash of (triggerId, body). A
+    // SETNX with a 24h TTL means only the FIRST delivery fires; retries ack 200
+    // without firing. Fail-soft: a Redis error skips the dedup (rare, and the
+    // caller can still retry — better to over-fire than to wedge webhooks).
+    try {
+      const eventId =
+        (typeof req.headers['x-clickdz-event-id'] === 'string' &&
+          req.headers['x-clickdz-event-id']) ||
+        '';
+      const bodyText =
+        typeof body === 'string' ? body : JSON.stringify(body ?? {});
+      const dedupKey = `clickdz:agenttrig:fired:${id}:${eventId || bodyText.slice(0, 200)}`;
+      const isNew = await (this.redis as any).setnx(dedupKey, '1');
+      if (isNew) {
+        await (this.redis as any).expire(dedupKey, 24 * 60 * 60);
+      } else {
+        // Already fired for this event — ack 200 without firing (stops retry storms).
+        return { ok: true };
+      }
+    } catch {
+      /* Redis hiccup — skip dedup, fail-open (rare) */
     }
 
     // Append the inbound body (≤4KB) as a context preview for the agent.

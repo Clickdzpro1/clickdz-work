@@ -98,6 +98,7 @@ import {
   sessionStatus,
   stopSession,
   writeFile,
+  SandboxError,
 } from './clickdz-vercel-sandbox';
 import type { SandboxFailure } from './clickdz-vercel-sandbox';
 
@@ -2059,6 +2060,10 @@ export class ClickDzOpenclawController {
       this.logger.warn(
         `[openclaw] listFiles failed: ${(err as Error)?.message ?? err}`
       );
+      // WS17: a 410/Gone ("Sandbox has stopped") means the session is dead.
+      // Clear thread.sandbox + persist so the FE stops showing an empty tree
+      // forever and the next turn recreates the session instead of reusing it.
+      await this.clearStaleSandbox(user.id, thread, err);
       res.status(200).json([]);
     }
   }
@@ -2101,7 +2106,49 @@ export class ClickDzOpenclawController {
       this.logger.warn(
         `[openclaw] readFile failed: ${(err as Error)?.message ?? err}`
       );
+      // WS17: clear the stale session on a 410/Gone (mirrors listThreadFiles).
+      await this.clearStaleSandbox(user.id, thread, err);
       res.status(200).json({ path: rel, content: '', language });
+    }
+  }
+
+  /**
+   * WS17: when a sandbox read (listFiles/readFile) fails with a 410/Gone
+   * ("Sandbox has stopped execution and is no longer available"), the session
+   * is dead. Clear `thread.sandbox` and persist so (a) the FE stops showing an
+   * empty file tree forever, and (b) the next /stream turn recreates the
+   * session via ensurePersistentSandbox instead of reusing the dead one.
+   * Fail-soft (a save error only delays recovery to the next turn). Best-effort
+   * stopSession on the dead id (no-op if already gone).
+   */
+  private async clearStaleSandbox(
+    userId: string,
+    thread: { sandbox?: { sessionId?: string } } | null,
+    err: unknown
+  ): Promise<void> {
+    if (!thread || !thread.sandbox?.sessionId) return;
+    const isGone =
+      (err instanceof SandboxError &&
+        (err.status === 410 || err.code === 'api_error')) ||
+      (err instanceof Error && /stopped|410|no longer available/i.test(err.message));
+    if (!isGone) return;
+    const deadId = thread.sandbox.sessionId;
+    try {
+      thread.sandbox = undefined;
+      await this.runtime.saveThread(userId, thread as never);
+      this.logger.log(
+        `[openclaw] cleared stale sandbox session=${deadId} (410/Gone)`
+      );
+    } catch (e) {
+      this.logger.warn(
+        `[openclaw] clearStaleSandbox save failed: ${(e as Error)?.message ?? e}`
+      );
+    }
+    // Best-effort stop (the session is already gone; this is a no-op then).
+    try {
+      await stopSession(deadId);
+    } catch {
+      /* already gone */
     }
   }
 

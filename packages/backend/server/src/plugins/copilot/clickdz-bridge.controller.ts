@@ -6388,29 +6388,13 @@ export class ClickDzBridgeController {
     if (targetWh && !warehouses.some(w => erpStr(w.id) === targetWh)) {
       throw new NotFound('Warehouse not found');
     }
-    // Append movements through the EXISTING ledger (movements-YYYYMM), exactly
-    // like erpInventoryMovement. A full partition surfaces as data_rejected.
-    const collection = erpMovementCollection();
-    for (const mv of result.movements) {
-      if (Buffer.byteLength(JSON.stringify(mv), 'utf8') > ERP_MAX_WRITE_BYTES) {
-        throw new BadRequest('Movement record too large');
-      }
-      const created = await this.erpCreateRecord(slug, collection, mv as unknown as ErpRecord, token);
-      if (!created.ok) {
-        this.erpWriteFailed(res, created.status);
-        return;
-      }
-    }
-    // Recompute + persist each affected product's roll-up from the ledger (now
-    // including the just-appended movements) — reuses erpApplyStockRollup.
-    if (result.movements.length > 0) {
-      const { totals } = await this.erpReadMovements(slug, ERP_MOVEMENT_MONTHS_READ);
-      for (const key of Object.keys(result.receivedByKey)) {
-        const newStock = Math.max(0, Math.round(totals.get(key) ?? 0));
-        await this.erpApplyStockRollup(slug, key, newStock, token);
-      }
-    }
-    // Persist the updated PO in place (incremented qtyReceived + new status).
+    // WS17: persist the updated PO FIRST (incremented qtyReceived + new status),
+    // BEFORE appending movements. This makes a retry idempotent: computeReceive
+    // derives movements from `actuallyTaken = newQtyReceived - oldQtyReceived`,
+    // so a retry that re-reads the already-incremented PO computes outstanding=0
+    // for received lines and produces NO duplicate movements. The prior order
+    // (movements first, PO last) left already-written movements in the ledger on
+    // a mid-loop failure, and a retry re-received ALL lines -> inflated stock.
     if (Buffer.byteLength(JSON.stringify(result.po), 'utf8') > ERP_MAX_WRITE_BYTES) {
       throw new BadRequest('Purchase order too large after receive');
     }
@@ -6425,17 +6409,50 @@ export class ClickDzBridgeController {
       this.erpWriteFailed(res, poWrote.status);
       return;
     }
+    // Append movements through the EXISTING ledger (movements-YYYYMM), exactly
+    // like erpInventoryMovement. A full partition surfaces as data_rejected.
+    const collection = erpMovementCollection();
+    for (const mv of result.movements) {
+      if (Buffer.byteLength(JSON.stringify(mv), 'utf8') > ERP_MAX_WRITE_BYTES) {
+        throw new BadRequest('Movement record too large');
+      }
+      const created = await this.erpCreateRecord(slug, collection, mv as unknown as ErpRecord, token);
+      if (!created.ok) {
+        this.erpWriteFailed(res, created.status);
+        return;
+      }
+    }
+    // Recompute + persist each affected product's roll-up from the ledger (now
+    // including the just-appended movements) — reuses erpApplyStockRollup. This
+    // is self-correcting on retry: it reads the FULL ledger and recomputes, so a
+    // partial-failure retry produces the correct stock regardless of which
+    // movements already landed.
+    if (result.movements.length > 0) {
+      const { totals } = await this.erpReadMovements(slug, ERP_MOVEMENT_MONTHS_READ);
+      for (const key of Object.keys(result.receivedByKey)) {
+        const newStock = Math.max(0, Math.round(totals.get(key) ?? 0));
+        await this.erpApplyStockRollup(slug, key, newStock, token);
+      }
+    }
     // Bump the supplier balance by the received cost (we now owe more).
+    // WS17: re-read the supplier FRESH here (not the copy from the top of the
+    // route) so the delta applies to the latest balance, narrowing the
+    // lost-update window for concurrent PO receives on the same supplier. The
+    // prior code reused the `supplier` read much earlier, so two concurrent
+    // receives both added their delta to the same stale balance and the last
+    // PUT won — losing one delta. Full atomicity (HINCRBY on a per-supplier
+    // counter) is deferred to the Prisma lift; this re-read is the safe
+    // incremental fix.
     let supplierBalance: number | undefined;
     if (result.receivedCost > 0) {
-      const suppliers = await this.erpList(slug, 'suppliers');
-      const supplier = suppliers?.find(s => erpStr(s.id) === erpStr(po.supplierId));
-      if (supplier) {
-        const updated = applySupplierBalanceDelta(supplier, result.receivedCost);
+      const freshSuppliers = await this.erpList(slug, 'suppliers');
+      const freshSupplier = freshSuppliers?.find(s => erpStr(s.id) === erpStr(po.supplierId));
+      if (freshSupplier) {
+        const updated = applySupplierBalanceDelta(freshSupplier, result.receivedCost);
         const sw = await putErpRecord(
           this.erpDataBase(slug),
           'suppliers',
-          erpStr(supplier.id),
+          erpStr(freshSupplier.id),
           updated,
           token
         );
