@@ -23,6 +23,18 @@ export interface ProvisionedApp {
 const PROVISION_TIMEOUT_MS = 25_000;
 const PROVISION_MAX_ATTEMPTS = 2;
 
+// C4: Per-app override for max provision attempts. ZOOM+ (Meet backend) is a
+// cold-start-or-not service — retrying a 25s timeout twice just doubles the
+// wait to 50s for the user. The frontend 'slow' state (15s threshold) already
+// surfaces a retry/cancel UI, so the backend retry is redundant for zoomplus.
+const PROVISION_MAX_ATTEMPTS_OVERRIDE: Record<string, number> = {
+  zoomplus: 1,
+};
+
+function maxAttemptsFor(app: string): number {
+  return PROVISION_MAX_ATTEMPTS_OVERRIDE[app] ?? PROVISION_MAX_ATTEMPTS;
+}
+
 async function provisionOnce(app: string): Promise<ProvisionedApp | null> {
   try {
     const resp = await fetch('/api/v1/apps/provision', {
@@ -57,7 +69,8 @@ async function provisionOnce(app: string): Promise<ProvisionedApp | null> {
  *  - One automatic retry so a cold-start transient doesn't hard-fail the panel.
  */
 export async function provisionApp(app: string): Promise<ProvisionedApp | null> {
-  for (let attempt = 0; attempt < PROVISION_MAX_ATTEMPTS; attempt++) {
+  const maxAttempts = maxAttemptsFor(app);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const result = await provisionOnce(app);
     if (result !== null) {
       // PostHog key action (no-op unless CDZ_POSTHOG_KEY/HOST configured).
