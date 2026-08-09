@@ -1,5 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
+import { Injectable, Logger } from '@nestjs/common';
+
 import { CopilotContextService } from '../context/service';
 import { type Turn } from '../core';
 import {
@@ -15,8 +17,27 @@ import { ConversationHost } from './hosts/conversation-host';
 import { ImageResultHost } from './hosts/image-result-host';
 import { TurnPersistence } from './hosts/turn-persistence';
 
+// WS17: cdz-flash is the reliable ClickDz model (0% flake in sustained probes)
+// used as the automatic fallback when the primary model (typically cdz-sage)
+// fails the upstream Make-scenario 502 BEFORE any tokens reach the client.
+const CDZ_FALLBACK_MODEL = 'cdz-flash';
+
+// Matches the upstream cdz-ai "Scenario failed to complete" 502 / engine error
+// that surfaces as a thrown Error inside the stream consumption loop.
+function isUpstreamScenarioFailed(error: unknown): boolean {
+  const raw =
+    (error instanceof Error && error.message) ||
+    (typeof error === 'string' && error) ||
+    '';
+  return (
+    /Scenario failed to complete|engine error/i.test(raw) ||
+    /status.*502|502.*Scenario/i.test(raw)
+  );
+}
+
 @Injectable()
 export class TurnOrchestrator {
+  private readonly logger = new Logger(TurnOrchestrator.name);
   constructor(
     private readonly conversations: ConversationHost,
     private readonly context: CopilotContextService,
@@ -156,13 +177,35 @@ export class TurnOrchestrator {
     wasAborted: () => boolean
   ) {
     let buffer = '';
-    for await (const chunk of this.runtime.streamText(
-      { modelId: model },
-      finalMessage,
-      options
-    )) {
-      buffer += chunk;
-      yield chunk;
+    try {
+      for await (const chunk of this.runtime.streamText(
+        { modelId: model },
+        finalMessage,
+        options
+      )) {
+        buffer += chunk;
+        yield chunk;
+      }
+    } catch (error) {
+      // WS17: if the upstream cdz-ai scenario failed (502) BEFORE any tokens
+      // reached the client, retry ONCE with cdz-flash (the reliable model).
+      // If tokens were already emitted, rethrow (mid-stream retry would garble
+      // output / double-charge) — the controller's cdzChatSseError handles it.
+      if (buffer === '' && isUpstreamScenarioFailed(error)) {
+        this.logger.warn(
+          `[chat] upstream scenario-failed 502 before any tokens — retrying once with ${CDZ_FALLBACK_MODEL} (was ${model})`
+        );
+        for await (const chunk of this.runtime.streamText(
+          { modelId: CDZ_FALLBACK_MODEL },
+          finalMessage,
+          options
+        )) {
+          buffer += chunk;
+          yield chunk;
+        }
+      } else {
+        throw error;
+      }
     }
     await this.turnPersistence.persistTextResult(session, buffer, wasAborted());
   }
@@ -205,13 +248,33 @@ export class TurnOrchestrator {
     wasAborted: () => boolean
   ): AsyncIterableIterator<StreamObject> {
     const chunks: StreamObject[] = [];
-    for await (const chunk of this.runtime.streamObject(
-      { modelId: model },
-      finalMessage,
-      options
-    )) {
-      chunks.push(chunk);
-      yield chunk;
+    try {
+      for await (const chunk of this.runtime.streamObject(
+        { modelId: model },
+        finalMessage,
+        options
+      )) {
+        chunks.push(chunk);
+        yield chunk;
+      }
+    } catch (error) {
+      // WS17: same retry-to-cdz-flash seam as streamTextResult — only when the
+      // scenario failed before any chunks reached the client.
+      if (chunks.length === 0 && isUpstreamScenarioFailed(error)) {
+        this.logger.warn(
+          `[chat-object] upstream scenario-failed 502 before any chunks — retrying once with ${CDZ_FALLBACK_MODEL} (was ${model})`
+        );
+        for await (const chunk of this.runtime.streamObject(
+          { modelId: CDZ_FALLBACK_MODEL },
+          finalMessage,
+          options
+        )) {
+          chunks.push(chunk);
+          yield chunk;
+        }
+      } else {
+        throw error;
+      }
     }
     await this.turnPersistence.persistObjectResult(
       session,

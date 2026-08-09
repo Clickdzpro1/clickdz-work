@@ -130,7 +130,7 @@ export const STUDIOS: StudioDef[] = [
   },
   {
     id: 'integrations',
-    label: '🔌 Integrations',
+    label: 'Integrations',
     route: '/integrations',
     icon: () => createElement(BlockLinkIcon),
     group: 'connect',
@@ -143,7 +143,7 @@ export const STUDIOS: StudioDef[] = [
     // the visual anchor a merchant arriving from Facebook selling actually
     // scans for, which is what the plain-French label used to provide.
     id: 'shoperp',
-    label: '🛍️ DzOS',
+    label: 'DzOS',
     route: '/shoperp',
     icon: () => createElement(BlockLinkIcon),
     group: 'commerce',

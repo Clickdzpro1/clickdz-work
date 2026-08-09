@@ -444,13 +444,22 @@ class WhatsappMaxGatewayClient {
   /** Proxy GET /instances/:id/chats → the chat list. [] on failure. */
   async listChats(instanceId: string): Promise<any[]> {
     if (!instanceId) return [];
-    const r = await this.call(`/instances/${instanceId}/chats`, {
-      method: 'GET',
-    });
-    if (!r || r.status !== 200) return [];
-    const b = r.body || {};
-    if (Array.isArray(b)) return b;
-    if (Array.isArray(b.chats)) return b.chats;
+    // WS17: Baileys populates the chats store from messaging-history.set
+    // ASYNC after connect — a fresh connection returns [] until the sync lands
+    // (10-30s). Retry up to 3x with 2s backoff so a recently-connected instance
+    // doesn't show "Aucune conversation" forever while the sync is in flight.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await this.call(`/instances/${instanceId}/chats`, {
+        method: 'GET',
+      });
+      if (r && r.status === 200) {
+        const b = r.body || {};
+        const chats = Array.isArray(b) ? b : Array.isArray(b.chats) ? b.chats : [];
+        if (chats.length > 0) return chats;
+      }
+      // empty or error — wait and retry (only between attempts)
+      if (attempt < 2) await new Promise(res => setTimeout(res, 2000));
+    }
     return [];
   }
 

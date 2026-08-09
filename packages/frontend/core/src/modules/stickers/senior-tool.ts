@@ -123,6 +123,11 @@ export class EdgelessCdzStickerButton extends WithDisposable(LitElement) {
       background: var(--affine-background-primary-color, #fff);
       outline: none;
       transition: border-color 0.15s;
+      /* WS17: the edgeless canvas + toolbar set user-select:none which INHERITS
+         into this shadow-DOM input — on mobile/iOS that prevents focus/typing.
+         Override so the input is always editable. */
+      user-select: text;
+      -webkit-user-select: text;
     }
 
     .cdz-input:focus {

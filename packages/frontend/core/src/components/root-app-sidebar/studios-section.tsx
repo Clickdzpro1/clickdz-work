@@ -49,7 +49,7 @@ const BetaChip = () => (
         'color-mix(in srgb, var(--affine-text-secondary-color) 16%, transparent)',
     }}
   >
-    béta
+    Beta
   </span>
 );
 

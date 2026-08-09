@@ -77,8 +77,11 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       font-weight: 500;
       line-height: 1.35;
       text-align: start;
-      white-space: nowrap;
-      text-overflow: ellipsis;
+      /* WS17: allow wrapping so the full suggestion label is visible instead of
+         truncated with "..." (nowrap+ellipsis made long French labels unreadable
+         and caused each chip to take a full row, making the block too tall). */
+      white-space: normal;
+      word-break: break-word;
       transition:
         background 0.15s ease,
         color 0.15s ease,

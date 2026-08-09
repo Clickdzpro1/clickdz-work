@@ -12,7 +12,9 @@ const DEFAULT_COLLAPSABLE_STATE: Record<string, boolean> = {
   favoritesOld: true,
   migrationFavorites: true,
   others: false,
-  studios: false,
+  // WS17: collapse STUDIOS by default — the 14-item flat list was a wall that
+  // pushed core doc features below the fold. Users click to expand when needed.
+  studios: true,
 };
 
 export class NavigationPanelService extends Service {

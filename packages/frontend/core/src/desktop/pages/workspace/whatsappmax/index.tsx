@@ -1274,15 +1274,21 @@ const ChatList = ({ active, onSelect, onDark }: ChatListProps) => {
   const [chats, setChats] = useState<ChatRow[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
+  // WS17: track gateway errors separately from genuine empties so the user sees
+  // "Erreur de récupération" instead of "Aucune conversation" when the gateway
+  // hiccups (the apiGet fail-soft path returns null on any non-ok).
+  const [chatError, setChatError] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
 
   const fetchChats = useCallback(async () => {
     setLoading(true);
+    setChatError(false);
     const out = await apiGet<{ chats: ChatRow[] }>('/api/v1/whatsappmax/chats');
     if (!mountedRef.current) return;
     setLoading(false);
     if (isDark(out)) { onDark(); return; }
+    if (out === null) { setChatError(true); return; }
     if (out && Array.isArray(out.chats)) setChats(out.chats);
   }, [onDark]);
 
@@ -1367,7 +1373,7 @@ const ChatList = ({ active, onSelect, onDark }: ChatListProps) => {
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {filtered.length === 0 ? (
           <div style={{ padding: 16, fontSize: 12.5, color: C.muted }}>
-            {loading ? 'Chargement…' : search ? 'Aucun résultat.' : 'Aucune conversation. Revenez après avoir reçu un message.'}
+            {loading ? 'Chargement…' : chatError ? 'Erreur de récupération. Réessayez.' : search ? 'Aucun résultat.' : 'Aucune conversation. Revenez après avoir reçu un message.'}
           </div>
         ) : (
           filtered.map(c => {

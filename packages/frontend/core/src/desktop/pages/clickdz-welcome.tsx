@@ -412,8 +412,10 @@ export const Component = () => {
 
         {/* Step indicator — 3 steps: name, profile, features */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-          <div style={{ flex: 1, height: 4, borderRadius: 2, background: step === 'name' ? C.primary : C.border, transition: 'background 200ms' }} />
-          <div style={{ flex: 1, height: 4, borderRadius: 2, background: step === 'profile' ? C.primary : (step === 'features' ? C.border : C.border), transition: 'background 200ms' }} />
+          {/* WS17: completed steps STAY filled (was: only the current step was
+              highlighted, so going to step 2 greyed-out step 1 — looked broken). */}
+          <div style={{ flex: 1, height: 4, borderRadius: 2, background: (step === 'name' || step === 'profile' || step === 'features') ? C.primary : C.border, transition: 'background 200ms' }} />
+          <div style={{ flex: 1, height: 4, borderRadius: 2, background: (step === 'profile' || step === 'features') ? C.primary : C.border, transition: 'background 200ms' }} />
           <div style={{ flex: 1, height: 4, borderRadius: 2, background: step === 'features' ? C.primary : C.border, transition: 'background 200ms' }} />
         </div>
 
