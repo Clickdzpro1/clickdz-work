@@ -519,7 +519,10 @@ export class AdminWorkspaceResolver {
     input?: AdminDashboardInput,
     @Info() info?: GraphQLResolveInfo
   ) {
-    this.assertCloudOnly();
+    // ClickDz: the admin analytics dashboard is the legitimate admin panel for
+    // this self-hosted instance, so we do NOT call assertCloudOnly() here
+    // (which throws NotFoundException when env.selfhosted is true). The other
+    // admin workspace queries keep the cloud-only guard.
     const includeTopSharedLinks = Boolean(
       info?.fieldNodes.some(
         node =>
