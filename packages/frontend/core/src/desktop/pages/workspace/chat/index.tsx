@@ -41,6 +41,7 @@ import {
   ViewTitle,
   WorkbenchService,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import { studioForPath } from '@affine/core/modules/studio';
 import { useI18n } from '@affine/i18n';
@@ -339,7 +340,9 @@ export const Component = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="AI_CHAT">
         <div className={styles.chatRoot} ref={onChatContainerRef} />
+        </AppAccessGate>
       </ViewBody>
     </>
   );
