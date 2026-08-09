@@ -6,7 +6,9 @@ import { useAgents } from '@affine/core/modules/agents/use-agents';
 import { MenuLinkItem } from '@affine/core/modules/app-sidebar/views';
 import {
   RecentStudiosService,
+  STUDIO_GROUP_ORDER,
   visibleStudios,
+  type StudioDef,
 } from '@affine/core/modules/studio';
 import { WorkbenchService } from '@affine/core/modules/workbench';
 import { useLiveData, useService } from '@toeverything/infra';
@@ -65,34 +67,62 @@ export const StudiosSection = () => {
   // The only new effect is one fail-soft GET /api/v1/agents on mount.
   const { caps } = useAgents();
 
+  const visible = visibleStudios(caps);
+
+  const renderStudio = (studio: StudioDef) => {
+    const postfix = studio.isNew ? (
+      <NewChip />
+    ) : studio.beta ? (
+      <BetaChip />
+    ) : undefined;
+    return (
+      <MenuLinkItem
+        key={studio.id}
+        data-testid={studio.testId}
+        active={location.pathname.startsWith(studio.route)}
+        to={studio.route}
+        icon={studio.icon()}
+        postfix={postfix}
+        postfixDisplay={postfix ? 'always' : undefined}
+        onClick={() => recentStudios.add(studio.id)}
+      >
+        {studio.label}
+      </MenuLinkItem>
+    );
+  };
+
   return (
     <CollapsibleSection
       path={['studios']}
       title="Studios"
       contentStyle={{ padding: '6px 8px 0 8px' }}
     >
-      {visibleStudios(caps).map(studio => {
-        const postfix =
-          studio.id === 'vdz' ? (
-            <NewChip />
-          ) : studio.beta ? (
-            <BetaChip />
-          ) : undefined;
+      {STUDIO_GROUP_ORDER.map(({ group, label }) => {
+        const groupStudios = visible.filter(s => s.group === group);
+        if (groupStudios.length === 0) return null;
         return (
-          <MenuLinkItem
-            key={studio.id}
-            data-testid={studio.testId}
-            active={location.pathname.startsWith(studio.route)}
-            to={studio.route}
-            icon={studio.icon()}
-            postfix={postfix}
-            postfixDisplay={postfix ? 'always' : undefined}
-            onClick={() => recentStudios.add(studio.id)}
-          >
-            {studio.label}
-          </MenuLinkItem>
+          <div key={group}>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                lineHeight: '24px',
+                padding: '8px 8px 2px 8px',
+                color: 'var(--affine-text-secondary-color)',
+                letterSpacing: '0.02em',
+                textTransform: 'uppercase',
+              }}
+            >
+              {label}
+            </div>
+            {groupStudios.map(renderStudio)}
+          </div>
         );
       })}
+      {/* Render any studios whose group is not in STUDIO_GROUP_ORDER (future-proofing) */}
+      {visible
+        .filter(s => !STUDIO_GROUP_ORDER.some(g => g.group === s.group))
+        .map(renderStudio)}
     </CollapsibleSection>
   );
 };
