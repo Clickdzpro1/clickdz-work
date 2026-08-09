@@ -180,6 +180,11 @@ export class TurnOrchestrator {
         buffer += chunk;
         yield chunk;
       }
+      // Record success for the primary model so the circuit breaker doesn't
+      // open on stale failures. Without this, 3 intermittent failures in any
+      // 60s window (even among hundreds of successes) would trip the circuit
+      // and route all traffic to cdz-flash (which may not stream).
+      this.modelHealth.recordSuccess(model);
     } catch (error) {
       // WS17: if the upstream cdz-ai scenario failed (502) BEFORE any tokens
       // reached the client, retry ONCE with cdz-flash (the reliable model).
@@ -274,6 +279,8 @@ export class TurnOrchestrator {
         chunks.push(chunk);
         yield chunk;
       }
+      // Record success for the primary model — see streamTextResult for rationale.
+      this.modelHealth.recordSuccess(model);
     } catch (error) {
       // WS17: same retry-to-cdz-flash seam as streamTextResult — only when the
       // scenario failed before any chunks reached the client.
