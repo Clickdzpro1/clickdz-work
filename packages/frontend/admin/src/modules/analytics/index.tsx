@@ -83,7 +83,7 @@ interface SignupTimelinePoint {
 
 const adminSignupsTimelineQuery = {
   id: 'adminSignupsTimelineQuery' as const,
-  op: 'adminDashboard',
+  op: 'adminSignupsTimeline',
   query: `query adminSignupsTimeline {
   adminDashboard(input: { syncHistoryHours: 24, timezone: "UTC" }) {
     signupsTimeline {
