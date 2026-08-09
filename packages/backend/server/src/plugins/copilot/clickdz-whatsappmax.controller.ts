@@ -127,15 +127,23 @@ const QR_POLL_MAX_ATTEMPTS = 12;
 
 // --- Redis key helpers (dedicated WhatsappMax namespace; no overlap with the
 // agent channel's clickdz:agentchan:* / clickdz:wa:conn:*).
-const maxKey = (userId: string) => `clickdz:wamax:${userId}`;
+// P4 W3: Per-connId record key — one record per connection (multi-account).
+const maxKey = (userId: string, connId: string) =>
+  `clickdz:wamax:${userId}:${connId}`;
+// Legacy flat key (pre-multi-account) — used ONLY for back-compat migration.
+const maxKeyLegacy = (userId: string) => `clickdz:wamax:${userId}`;
+// Index key: a Redis SET of connIds for a user (multi-account registry).
+const maxIdxKey = (userId: string) => `clickdz:wamax:idx:${userId}`;
 const maxConnKey = (connId: string) => `clickdz:wamax:conn:${connId}`;
 const maxChatKey = (connId: string) => `clickdz:wamax:connchat:${connId}`;
 // Per-chat AI auto-reply toggle: '1' = enabled, '0' or absent = disabled.
-const maxAiKey = (userId: string, chatJidHash: string) =>
-  `clickdz:wamax:ai:${userId}:${chatJidHash}`;
+// P4 W3: scoped by connId so per-chat settings don't bleed across accounts.
+const maxAiKey = (userId: string, connId: string, chatJidHash: string) =>
+  `clickdz:wamax:ai:${userId}:${connId}:${chatJidHash}`;
 // Per-chat read watermark: last-read message ts (ms).
-const maxReadKey = (userId: string, chatJidHash: string) =>
-  `clickdz:wamax:read:${userId}:${chatJidHash}`;
+// P4 W3: scoped by connId so read state doesn't bleed across accounts.
+const maxReadKey = (userId: string, connId: string, chatJidHash: string) =>
+  `clickdz:wamax:read:${userId}:${connId}:${chatJidHash}`;
 
 // TTL (Cache API takes MILLISECONDS). 180d, re-armed on activity.
 const MAX_TTL_MS = 180 * 24 * 60 * 60 * 1000;
@@ -582,9 +590,12 @@ function registerWhatsappMaxRunDone(deps: { cache: Cache }): void {
         }
         if (!conn || conn.userId !== rec.userId) return;
         // Load the owner's WhatsappMax record → instance.
+        // P4 W3: per-connId key (connId recovered from the sentinel at line 574).
         let wmRec: WhatsappMaxRecord | null = null;
         try {
-          wmRec = await deps.cache.get<WhatsappMaxRecord>(maxKey(rec.userId));
+          wmRec = await deps.cache.get<WhatsappMaxRecord>(
+            maxKey(rec.userId, connId)
+          );
         } catch {
           wmRec = null;
         }
@@ -643,13 +654,145 @@ export class ClickDzWhatsappMaxController {
     }
   }
 
-  /** Load the caller's WhatsappMax record (fail-soft). */
-  private async loadRecord(userId: string): Promise<WhatsappMaxRecord | null> {
+  /** Load a specific connection's WhatsappMax record (fail-soft).
+   *  P4 W3: per-connId key with lazy back-compat migration from the legacy
+   *  flat key (clickdz:wamax:{userId}). If the new key misses but a legacy
+   *  record exists AND its connId matches, we migrate: write the new key,
+   *  add to the index, delete the legacy key. This self-heals existing users
+   *  on first access after the deploy. */
+  private async loadRecord(
+    userId: string,
+    connId: string
+  ): Promise<WhatsappMaxRecord | null> {
+    if (!connId) return null;
     try {
-      const rec = await this.cache.get<WhatsappMaxRecord>(maxKey(userId));
-      return rec && rec.instanceId ? rec : null;
+      const rec = await this.cache.get<WhatsappMaxRecord>(
+        maxKey(userId, connId)
+      );
+      if (rec && rec.instanceId) return rec;
+      // Miss — try legacy flat key for back-compat migration.
+      const legacy = await this.cache.get<WhatsappMaxRecord>(
+        maxKeyLegacy(userId)
+      );
+      if (legacy && legacy.instanceId && legacy.connId === connId) {
+        // Migrate: write new key, index, delete legacy.
+        try {
+          await this.cache.set(maxKey(userId, connId), legacy, {
+            ttl: MAX_TTL_MS,
+          });
+          await this.indexAddConn(userId, connId);
+          await this.cache.delete(maxKeyLegacy(userId));
+        } catch {
+          /* best-effort migration — legacy key still readable */
+        }
+        return legacy;
+      }
+      return null;
     } catch {
       return null;
+    }
+  }
+
+  /** Load ALL of a user's WhatsappMax records (multi-account).
+   *  P4 W3: reads the connId index; if empty, falls back to legacy migration
+   *  (single-account era). Returns records WITHOUT the sealed secret. */
+  private async loadRecords(
+    userId: string
+  ): Promise<WhatsappMaxRecord[]> {
+    try {
+      const connIds = await this.indexListConn(userId);
+      if (connIds.length > 0) {
+        const records: WhatsappMaxRecord[] = [];
+        for (const cid of connIds) {
+          const rec = await this.cache.get<WhatsappMaxRecord>(
+            maxKey(userId, cid)
+          );
+          if (rec && rec.instanceId) {
+            records.push(rec);
+          }
+        }
+        return records;
+      }
+      // Index empty — try legacy migration (single-account back-compat).
+      const legacy = await this.cache.get<WhatsappMaxRecord>(
+        maxKeyLegacy(userId)
+      );
+      if (legacy && legacy.instanceId && legacy.connId) {
+        try {
+          await this.cache.set(
+            maxKey(userId, legacy.connId),
+            legacy,
+            { ttl: MAX_TTL_MS }
+          );
+          await this.indexAddConn(userId, legacy.connId);
+          await this.cache.delete(maxKeyLegacy(userId));
+        } catch {
+          /* best-effort */
+        }
+        return [legacy];
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Resolve a single record by connId, or fall back to the first connected
+   *  account when connId is absent (back-compat shim during migration).
+   *  P4 W3: used by route handlers that can optionally accept connId. */
+  private async resolveRecord(
+    userId: string,
+    connId?: string
+  ): Promise<{ rec: WhatsappMaxRecord; connId: string } | null> {
+    if (connId) {
+      const rec = await this.loadRecord(userId, connId);
+      if (rec) return { rec, connId };
+      return null;
+    }
+    // No connId — fall back to first connected account (back-compat).
+    const records = await this.loadRecords(userId);
+    if (records.length > 0 && records[0].connId) {
+      return { rec: records[0], connId: records[0].connId };
+    }
+    return null;
+  }
+
+  // --- P4 W3: Index helpers (raw Redis SET ops via this.redis) ---
+  // Best-effort; wrapped in try/catch so a Redis hiccup never crashes a route.
+
+  /** Add a connId to the user's account index (Redis SADD + EXPIRE). */
+  private async indexAddConn(userId: string, connId: string): Promise<void> {
+    try {
+      const key = maxIdxKey(userId);
+      await (this.redis as any).sadd(key, connId);
+      await (this.redis as any).expire(
+        key,
+        Math.floor(MAX_TTL_MS / 1000)
+      );
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Remove a connId from the user's account index (Redis SREM). */
+  private async indexRemoveConn(
+    userId: string,
+    connId: string
+  ): Promise<void> {
+    try {
+      await (this.redis as any).srem(maxIdxKey(userId), connId);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** List all connIds in the user's account index (Redis SMEMBERS). */
+  private async indexListConn(userId: string): Promise<string[]> {
+    try {
+      const vals = await (this.redis as any).smembers(maxIdxKey(userId));
+      return Array.isArray(vals) ? vals.filter(Boolean) : [];
+    } catch {
+      return [];
     }
   }
 
@@ -660,17 +803,24 @@ export class ClickDzWhatsappMaxController {
   // =========================================================================
   @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/whatsappmax/status')
-  async status(@CurrentUser() user: CurrentUser): Promise<{
+  async status(
+    @CurrentUser() user: CurrentUser,
+    @Query('connId') connIdRaw: string
+  ): Promise<{
     connected: boolean;
     phoneNumber?: string;
     status?: string;
     connectedAt?: number;
+    connId?: string;
   }> {
     this.assertEnabled();
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) {
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) {
       return { connected: false };
     }
+    const rec = resolved.rec;
+    const resolvedConnId = resolved.connId;
     let liveStatus = rec.status;
     let livePhone = rec.phoneNumber;
     const view = await gateway.getInstance(rec.instanceId);
@@ -680,7 +830,7 @@ export class ClickDzWhatsappMaxController {
       if (liveStatus !== rec.status || livePhone !== rec.phoneNumber) {
         try {
           await this.cache.set(
-            maxKey(user.id),
+            maxKey(user.id, resolvedConnId),
             { ...rec, status: liveStatus, phoneNumber: livePhone },
             { ttl: MAX_TTL_MS }
           );
@@ -694,6 +844,7 @@ export class ClickDzWhatsappMaxController {
       phoneNumber: livePhone ?? undefined,
       status: liveStatus,
       connectedAt: rec.connectedAt,
+      connId: resolvedConnId,
     };
   }
 
@@ -708,15 +859,17 @@ export class ClickDzWhatsappMaxController {
   @Get('/api/v1/whatsappmax/qr.png')
   async qrPng(
     @CurrentUser() user: CurrentUser,
+    @Query('connId') connIdRaw: string,
     @Res({ passthrough: true }) res: Response
   ): Promise<void> {
     this.assertEnabled();
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) {
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) {
       res.status(202).set({ 'cache-control': 'no-store' }).end();
       return;
     }
-    const result = await gateway.getQrPng(rec.instanceId);
+    const result = await gateway.getQrPng(resolved.rec.instanceId);
     if (!result) {
       res.status(202).set({ 'cache-control': 'no-store' }).end();
       return;
@@ -744,33 +897,39 @@ export class ClickDzWhatsappMaxController {
   // =========================================================================
   @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/whatsappmax/qr')
-  async qrRaw(@CurrentUser() user: CurrentUser): Promise<{
+  async qrRaw(
+    @CurrentUser() user: CurrentUser,
+    @Query('connId') connIdRaw: string
+  ): Promise<{
     qr: string | null;
     status: string;
   }> {
     this.assertEnabled();
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) {
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) {
       return { qr: null, status: 'not_connected' };
     }
-    const qrData = await gateway.getQr(rec.instanceId);
-    const view = await gateway.getInstance(rec.instanceId);
+    const qrData = await gateway.getQr(resolved.rec.instanceId);
+    const view = await gateway.getInstance(resolved.rec.instanceId);
     return {
       qr: qrData?.qr ?? null,
-      status: view?.status ?? rec.status ?? 'unknown',
+      status: view?.status ?? resolved.rec.status ?? 'unknown',
     };
   }
 
   // =========================================================================
   // POST /api/v1/whatsappmax/connect  { phoneNumber? }
-  //   → { ok, qr?, status }
+  //   → { ok, qr?, status, connId? }
   //
   // P4 E1.1: phoneNumber is now OPTIONAL (QR-only pairing; phone not required).
   // Provision a per-user gateway instance with an opaque per-connection webhookUrl,
   // seal + persist its per-instance webhookSecret + the record + the connId→owner
   // reverse map. Poll until QR is ready (~10s) and return early with qr string.
   // The dead pairWithRetry / pair() code path has been REMOVED.
-  // Reconnect tears down the old instance first.
+  // P4 W3: NO tear-down of prior instances — multi-account support. Each
+  // connect() mints a new connId and persists a separate record. The return
+  // now includes connId so the FE can track the new account.
   // =========================================================================
   @Throttle('strict')
   @Post('/api/v1/whatsappmax/connect')
@@ -781,6 +940,7 @@ export class ClickDzWhatsappMaxController {
     ok: boolean;
     qr?: string;
     status: string;
+    connId?: string;
   }> {
     this.assertEnabled();
     // phoneNumber is OPTIONAL — QR pairing does not need it.
@@ -795,26 +955,11 @@ export class ClickDzWhatsappMaxController {
       throw new BadRequest('studio_unavailable');
     }
 
-    // (1) Tear down a prior instance (reconnect) so we don't strand a socket.
-    const prior = await this.loadRecord(user.id);
-    if (prior) {
-      try {
-        await gateway.logout(prior.instanceId);
-        await gateway.deleteInstance(prior.instanceId);
-      } catch {
-        /* best-effort */
-      }
-      try {
-        if (prior.connId) {
-          await this.cache.delete(maxConnKey(prior.connId));
-          await this.cache.delete(maxChatKey(prior.connId));
-        }
-      } catch {
-        /* best-effort */
-      }
-    }
+    // P4 W3: NO tear-down of prior instances — multi-account support.
+    // Each connect() mints a new connId and persists a separate record.
+    // The old tear-down block (lines 798-815) has been REMOVED.
 
-    // (2) Mint an opaque connId + create the instance under the tenant.
+    // (1) Mint an opaque connId + create the instance under the tenant.
     const connId = mintConnId();
     const webhookUrl = `${APP_EXTERNAL_URL}/api/v1/whatsappmax/wh/${connId}`;
     const created = await gateway.createInstance('clickdz:whatsappmax', webhookUrl);
@@ -829,7 +974,7 @@ export class ClickDzWhatsappMaxController {
       throw new BadRequest('provision_failed');
     }
 
-    // (3) Seal the per-instance secret BEFORE persisting.
+    // (2) Seal the per-instance secret BEFORE persisting.
     const webhookSecretSealed = sealSecret(created.webhookSecret);
     if (!webhookSecretSealed) {
       try {
@@ -840,7 +985,8 @@ export class ClickDzWhatsappMaxController {
       throw new BadRequest('studio_unavailable');
     }
 
-    // (4) Persist the record + connId→owner reverse map (both 180d).
+    // (3) Persist the record + connId→owner reverse map (both 180d).
+    // P4 W3: per-connId key + index registration.
     const rec: WhatsappMaxRecord = {
       instanceId: created.id,
       webhookSecretSealed,
@@ -850,7 +996,7 @@ export class ClickDzWhatsappMaxController {
       connectedAt: Date.now(),
       active: true,
     };
-    const storedRec = await this.cache.set(maxKey(user.id), rec, {
+    const storedRec = await this.cache.set(maxKey(user.id, connId), rec, {
       ttl: MAX_TTL_MS,
     });
     const conn: WhatsappMaxConnRecord = { userId: user.id };
@@ -865,8 +1011,10 @@ export class ClickDzWhatsappMaxController {
       }
       throw new BadRequest('studio_unavailable');
     }
+    // P4 W3: register the connId in the user's account index.
+    await this.indexAddConn(user.id, connId);
 
-    // (5) Poll until QR is ready (bounded ~10s), then return the QR string.
+    // (4) Poll until QR is ready (bounded ~10s), then return the QR string.
     // The FE then polls GET /status (drives created→connecting→qr→connected)
     // and while status==='qr' shows the live QR image via GET /qr.png.
     for (let attempt = 0; attempt < QR_POLL_MAX_ATTEMPTS; attempt++) {
@@ -874,18 +1022,18 @@ export class ClickDzWhatsappMaxController {
       const liveStatus = view?.status || '';
       if (liveStatus === 'qr') {
         const qrData = await gateway.getQr(created.id);
-        return { ok: true, qr: qrData?.qr ?? undefined, status: 'qr' };
+        return { ok: true, qr: qrData?.qr ?? undefined, status: 'qr', connId };
       }
       if (liveStatus === 'connected') {
-        return { ok: true, status: 'connected' };
+        return { ok: true, status: 'connected', connId };
       }
       if (liveStatus === 'logged_out') {
-        return { ok: true, status: 'logged_out' };
+        return { ok: true, status: 'logged_out', connId };
       }
       await sleep(QR_POLL_INTERVAL_MS);
     }
     // Timed out — return early with whatever status is available. FE polls /status.
-    return { ok: true, status: 'connecting' };
+    return { ok: true, status: 'connecting', connId };
   }
 
   // =========================================================================
@@ -895,11 +1043,18 @@ export class ClickDzWhatsappMaxController {
   @Throttle('strict')
   @Post('/api/v1/whatsappmax/disconnect')
   async disconnect(
-    @CurrentUser() user: CurrentUser
+    @CurrentUser() user: CurrentUser,
+    @Body() body: { connId?: unknown }
   ): Promise<{ ok: boolean }> {
     this.assertEnabled();
-    const rec = await this.loadRecord(user.id);
-    if (rec) {
+    // P4 W3: accept connId from body; fall back to first account if absent.
+    const connIdRaw = body?.connId;
+    const connId =
+      typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (resolved) {
+      const rec = resolved.rec;
+      const resolvedConnId = resolved.connId;
       if (rec.instanceId) {
         try {
           await gateway.logout(rec.instanceId);
@@ -909,18 +1064,18 @@ export class ClickDzWhatsappMaxController {
         }
       }
       try {
-        if (rec.connId) {
-          await this.cache.delete(maxConnKey(rec.connId));
-          await this.cache.delete(maxChatKey(rec.connId));
-        }
+        await this.cache.delete(maxConnKey(resolvedConnId));
+        await this.cache.delete(maxChatKey(resolvedConnId));
       } catch {
         /* best-effort */
       }
-    }
-    try {
-      await this.cache.delete(maxKey(user.id));
-    } catch {
-      /* best-effort */
+      try {
+        await this.cache.delete(maxKey(user.id, resolvedConnId));
+      } catch {
+        /* best-effort */
+      }
+      // P4 W3: remove from the user's account index.
+      await this.indexRemoveConn(user.id, resolvedConnId);
     }
     return { ok: true };
   }
@@ -933,7 +1088,7 @@ export class ClickDzWhatsappMaxController {
   @Post('/api/v1/whatsappmax/send')
   async send(
     @CurrentUser() user: CurrentUser,
-    @Body() body: { to?: unknown; text?: unknown }
+    @Body() body: { to?: unknown; text?: unknown; connId?: unknown }
   ): Promise<{ ok: boolean; sent: boolean; note?: string }> {
     this.assertEnabled();
     // Preserve full JIDs (1:1 '@s.whatsapp.net' and group '@g.us') — the gateway
@@ -945,11 +1100,14 @@ export class ClickDzWhatsappMaxController {
     if (!to) throw new BadRequest('invalid_to');
     const text = typeof body?.text === 'string' ? body.text.trim() : '';
     if (!text) throw new BadRequest('text is required');
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) {
+    // P4 W3: per-connId record.
+    const connId =
+      typeof body?.connId === 'string' ? body.connId.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) {
       return { ok: true, sent: false, note: 'not_connected' };
     }
-    const sent = await gateway.sendText(rec.instanceId, to, text);
+    const sent = await gateway.sendText(resolved.rec.instanceId, to, text);
     return { ok: true, sent };
   }
 
@@ -973,6 +1131,7 @@ export class ClickDzWhatsappMaxController {
       caption?: unknown;
       fileName?: unknown;
       mimetype?: unknown;
+      connId?: unknown;
     }
   ): Promise<{ ok: boolean; messageId?: string; note?: string }> {
     this.assertEnabled();
@@ -994,14 +1153,17 @@ export class ClickDzWhatsappMaxController {
     if (base64 && base64.length > 14_000_000) {
       throw new BadRequest('base64 payload too large (max ~10MB)');
     }
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) {
+    // P4 W3: per-connId record.
+    const connId =
+      typeof body?.connId === 'string' ? body.connId.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) {
       // Match /send's contract (ok:true + note:'not_connected') so the FE can
       // surface the specific 'Liez un numéro WhatsApp d'abord.' message instead
       // of a generic 'Envoi du média échoué.'
       return { ok: true, note: 'not_connected' };
     }
-    const result = await gateway.sendMedia(rec.instanceId, {
+    const result = await gateway.sendMedia(resolved.rec.instanceId, {
       to,
       kind,
       url,
@@ -1023,7 +1185,7 @@ export class ClickDzWhatsappMaxController {
   @Post('/api/v1/whatsappmax/broadcast')
   async broadcast(
     @CurrentUser() user: CurrentUser,
-    @Body() body: { to?: unknown; text?: unknown }
+    @Body() body: { to?: unknown; text?: unknown; connId?: unknown }
   ): Promise<{ ok: boolean; sent: number; failed: number; total: number }> {
     this.assertEnabled();
     const text = typeof body?.text === 'string' ? body.text.trim() : '';
@@ -1044,14 +1206,17 @@ export class ClickDzWhatsappMaxController {
       }
     }
     if (!recipients.length) throw new BadRequest('to must be a non-empty list of phone numbers');
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) {
+    // P4 W3: per-connId record.
+    const connId =
+      typeof body?.connId === 'string' ? body.connId.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) {
       throw new BadRequest('not_connected');
     }
     let sent = 0;
     let failed = 0;
     for (const to of recipients) {
-      const ok = await gateway.sendText(rec.instanceId, to, text);
+      const ok = await gateway.sendText(resolved.rec.instanceId, to, text);
       if (ok) sent++;
       else failed++;
     }
@@ -1066,12 +1231,14 @@ export class ClickDzWhatsappMaxController {
   @Throttle('default', { limit: 300, ttl: 60_000 })
   @Get('/api/v1/whatsappmax/chats')
   async chats(
-    @CurrentUser() user: CurrentUser
+    @CurrentUser() user: CurrentUser,
+    @Query('connId') connIdRaw: string
   ): Promise<{ chats: unknown[] }> {
     this.assertEnabled();
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) return { chats: [] };
-    const chats = await gateway.listChats(rec.instanceId);
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) return { chats: [] };
+    const chats = await gateway.listChats(resolved.rec.instanceId);
     return { chats };
   }
 
@@ -1088,7 +1255,8 @@ export class ClickDzWhatsappMaxController {
     @Query('chatJid') chatJidRaw: string,
     @Query('limit') limitRaw: string,
     @Query('before') beforeRaw: string,
-    @Query('fromMe') fromMeRaw: string
+    @Query('fromMe') fromMeRaw: string,
+    @Query('connId') connIdRaw: string
   ): Promise<{ messages: unknown[] }> {
     this.assertEnabled();
     const chatJid = typeof chatJidRaw === 'string' ? chatJidRaw.trim() : '';
@@ -1099,10 +1267,11 @@ export class ClickDzWhatsappMaxController {
         : undefined;
     const fromMe =
       fromMeRaw === 'true' ? true : fromMeRaw === 'false' ? false : undefined;
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) return { messages: [] };
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) return { messages: [] };
     const messages = await gateway.listMessages(
-      rec.instanceId,
+      resolved.rec.instanceId,
       chatJid,
       limit,
       before,
@@ -1122,6 +1291,7 @@ export class ClickDzWhatsappMaxController {
   async media(
     @CurrentUser() user: CurrentUser,
     @Query('messageId') messageIdRaw: string,
+    @Query('connId') connIdRaw: string,
     @Res({ passthrough: true }) res: Response
   ): Promise<void> {
     this.assertEnabled();
@@ -1130,12 +1300,13 @@ export class ClickDzWhatsappMaxController {
       res.status(400).json({ error: 'messageId required' });
       return;
     }
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) {
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) {
       res.status(404).json({ error: 'not_connected' });
       return;
     }
-    const result = await gateway.downloadMedia(rec.instanceId, messageId);
+    const result = await gateway.downloadMedia(resolved.rec.instanceId, messageId);
     if (!result || result.status !== 200) {
       res.status(404).json({ error: 'media_not_found' });
       return;
@@ -1159,13 +1330,15 @@ export class ClickDzWhatsappMaxController {
   @Get('/api/v1/whatsappmax/contacts')
   async contacts(
     @CurrentUser() user: CurrentUser,
-    @Query('limit') limitRaw: string
+    @Query('limit') limitRaw: string,
+    @Query('connId') connIdRaw: string
   ): Promise<{ contacts: unknown[] }> {
     this.assertEnabled();
     const limit = Number(limitRaw) || 100;
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) return { contacts: [] };
-    const contacts = await gateway.listContacts(rec.instanceId, limit);
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) return { contacts: [] };
+    const contacts = await gateway.listContacts(resolved.rec.instanceId, limit);
     return { contacts };
   }
 
@@ -1178,7 +1351,7 @@ export class ClickDzWhatsappMaxController {
   @Post('/api/v1/whatsappmax/check')
   async check(
     @CurrentUser() user: CurrentUser,
-    @Body() body: { numbers?: unknown }
+    @Body() body: { numbers?: unknown; connId?: unknown }
   ): Promise<{ results: unknown[] }> {
     this.assertEnabled();
     const rawNums = Array.isArray(body?.numbers) ? (body.numbers as unknown[]) : [];
@@ -1187,9 +1360,12 @@ export class ClickDzWhatsappMaxController {
       .filter(Boolean)
       .slice(0, 100);
     if (!numbers.length) throw new BadRequest('numbers must be a non-empty array');
-    const rec = await this.loadRecord(user.id);
-    if (!rec || !rec.active) throw new BadRequest('not_connected');
-    const result = await gateway.checkNumbers(rec.instanceId, numbers);
+    // P4 W3: per-connId record.
+    const connId =
+      typeof body?.connId === 'string' ? body.connId.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) throw new BadRequest('not_connected');
+    const result = await gateway.checkNumbers(resolved.rec.instanceId, numbers);
     return { results: result?.results ?? [] };
   }
 
@@ -1203,15 +1379,18 @@ export class ClickDzWhatsappMaxController {
   @Post('/api/v1/whatsappmax/read')
   async setReadWatermark(
     @CurrentUser() user: CurrentUser,
-    @Body() body: { chatJid?: unknown }
+    @Body() body: { chatJid?: unknown; connId?: unknown }
   ): Promise<{ ok: boolean }> {
     this.assertEnabled();
     const chatJid = typeof body?.chatJid === 'string' ? body.chatJid.trim() : '';
     if (!chatJid) throw new BadRequest('chatJid required');
-    const rec = await this.loadRecord(user.id);
-    if (!rec) return { ok: false };
+    // P4 W3: per-connId record.
+    const connId =
+      typeof body?.connId === 'string' ? body.connId.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved) return { ok: false };
     try {
-      const key = maxReadKey(user.id, hashJid(chatJid));
+      const key = maxReadKey(user.id, resolved.connId, hashJid(chatJid));
       // Store the current ts as the read watermark (raw ioredis SET).
       await (this.redis as any).set(key, String(Date.now()), 'EX', Math.floor(MAX_TTL_MS / 1000));
     } catch {
@@ -1229,13 +1408,20 @@ export class ClickDzWhatsappMaxController {
   @Get('/api/v1/whatsappmax/ai')
   async getAiToggle(
     @CurrentUser() user: CurrentUser,
-    @Query('chatJid') chatJidRaw: string
+    @Query('chatJid') chatJidRaw: string,
+    @Query('connId') connIdRaw: string
   ): Promise<{ enabled: boolean }> {
     this.assertEnabled();
     const chatJid = typeof chatJidRaw === 'string' ? chatJidRaw.trim() : '';
     if (!chatJid) throw new BadRequest('chatJid required');
+    // P4 W3: per-connId record.
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved) return { enabled: false };
     try {
-      const val = await (this.redis as any).get(maxAiKey(user.id, hashJid(chatJid)));
+      const val = await (this.redis as any).get(
+        maxAiKey(user.id, resolved.connId, hashJid(chatJid))
+      );
       return { enabled: val === '1' };
     } catch {
       return { enabled: false };
@@ -1251,14 +1437,19 @@ export class ClickDzWhatsappMaxController {
   @Post('/api/v1/whatsappmax/ai')
   async setAiToggle(
     @CurrentUser() user: CurrentUser,
-    @Body() body: { chatJid?: unknown; enabled?: unknown }
+    @Body() body: { chatJid?: unknown; enabled?: unknown; connId?: unknown }
   ): Promise<{ ok: boolean; enabled: boolean }> {
     this.assertEnabled();
     const chatJid = typeof body?.chatJid === 'string' ? body.chatJid.trim() : '';
     if (!chatJid) throw new BadRequest('chatJid required');
     const enabled = body?.enabled === true || body?.enabled === 'true' || body?.enabled === 1;
+    // P4 W3: per-connId record.
+    const connId =
+      typeof body?.connId === 'string' ? body.connId.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved) return { ok: false, enabled };
     try {
-      const key = maxAiKey(user.id, hashJid(chatJid));
+      const key = maxAiKey(user.id, resolved.connId, hashJid(chatJid));
       await (this.redis as any).set(
         key,
         enabled ? '1' : '0',
@@ -1269,6 +1460,61 @@ export class ClickDzWhatsappMaxController {
       /* best-effort */
     }
     return { ok: true, enabled };
+  }
+
+  // =========================================================================
+  // P4 W3 — GET /api/v1/whatsappmax/accounts
+  //   → { accounts: [{ connId, phoneNumber, status, connectedAt, active }] }
+  //   Lists ALL of the user's connected WhatsApp accounts (multi-account).
+  //   NEVER includes the sealed webhook secret. Best-effort live status refresh
+  //   from gateway.getInstance for each account.
+  // =========================================================================
+  @Throttle('default', { limit: 60, ttl: 60_000 })
+  @Get('/api/v1/whatsappmax/accounts')
+  async accounts(
+    @CurrentUser() user: CurrentUser
+  ): Promise<{
+    accounts: Array<{
+      connId: string;
+      phoneNumber: string | null;
+      status: string;
+      connectedAt: number;
+      active: boolean;
+    }>;
+  }> {
+    this.assertEnabled();
+    const records = await this.loadRecords(user.id);
+    const accounts: Array<{
+      connId: string;
+      phoneNumber: string | null;
+      status: string;
+      connectedAt: number;
+      active: boolean;
+    }> = [];
+    for (const rec of records) {
+      // Best-effort live status refresh from the gateway.
+      let liveStatus = rec.status;
+      let livePhone = rec.phoneNumber;
+      if (rec.active && rec.instanceId) {
+        try {
+          const view = await gateway.getInstance(rec.instanceId);
+          if (view) {
+            liveStatus = view.status || liveStatus;
+            if (view.phoneNumber) livePhone = view.phoneNumber;
+          }
+        } catch {
+          /* best-effort — use stored status */
+        }
+      }
+      accounts.push({
+        connId: rec.connId,
+        phoneNumber: livePhone,
+        status: liveStatus,
+        connectedAt: rec.connectedAt,
+        active: rec.active,
+      });
+    }
+    return { accounts };
   }
 
   // =========================================================================
@@ -1305,9 +1551,12 @@ export class ClickDzWhatsappMaxController {
     if (!conn || !conn.userId) return {};
 
     // (2) Load the owner's record.
+    // P4 W3: per-connId key (id is the connId URL param).
     let rec: WhatsappMaxRecord | undefined;
     try {
-      rec = await this.cache.get<WhatsappMaxRecord>(maxKey(conn.userId));
+      rec = await this.cache.get<WhatsappMaxRecord>(
+        maxKey(conn.userId, id)
+      );
     } catch {
       rec = undefined;
     }
@@ -1348,9 +1597,10 @@ export class ClickDzWhatsappMaxController {
     if (!chatJid) return {};
 
     // Re-arm TTLs + bind the reply-to chat (last inbound wins).
+    // P4 W3: per-connId key for the record re-arm.
     try {
       await this.cache.set(maxChatKey(id), { chatJid }, { ttl: MAX_TTL_MS });
-      await this.cache.set(maxKey(conn.userId), rec, { ttl: MAX_TTL_MS });
+      await this.cache.set(maxKey(conn.userId, id), rec, { ttl: MAX_TTL_MS });
       await this.cache.set(maxConnKey(id), conn, { ttl: MAX_TTL_MS });
     } catch {
       /* best-effort */
@@ -1358,10 +1608,11 @@ export class ClickDzWhatsappMaxController {
 
     if (text) {
       // P4 E1.3: check per-chat AI toggle before enqueueing a run.
+      // P4 W3: per-connId scoped AI key.
       let aiEnabled = false;
       try {
         const aiVal = await (this.redis as any).get(
-          maxAiKey(conn.userId, hashJid(chatJid))
+          maxAiKey(conn.userId, id, hashJid(chatJid))
         );
         aiEnabled = aiVal === '1';
       } catch {
@@ -1432,3 +1683,4 @@ export class ClickDzWhatsappMaxController {
     );
   }
 }
+
