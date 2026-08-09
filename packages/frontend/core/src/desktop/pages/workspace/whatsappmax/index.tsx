@@ -340,6 +340,13 @@ const QrPairing = ({
   // fire onError and show a broken-image icon before the next 2s refresh.
   // Track load state so we can show a placeholder spinner while waiting.
   const [qrLoaded, setQrLoaded] = useState(false);
+  // Ref mirror of qrLoaded so the setInterval callback can read the current
+  // value (setInterval captures the closure at creation time, not live state).
+  const qrLoadedRef = useRef(false);
+  const setQrLoadedBoth = useCallback((v: boolean) => {
+    qrLoadedRef.current = v;
+    setQrLoaded(v);
+  }, []);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // In add-mode, /connect mints a new connId — we store it locally so the
@@ -367,13 +374,28 @@ const QrPairing = ({
 
   const startPolls = useCallback(() => {
     stopPolls();
-    // QR image refresh every 2s (cache-buster)
-    setQrLoaded(false);
+    // QR refresh: 3s while the QR hasn't loaded yet (to pick up the 202→200
+    // transition quickly), then 15s once loaded (to catch WhatsApp's ~20s QR
+    // regeneration without flicker). The old fixed 2s interval caused rapid
+    // flicker — 10x faster than the QR TTL — making the QR hard to scan.
+    setQrLoadedBoth(false);
     setQrTs(Date.now());
+    let slowTick = 0;
     qrRefreshRef.current = setInterval(() => {
-      setQrLoaded(false);
-      setQrTs(Date.now());
-    }, 2000);
+      if (!qrLoadedRef.current) {
+        // QR not loaded yet — refresh every tick (3s) to pick it up.
+        setQrTs(Date.now());
+      } else {
+        // QR is loaded — only refresh every 5th tick (~15s) to catch
+        // WhatsApp's QR regeneration without flicker.
+        slowTick++;
+        if (slowTick >= 5) {
+          slowTick = 0;
+          setQrLoadedBoth(false);
+          setQrTs(Date.now());
+        }
+      }
+    }, 3000);
 
     // Status poll every 2.5s
     statusPollRef.current = setInterval(() => {
@@ -432,8 +454,11 @@ const QrPairing = ({
       setErr('Connexion impossible pour le moment. Réessayez.');
       return;
     }
-    if (mode === 'add' && out.connId) {
-      // Store the minted connId so status poll + QR target the new connection
+    if (out.connId) {
+      // Capture the minted connId in ALL modes (not just 'add') so the status
+      // poll and QR refresh target the correct connection. In 'first' mode the
+      // prop connId is null — without this, the QR image and status poll would
+      // have no connId, potentially hitting the wrong backend record.
       setPairConnId(out.connId);
     }
     setConnecting(true);
@@ -563,10 +588,10 @@ const QrPairing = ({
                 display: qrLoaded ? 'block' : 'none',
                 borderRadius: 4,
               }}
-              onLoad={() => setQrLoaded(true)}
+              onLoad={() => setQrLoadedBoth(true)}
               onError={() => {
                 /* 202 = not ready yet; keep refreshing. Stay on placeholder. */
-                setQrLoaded(false);
+                setQrLoadedBoth(false);
               }}
             />
           </div>
