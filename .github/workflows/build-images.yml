@@ -44,6 +44,10 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           PERFSEE_TOKEN: ${{ secrets.PERFSEE_TOKEN }}
+          # WS12: bake PostHog analytics into the web bundle so telemetry fires
+          # client-side (tools/cli/src/rspack/index.ts).
+          CDZ_POSTHOG_KEY: ${{ secrets.CDZ_POSTHOG_KEY }}
+          CDZ_POSTHOG_HOST: ${{ secrets.CDZ_POSTHOG_HOST }}
       - name: Upload web artifact
         uses: actions/upload-artifact@v4
         with:
