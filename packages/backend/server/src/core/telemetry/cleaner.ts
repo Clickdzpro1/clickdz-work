@@ -68,6 +68,23 @@ const USER_PROP_RENAME_MAP = new Map<string, string>([
 const DROP_PARAM_SEGMENTS = new Set(['other', 'instruction', 'operation']);
 const DROP_MAPPED_PARAMS = new Set(['doc_id', 'workspace_id', 'server_id']);
 
+// M10: PII redaction — detect emails and phone numbers in scalar string values
+// and replace with '[REDACTED]' before truncation. The email regex requires a
+// domain.tld pattern to avoid false positives on error codes or log lines that
+// happen to contain @. The phone regex matches international and domestic
+// formats with common separators (spaces, dashes, dots, parentheses).
+const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+const PHONE_RE = /\+?\d[\d\s().-]{7,}\d/g;
+
+function redactPii(value: string): string {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  // Quick check: if no @ and no + and no digit-heavy patterns, skip regex cost.
+  if (!value.includes('@') && !/\+?\d[\d\s().-]{7,}/.test(value)) return value;
+  let redacted = value.replace(EMAIL_RE, '[REDACTED]');
+  redacted = redacted.replace(PHONE_RE, '[REDACTED]');
+  return redacted;
+}
+
 const PRIORITY_KEYS = new Set([
   'event_id',
   'session_id',
@@ -315,7 +332,10 @@ function toScalar(value: unknown): Scalar | undefined {
     return value ? 1 : 0;
   }
   if (typeof value === 'string') {
-    return value.length > 100 ? value.slice(0, 100) : value;
+    // M10: redact PII (emails, phone numbers) BEFORE truncation so the
+    // redaction marker is what gets stored, not a truncated email fragment.
+    const safe = redactPii(value);
+    return safe.length > 100 ? safe.slice(0, 100) : safe;
   }
   if (value instanceof Date) {
     return value.toISOString();
@@ -323,7 +343,8 @@ function toScalar(value: unknown): Scalar | undefined {
 
   try {
     const serialized = JSON.stringify(value);
-    return serialized.length > 100 ? serialized.slice(0, 100) : serialized;
+    const safe = redactPii(serialized);
+    return safe.length > 100 ? safe.slice(0, 100) : safe;
   } catch {
     return undefined;
   }
