@@ -160,26 +160,26 @@ const VdzStudioPage = () => {
       if (exportState.lostJob) {
         return (
           exportState.error ||
-          'The render job was lost — please export again.'
+          'La tâche de rendu a été perdue — veuillez exporter à nouveau.'
         );
       }
-      return exportState.error || 'Export failed';
+      return exportState.error || 'Échec de l'export';
     }
-    if (timelineExport.preparing) return 'Preparing media…';
+    if (timelineExport.preparing) return 'Préparation des médias…';
     const notes: string[] = [];
     // When Remotion was requested but isn't available we transparently used
     // Classic; say so once so the poster/no-audio caveats below make sense.
     if (timelineExport.fellBackToClassic) {
-      notes.push('Remotion unavailable — exported with Classic');
+      notes.push('Remotion indisponible — exporté avec Classic');
     }
     if (timelineExport.skippedMedia.length > 0) {
       notes.push(
-        `${timelineExport.skippedMedia.length} media file(s) not embedded`
+        `${timelineExport.skippedMedia.length} fichier(s) média non intégré(s)`
       );
     }
     const posters = timelineExport.lastCompile?.posterOnlyVideoClips.length ?? 0;
     if (posters > 0) {
-      notes.push(`${posters} video clip(s) exported as still poster`);
+      notes.push(`${posters} clip(s) vidéo exporté(s) en image fixe`);
     }
     return notes.length > 0 ? notes.join(' · ') : null;
   }, [
@@ -509,10 +509,10 @@ const VdzStudioPage = () => {
     const textClip = {
       id: `clip-${nanoid(6)}`,
       type: 'text' as const,
-      name: 'New text',
+      name: 'Nouveau texte',
       start,
       duration: 3,
-      text: 'New text',
+      text: 'Nouveau texte',
       fontSize: 0.06,
       color: '#ffffff',
       x: 0.5,
@@ -551,7 +551,7 @@ const VdzStudioPage = () => {
       const shapeClip = {
         id: `clip-${nanoid(6)}`,
         type: 'shape' as const,
-        name: shape === 'circle' ? 'Circle' : 'Rectangle',
+        name: shape === 'circle' ? 'Cercle' : 'Rectangle',
         start,
         duration: 3,
         shape,
@@ -770,13 +770,13 @@ const VdzStudioPage = () => {
 
   return (
     <>
-      <ViewTitle title="Vdz Studio" />
+      <ViewTitle title="Studio Vdz" />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div className={styles.header}>
           {/* LEFT: product title. */}
           <div className={styles.headerLeft}>
-            <span className={styles.headerTitle}>Vdz Studio</span>
+            <span className={styles.headerTitle}>Studio Vdz</span>
           </div>
 
           {/* CENTER: Edit / Generate as one segmented control, kept centred. */}
@@ -784,7 +784,7 @@ const VdzStudioPage = () => {
             <div
               className={styles.modeTabs}
               role="tablist"
-              aria-label="Vdz mode"
+              aria-label="Mode Vdz"
             >
               <button
                 type="button"
@@ -794,7 +794,7 @@ const VdzStudioPage = () => {
                 aria-selected={mode === 'edit'}
                 onClick={() => switchMode('edit')}
               >
-                Edit
+                Édition
               </button>
               <button
                 type="button"
@@ -804,7 +804,7 @@ const VdzStudioPage = () => {
                 aria-selected={mode === 'generate'}
                 onClick={() => switchMode('generate')}
               >
-                Generate
+                Générer
               </button>
             </div>
           </div>
@@ -895,12 +895,12 @@ const VdzStudioPage = () => {
                     onReset={() => resetPanelSize('mediaBin')}
                     axis="x"
                     dir={1}
-                    aria-label="Resize media panel"
+                    aria-label="Redimensionner le panneau média"
                   />
                 </>
               ) : (
                 <VdzReopenTab
-                  label="Media"
+                  label="Médias"
                   edge="left"
                   onClick={() => setPanelVisible('mediaBin', true)}
                 />
@@ -940,7 +940,7 @@ const VdzStudioPage = () => {
                       onReset={() => resetPanelSize('timeline')}
                       axis="y"
                       dir={-1}
-                      aria-label="Resize timeline"
+                      aria-label="Redimensionner la chronologie"
                     />
                     <div
                       className={styles.timeline}
@@ -1000,7 +1000,7 @@ const VdzStudioPage = () => {
                             Math.max(duration, 0.1)
                           )}
                           onChange={onScrub}
-                          aria-label="Playhead"
+                          aria-label="Tête de lecture"
                         />
                       </div>
 
@@ -1023,7 +1023,7 @@ const VdzStudioPage = () => {
                   </>
                 ) : (
                   <VdzReopenTab
-                    label="Timeline"
+                    label="Chronologie"
                     edge="bottom"
                     onClick={() => setPanelVisible('timeline', true)}
                   />
@@ -1147,14 +1147,14 @@ const VdzStudioPage = () => {
                         onReset={() => resetPanelSize('inspector')}
                         axis="x"
                         dir={-1}
-                        aria-label="Resize inspector"
+                        aria-label="Redimensionner l'inspecteur"
                       />
                       <div
                         className={styles.sidePanelSlot}
                         style={{ width: layout.inspector.size }}
                       >
                         <VdzPanel
-                          title="Inspector"
+                          title="Inspecteur"
                           data-testid="vdz-inspector"
                           onCollapse={() =>
                             setPanelVisible('inspector', false)
@@ -1184,7 +1184,7 @@ const VdzStudioPage = () => {
                         onReset={() => resetPanelSize('aiDock')}
                         axis="x"
                         dir={-1}
-                        aria-label="Resize AI panel"
+                        aria-label="Redimensionner le panneau IA"
                       />
                       <div
                         className={styles.sidePanelSlot}
@@ -1213,7 +1213,7 @@ const VdzStudioPage = () => {
                   edge so each can be re-shown independently). */}
               {!layout.inspector.visible ? (
                 <VdzReopenTab
-                  label="Inspector"
+                  label="Inspecteur"
                   edge="right"
                   index={0}
                   onClick={() => setPanelVisible('inspector', true)}
@@ -1221,7 +1221,7 @@ const VdzStudioPage = () => {
               ) : null}
               {!layout.aiDock.visible ? (
                 <VdzReopenTab
-                  label="AI"
+                  label="IA"
                   edge="right"
                   index={layout.inspector.visible ? 0 : 1}
                   onClick={() => setPanelVisible('aiDock', true)}
@@ -1239,10 +1239,10 @@ const VdzStudioPage = () => {
               <span className={styles.footerLabel}>
                 <span className={styles.footerDot} />
                 {pendingProposal
-                  ? `AI proposed ${pendingProposal.ops.length} edit${
+                  ? `L'IA a proposé ${pendingProposal.ops.length} modification${
                       pendingProposal.ops.length === 1 ? '' : 's'
-                    } — review in the AI panel →`
-                  : 'AI dock ready'}
+                    } — à réviser dans le panneau IA →`
+                  : 'Panneau IA prêt'}
               </span>
               {history.error ? (
                 <span className={styles.errorText}>{history.error}</span>
