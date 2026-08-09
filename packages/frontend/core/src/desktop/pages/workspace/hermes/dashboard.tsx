@@ -664,9 +664,9 @@ export const HermesDashboard = ({
       {/* ---- Planner-offline notice (mirrors the console's blocking notice) */}
       {capsState === 'ready' && !plannerReady ? (
         <Banner tone="warn">
-          <strong>Planner offline.</strong>&nbsp;Hermes can’t run until the owner
-          configures the reasoning key on the server. Your setup, tools and
-          workflows still load.
+          <strong>Planificateur hors ligne.</strong>&nbsp;Hermes ne peut pas s'exécuter tant que le propriétaire
+          n'a pas configuré la clé de raisonnement sur le serveur. Votre configuration, vos outils et
+          vos flux de travail restent disponibles.
         </Banner>
       ) : null}
 
@@ -720,7 +720,7 @@ export const HermesDashboard = ({
             <button
               style={miniBtnStyle('secondary')}
               onClick={() => void loadRuns()}
-              title="Refresh runs"
+              title="Actualiser les exécutions"
             >
               ↻
             </button>
@@ -745,23 +745,23 @@ export const HermesDashboard = ({
                 color: C.muted,
               }}
             >
-              <Spinner /> Loading background runs…
+              <Spinner /> Chargement des exécutions en arrière-plan…
             </div>
           ) : runsState === 'error' ? (
             <Banner tone="error">
-              Couldn’t load background runs.{' '}
+              Impossible de charger les exécutions en arrière-plan.{' '}
               <button
                 style={{ ...miniBtnStyle('secondary'), display: 'inline-flex' }}
                 onClick={() => void loadRuns()}
               >
-                Retry
+                Réessayer
               </button>
             </Banner>
           ) : runs.length === 0 ? (
             <EmptyNote>
-              No background runs yet. Type a goal above and hit{' '}
-              <strong>Run in background</strong> — it keeps going even if you
-              close this tab.
+              Aucune exécution en arrière-plan. Tapez un objectif ci-dessus et appuyez sur{' '}
+              <strong>Exécuter en arrière-plan</strong> — l'exécution continue même si vous
+              fermez cet onglet.
             </EmptyNote>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -790,12 +790,12 @@ export const HermesDashboard = ({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
           {/* Recent runs */}
           <Panel
-            title="Recent runs"
+            title="Exécutions récentes"
             action={
               <button
                 style={miniBtnStyle('secondary')}
                 onClick={() => void loadThreads()}
-                title="Refresh runs"
+                title="Actualiser les exécutions"
               >
                 ↻
               </button>
@@ -811,22 +811,22 @@ export const HermesDashboard = ({
                   color: C.muted,
                 }}
               >
-                <Spinner /> Loading your runs…
+                <Spinner /> Chargement de vos exécutions…
               </div>
             ) : threadsState === 'error' ? (
               <Banner tone="error">
-                Couldn’t load your runs.{' '}
+                Impossible de charger vos exécutions.{' '}
                 <button
                   style={{ ...miniBtnStyle('secondary'), display: 'inline-flex' }}
                   onClick={() => void loadThreads()}
                 >
-                  Retry
+                  Réessayer
                 </button>
               </Banner>
             ) : threads.length === 0 ? (
               <EmptyNote>
-                No runs yet. Start one from a workflow below or hit{' '}
-                <strong>New run</strong>.
+                Aucune exécution. Lancez-en une depuis un flux ci-dessous ou appuyez sur{' '}
+                <strong>Nouvelle exécution</strong>.
               </EmptyNote>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -839,25 +839,25 @@ export const HermesDashboard = ({
 
           {/* Saved workflows */}
           <Panel
-            title="Saved workflows"
+            title="Flux enregistrés"
             action={
               <button
                 style={miniBtnStyle('secondary')}
                 onClick={onReconfigure}
-                title="Edit saved workflows"
+                title="Modifier les flux enregistrés"
               >
-                Edit
+                Modifier
               </button>
             }
           >
             {savedWorkflows.length === 0 ? (
               <EmptyNote>
-                No saved workflows yet.{' '}
+                Aucun flux enregistré.{' '}
                 <button
                   style={{ ...miniBtnStyle('primary'), display: 'inline-flex' }}
                   onClick={onReconfigure}
                 >
-                  Add one
+                  Ajouter
                 </button>
               </EmptyNote>
             ) : (
@@ -876,15 +876,15 @@ export const HermesDashboard = ({
 
         {/* Right column: tools & connections (reuse the shipping panel) */}
         <div style={{ minWidth: 0 }}>
-          <Panel title="Tools & connections">
+          <Panel title="Outils & connexions">
             {capsState === 'error' ? (
               <Banner tone="error">
-                Couldn’t load tool availability.{' '}
+                Impossible de charger la disponibilité des outils.{' '}
                 <button
                   style={{ ...miniBtnStyle('secondary'), display: 'inline-flex' }}
                   onClick={() => void loadCaps()}
                 >
-                  Retry
+                  Réessayer
                 </button>
               </Banner>
             ) : (
@@ -918,15 +918,15 @@ export const HermesDashboard = ({
         </span>
         <div style={{ flex: 1, minWidth: 180 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-            Default run mode
+            Mode d'exécution par défaut
           </div>
           <div style={{ fontSize: 12, color: C.muted }}>
-            {MODE_LABEL[config.defaultMode ?? 'ask']} · change it per run in the
+            {MODE_LABEL[config.defaultMode ?? 'ask']} · modifiable à chaque exécution dans la
             console.
           </div>
         </div>
         <button style={btnStyle('primary')} onClick={() => onOpenConsole()}>
-          Open console →
+          Ouvrir la console →
         </button>
       </div>
 
@@ -1058,7 +1058,7 @@ const RunRow = ({
           whiteSpace: 'nowrap',
         }}
       >
-        {thread.title || 'Untitled run'}
+        {thread.title || 'Exécution sans titre'}
       </span>
       <span style={{ display: 'block', fontSize: 11, color: C.muted }}>
         {thread.messageCount} message{thread.messageCount === 1 ? '' : 's'}
@@ -1091,7 +1091,7 @@ const WorkflowRow = ({
   >
     <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-        {workflow.title || 'Saved workflow'}
+        {workflow.title || 'Flux enregistré'}
       </div>
       <div
         style={{
@@ -1112,9 +1112,9 @@ const WorkflowRow = ({
     <button
       style={{ ...miniBtnStyle('primary'), flexShrink: 0 }}
       onClick={onRun}
-      title="Load this into the console"
+      title="Charger dans la console"
     >
-      Run →
+      Exécuter →
     </button>
   </div>
 );
@@ -1181,9 +1181,9 @@ const BackgroundComposer = ({
     try {
       const runId = await onStart(trimmed);
       if (runId) setValue('');
-      else setErr('Couldn’t start the run — please retry.');
+      else setErr('Impossible de démarrer l'exécution — veuillez réessayer.');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Couldn’t start the run.');
+      setErr(e instanceof Error ? e.message : 'Impossible de démarrer l'exécution.');
     } finally {
       setBusy(false);
     }
@@ -1196,8 +1196,8 @@ const BackgroundComposer = ({
         onChange={e => setValue(e.target.value)}
         placeholder={
           disabled
-            ? 'Planner offline — background runs are disabled'
-            : 'Describe a goal to run in the background (continue-in-background)…'
+            ? 'Planificateur hors ligne — les exécutions en arrière-plan sont désactivées'
+            : 'Décrivez un objectif à exécuter en arrière-plan (continue-en-arrière-plan)…'
         }
         disabled={disabled || busy}
         rows={2}
@@ -1230,7 +1230,7 @@ const BackgroundComposer = ({
         }}
       >
         <span style={{ flex: 1, minWidth: 0, fontSize: 11.5, color: C.muted }}>
-          Runs keep going if you close the tab · appears below, streams live.
+          Les exécutions continuent si vous fermez l'onglet · apparaît ci-dessous, diffuse en direct.
         </span>
         <button
           style={{
@@ -1239,14 +1239,14 @@ const BackgroundComposer = ({
           }}
           disabled={disabled || busy || !value.trim()}
           onClick={() => void submit()}
-          title="Start this run in the background"
+          title="Démarrer cette exécution en arrière-plan"
         >
           {busy ? (
             <>
-              <Spinner dark /> Starting…
+              <Spinner dark /> Démarrage…
             </>
           ) : (
-            <>🌙 Run in background</>
+            <>🌙 Exécuter en arrière-plan</>
           )}
         </button>
       </div>
@@ -1264,7 +1264,7 @@ const ExecutionRow = ({
 }) => {
   const state = coerceRunState(run.state);
   const when = run.startedAt ?? run.endedAt;
-  const preview = (run.prompt ?? '').trim() || 'Untitled run';
+  const preview = (run.prompt ?? '').trim() || 'Exécution sans titre';
   return (
     <button
       type="button"
@@ -1322,7 +1322,7 @@ const ExecutionRow = ({
           {preview}
         </span>
         <span style={{ display: 'block', fontSize: 11, color: C.muted }}>
-          {when ? timeAgo(when) : 'just now'}
+          {when ? timeAgo(when) : 'à l'instant'}
         </span>
       </span>
       <RunStateChip state={state} />
@@ -1402,7 +1402,7 @@ const RunLiveView = ({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label="Background run"
+      aria-label="Exécution en arrière-plan"
       onClick={onClose}
       style={{
         position: 'fixed',
@@ -1453,7 +1453,7 @@ const RunLiveView = ({
               minWidth: 0,
             }}
           >
-            Background run
+            Exécution en arrière-plan
           </span>
           <RunStateChip state={state} />
           {isLive ? (
@@ -1466,14 +1466,14 @@ const RunLiveView = ({
                 color: C.muted,
               }}
             >
-              <Spinner /> live
+              <Spinner /> en direct
             </span>
           ) : null}
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
-            title="Close"
+            aria-label="Fermer"
+            title="Fermer"
             style={{
               appearance: 'none',
               width: 26,
@@ -1530,11 +1530,11 @@ const RunLiveView = ({
                 color: C.muted,
               }}
             >
-              <Spinner /> Attaching to run…
+              <Spinner /> Connexion à l'exécution…
             </div>
           ) : recordState === 'error' && steps.length === 0 && !finalText ? (
             <Banner tone="error">
-              Couldn’t load this run.{' '}
+              Impossible de charger cette exécution.{' '}
               <button
                 style={{ ...miniBtnStyle('secondary'), display: 'inline-flex' }}
                 onClick={() => {
@@ -1542,7 +1542,7 @@ const RunLiveView = ({
                   stream.reattach?.();
                 }}
               >
-                Retry
+                Réessayer
               </button>
             </Banner>
           ) : (
@@ -1567,15 +1567,15 @@ const RunLiveView = ({
                   {/* The one spot in this surface where the wait IS the model
                       thinking, so it gets the AI pulse rather than the generic
                       mechanical spinner used for list/attach states. */}
-                  <CdzAILoading /> Working…
+                  <CdzAILoading /> Traitement…
                 </div>
               ) : (
-                <EmptyNote>No steps were recorded for this run.</EmptyNote>
+                <EmptyNote>Aucune étape enregistrée pour cette exécution.</EmptyNote>
               )}
 
               {errorText ? (
                 <Banner tone="error">
-                  <strong>Run error.</strong>&nbsp;{errorText}
+                  <strong>Erreur d'exécution.</strong>&nbsp;{errorText}
                 </Banner>
               ) : null}
 
@@ -1598,7 +1598,7 @@ const RunLiveView = ({
                       marginBottom: 8,
                     }}
                   >
-                    Final answer
+                    Réponse finale
                   </div>
                   <StreamingAnswer text={finalText} live={isLive} />
                 </div>
