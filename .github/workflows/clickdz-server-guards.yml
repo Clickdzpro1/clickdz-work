@@ -63,3 +63,25 @@ jobs:
         # test:clickdz is scoped to copilot-clickdz-*.spec.ts, so this job stays
         # fast and cannot be broken by unrelated server-test failures.
         run: yarn affine @affine/server test:clickdz --forbid-only
+
+  # M12: ci-gate — single required status check for branch protection.
+  # This job depends on all guard jobs above and fails if any of them
+  # failed or were cancelled. Configure it as the required status check
+  # in repo Settings → Branches → canary branch protection rules.
+  ci-gate:
+    name: ci-gate
+    runs-on: ubuntu-latest
+    needs:
+      - clickdz-money-guards
+    if: always()
+    steps:
+      - name: Check guard results
+        run: |
+          echo "Guard job results:"
+          echo "  clickdz-money-guards: ${{ needs.clickdz-money-guards.result }}"
+          if [[ "${{ needs.clickdz-money-guards.result }}" != "success" ]]; then
+            echo "::error::A required guard job did not pass (clickdz-money-guards: ${{ needs.clickdz-money-guards.result }})"
+            exit 1
+          fi
+          echo "All guard jobs passed. ci-gate is green."
+
