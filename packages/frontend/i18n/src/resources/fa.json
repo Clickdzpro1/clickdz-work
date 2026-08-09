@@ -2360,7 +2360,7 @@
   "com.affine.workspaceDelete.description2": "Deleting <1>{{workspace}}</1> will delete both local data and synced server data. This cannot be undone, so please proceed with caution.",
   "com.affine.workspaceList.addWorkspace.create-cloud": "Create synced workspace",
   "com.affine.workspaceList.workspaceListType.cloud": "Cloud sync",
-  "com.affine.workspaceSubPath.chat": "Intelligence",
+  "com.affine.workspaceSubPath.chat": "گفتگوی هوش مصنوعی",
   "com.affine.integration.calendar.save-error": "An error occurred while saving the calendar settings",
   "com.affine.integration.calendar.account.load-error": "Failed to load calendar accounts",
   "com.affine.integration.calendar.provider.load-error": "Failed to load calendar providers",
