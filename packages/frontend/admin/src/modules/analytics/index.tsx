@@ -76,6 +76,30 @@ interface AdminAppEntitlementsResponse {
   adminUserAppEntitlements: AdminUserAppEntitlement[];
 }
 
+interface SignupTimelinePoint {
+  date: string;
+  count: number;
+}
+
+const adminSignupsTimelineQuery = {
+  id: 'adminSignupsTimelineQuery' as const,
+  op: 'adminDashboard',
+  query: `query adminSignupsTimeline {
+  adminDashboard(input: { syncHistoryHours: 24, timezone: "UTC" }) {
+    signupsTimeline {
+      date
+      count
+    }
+  }
+}`,
+} satisfies GraphQLQuery;
+
+interface AdminSignupsTimelineResponse {
+  adminDashboard: {
+    signupsTimeline: SignupTimelinePoint[] | null;
+  };
+}
+
 function MetricCard({
   title,
   value,
@@ -286,6 +310,15 @@ function AnalyticsPageContent() {
     (entitlementsData as unknown as AdminAppEntitlementsResponse | undefined)
       ?.adminUserAppEntitlements ?? [];
 
+  // Inscriptions au fil du temps (récupérées via le champ signupsTimeline
+  // du backend, exposé par adminDashboard).
+  const { data: signupsData } = useQuery({
+    query: adminSignupsTimelineQuery as GraphQLQuery,
+  });
+  const signupsTimeline =
+    (signupsData as unknown as AdminSignupsTimelineResponse | undefined)
+      ?.adminDashboard?.signupsTimeline ?? null;
+
   const appCounts = useMemo<AppCountPoint[]>(() => {
     const counts = new Map<string, number>();
     for (const app of USER_APPS) {
@@ -307,23 +340,16 @@ function AnalyticsPageContent() {
     }));
   }, [perUserEntitlements]);
 
-  // Inscriptions au fil du temps (histogramme fourni par le backend le cas
-  // échéant, sinon dérivé des utilisateurs connus).
+  // Inscriptions au fil du temps (histogramme fourni par le backend).
   const signupPoints = useMemo<SignupPoint[]>(() => {
-    const timeline = (
-      dashboardData.adminDashboard as unknown as {
-        signupsTimeline?: { date: string; count: number }[] | null;
-      }
-    ).signupsTimeline;
-
-    if (Array.isArray(timeline) && timeline.length > 0) {
-      return timeline.map(point => ({
+    if (Array.isArray(signupsTimeline) && signupsTimeline.length > 0) {
+      return signupsTimeline.map(point => ({
         label: dateFormatter.format(new Date(point.date)),
         inscriptions: point.count,
       }));
     }
     return [];
-  }, [dashboardData]);
+  }, [signupsTimeline]);
 
   return (
     <div className="h-dvh flex-1 flex-col flex overflow-hidden">
