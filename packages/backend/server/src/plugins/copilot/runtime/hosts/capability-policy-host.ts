@@ -1,11 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 
+import { metrics } from '../../../../base';
 import { ServerFeature, ServerService } from '../../../../core';
 import { QuotaStateService } from '../../../../core/quota/state';
 import type { ChatSession } from '../../session';
 import { type ToolsConfig } from '../../types';
 import { getTools } from '../../utils';
+import { CdzModelHealthService } from '../cdz-model-health.service';
 import {
   ModelSelectionPolicy,
   type ResolveModelInput,
@@ -31,10 +33,12 @@ type ResolvePolicyModelInput = ResolveModelInput & {
 
 @Injectable()
 export class CapabilityPolicyHost {
+  private readonly logger = new Logger(CapabilityPolicyHost.name);
   constructor(
     private readonly server: ServerService,
     private readonly moduleRef: ModuleRef,
-    private readonly modelSelection: ModelSelectionPolicy
+    private readonly modelSelection: ModelSelectionPolicy,
+    private readonly modelHealth: CdzModelHealthService
   ) {}
 
   private async hasAiProAccess(
@@ -60,6 +64,22 @@ export class CapabilityPolicyHost {
   }
 
   private async resolveModel(input: ResolvePolicyModelInput) {
+    // D1: circuit breaker check — if the requested model's circuit is open,
+    // route to the fallback model before doing any model selection work.
+    const requestedModelId = input.requestedModelId;
+    if (requestedModelId) {
+      const fallback = this.modelHealth.getFallbackModel(requestedModelId);
+      if (fallback) {
+        this.logger.warn(
+          `[circuit-breaker] resolveModel routing ${requestedModelId} -> ${fallback} (circuit open)`
+        );
+        metrics.ai
+          .counter('cdz_circuit_breaker_routed')
+          .add(1, { from: requestedModelId, to: fallback });
+        return fallback;
+      }
+    }
+
     const resolved = this.modelSelection.resolveRequestedModel(input);
     if (!resolved.matchedOptionalModel) {
       return resolved.selectedModel;
@@ -122,3 +142,4 @@ export class CapabilityPolicyHost {
     return this.modelSelection.resolveRequestedModel(input).selectedModel;
   }
 }
+
