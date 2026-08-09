@@ -105,7 +105,7 @@ const RUNTIME_LABELS: Record<string, string> = {
 // EmptyState example chips — real, runnable coding tasks that exercise write +
 // run (+ preview). Passed to the SHELL EmptyState (string[] + onPickExample).
 const EXAMPLES: string[] = [
-  'Construire une petite API Express avec une route /health et la voir s'exécuter',
+  'Construire une petite API Express avec une route /health et la voir s’exécuter',
   'Écrire un script Python qui calcule et affiche les 20 premiers nombres premiers',
   'Écrire un script Node qui récupère https://jsonplaceholder.typicode.com/todos/1 et résume les champs',
   'Écrire une fonction Python fizzbuzz et un petit test qui vérifie les 15 premières sorties, puis exécuter le test',
@@ -265,7 +265,7 @@ const OpenClawPage = () => {
       : capsState === 'error'
         ? 'Échec du chargement des capacités du sandbox.'
         : caps?.sandbox
-          ? 'Le sandbox Vercel est activé — les tâches s'exécutent en direct.'
+          ? 'Le sandbox Vercel est activé — les tâches s’exécutent en direct.'
           : caps?.reason ?? 'Sandbox désactivé — le code est généré, pas exécuté.';
   const headerChip = (
     <span style={capChipStyle} title={headerLampTitle}>
@@ -778,8 +778,8 @@ const OpenClawConsole = ({
       style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
       title={
         sandboxOn
-          ? "L'environnement d'exécution du sandbox"
-          : "L'environnement guide le langage généré (l'exécution est désactivée)"
+          ? "L'environnement d’exécution du sandbox"
+          : "L'environnement guide le langage généré (l’exécution est désactivée)"
       }
     >
       {runtimes.map(rt => {
@@ -954,7 +954,7 @@ const OpenClawConsole = ({
                   <PanelHint>
                     {files.length > 0
                       ? 'Sélectionnez un fichier pour le consulter.'
-                      : 'Les fichiers écrits par l'agent apparaîtront ici.'}
+                      : 'Les fichiers écrits par l’agent apparaîtront ici.'}
                   </PanelHint>
                 )}
               </div>
@@ -1025,7 +1025,7 @@ const OpenClawConsole = ({
           ) : !sandboxOn ? (
             <Banner tone="warn">
               <strong>Génération uniquement — sandbox désactivé.</strong> Le code est écrit
-              et expliqué, mais rien n'est exécuté. Pas d'exécution, pas de ports, pas d'aperçu.
+              et expliqué, mais rien n'est exécuté. Pas d’exécution, pas de ports, pas d’aperçu.
               {caps?.reason ? (
                 <div style={{ marginTop: 4, color: C.muted, fontSize: 12 }}>
                   Raison : {caps.reason}
@@ -1086,7 +1086,7 @@ const OpenClawConsole = ({
                 subtitle={
                   sandboxOn
                     ? "Décrivez une tâche de codage. OpenClaw écrit les fichiers, les exécute dans un sandbox isolé, diffuse la sortie, et (pour les applications web) affiche un aperçu en direct."
-                    : "Décrivez une tâche de codage. OpenClaw écrit et explique le code. L'exécution en direct est désactivée sur ce serveur, rien n'est exécuté."
+                    : "Décrivez une tâche de codage. OpenClaw écrit et explique le code. L'exécution en direct est désactivée sur ce serveur, rien n’est exécuté."
                 }
                 examples={EXAMPLES}
                 onPickExample={pickExample}
