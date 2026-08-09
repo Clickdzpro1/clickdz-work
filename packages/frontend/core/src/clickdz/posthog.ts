@@ -95,6 +95,8 @@ export async function initCdzPostHog(): Promise<PostHogLike | null> {
       capture_pageleave: true,
       persistence: 'localStorage+cookie',
       disable_session_recording: true,
+      ip: false, // GDPR: do not capture or store IP addresses
+      person_profiles: 'identified_only', // only create person profiles for identified users
     }) as PostHogLike;
     enabled = true;
     return client;
@@ -107,8 +109,13 @@ export async function initCdzPostHog(): Promise<PostHogLike | null> {
 }
 
 /**
- * Identify the signed-in user (distinct id + email person property).
+ * Identify the signed-in user (distinct id only — no PII).
  * Call once after login / session restore. Pass `null` on logout to reset.
+ *
+ * M10: We intentionally do NOT send `email` as a person property — the opaque
+ * user.id is sufficient for analytics. Sending email would leak PII into the
+ * PostHog person record (GDPR risk). The CdzPostHogUser type still carries
+ * `email` for API compatibility, but it is not forwarded to PostHog.
  */
 export function identifyCdzPostHogUser(user: CdzPostHogUser | null): void {
   if (!client || !enabled) {
@@ -116,7 +123,7 @@ export function identifyCdzPostHogUser(user: CdzPostHogUser | null): void {
   }
   try {
     if (user && user.id) {
-      client.identify(user.id, user.email ? { email: user.email } : {});
+      client.identify(user.id);
     } else {
       client.reset();
     }
