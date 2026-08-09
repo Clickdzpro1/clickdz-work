@@ -475,6 +475,20 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
   @property({ attribute: false })
   accessor onOpenDoc!: (docId: string, sessionId?: string) => void;
 
+  // ClickDz context props — drilled through to chat-message-assistant
+  // so suggestions are context-aware (studio, niche, lang, recent titles).
+  @property({ attribute: false })
+  accessor cdzStudio: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzNiche: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzLang: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzRecentTitles: string[] | undefined;
+
   @property({
     type: String,
     attribute: 'data-testid',
@@ -830,6 +844,10 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
                     .docDisplayService=${this.docDisplayService}
                     .peekViewService=${this.peekViewService}
                     .onOpenDoc=${this.onOpenDoc}
+                    .cdzStudio=${this.cdzStudio}
+                    .cdzNiche=${this.cdzNiche}
+                    .cdzLang=${this.cdzLang}
+                    .cdzRecentTitles=${this.cdzRecentTitles}
                   ></chat-message-assistant>`;
                 } else if (isChatAction(item) && this.host) {
                   return html`<chat-message-action
