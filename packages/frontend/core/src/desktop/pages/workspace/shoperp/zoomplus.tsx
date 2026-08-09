@@ -1,6 +1,6 @@
 // ZOOM+ — Video conferencing tab for ClickDz Work
 // Powered by La Suite Meet (LiveKit, MIT license) + CDZ AI for transcription.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
 import { provisionApp } from './app-provision';
 
@@ -29,8 +29,39 @@ function zoomPlusInstanceUrl(): string {
 export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'no-login'>('loading');
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'no-login' | 'slow'>('loading');
   const [iframeSrc, setIframeSrc] = useState('');
+
+  // C4: Track the current load attempt so stale provision results (from a
+  // previous load() that resolved after the user cancelled or retried) don't
+  // clobber the current status. Each load() increments this counter; at the
+  // end we only apply the result if the counter hasn't changed.
+  const loadEpochRef = useRef(0);
+
+  // C4: Elapsed timer — starts when status === 'loading'. After 15s with no
+  // resolution, transitions to 'slow' so the user sees a message + retry/cancel
+  // instead of an indefinite spinner (the Meet backend cold start can take 50s).
+  const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const SLOW_THRESHOLD_MS = 15_000;
+
+  const clearSlowTimer = useCallback(() => {
+    if (slowTimerRef.current) {
+      clearTimeout(slowTimerRef.current);
+      slowTimerRef.current = null;
+    }
+  }, []);
+
+  const startSlowTimer = useCallback(() => {
+    clearSlowTimer();
+    const epoch = loadEpochRef.current;
+    slowTimerRef.current = setTimeout(() => {
+      // Only transition to 'slow' if we're still on the same load attempt
+      // and haven't already resolved to another status.
+      if (loadEpochRef.current === epoch) {
+        setStatus(prev => prev === 'loading' ? 'slow' : prev);
+      }
+    }, SLOW_THRESHOLD_MS);
+  }, [clearSlowTimer]);
 
   // Robust flow: provision the app, then iframe the IdP /prime loginUrl
   // (preferred — stashes the bridge_code as a first-party cookie then redirects
@@ -41,8 +72,14 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   // showed a permanent "Login" screen with no error. Now we surface a retry
   // banner instead of iframing the broken fallback.
   const load = useCallback(async () => {
+    const epoch = ++loadEpochRef.current;
     setStatus('loading');
+    startSlowTimer();
     const p = await provisionApp('zoomplus');
+    clearSlowTimer();
+    // Ignore stale results from a previous load attempt (user clicked
+    // Réessayer or Annuler which started a new epoch).
+    if (loadEpochRef.current !== epoch) return;
     if (!p) {
       setStatus('error');
       return;
@@ -55,7 +92,21 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
     }
     setIframeSrc(p.loginUrl);
     setStatus('ready');
-  }, []);
+  }, [startSlowTimer, clearSlowTimer]);
+
+  // C4: Cancel the current load attempt — stops the timer and shows the error
+  // banner (which has its own Réessayer button). The in-flight provisionApp
+  // promise will resolve later but its result is ignored via the epoch guard.
+  const cancelLoad = useCallback(() => {
+    ++loadEpochRef.current; // invalidate the in-flight load()
+    clearSlowTimer();
+    setStatus('error');
+  }, [clearSlowTimer]);
+
+  // Cleanup timer on unmount.
+  useEffect(() => {
+    return () => clearSlowTimer();
+  }, [clearSlowTimer]);
 
   useEffect(() => {
     ensureShoperpResponsiveCss();
@@ -72,11 +123,21 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         </div>
         <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
-      <div style={status === 'ready'
+      <div aria-live="polite" style={status === 'ready'
         ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
         : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
-        {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à ZOOM+…</div>
-        : status === 'error' ? (
+        {status === 'loading' ? <div aria-busy="true" style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à ZOOM+…</div>
+        : status === 'slow' ? (
+          // C4: The connection has been loading for >15s. The Meet backend cold
+          // start can take up to 50s — instead of leaving the user staring at a
+          // spinner, surface a message with retry/cancel actions.
+          <Banner tone="warn">La connexion prend plus de temps que prévu.
+            <br /><br />
+            <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button>
+            {' · '}
+            <button style={linkBtnStyle} onClick={cancelLoad}>Annuler</button>
+          </Banner>
+        ) : status === 'error' ? (
           <Banner tone="error">Impossible de se connecter à ZOOM+ pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
         ) : status === 'no-login' ? (
           // WS17: provisioning succeeded but no IdP loginUrl — the Meet backend /
