@@ -4,6 +4,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import { useService } from '@toeverything/infra';
 import { useCallback } from 'react';
@@ -69,14 +70,16 @@ const CourseProPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
-        <div style={{ height: '100%', width: '100%', overflow: 'auto' }}>
-          <CourseProPanel
-            slug={workspaceId}
-            readOnly={false}
-            onWritesBlocked={onWritesBlocked}
-            onMutated={onMutated}
-          />
-        </div>
+        <AppAccessGate app="COURSE_PRO">
+          <div style={{ height: '100%', width: '100%', overflow: 'auto' }}>
+            <CourseProPanel
+              slug={workspaceId}
+              readOnly={false}
+              onWritesBlocked={onWritesBlocked}
+              onMutated={onMutated}
+            />
+          </div>
+        </AppAccessGate>
       </ViewBody>
     </>
   );
