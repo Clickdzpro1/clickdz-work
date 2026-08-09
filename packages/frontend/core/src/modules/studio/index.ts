@@ -5,7 +5,7 @@ import { RecentStudiosService } from './recent-studios';
 
 export type { StudioDef, StudioGroup, StudioId } from './registry';
 export type { StudioFlag } from './registry';
-export { STUDIOS, studioForPath, visibleStudios } from './registry';
+export { STUDIOS, STUDIO_GROUP_ORDER, studioForPath, visibleStudios } from './registry';
 export { RecentStudiosService } from './recent-studios';
 
 export function configureStudioModule(framework: Framework) {
