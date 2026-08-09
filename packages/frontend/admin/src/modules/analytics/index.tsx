@@ -302,23 +302,51 @@ function AnalyticsPageContent() {
   const activeUsers = dashboardData.adminDashboard.syncActiveUsers;
   const syncWindow = dashboardData.adminDashboard.syncWindow;
 
-  // Accès aux applications sur l'ensemble des utilisateurs.
+  return (
+    <div className="h-dvh flex-1 flex-col flex overflow-hidden">
+      <Header title="Analytique" />
+      <div className="flex-1 overflow-auto p-6 space-y-6">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+          <MetricCard
+            title="Utilisateurs totaux"
+            value={intFormatter.format(totalUsers)}
+            description="Comptes enregistrés"
+            icon={<UsersIcon className="h-4 w-4" />}
+          />
+          <MetricCard
+            title="Utilisateurs actifs (récents)"
+            value={intFormatter.format(activeUsers)}
+            description={`Fenêtre de ${syncWindow.effectiveSize}h`}
+            icon={<ActivityIcon className="h-4 w-4" />}
+          />
+          {/* Accès accordés — wrapped so a failure doesn’t kill the page */}
+          <AnalyticsErrorBoundary>
+            <EntitlementsMetricCard />
+          </AnalyticsErrorBoundary>
+        </div>
+
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <AnalyticsErrorBoundary>
+            <AppEntitlementsSection />
+          </AnalyticsErrorBoundary>
+
+          <AnalyticsErrorBoundary>
+            <SignupsSection />
+          </AnalyticsErrorBoundary>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Section: accès aux applications (adminUserAppEntitlements query). */
+function EntitlementsMetricCard() {
   const { data: entitlementsData } = useQuery({
     query: adminAppEntitlementsQuery as GraphQLQuery,
   });
   const perUserEntitlements =
     (entitlementsData as unknown as AdminAppEntitlementsResponse | undefined)
       ?.adminUserAppEntitlements ?? [];
-
-  // Inscriptions au fil du temps (récupérées via le champ signupsTimeline
-  // du backend, exposé par adminDashboard).
-  const { data: signupsData } = useQuery({
-    query: adminSignupsTimelineQuery as GraphQLQuery,
-  });
-  const signupsTimeline =
-    (signupsData as unknown as AdminSignupsTimelineResponse | undefined)
-      ?.adminDashboard?.signupsTimeline ?? null;
-
   const appCounts = useMemo<AppCountPoint[]>(() => {
     const counts = new Map<string, number>();
     for (const app of USER_APPS) {
@@ -339,8 +367,72 @@ function AnalyticsPageContent() {
       utilisateurs: counts.get(app.key) ?? 0,
     }));
   }, [perUserEntitlements]);
+  return (
+    <MetricCard
+      title="Accès accordés"
+      value={intFormatter.format(
+        appCounts.reduce((sum, point) => sum + point.utilisateurs, 0)
+      )}
+      description="Droits applicatifs actifs"
+      icon={<AppWindowIcon className="h-4 w-4" />}
+    />
+  );
+}
 
-  // Inscriptions au fil du temps (histogramme fourni par le backend).
+/** Section: chart des accès aux applications. */
+function AppEntitlementsSection() {
+  const { data: entitlementsData } = useQuery({
+    query: adminAppEntitlementsQuery as GraphQLQuery,
+  });
+  const perUserEntitlements =
+    (entitlementsData as unknown as AdminAppEntitlementsResponse | undefined)
+      ?.adminUserAppEntitlements ?? [];
+  const appCounts = useMemo<AppCountPoint[]>(() => {
+    const counts = new Map<string, number>();
+    for (const app of USER_APPS) {
+      counts.set(app.key, 0);
+    }
+    for (const user of perUserEntitlements) {
+      for (const entitlement of user.entitlements) {
+        if (entitlement.active && counts.has(entitlement.app)) {
+          counts.set(
+            entitlement.app,
+            (counts.get(entitlement.app) ?? 0) + 1
+          );
+        }
+      }
+    }
+    return USER_APPS.map(app => ({
+      app: app.label,
+      utilisateurs: counts.get(app.key) ?? 0,
+    }));
+  }, [perUserEntitlements]);
+  return (
+    <Card className="border-border/60 bg-card shadow-1">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <AppWindowIcon className="h-4 w-4" aria-hidden="true" />
+          Accès aux applications
+        </CardTitle>
+        <CardDescription>
+          Nombre d{"'"}utilisateurs avec chaque application active
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AppEntitlementsChart points={appCounts} />
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Section: chart des inscriptions (signupsTimeline query). */
+function SignupsSection() {
+  const { data: signupsData } = useQuery({
+    query: adminSignupsTimelineQuery as GraphQLQuery,
+  });
+  const signupsTimeline =
+    (signupsData as unknown as AdminSignupsTimelineResponse | undefined)
+      ?.adminDashboard?.signupsTimeline ?? null;
   const signupPoints = useMemo<SignupPoint[]>(() => {
     if (Array.isArray(signupsTimeline) && signupsTimeline.length > 0) {
       return signupsTimeline.map(point => ({
@@ -352,65 +444,20 @@ function AnalyticsPageContent() {
   }, [signupsTimeline]);
 
   return (
-    <div className="h-dvh flex-1 flex-col flex overflow-hidden">
-      <Header title="Analytique" />
-      <div className="flex-1 overflow-auto p-6 space-y-6">
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-          <MetricCard
-            title="Utilisateurs totaux"
-            value={intFormatter.format(totalUsers)}
-            description="Comptes enregistrés"
-            icon={<UsersIcon className="h-4 w-4" />}
-          />
-          <MetricCard
-            title="Utilisateurs actifs (récents)"
-            value={intFormatter.format(activeUsers)}
-            description={`Fenêtre de ${syncWindow.effectiveSize}h`}
-            icon={<ActivityIcon className="h-4 w-4" />}
-          />
-          <MetricCard
-            title="Accès accordés"
-            value={intFormatter.format(
-              appCounts.reduce((sum, point) => sum + point.utilisateurs, 0)
-            )}
-            description="Droits applicatifs actifs"
-            icon={<AppWindowIcon className="h-4 w-4" />}
-          />
-        </div>
-
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          <Card className="border-border/60 bg-card shadow-1">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <AppWindowIcon className="h-4 w-4" aria-hidden="true" />
-                Accès aux applications
-              </CardTitle>
-              <CardDescription>
-                Nombre d{"'"}utilisateurs avec chaque application active
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <AppEntitlementsChart points={appCounts} />
-            </CardContent>
-          </Card>
-
-          <Card className="border-border/60 bg-card shadow-1">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <UserPlusIcon className="h-4 w-4" aria-hidden="true" />
-                Inscriptions au fil du temps
-              </CardTitle>
-              <CardDescription>
-                Nouvelles inscriptions par période
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <SignupsChart points={signupPoints} />
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </div>
+    <Card className="border-border/60 bg-card shadow-1">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <UserPlusIcon className="h-4 w-4" aria-hidden="true" />
+          Inscriptions au fil du temps
+        </CardTitle>
+        <CardDescription>
+          Nouvelles inscriptions par période
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <SignupsChart points={signupPoints} />
+      </CardContent>
+    </Card>
   );
 }
 
