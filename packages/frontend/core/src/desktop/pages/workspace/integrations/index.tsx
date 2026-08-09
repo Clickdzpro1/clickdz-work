@@ -253,7 +253,7 @@ const IntegrationsPage = () => {
             : null
         );
         if (data.error === 'composio_unreachable') {
-          setNotice("Couldn't reach Composio right now — try again in a moment.");
+          setNotice("Impossible de contacter Composio pour le moment — réessayez dans un instant.");
         }
         setState('ready');
       } catch {
@@ -279,7 +279,7 @@ const IntegrationsPage = () => {
       });
       if (token !== reqTokenRef.current) return; // query changed under us
       if (!res.ok) {
-        setPageError('Could not load more toolkits.');
+        setPageError('Impossible de charger plus de kits d’outils.');
         return;
       }
       const data = (await res.json()) as ToolkitsResponse;
@@ -298,7 +298,7 @@ const IntegrationsPage = () => {
       );
     } catch {
       if (token === reqTokenRef.current) {
-        setPageError('Network error while loading more toolkits.');
+        setPageError('Erreur réseau lors du chargement de plus de kits.');
       }
     } finally {
       loadingMoreRef.current = false;
@@ -403,7 +403,7 @@ const IntegrationsPage = () => {
           return;
         }
         if (data.error === 'not_configured') {
-          setNotice('Integrations are not configured yet — ask the owner to set COMPOSIO_API_KEY.');
+          setNotice('Les intégrations ne sont pas encore configurées — demandez au propriétaire de définir COMPOSIO_API_KEY.');
         } else if (data.error === 'toolkit_auth_unconfigured') {
           // Distinct, actionable surface (Composio dashboard) with retry.
           setConnectError({ toolkit: slug, kind: 'auth_unconfigured' });
@@ -447,16 +447,16 @@ const IntegrationsPage = () => {
         error?: string;
       };
       if (res.status === 409 || data.error === 'not_configured') {
-        setRunError('Integrations are not configured yet — ask the owner to set COMPOSIO_API_KEY.');
+        setRunError('Les intégrations ne sont pas encore configurées — demandez au propriétaire de définir COMPOSIO_API_KEY.');
         return;
       }
       if (res.status === 502 || data.error === 'planner_unavailable') {
         setRunErrorKind('planner');
-        setRunError('AI planner unreachable — try again shortly.');
+        setRunError('Planificateur IA inaccessible — réessayez sous peu.');
         return;
       }
       if (!res.ok || !data.ok) {
-        setRunError('The run could not be completed. Please try again.');
+        setRunError('L’exécution n’a pas pu aboutir. Veuillez réessayer.');
         return;
       }
       setResult({
@@ -466,7 +466,7 @@ const IntegrationsPage = () => {
         iterations: typeof data.iterations === 'number' ? data.iterations : 0,
       });
     } catch {
-      setRunError('Network error while running. Check your connection and try again.');
+      setRunError('Erreur réseau lors de l’exécution. Vérifiez votre connexion et réessayez.');
     } finally {
       setRunning(false);
     }
@@ -528,7 +528,7 @@ const IntegrationsPage = () => {
     const now = Date.now();
     setEditingFlow({
       id: 'new',
-      name: 'Untitled flow',
+      name: 'Flow sans titre',
       nodes: [],
       edges: [],
       createdAt: now,
@@ -591,7 +591,7 @@ const IntegrationsPage = () => {
       const saved = await saveFlowFn(editingFlow);
       setEditingFlow(saved); // adopt the canonical id/timestamps from the server
       setFlowDirty(false);
-      setFlowNotice('Flow saved.');
+      setFlowNotice('Flow enregistré.');
     } catch {
       /* error surfaced via flowsError */
     } finally {
@@ -624,7 +624,7 @@ const IntegrationsPage = () => {
 
   return (
     <>
-      <ViewTitle title="Integrations" />
+      <ViewTitle title="Intégrations" />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
@@ -640,7 +640,7 @@ const IntegrationsPage = () => {
           }}
         >
           <span style={{ fontSize: 16 }}>🔌</span>
-          Integrations
+          Intégrations
           <span
             style={{
               fontSize: 10,
@@ -694,11 +694,11 @@ const IntegrationsPage = () => {
                   color: C.text,
                 }}
               >
-                <span>🔌</span> Integrations
+                <span>🔌</span> Intégrations
               </h1>
               <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
-                Connect ClickDz Work to the tools you already use. Browse the
-                full Composio catalog below.
+                Connectez ClickDz Work aux outils que vous utilisez déjà. Parcourez le
+                catalogue Composio complet ci-dessous.
               </p>
             </header>
 
@@ -712,28 +712,28 @@ const IntegrationsPage = () => {
               <>
             {/* Status banner ------------------------------------------------ */}
             {state === 'loading' ? (
-              <Banner tone="info">Loading integrations…</Banner>
+              <Banner tone="info">Chargement des intégrations…</Banner>
             ) : state === 'error' ? (
               <Banner tone="error">
-                Couldn&apos;t load integrations.{' '}
+                Impossible de charger les intégrations.{' '}
                 <button style={linkBtnStyle} onClick={() => void loadFirst(false)}>
-                  Retry
+                  Réessayer
                 </button>
               </Banner>
             ) : !enabled ? (
               <Banner tone="warn">
-                <strong>Integrations aren&apos;t set up yet.</strong>
+                <strong>Les intégrations ne sont pas encore configurées.</strong>
                 <br />
-                Ask the owner to set <code style={codeStyle}>
+                Demandez au propriétaire de définir <code style={codeStyle}>
                   COMPOSIO_API_KEY
                 </code>{' '}
-                on the server, then reload this page. Until then this tab stays
-                read-only and nothing is connected.
+                sur le serveur, puis rechargez cette page. D’ici là, cet onglet reste
+                en lecture seule et rien n’est connecté.
               </Banner>
             ) : (
               <Banner tone="ok">
-                Integrations are live. Search the catalog, pick a tool, and press{' '}
-                <strong>Connect</strong> to link your account.
+                Les intégrations sont actives. Recherchez dans le catalogue, choisissez un outil, et appuyez sur{' '}
+                <strong>Connecter</strong> pour lier votre compte.
               </Banner>
             )}
 
@@ -746,13 +746,13 @@ const IntegrationsPage = () => {
                   const name = selectedNames(connectError.toolkit);
                   return connectError.kind === 'auth_unconfigured' ? (
                     <>
-                      <strong>{name}</strong> needs auth setup in the Composio
-                      dashboard before it can be connected. Ask the owner to add
-                      an auth config for this toolkit, then retry.
+                      <strong>{name}</strong> nécessite une configuration d’authentification dans le tableau de bord
+                      Composio avant de pouvoir être connecté. Demandez au propriétaire d’ajouter
+                      une configuration d’authentification pour ce kit, puis réessayez.
                     </>
                   ) : (
                     <>
-                      Could not start the connection for <strong>{name}</strong>
+                      Impossible de démarrer la connexion pour <strong>{name}</strong>
                       {connectError.detail ? `: ${connectError.detail}` : '.'}
                     </>
                   );
@@ -763,7 +763,7 @@ const IntegrationsPage = () => {
                     disabled={connecting === connectError.toolkit}
                     onClick={() => void connect(connectError.toolkit)}
                   >
-                    {connecting === connectError.toolkit ? 'Retrying…' : 'Retry'}
+                    {connecting === connectError.toolkit ? 'Nouvelle tentative…' : 'Réessayer'}
                   </button>
                 </div>
               </Banner>
@@ -791,8 +791,8 @@ const IntegrationsPage = () => {
                     type="text"
                     value={searchInput}
                     onChange={e => setSearchInput(e.target.value)}
-                    placeholder="Search integrations (e.g. Slack, GitHub, Notion)…"
-                    aria-label="Search integrations"
+                    placeholder="Rechercher des intégrations (ex. Slack, GitHub, Notion)…"
+                    aria-label="Rechercher des intégrations"
                     style={{
                       width: '100%',
                       boxSizing: 'border-box',
@@ -809,7 +809,7 @@ const IntegrationsPage = () => {
                   {searchInput ? (
                     <button
                       type="button"
-                      aria-label="Clear search"
+                      aria-label="Effacer la recherche"
                       onClick={() => setSearchInput('')}
                       style={{
                         position: 'absolute',
@@ -836,11 +836,11 @@ const IntegrationsPage = () => {
                   <div
                     style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
                     role="group"
-                    aria-label="Filter by category"
+                    aria-label="Filtrer par catégorie"
                   >
                     {categoryChips.map(cat => {
                       const on = category === cat;
-                      const label = cat === ALL_CATEGORIES ? 'All' : cat;
+                      const label = cat === ALL_CATEGORIES ? 'Tous' : cat;
                       return (
                         <button
                           key={cat}
@@ -999,12 +999,12 @@ const IntegrationsPage = () => {
                           >
                             {isConnecting ? (
                               <>
-                                <Spinner /> Connecting…
+                                <Spinner /> Connexion…
                               </>
                             ) : isConnected ? (
-                              <>✓ Connected</>
+                              <>✓ Connecté</>
                             ) : (
-                              <>Connect</>
+                              <>Connecter</>
                             )}
                           </button>
                         </div>
@@ -1028,7 +1028,7 @@ const IntegrationsPage = () => {
                       <div style={{ fontSize: 12, color: 'var(--affine-error-color, #eb4b4b)' }}>
                         {pageError}{' '}
                         <button style={linkBtnStyle} onClick={() => void loadMore()}>
-                          Retry
+                          Réessayer
                         </button>
                       </div>
                     ) : loadingMore ? (
@@ -1041,7 +1041,7 @@ const IntegrationsPage = () => {
                           color: C.muted,
                         }}
                       >
-                        <Spinner dark /> Loading more…
+                        <Spinner dark /> Chargement de plus…
                       </span>
                     ) : nextCursor ? (
                       <button
@@ -1059,12 +1059,12 @@ const IntegrationsPage = () => {
                           border: `1px solid ${C.border}`,
                         }}
                       >
-                        Load more
+                        Charger plus
                       </button>
                     ) : (
                       <span style={{ fontSize: 11, color: C.muted }}>
-                        {toolkits.length} integration
-                        {toolkits.length === 1 ? '' : 's'} shown
+                        {toolkits.length} intégration
+                        {toolkits.length === 1 ? '' : 's'} affichée{toolkits.length === 1 ? '' : 's'}
                       </span>
                     )}
                   </div>
@@ -1072,8 +1072,8 @@ const IntegrationsPage = () => {
               ) : (
                 <Banner tone="info">
                   {search || category !== ALL_CATEGORIES
-                    ? 'No integrations match your search or filter. Try a different term or category.'
-                    : "No toolkits are available right now. Once the owner finishes Composio setup they'll appear here."}
+                    ? 'Aucune intégration ne correspond à votre recherche ou filtre. Essayez un autre terme ou catégorie.'
+                    : "Aucun kit d’outils n’est disponible pour le moment. Une fois que le propriétaire aura terminé la configuration Composio, ils apparaîtront ici."}
                 </Banner>
               )
             ) : null}
@@ -1102,18 +1102,18 @@ const IntegrationsPage = () => {
                     gap: 8,
                   }}
                 >
-                  <span>▶</span> Run
+                  <span>▶</span> Exécuter
                 </h2>
                 <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>
-                  Describe what you want to do; the agent picks and runs the
-                  right tools from the toolkits you select below.
+                  Décrivez ce que vous voulez faire ; l’agent sélectionne et exécute les
+                  bons outils parmi les kits que vous choisissez ci-dessous.
                 </p>
               </div>
 
               {!enabled ? (
                 <Banner tone="warn">
-                  Running is disabled until an owner sets{' '}
-                  <code style={codeStyle}>COMPOSIO_API_KEY</code> on the server.
+                  L’exécution est désactivée tant qu’un propriétaire n’a pas défini{' '}
+                  <code style={codeStyle}>COMPOSIO_API_KEY</code> sur le serveur.
                 </Banner>
               ) : null}
 
@@ -1122,7 +1122,7 @@ const IntegrationsPage = () => {
                 value={prompt}
                 onChange={e => setPrompt(e.target.value.slice(0, RUN_PROMPT_MAX))}
                 disabled={!enabled || running}
-                placeholder="e.g. Star the composiohq/composio repo on GitHub"
+                placeholder="Ex : Mettre une étoile au repo composiohq/composio sur GitHub"
                 rows={3}
                 style={{
                   width: '100%',
@@ -1147,7 +1147,7 @@ const IntegrationsPage = () => {
                 <div
                   style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}
                   role="group"
-                  aria-label="Toolkits to allow"
+                  aria-label="Kits d’outils à autoriser"
                 >
                   {(() => {
                     const seen = new Set<string>();
@@ -1174,7 +1174,7 @@ const IntegrationsPage = () => {
                           type="button"
                           disabled={!enabled || running || capped}
                           onClick={() => toggleToolkit(slug)}
-                          title={capped ? `Up to ${RUN_MAX_TOOLKITS} toolkits` : name}
+                          title={capped ? `Jusqu’à ${RUN_MAX_TOOLKITS} kits d’outils` : name}
                           style={{
                             appearance: 'none',
                             cursor:
@@ -1221,16 +1221,16 @@ const IntegrationsPage = () => {
                 >
                   {running ? (
                     <>
-                      <Spinner /> Running…
+                      <Spinner /> Exécution…
                     </>
                   ) : (
-                    <>▶ Run</>
+                    <>▶ Exécuter</>
                   )}
                 </button>
                 <span style={{ fontSize: 12, color: C.muted }}>
                   {selected.length > 0
-                    ? `${selected.length}/${RUN_MAX_TOOLKITS} toolkit${selected.length > 1 ? 's' : ''} selected`
-                    : 'No toolkit filter — the agent may have nothing to run.'}
+                    ? `${selected.length}/${RUN_MAX_TOOLKITS} kit${selected.length > 1 ? 's' : ''} d’outils sélectionné${selected.length > 1 ? 's' : ''}`
+                    : 'Aucun filtre de kit d’outils — l’agent n’aura peut-être rien à exécuter.'}
                 </span>
               </div>
 
@@ -1246,7 +1246,7 @@ const IntegrationsPage = () => {
                         disabled={running}
                         onClick={() => void run()}
                       >
-                        {running ? 'Retrying…' : 'Retry'}
+                        {running ? 'Nouvelle tentative…' : 'Réessayer'}
                       </button>
                     </div>
                   ) : null}
@@ -1277,7 +1277,7 @@ const IntegrationsPage = () => {
                         marginBottom: 6,
                       }}
                     >
-                      Answer
+                      Réponse
                     </div>
                     <div
                       style={{
@@ -1287,7 +1287,7 @@ const IntegrationsPage = () => {
                         wordBreak: 'break-word',
                       }}
                     >
-                      {result.answer || '(no answer returned)'}
+                      {result.answer || '(aucune réponse renvoyée)'}
                     </div>
                   </div>
 
@@ -1305,8 +1305,8 @@ const IntegrationsPage = () => {
                           color: C.muted,
                         }}
                       >
-                        Steps ({result.steps.length}) · {result.iterations}{' '}
-                        iteration{result.iterations === 1 ? '' : 's'}
+                        Étapes ({result.steps.length}) · {result.iterations}{' '}
+                        itération{result.iterations === 1 ? '' : 's'}
                       </div>
                       {result.steps.map((step, i) => (
                         <StepRow key={`${step.tool}-${i}`} step={step} index={i} />
@@ -1458,7 +1458,7 @@ const StepRow = ({ step, index }: { step: RunStep; index: number }) => {
             border: `1px solid ${step.ok ? C.border : C.errBorder}`,
           }}
         >
-          {step.ok ? 'ok' : 'failed'}
+          {step.ok ? 'ok' : 'échec'}
         </span>
         <span style={{ fontSize: 11, color: C.muted }}>
           {open ? '▾' : '▸'}
@@ -1480,7 +1480,7 @@ const StepRow = ({ step, index }: { step: RunStep; index: number }) => {
             overflow: 'auto',
           }}
         >
-          {step.resultPreview || '(empty result)'}
+          {step.resultPreview || '(résultat vide)'}
         </pre>
       ) : null}
     </div>
@@ -1491,9 +1491,9 @@ const StepRow = ({ step, index }: { step: RunStep; index: number }) => {
 
 // The in-page tab bar. Pure inline-styled buttons matching the category chips.
 const TAB_LABELS: Record<TabKey, string> = {
-  catalog: 'Catalog',
-  flows: 'Flows',
-  runs: 'Runs',
+  catalog: 'Catalogue',
+  flows: 'Flux',
+  runs: 'Exécutions',
 };
 
 const TabBar = ({
@@ -1509,7 +1509,7 @@ const TabBar = ({
      never overflows on viewports wider than 600 px. */
   <div
     role="tablist"
-    aria-label="Integrations sections"
+    aria-label="Sections des intégrations"
     style={{
       display: 'flex',
       gap: 4,
@@ -1610,11 +1610,11 @@ const FlowList = ({
               gap: 8,
             }}
           >
-            <span>🧭</span> Flows
+            <span>🧭</span> Flux
           </h2>
           <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>
-            Chain your connected tools into an automation. Open one to edit it on
-            the canvas, then Save or Run it.
+            Enchaînez vos outils connectés dans une automatisation. Ouvrez-en une pour la modifier sur
+            le canvas, puis Enregistrer ou Exécuter.
           </p>
         </div>
         <span style={{ flex: 1 }} />
@@ -1636,15 +1636,15 @@ const FlowList = ({
             gap: 6,
           }}
         >
-          + New flow
+          + Nouveau flux
         </button>
       </div>
 
       {!enabled ? (
         <Banner tone="warn">
-          Running flows is disabled until an owner sets{' '}
-          <code style={codeStyle}>COMPOSIO_API_KEY</code>. You can still design
-          and save flows.
+          L’exécution de flux est désactivée tant qu’un propriétaire n’a pas défini{' '}
+          <code style={codeStyle}>COMPOSIO_API_KEY</code>. Vous pouvez toujours concevoir
+          et enregistrer des flux.
         </Banner>
       ) : null}
 
@@ -1659,13 +1659,13 @@ const FlowList = ({
             padding: '20px 0',
           }}
         >
-          <Spinner dark /> Loading flows…
+          <Spinner dark /> Chargement des flux…
         </div>
       ) : error && flows.length === 0 ? (
         <Banner tone="error">
           {error}{' '}
           <button style={linkBtnStyle} onClick={onRefresh}>
-            Retry
+            Réessayer
           </button>
         </Banner>
       ) : flows.length === 0 ? (
@@ -1680,8 +1680,8 @@ const FlowList = ({
             color: C.muted,
           }}
         >
-          No flows yet. Press <strong>+ New flow</strong> to build your first
-          automation.
+          Aucun flux pour le moment. Appuyez sur <strong>+ Nouveau flux</strong> pour créer votre première
+          automatisation.
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1709,7 +1709,7 @@ const FlowList = ({
                       if (e.key === 'Enter') commitRename(flow);
                       else if (e.key === 'Escape') setRenamingId(null);
                     }}
-                    aria-label="Flow name"
+                    aria-label="Nom du flux"
                     style={{
                       width: '100%',
                       boxSizing: 'border-box',
@@ -1749,9 +1749,9 @@ const FlowList = ({
                   </button>
                 )}
                 <span style={{ fontSize: 11.5, color: C.muted }}>
-                  {flow.nodes.length} node{flow.nodes.length === 1 ? '' : 's'} ·{' '}
-                  {flow.edges.length} edge{flow.edges.length === 1 ? '' : 's'} ·
-                  updated{' '}
+                  {flow.nodes.length} nœud{flow.nodes.length === 1 ? '' : 's'} ·{' '}
+                  {flow.edges.length} liaison{flow.edges.length === 1 ? '' : 's'} ·
+                  mis à jour{' '}
                   {(() => {
                     try {
                       return new Date(flow.updatedAt).toLocaleString();
@@ -1766,21 +1766,21 @@ const FlowList = ({
                 onClick={() => onOpen(flow)}
                 style={miniBtnStyle(false)}
               >
-                Open
+                Ouvrir
               </button>
               <button
                 type="button"
                 onClick={() => startRename(flow)}
                 style={miniBtnStyle(false)}
               >
-                Rename
+                Renommer
               </button>
               <button
                 type="button"
                 onClick={() => onDelete(flow)}
                 style={miniBtnStyle(true)}
               >
-                Delete
+                Supprimer
               </button>
             </div>
           ))}
@@ -1857,12 +1857,12 @@ const FlowEditor = ({
             border: `1px solid ${C.border}`,
           }}
         >
-          ← Flows
+          ← Flux
         </button>
         <input
           value={flow.name}
           onChange={e => onRename(e.target.value)}
-          placeholder="Flow name"
+          placeholder="Nom du flux"
           aria-label="Flow name"
           style={{
             flex: 1,
@@ -1901,19 +1901,19 @@ const FlowEditor = ({
         >
           {saving ? (
             <>
-              <Spinner dark /> Saving…
+              <Spinner dark /> Enregistrement…
             </>
           ) : dirty || isNew ? (
-            'Save'
+            'Enregistrer'
           ) : (
-            'Saved'
+            'Enregistré'
           )}
         </button>
         <button
           type="button"
           disabled={!enabled || running}
           onClick={onRun}
-          title={!enabled ? 'Set COMPOSIO_API_KEY to run flows' : 'Run this flow'}
+          title={!enabled ? 'Définir COMPOSIO_API_KEY pour exécuter des flux' : 'Exécuter ce flux'}
           style={{
             appearance: 'none',
             border: 'none',
@@ -1932,14 +1932,14 @@ const FlowEditor = ({
         >
           {running ? (
             <>
-              <Spinner /> Running…
+              <Spinner /> Exécution…
             </>
           ) : (
-            <>▶ Run</>
+            <>▶ Exécuter</>
           )}
         </button>
         <button type="button" onClick={onDelete} style={miniBtnStyle(true)}>
-          Delete
+          Supprimer
         </button>
       </div>
 
