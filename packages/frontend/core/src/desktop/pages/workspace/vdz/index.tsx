@@ -4,6 +4,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { nanoid } from 'nanoid';
 import {
   lazy,
@@ -840,6 +841,7 @@ const VdzStudioPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="VDZ">
         <VdzExportDialog
           open={timelineExport.dialogOpen}
           timeline={timeline}
@@ -1251,6 +1253,7 @@ const VdzStudioPage = () => {
             </div>
           </div>
         )}
+        </AppAccessGate>
       </ViewBody>
     </>
   );
