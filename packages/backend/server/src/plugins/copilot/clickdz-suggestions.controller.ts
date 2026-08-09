@@ -138,6 +138,23 @@ const FALLBACKS: Record<string, FollowUp[]> = {
       prompt: 'Résume cette réponse en trois points clés, simples et directs.',
     },
   ],
+  chat: [
+    {
+      label: 'Adapter à mon activité ?',
+      prompt:
+        'Adapte cette réponse spécifiquement à mon activité et mon marché. Donne-moi des conseils concrets et applicables.',
+    },
+    {
+      label: 'Créer du contenu à partir de ça ?',
+      prompt:
+        'Transforme cette réponse en un contenu prêt à publier sur mes réseaux sociaux, en français et en derja.',
+    },
+    {
+      label: 'Quelle est la prochaine étape ?',
+      prompt:
+        'Quelle est la prochaine étape concrète que je devrais faire après cette réponse ? Sois précis et actionnable.',
+    },
+  ],
 };
 
 /** Human-readable description of a studio, for grounding the model. */
