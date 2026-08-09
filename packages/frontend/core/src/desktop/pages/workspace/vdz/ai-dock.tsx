@@ -620,7 +620,6 @@ function SuggestionChips({
           onClick={() => onPick(s.message)}
           disabled={busy}
           title={s.message}
-          style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
         >
           <span aria-hidden="true" style={{ fontSize: 12, lineHeight: 1 }}>
             {suggestionGlyph(s.id)}
