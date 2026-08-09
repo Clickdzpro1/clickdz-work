@@ -30,6 +30,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import {
   type CSSProperties,
   type ReactNode,
@@ -301,6 +302,7 @@ const OpenClawPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="OPENCLAW">
         <CdzResponsive />
         {view === 'console' && provisioned ? (
           // The live coding console fills the whole body (its own 3-pane layout).
@@ -358,6 +360,7 @@ const OpenClawPage = () => {
             </div>
           </div>
         )}
+        </AppAccessGate>
       </ViewBody>
     </>
   );
