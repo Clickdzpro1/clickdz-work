@@ -131,6 +131,10 @@ const TG_MAX_TEXT = 3900;
 // keys its own channel record FOR FREE (the segment was always an opaque string).
 const chanKey = (userId: string, agent: AgentId) =>
   `clickdz:agentchan:${userId}:${agent}:telegram`;
+// WS17: exported so the agents roster (hasTelegram) can check the per-agent
+// channel record the BYOT model actually writes — the old userTgBindKey is
+// never written in BYOT, so the roster always showed channels.telegram:false.
+export const tgChanKey = chanKey;
 // connId → { userId, agent } — the webhook's opaque-URL reverse lookup.
 const connKey = (connId: string) => `clickdz:tg:conn:${connId}`;
 // (connId, chatId) → true — a chat bound to a connection (inbound source guard).

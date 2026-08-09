@@ -6613,7 +6613,17 @@ export class ClickDzBridgeController {
       res.status(HttpStatus.CONFLICT).json({ error: 'courier_exists', id: built.courier.id });
       return;
     }
-    const created = await this.erpCreateRecord(slug, 'couriers', built.courier as unknown as ErpRecord, token);
+    // WS17: use PUT-by-id (not POST) so the courier's business-key id is
+    // preserved. erpCreateRecord (POST) overwrites the body's id with a random
+    // UUID, after which no lookup by business-key id can match (update, assign,
+    // duplicate guard all fail). Mirrors suppliers (line 6138) and POs (6315).
+    const created = await putErpRecord(
+      this.erpDataBase(slug),
+      'couriers',
+      built.courier.id,
+      built.courier as unknown as ErpRecord,
+      token
+    );
     if (!created.ok) {
       this.erpWriteFailed(res, created.status);
       return;
@@ -7140,7 +7150,10 @@ export class ClickDzBridgeController {
     // silently, the same money is counted twice by any report that spans both
     // months. erpDeleteRecord already logs its own failure, but that is invisible
     // to the merchant, so retry once and then say so loudly in the log with the
-    // exact ids needed to clean it up by hand.
+    // exact ids needed to clean it up by hand. WS17: also surface a warning in
+    // the response body so the FE can alert the merchant (a silent ok:true with
+    // a double-counted entry is a hidden money bug).
+    let doubleCountRisk = false;
     if (foundCollection && foundCollection !== targetCollection) {
       let dropped = await this.erpDeleteRecord(
         slug,
@@ -7157,6 +7170,7 @@ export class ClickDzBridgeController {
         );
       }
       if (!dropped) {
+        doubleCountRisk = true;
         this.logger.error(
           `[erp] caisse-update DOUBLE-COUNT RISK slug=${slug} id=${entryId} ` +
             `moved ${foundCollection} -> ${targetCollection} but the old copy ` +
@@ -7167,7 +7181,7 @@ export class ClickDzBridgeController {
     this.logger.log(
       `[erp] caisse-update slug=${slug} user=${user.id} id=${entryId} coll=${targetCollection}`
     );
-    return { ok: true, entry: saved.record };
+    return { ok: true, entry: saved.record, ...(doubleCountRisk ? { warning: 'double_count_risk' } : {}) };
   }
 
   /**

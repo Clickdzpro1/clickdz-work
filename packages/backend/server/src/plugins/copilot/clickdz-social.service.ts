@@ -134,6 +134,12 @@ export const socialPostIndexKey = (userId: string) =>
 export const socialLogKey = (userId: string) =>
   `clickdz:social:log:${userId}`;
 
+// WS17: global index of userIds that have at least one scheduled post — the
+// Plan-B cron sweep iterates this to find past-due 'scheduled' posts whose
+// BullMQ job was lost (Redis flush / worker restart). A JSON array under a
+// single key (the Cache provider doesn't expose SCAN or sadd/smembers).
+export const socialSchedulersKey = () => 'clickdz:social:schedulers';
+
 // ---------------------------------------------------------------------------
 // Static per-network action map (verified slugs from P3 plan §1).
 // Fallback to live discovery when a slug is missing (resolveSocialAction).
@@ -898,5 +904,70 @@ export class ClickDzSocialService {
     return media
       .map(m => m.url)
       .filter(u => !/^https?:\/\//i.test(u));
+  }
+
+  // -------------------------------------------------------------------------
+  // WS17: Plan-B cron support — recover scheduled posts whose BullMQ job was
+  // lost (Redis flush / worker restart). A global JSON array of userIds with
+  // scheduled posts is maintained at enqueue time; the cron iterates it, reads
+  // each user's postindex, and returns past-due 'scheduled' post ids for the
+  // job to re-enqueue. Fail-soft on every step (a Redis hiccup only delays the
+  // sweep; the UI's retry/reschedule path still works).
+  // -------------------------------------------------------------------------
+
+  /** Add a userId to the global schedulers index (idempotent, fail-soft). */
+  async registerScheduler(userId: string): Promise<void> {
+    try {
+      const raw = (await this.cache.get<string[]>(socialSchedulersKey())) ?? [];
+      const set = new Set(Array.isArray(raw) ? raw : []);
+      set.add(userId);
+      await this.cache.set(socialSchedulersKey(), [...set], {
+        ttl: 365 * 24 * 60 * 60 * 1000,
+      });
+    } catch {
+      /* fail-soft — the sweep is a safety net, not the primary path */
+    }
+  }
+
+  /** Return all userIds known to have scheduled posts (fail-soft -> []). */
+  async listSchedulerUserIds(): Promise<string[]> {
+    try {
+      const raw = (await this.cache.get<string[]>(socialSchedulersKey())) ?? [];
+      return Array.isArray(raw) ? raw : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Return the postIds for a user whose status is 'scheduled' AND scheduledAt is
+   * past `dueBefore` (epoch ms). Used by the Plan-B cron to find missed posts.
+   * Fail-soft -> [].
+   */
+  async listScheduledDue(
+    userId: string,
+    dueBefore: number
+  ): Promise<string[]> {
+    try {
+      const ids = await this.cache.mapKeys(socialPostIndexKey(userId));
+      const due: string[] = [];
+      for (const id of ids) {
+        const s = await this.cache.mapGet<SocialPostSummary>(
+          socialPostIndexKey(userId),
+          id
+        );
+        if (
+          s &&
+          s.status === 'scheduled' &&
+          typeof s.scheduledAt === 'number' &&
+          s.scheduledAt < dueBefore
+        ) {
+          due.push(id);
+        }
+      }
+      return due;
+    } catch {
+      return [];
+    }
   }
 }

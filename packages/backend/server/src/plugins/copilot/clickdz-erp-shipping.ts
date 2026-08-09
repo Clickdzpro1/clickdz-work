@@ -219,7 +219,7 @@ const COURIER_PHONE_MAX = 20;
  * '' when nothing usable remains (caller must reject).
  */
 export function courierIdFromName(name: string): string {
-  return str(name)
+  const slug = str(name)
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '') // drop combining accents
     .toLowerCase()
@@ -227,6 +227,11 @@ export function courierIdFromName(name: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 50)
     .replace(/-+$/g, '');
+  // WS17: isValidCourierId requires 2-50 chars. A single-word name like "A"
+  // produces a 1-char slug that would fail validation. Pad with a short suffix
+  // so a valid name never gets rejected on the id field.
+  if (slug.length === 1) return `${slug}-x`;
+  return slug;
 }
 
 /** A courier id is valid iff kebab-case, 2-50 chars, no leading/trailing dash. */

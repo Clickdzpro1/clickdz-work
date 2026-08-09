@@ -347,6 +347,14 @@ export interface AgentCaps {
    */
   whatsappmaxEnabled?: boolean;
   /**
+   * WS17 ZOOM+ (Meet) studio switch (backend `CDZ_ZOOMPLUS_ENABLED`). The FE
+   * studio registry (`visibleStudios`) gates the ZOOM+ sidebar entry on this
+   * flag. Default OFF so the tab hides when the Meet services / meet.clickdz.ai
+   * DNS aren't configured (owner-only dependency). Optional (undefined ⇒ falsy
+   * ⇒ hidden), same contract as the other studio flags.
+   */
+  zoomplusEnabled?: boolean;
+  /**
    * R14 VPIC image-editor studio switch (backend `CDZ_VPIC_ENABLED`). The backend
    * caps object carries it; `visibleStudios` reads it to gate the VPIC entry.
    * Optional (undefined ⇒ falsy ⇒ hidden), same contract as the other studio

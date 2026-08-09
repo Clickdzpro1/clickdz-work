@@ -220,6 +220,31 @@ export async function createOrUpdatePost(body: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Media upload (WS17) — store an uploaded file and get a PUBLIC URL Composio
+// can fetch. Browser blob: URLs can't be used (Composio can't reach them).
+// ---------------------------------------------------------------------------
+export async function uploadMedia(
+  file: File
+): Promise<{ ok: boolean; url?: string; kind?: 'image' | 'video'; mime?: string; error?: string }> {
+  const kind: 'image' | 'video' = file.type.startsWith('video') ? 'video' : 'image';
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(new Error('read failed'));
+    reader.readAsDataURL(file);
+  });
+  const r = await apiFetch<{ url: string; kind: string; mime: string } & { error?: string }>(
+    '/api/v1/social/media/upload',
+    {
+      method: 'POST',
+      body: JSON.stringify({ kind, mime: file.type || (kind === 'video' ? 'video/mp4' : 'image/png'), base64: dataUrl, name: file.name }),
+    }
+  );
+  if (r.ok) return { ok: true, url: r.data.url, kind, mime: r.data.mime || file.type };
+  return { ok: false, error: (r.data as Record<string, unknown> | undefined)?.error as string | undefined };
+}
+
 export async function listPosts(opts?: {
   status?: SocialStatus;
   from?: number;

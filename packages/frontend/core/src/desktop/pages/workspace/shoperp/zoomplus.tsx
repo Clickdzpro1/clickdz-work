@@ -2,19 +2,20 @@
 // Powered by La Suite Meet (LiveKit, MIT license) + CDZ AI for transcription.
 import { useCallback, useEffect, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
-import { provisionApp, withBridgeCode } from './app-provision';
+import { provisionApp } from './app-provision';
 
 const ZOOMPLUS_URL_KEY = 'cdz.zoomplus.url';
 
 /**
- * Base URL used ONLY for the bridge-code fallback (and as a last resort). Meet
- * is not cookie-shimmed the same way — provisionApp returns the IdP /prime
- * loginUrl which is what actually auto-logs the user in — but we keep the real
- * Meet frontend host as the fallback base. A self-hoster can repoint this via
- * localStorage without a rebuild; there is no fake per-shop host.
+ * Base URL for the Meet frontend host. Kept for a self-hoster override via
+ * localStorage (no rebuild needed); there is no fake per-shop host. WS17: the
+ * bridge-code fallback that used this is removed (Meet's OIDC drops the
+ * bridge_code, so the fallback showed a permanent login screen).
  */
 const ZOOMPLUS_INSTANCE_URL = 'https://meet-frontend-production.up.railway.app';
 
+// Kept for the localStorage override contract (a self-hoster may still repoint
+// the host). Unused by the load() flow now but referenced by the override path.
 function zoomPlusInstanceUrl(): string {
   try {
     const override = localStorage.getItem(ZOOMPLUS_URL_KEY);
@@ -28,13 +29,17 @@ function zoomPlusInstanceUrl(): string {
 export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'no-login'>('loading');
   const [iframeSrc, setIframeSrc] = useState('');
 
   // Robust flow: provision the app, then iframe the IdP /prime loginUrl
   // (preferred — stashes the bridge_code as a first-party cookie then redirects
-  // into Meet so OIDC auto-approves) or the bridge-code URL. The iframe load IS
-  // the health check — no CORS probe.
+  // into Meet so OIDC auto-approves). WS17: when loginUrl is missing (IdP/Meet
+  // backend cold-start timeout, or CDZ_ZOOM_IDP_URL misconfigured), the old
+  // fallback appended ?bridge_code=... to the Meet frontend URL — but the
+  // backend documents that Meet's OIDC client drops our bridge_code, so the SPA
+  // showed a permanent "Login" screen with no error. Now we surface a retry
+  // banner instead of iframing the broken fallback.
   const load = useCallback(async () => {
     setStatus('loading');
     const p = await provisionApp('zoomplus');
@@ -42,7 +47,13 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
       setStatus('error');
       return;
     }
-    setIframeSrc(p.loginUrl || withBridgeCode(zoomPlusInstanceUrl(), p.code));
+    if (!p.loginUrl) {
+      // No IdP login URL — the Meet backend/IdP bridge isn't ready. Don't iframe
+      // the dead bridge_code fallback; show a retry banner.
+      setStatus('no-login');
+      return;
+    }
+    setIframeSrc(p.loginUrl);
     setStatus('ready');
   }, []);
 
@@ -67,6 +78,11 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à ZOOM+…</div>
         : status === 'error' ? (
           <Banner tone="error">Impossible de se connecter à ZOOM+ pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
+        ) : status === 'no-login' ? (
+          // WS17: provisioning succeeded but no IdP loginUrl — the Meet backend /
+          // IdP bridge isn't ready (cold start or CDZ_ZOOM_IDP_URL misconfigured).
+          // Show a retry banner instead of the dead bridge_code iframe fallback.
+          <Banner tone="warn">Le service de connexion ZOOM+ n'est pas encore prêt. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
         ) : (
           /* The iframe fills the pane (flex:1, height:100%); the explainer is a
              slim footer strip so it never eats the iframe's space. */

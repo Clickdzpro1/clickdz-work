@@ -250,6 +250,13 @@ export const STUDIOS: StudioDef[] = [
     icon: () => createElement(VoiceIcon),
     group: 'commerce',
     testId: 'slider-bar-zoomplus-button',
+    // WS17: flag-gated on caps.zoomplusEnabled (env CDZ_ZOOMPLUS_ENABLED) so the
+    // ZOOM+ sidebar entry hides when the Meet services (meet-backend /
+    // meet-frontend / meet-idp-bridge) aren't configured. Without this the entry
+    // is always visible and users see a permanent "Connexion à ZOOM+…" spinner or
+    // login screen when the services are down (the meet.clickdz.ai DNS dependency
+    // is owner-only). Absent ⇒ hidden (feature dark), byte-identical to flags-off.
+    flag: 'zoomplus',
   },
   {
     // WS14 — WhatsappMax studio. flag-gated on caps.whatsappmaxEnabled
@@ -302,6 +309,7 @@ export function visibleStudios(caps?: {
   multi?: boolean;
   vpicEnabled?: boolean;
   whatsappmaxEnabled?: boolean;
+  zoomplusEnabled?: boolean;
 }): StudioDef[] {
   return STUDIOS.filter(studio => {
     if (studio.flag === 'agents-multi') {
@@ -314,6 +322,11 @@ export function visibleStudios(caps?: {
       // WS14: gated on caps.whatsappmaxEnabled (env CDZ_WHATSAPPMAX_ENABLED).
       // Absent/false ⇒ hidden (feature dark), byte-identical to today.
       return !!caps?.whatsappmaxEnabled;
+    }
+    if (studio.flag === 'zoomplus') {
+      // WS17: gated on caps.zoomplusEnabled (env CDZ_ZOOMPLUS_ENABLED).
+      // Absent/false ⇒ hidden (Meet services not configured / DNS pending).
+      return !!caps?.zoomplusEnabled;
     }
     return true;
   });

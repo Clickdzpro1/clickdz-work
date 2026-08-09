@@ -53,6 +53,11 @@ import {
 // is safe on the caps hot path (no I/O). The orchestrator merges R8 files, so
 // this static import resolves at boot; flags-off it just returns false.
 import { waCapsEnabled } from './clickdz-wa-client';
+// WS17: the Telegram caps gate — env flag AND secretBoxReady (matches the
+// route gate channelsEnabled() in clickdz-agent-telegram). Without this the
+// caps reported Telegram available while the routes 404'd when the secret box
+// wasn't ready.
+import { channelsEnabled as tgChannelsEnabled } from './clickdz-agent-telegram';
 // The reset key builders live in a PURE module (no imports, no framework) so the
 // fast guards spec can import them directly — importing THIS controller pulls in
 // the Rust native addon, which that job does not build. See the module header for
@@ -312,6 +317,10 @@ interface AgentCaps {
   // env == the tab hidden (the FE studio registry gates on this flag). Reuses the
   // existing whatsapp-gateway backend; this bit only toggles the studio surface.
   whatsappmaxEnabled: boolean;
+  // WS17: whether the ZOOM+ (Meet) studio tab is available. Default OFF ⇒ unset
+  // env == the tab hidden, so users don't see a permanent spinner/login screen
+  // when the Meet Railway services or the meet.clickdz.ai DNS aren't configured.
+  zoomplusEnabled: boolean;
 }
 
 /**
@@ -335,7 +344,7 @@ function buildCaps(): AgentCaps {
   return {
     multi: process.env.CDZ_AGENTS_MULTI === '1',
     dzdPer1k: Number(process.env.CDZ_DZD_PER_1K || '0'),
-    telegramEnabled: process.env.CDZ_AGENT_TELEGRAM_ENABLED === '1',
+    telegramEnabled: tgChannelsEnabled(),
     webEnabled: process.env.CDZ_AGENT_WEB_ENABLED === '1',
     // R8: WhatsApp cap is Wassila's env-only predicate (URL+TOKEN pair AND the
     // master WA flag) — a fetch-free read on the caps hot path; false today.
@@ -352,6 +361,10 @@ function buildCaps(): AgentCaps {
     // WS14: WhatsappMax studio gate (same inline idiom; default OFF). The FE
     // studio registry gates the WhatsappMax tab's visibility on this flag.
     whatsappmaxEnabled: process.env.CDZ_WHATSAPPMAX_ENABLED === '1',
+    // WS17: ZOOM+ (Meet) studio gate. Default OFF so the tab hides when the Meet
+    // services / meet.clickdz.ai DNS aren't configured (owner-only dependency).
+    // The FE studio registry gates the ZOOM+ tab's visibility on this flag.
+    zoomplusEnabled: process.env.CDZ_ZOOMPLUS_ENABLED === '1',
   };
 }
 
@@ -423,13 +436,23 @@ export class ClickDzAgentsController {
     }
   }
 
-  /** True when the caller has a bound Telegram chat (fail-soft → false). */
+  /**
+   * True when the caller has a bound Telegram chat (fail-soft → false).
+   * WS17: the BYOT model writes per-agent channel records to
+   * `clickdz:agentchan:{userId}:{agent}:telegram` (clickdz-agent-telegram.ts
+   * chanKey), NOT the old `userTgBindKey` which is never written in BYOT. Check
+   * both built-in agents (hermes, openclaw) so the roster's channels.telegram
+   * reflects the actual connection state.
+   */
   private async hasTelegram(userId: string): Promise<boolean> {
     try {
-      const bind = await this.cache.get<{ chatId?: number | string }>(
-        userTgBindKey(userId)
-      );
-      return bind != null && bind.chatId != null;
+      for (const agent of ['hermes', 'openclaw'] as const) {
+        const rec = await this.cache.get<{ chatId?: number | string }>(
+          `clickdz:agentchan:${userId}:${agent}:telegram`
+        );
+        if (rec != null && rec.chatId != null) return true;
+      }
+      return false;
     } catch {
       return false;
     }

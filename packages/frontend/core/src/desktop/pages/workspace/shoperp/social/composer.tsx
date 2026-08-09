@@ -11,6 +11,7 @@ import {
   createOrUpdatePost,
   generateImage,
   getNetworkMeta,
+  uploadMedia,
   type SocialMedia,
   type SocialPost,
 } from './api';
@@ -70,6 +71,9 @@ export const ComposerView = ({
   const [imgModel, setImgModel] = useState(CDZIM_DEFAULT.modelId);
   const [imgBusy, setImgBusy] = useState(false);
   const [imgNote, setImgNote] = useState<string | null>(null);
+  // WS17: file-upload busy state (the upload route stores the file server-side
+  // and returns a public URL — no more browser blob: URLs that Composio can't fetch).
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // --- Submit ---
@@ -163,15 +167,30 @@ export const ComposerView = ({
     }
   }, [imgPrompt, imgBusy, imgModel, dict]);
 
-  // File upload (blob URL — backend receives it as a URL in the post)
-  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  // File upload — WS17: upload to the backend, which stores it via
+  // CopilotStorage and returns a PUBLIC URL Composio can fetch. The old
+  // URL.createObjectURL(blob:) approach silently failed at publish time because
+  // Composio's servers can't reach browser-only URLs.
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (!f || media.length >= 4) return;
-    const url = URL.createObjectURL(f);
-    const kind: 'image' | 'video' = f.type.startsWith('video') ? 'video' : 'image';
-    setMedia(prev => [...prev, { kind, url, mime: f.type, alt: f.name }].slice(0, 4));
-    e.target.value = '';
-  }, [media]);
+    if (!f || media.length >= 4 || uploading) return;
+    setUploading(true);
+    setImgNote(null);
+    try {
+      const res = await uploadMedia(f);
+      if (res.ok && res.url) {
+        const kind: 'image' | 'video' = res.kind === 'video' ? 'video' : 'image';
+        setMedia(prev => [...prev, { kind, url: res.url!, mime: res.mime, alt: f.name }].slice(0, 4));
+      } else {
+        setImgNote(dict.imgGenFail ?? 'Upload failed. Try again.');
+      }
+    } catch {
+      setImgNote(dict.imgGenFail ?? 'Upload failed.');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  }, [media, uploading, dict]);
 
   const removeMedia = (idx: number) => setMedia(prev => prev.filter((_, i) => i !== idx));
 

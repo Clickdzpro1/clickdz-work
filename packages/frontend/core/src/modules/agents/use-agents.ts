@@ -58,6 +58,8 @@ export const DEFAULT_AGENT_CAPS: AgentCaps = {
   customEnabled: false,
   // WS14: WhatsappMax studio gate — dark by default (byte-identical sidebar).
   whatsappmaxEnabled: false,
+  // WS17: ZOOM+ (Meet) studio gate — dark by default (Meet services/DNS pending).
+  zoomplusEnabled: false,
 };
 
 /** What {@link useAgents} exposes to the R7 agents pages. */

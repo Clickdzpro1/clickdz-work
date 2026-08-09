@@ -947,17 +947,39 @@ export class ClickDzCourierController {
     // whole courier lifecycle (ship, track, sync, COD reconcile) would break.
     // Harmless while the gate is off — the @Public GET ignores a header it does
     // not need — so this ships safely ahead of the flag. Never logged.
+    // WS17: paginate with ?offset (data API caps at 500/req) so a shop with
+    // >500 orders isn't silently truncated — sync/ship/COD-reconcile would miss
+    // parcels beyond 500. Hard cap 5000 rows guards against runaway collections.
     const token = dataWriteToken(slug);
-    const res = await fetch(`${this.erpDataBase(slug)}/orders?limit=500`, {
-      headers: {
-        Accept: 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
-    }).catch(() => null);
-    if (!res || !res.ok) return null;
-    const data = (await res.json().catch(() => null)) as unknown;
-    return Array.isArray(data) ? (data as ErpRecord[]) : null;
+    const out: ErpRecord[] = [];
+    let offset = 0;
+    const ERP_LIST_MAX_ROWS = 5000;
+    while (offset < ERP_LIST_MAX_ROWS) {
+      const res = await fetch(
+        `${this.erpDataBase(slug)}/orders?limit=500&offset=${offset}`,
+        {
+          headers: {
+            Accept: 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+        }
+      ).catch(() => null);
+      if (!res || !res.ok) {
+        if (offset === 0) return null;
+        break;
+      }
+      const data = (await res.json().catch(() => null)) as unknown;
+      if (!Array.isArray(data)) {
+        if (offset === 0) return null;
+        break;
+      }
+      const page = data as ErpRecord[];
+      out.push(...page);
+      if (page.length < 500) break;
+      offset += 500;
+    }
+    return out;
   }
 
   /**
@@ -970,20 +992,39 @@ export class ClickDzCourierController {
   ): Promise<ErpRecord[] | null> {
     // SEC-2: same reasoning as erpListOrders — this reads caisse partitions for
     // the pending-COD marker dedupe, and `caisse` is read-gate protected.
+    // WS17: paginate with ?offset (mirrors erpListOrders) so caisse partitions
+    // with >500 entries aren't silently truncated (the dedupe read would miss
+    // markers beyond 500, causing duplicate COD writes).
     const token = dataWriteToken(slug);
-    const res = await fetch(
-      `${this.erpDataBase(slug)}/${collection}?limit=500`,
-      {
-        headers: {
-          Accept: 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+    const out: ErpRecord[] = [];
+    let offset = 0;
+    const ERP_LIST_MAX_ROWS = 5000;
+    while (offset < ERP_LIST_MAX_ROWS) {
+      const res = await fetch(
+        `${this.erpDataBase(slug)}/${collection}?limit=500&offset=${offset}`,
+        {
+          headers: {
+            Accept: 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+        }
+      ).catch(() => null);
+      if (!res || !res.ok) {
+        if (offset === 0) return null;
+        break;
       }
-    ).catch(() => null);
-    if (!res || !res.ok) return null;
-    const data = (await res.json().catch(() => null)) as unknown;
-    return Array.isArray(data) ? (data as ErpRecord[]) : null;
+      const data = (await res.json().catch(() => null)) as unknown;
+      if (!Array.isArray(data)) {
+        if (offset === 0) return null;
+        break;
+      }
+      const page = data as ErpRecord[];
+      out.push(...page);
+      if (page.length < 500) break;
+      offset += 500;
+    }
+    return out;
   }
 
   /**

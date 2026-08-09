@@ -39,6 +39,7 @@ import {
 } from './clickdz-social.service';
 import type { SocialPost, PublishedLogEntry } from './clickdz-social.service';
 import { ClickDzSocialJob } from './clickdz-social.job';
+import { CopilotStorage } from './storage';
 
 // SECURITY / CONFIG: the ONE switch. Without COMPOSIO_API_KEY every enabled
 // code path below is unreachable — the controller reports {enabled:false} and
@@ -935,7 +936,13 @@ export class ClickDzIntegrationsController {
     private readonly cache: Cache,
     // P3 — Social studio: service (shared publish logic) + job (scheduler).
     private readonly socialService: ClickDzSocialService,
-    private readonly socialJob: ClickDzSocialJob
+    private readonly socialJob: ClickDzSocialJob,
+    // WS17: CopilotStorage for the social media upload route — stores the
+    // uploaded file and returns a PUBLIC /api/copilot/blob/... URL Composio's
+    // servers can fetch (the blob GET route is @Public). Without this, social
+    // posts with uploaded media used a browser-only blob: URL that Composio
+    // can't reach, silently failing every media publish.
+    private readonly copilotStorage: CopilotStorage
   ) {}
 
   /** Small helper: fetch with a hard AbortController timeout (default 8s). */
@@ -2649,6 +2656,81 @@ export class ClickDzIntegrationsController {
       if (!ok) allOk = false;
     }
     res.status(200).json({ ok: allOk, disconnected: ids.length });
+  }
+
+  // ---- Social media upload (WS17) ----------------------------------------
+
+  /**
+   * POST /api/v1/social/media/upload — store an uploaded image/video and return
+   * a PUBLIC URL Composio's servers can fetch. The browser can't use a blob:
+   * URL (URL.createObjectURL) for social posts because Composio can't reach
+   * browser-only URLs — every media publish silently failed. This route takes
+   * a base64 payload, stores it via CopilotStorage (under the caller's copilot
+   * scope), and returns the public /api/copilot/blob/{u}/{w}/{key} URL (the
+   * blob GET route is @Public). The FE then uses this URL as media[].url.
+   *
+   * Body: { kind: 'image'|'video', mime: string, base64: string, name?: string }
+   * Returns: { url: string, kind: string, mime: string }
+   */
+  @Throttle('strict')
+  @Post('/api/v1/social/media/upload')
+  async uploadSocialMedia(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any
+  ): Promise<{ url: string; kind: string; mime: string }> {
+    const kind: 'image' | 'video' =
+      body?.kind === 'video' ? 'video' : 'image';
+    const mime =
+      typeof body?.mime === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(body.mime)
+        ? body.mime
+        : kind === 'video'
+          ? 'video/mp4'
+          : 'image/png';
+    const base64 = typeof body?.base64 === 'string' ? body.base64 : '';
+    if (!base64) throw new BadRequest('"base64" is required');
+    // 10MB decoded cap (matches the sendMedia base64 guard).
+    if (base64.length > 14_000_000) {
+      throw new BadRequest('media too large (max ~10MB)');
+    }
+    let buffer: Buffer;
+    try {
+      // Strip an optional data: prefix if the FE sent a data URL.
+      const cleaned = base64.replace(/^data:[^;]+;base64,/, '');
+      buffer = Buffer.from(cleaned, 'base64');
+    } catch {
+      throw new BadRequest('"base64" is not valid base64');
+    }
+    if (!buffer.length) throw new BadRequest('"base64" decoded to empty');
+    const ext = mime.includes('png')
+      ? 'png'
+      : mime.includes('jpeg') || mime.includes('jpg')
+        ? 'jpg'
+        : mime.includes('webp')
+          ? 'webp'
+          : mime.includes('mp4')
+            ? 'mp4'
+            : mime.includes('webm')
+              ? 'webm'
+              : mime.includes('quicktime') || mime.includes('mov')
+                ? 'mov'
+                : 'bin';
+    const id = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+    const key = `social-media/${kind}/${id}.${ext}`;
+    const rawName = typeof body?.name === 'string' ? body.name.slice(0, 80) : '';
+    // CopilotStorage.put expects (userId, workspaceId, key, blob, mime). Social
+    // media is user-scoped (no workspace), so use 'social' as the workspace id —
+    // the blob GET route is @Public and serves by the full path regardless.
+    const url = await this.copilotStorage.put(
+      user.id,
+      'social',
+      key,
+      buffer,
+      mime
+    );
+    this.logger.log(
+      `[social] media upload user=${user.id} kind=${kind} mime=${mime} bytes=${buffer.length} name=${rawName}`
+    );
+    return { url, kind, mime };
   }
 
   // ---- Social posts CRUD --------------------------------------------------

@@ -152,10 +152,42 @@ export class ClickDzSocialJob {
    */
   @Cron(CronExpression.EVERY_10_MINUTES)
   async sweepMissedPosts(): Promise<void> {
-    // No-op body: the actual per-user sweep requires enumerating all userId
-    // keys (needs SCAN or a user-id set — deferred to the Prisma lift).
-    // The cron is registered so the operator can confirm it's wired.
-    this.logger.debug('[social-job] Plan-B sweep tick (user-set enumeration pending Prisma lift)');
+    // WS17: recover scheduled posts whose BullMQ job was lost (Redis flush /
+    // worker restart). Iterate the global schedulers index (maintained at
+    // enqueue time), read each user's postindex, and re-enqueue any post that
+    // is 'scheduled' and past its scheduledAt + grace. Fail-soft on every step
+    // (a Redis hiccup only delays the sweep; the UI retry path still works).
+    try {
+      const userIds = await this.social.listSchedulerUserIds();
+      if (!userIds.length) {
+        this.logger.debug('[social-job] Plan-B sweep: no scheduled users');
+        return;
+      }
+      const dueBefore = Date.now() - MISSED_POST_GRACE_MS;
+      let reenqueued = 0;
+      for (const userId of userIds) {
+        const due = await this.social.listScheduledDue(userId, dueBefore);
+        for (const postId of due) {
+          // Re-enqueue with delay=0 (fires immediately). Idempotent jobId means
+          // a duplicate (if the original job is somehow still alive) is a no-op.
+          await this.enqueuePublish(userId, postId, Date.now());
+          reenqueued++;
+        }
+      }
+      if (reenqueued > 0) {
+        this.logger.log(
+          `[social-job] Plan-B sweep recovered ${reenqueued} missed post(s) across ${userIds.length} user(s)`
+        );
+      } else {
+        this.logger.debug(
+          `[social-job] Plan-B sweep: ${userIds.length} user(s), 0 missed`
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `[social-job] Plan-B sweep failed: ${(e as Error)?.message ?? e}`
+      );
+    }
   }
 
   // =========================================================================
@@ -186,6 +218,9 @@ export class ClickDzSocialJob {
           removeOnFail: false,
         }
       );
+      // WS17: register this user in the global schedulers index so the Plan-B
+      // cron sweep can find their past-due posts if this job is later lost.
+      await this.social.registerScheduler(userId).catch(() => {});
       this.logger.log(
         `[social-job] enqueued postId=${postId} delay=${delay}ms jobId=${job?.id}`
       );

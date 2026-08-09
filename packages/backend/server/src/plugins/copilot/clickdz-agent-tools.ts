@@ -402,9 +402,11 @@ export async function registerTelegramFailSoft(
       // channel record it needs to send. Previously `deps` was passed straight
       // through, so `deps.cache` was undefined in the detached-run path and
       // every telegram_send call hit a TypeError -> silent {ok:false}. Mirrors
-      // the WhatsApp loader below.
+      // the WhatsApp loader below. NOTE: createTelegramSendTool expects a
+      // { cache } object, NOT a bare Cache — passing `cache as any` (the p2
+      // attempt) left deps.cache undefined and the tool still failed.
       const cache = deps?.redis ? new Cache(deps.redis as any) : undefined;
-      const def = mod.createTelegramSendTool(cache as any);
+      const def = mod.createTelegramSendTool({ cache: cache as any });
       if (def && typeof def.name === 'string') {
         registry.register(def as AgentToolDef);
       }
