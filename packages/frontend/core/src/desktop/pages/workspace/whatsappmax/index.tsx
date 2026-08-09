@@ -312,6 +312,10 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
   const [connecting, setConnecting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [qrTs, setQrTs] = useState<number | null>(null);
+  // WS17: QR image readiness — a 202 (not-ready) response makes the <img>
+  // fire onError and show a broken-image icon before the next 2s refresh.
+  // Track load state so we can show a placeholder spinner while waiting.
+  const [qrLoaded, setQrLoaded] = useState(false);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -334,8 +338,10 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
   const startPolls = useCallback(() => {
     stopPolls();
     // QR image refresh every 2s (cache-buster)
+    setQrLoaded(false);
     setQrTs(Date.now());
     qrRefreshRef.current = setInterval(() => {
+      setQrLoaded(false);
       setQrTs(Date.now());
     }, 2000);
 
@@ -469,16 +475,55 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
               borderRadius: 12,
               padding: 12,
               boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
+              position: 'relative',
+              width: 280,
+              height: 280,
+              display: 'grid',
+              placeItems: 'center',
             }}
           >
+            {/* WS17: placeholder while the QR image is fetching (a 202
+                'not ready' response fires onError; without this the user sees
+                a broken-image icon for ~2s until the next refresh). */}
+            {!qrLoaded && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 12,
+                  display: 'grid',
+                  placeItems: 'center',
+                  color: '#9ca3af',
+                  fontSize: 12.5,
+                  gap: 10,
+                  textAlign: 'center',
+                }}
+              >
+                <div
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: '50%',
+                    border: '3px solid #e5e7eb',
+                    borderTopColor: '#2563eb',
+                    animation: 'cdz-qr-spin 0.8s linear infinite',
+                  }}
+                />
+                Génération du code QR…
+              </div>
+            )}
             <img
               src={cdzApiUrl(`/api/v1/whatsappmax/qr.png?ts=${qrTs}`)}
               alt="QR WhatsApp"
               width={256}
               height={256}
-              style={{ display: 'block', borderRadius: 4 }}
+              style={{
+                display: qrLoaded ? 'block' : 'none',
+                borderRadius: 4,
+              }}
+              onLoad={() => setQrLoaded(true)}
               onError={() => {
-                /* 202 = not ready yet, keep refreshing */
+                /* 202 = not ready yet; keep refreshing. Stay on placeholder. */
+                setQrLoaded(false);
               }}
             />
           </div>
@@ -735,12 +780,16 @@ const Composer = ({ chatJid, connected, onDark, onSent }: ComposerProps) => {
     );
     setBusy(false);
     if (isDark(out)) { onDark(); return; }
-    if (out && out.ok) {
+    if (out && out.ok && !(out as { note?: string }).note) {
       setMediaUrl('');
       setMediaCaption('');
       setShowMedia(false);
     } else {
-      setErr('Envoi du média échoué.');
+      setErr(
+        (out as { note?: string })?.note === 'not_connected'
+          ? 'Liez un numéro WhatsApp d\'abord.'
+          : 'Envoi du média échoué.'
+      );
     }
   }, [mediaUrl, mediaKind, mediaCaption, busy, connected, chatJid, onDark]);
 
@@ -1705,6 +1754,9 @@ const WhatsappMaxPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        {/* WS17: keyframes for the QR placeholder spinner (inline styles can't
+            define @keyframes, so inject once at the page root). */}
+        <style>{`@keyframes cdz-qr-spin{to{transform:rotate(360deg)}}`}</style>
         <div
           style={{
             width: '100%',

@@ -177,6 +177,9 @@ import {
   type ShopState,
 } from './clickdz-shop-state';
 import * as Shipping from './clickdz-erp-shipping';
+// WS17: shared Voice Library index helpers so the bulk-TTS route appends its
+// clip to the SAME Redis index the Library tab reads (clickdz-audio-library).
+import { CDZ_VOICE_LIBRARY, type LibraryRecord } from './clickdz-audio-library';
 
 // SECURITY: input caps for cost/side-effecting routes (images, apps, plan).
 // Non-breaking for normal use; reject oversized/abusive payloads early.
@@ -463,6 +466,11 @@ const VOICE_TTS_DEFAULT_FORMAT = 'mp3';
 // Cap the free-text OpenAI `instructions` field so it can't be abused as a
 // giant prompt against the paid speech API.
 const MAX_TTS_INSTRUCTIONS_CHARS = 1_000;
+// CDZ VOICE: single-shot /api/voice/tts text cap. The FE caps at TTS_MAX_CHARS
+// (2000) but the route had NO length guard, so a direct API caller could send
+// arbitrarily large text to the paid Deepgram/OpenAI endpoint. 4000 allows FE
+// headroom while blocking abuse; longer scripts must use /api/v1/voice/tts-bulk.
+const TTS_MAX_TEXT_CHARS = 4_000;
 // CDZ VOICE (bulk/long-script TTS): splitting + persistence bounds for the
 // /api/v1/voice/tts-bulk route. A long script is split sentence-aware into
 // chunks of at most BULK_TTS_MAX_CHUNK_CHARS, synthesized serially with the
@@ -4106,7 +4114,9 @@ export class ClickDzBridgeController {
    * CDZ_TEMPLATE_CATALOG: OFF ⇒ typed 404 (picker hidden), never an empty 200
    * that would render a blank gallery. auth'd via the global AuthGuard.
    */
-  @Throttle('strict')
+  // WS17: 'default' throttle — read-only catalog listing fetched on wizard
+  // open; 'strict' (20/min) would hide the gallery on a few rapid reopens.
+  @Throttle('default')
   @Get('/api/v1/apps/templates')
   async listTemplates(@CurrentUser() _user: CurrentUser) {
     if (!templateCatalogEnabled()) {
@@ -4124,7 +4134,11 @@ export class ClickDzBridgeController {
    * never an empty 200 that would render a blank shelf. Mirrors the shop
    * catalog route above, gate and typed-404 included.
    */
-  @Throttle('strict')
+  // WS17: 'default' throttle (not 'strict' = 20/min) — this is a lightweight
+  // read-only metadata listing the FE fetches on every /apps page load. A
+  // merchant reopening the gallery a few times would otherwise hit strict and
+  // see the gallery disappear (FE treats non-200 as 'hide gallery').
+  @Throttle('default')
   @Get('/api/v1/apps/app-templates')
   async listAppTemplates(@CurrentUser() _user: CurrentUser) {
     if (!appTemplateCatalogEnabled()) {
@@ -4546,6 +4560,14 @@ export class ClickDzBridgeController {
   async tts(@Body() body: any, @Res() res: Response) {
     const provider = body?.provider === 'openai' ? 'openai' : 'deepgram';
     const text = typeof body?.text === 'string' ? body.text : '';
+    // WS17: length guard — block oversized text from reaching the paid speech
+    // API. The FE caps at 2000; longer scripts must use /api/v1/voice/tts-bulk.
+    if (text.length > TTS_MAX_TEXT_CHARS) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'text_too_long', max: TTS_MAX_TEXT_CHARS, got: text.length });
+      return;
+    }
     // Shared, additive format selection (default mp3 => byte-identical wire).
     const fmtKey =
       typeof body?.format === 'string' && body.format in VOICE_TTS_FORMATS
@@ -4915,6 +4937,49 @@ export class ClickDzBridgeController {
     this.logger.log(
       `[voice] tts-bulk user=${user.id} provider=${provider} chunks=${chunks.length} bytes=${concatenated.length}`
     );
+
+    // WS17: append to the Voice Library Redis index so the clip appears in
+    // GET /api/v1/voice/library/clips (the Library tab). Fail-soft — a Redis
+    // hiccup only loses the list row, not the bytes (the URL still works).
+    const record: LibraryRecord = {
+      id,
+      key,
+      url,
+      name,
+      kind: 'tts',
+      createdAt,
+    };
+    try {
+      const idxKey = CDZ_VOICE_LIBRARY.indexKey(user.id);
+      let items: LibraryRecord[] = [];
+      const raw = await this.redis.get(idxKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          items = parsed.filter(
+            (r): r is LibraryRecord =>
+              !!r &&
+              typeof (r as Partial<LibraryRecord>)?.id === 'string' &&
+              typeof (r as Partial<LibraryRecord>)?.key === 'string' &&
+              typeof (r as Partial<LibraryRecord>)?.url === 'string' &&
+              typeof (r as Partial<LibraryRecord>)?.name === 'string' &&
+              ((r as Partial<LibraryRecord>)?.kind === 'tts' ||
+                (r as Partial<LibraryRecord>)?.kind === 'transcript') &&
+              typeof (r as Partial<LibraryRecord>)?.createdAt === 'number'
+          );
+        }
+      }
+      const next = [record, ...items].slice(0, CDZ_VOICE_LIBRARY.maxItems);
+      await this.redis.set(idxKey, JSON.stringify(next));
+      await this.redis.expire(idxKey, CDZ_VOICE_LIBRARY.ttlSeconds);
+    } catch (e) {
+      this.logger.warn(
+        `[voice] tts-bulk library index write failed user=${user.id}: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+    }
+
     return {
       clip: { id, url, name, createdAt, kind: 'tts' },
       chunks: chunks.length,

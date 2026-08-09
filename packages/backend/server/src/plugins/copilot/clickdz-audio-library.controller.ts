@@ -61,7 +61,16 @@ const LIBRARY_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days
 
 const libraryIndexKey = (userId: string) => `cdz:voice:library:${userId}`;
 
-interface LibraryRecord {
+// Exported so the bridge controller's bulk-TTS route can append a clip to the
+// SAME Redis index the Library tab reads (otherwise bulk clips are playable
+// from their returned URL but never appear in GET /api/v1/voice/library/clips).
+export const CDZ_VOICE_LIBRARY = {
+  indexKey: libraryIndexKey,
+  maxItems: LIBRARY_MAX_ITEMS,
+  ttlSeconds: LIBRARY_TTL_SECONDS,
+};
+
+export interface LibraryRecord {
   id: string;
   key: string; // blob store key (storage.get/delete scope)
   url: string; // replay URL from CopilotStorage.put

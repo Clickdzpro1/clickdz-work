@@ -927,7 +927,12 @@ export class ClickDzWhatsappMaxController {
     @Body() body: { to?: unknown; text?: unknown }
   ): Promise<{ ok: boolean; sent: boolean; note?: string }> {
     this.assertEnabled();
-    const to = normalizeMsisdn(body?.to);
+    // Preserve full JIDs (1:1 '@s.whatsapp.net' and group '@g.us') — the gateway
+    // accepts either a JID or bare digits. normalizeMsisdn strips ALL non-digits,
+    // which mangles group JIDs ('12345@g.us' -> '12345') and silently breaks
+    // group sends. Only normalize when the input is a bare phone (no '@').
+    const rawTo = typeof body?.to === 'string' ? body.to.trim() : '';
+    const to = rawTo.includes('@') ? rawTo : normalizeMsisdn(rawTo);
     if (!to) throw new BadRequest('invalid_to');
     const text = typeof body?.text === 'string' ? body.text.trim() : '';
     if (!text) throw new BadRequest('text is required');
@@ -962,7 +967,9 @@ export class ClickDzWhatsappMaxController {
     }
   ): Promise<{ ok: boolean; messageId?: string; note?: string }> {
     this.assertEnabled();
-    const to = normalizeMsisdn(body?.to);
+    // Preserve full JIDs (see /send above) — normalizeMsisdn mangles group JIDs.
+    const rawTo = typeof body?.to === 'string' ? body.to.trim() : '';
+    const to = rawTo.includes('@') ? rawTo : normalizeMsisdn(rawTo);
     if (!to) throw new BadRequest('invalid_to');
     const kind = typeof body?.kind === 'string' ? body.kind.trim() : '';
     const validKinds = ['image', 'video', 'audio', 'document'];
@@ -980,7 +987,10 @@ export class ClickDzWhatsappMaxController {
     }
     const rec = await this.loadRecord(user.id);
     if (!rec || !rec.active) {
-      return { ok: false, note: 'not_connected' };
+      // Match /send's contract (ok:true + note:'not_connected') so the FE can
+      // surface the specific 'Liez un numéro WhatsApp d'abord.' message instead
+      // of a generic 'Envoi du média échoué.'
+      return { ok: true, note: 'not_connected' };
     }
     const result = await gateway.sendMedia(rec.instanceId, {
       to,
@@ -1010,11 +1020,14 @@ export class ClickDzWhatsappMaxController {
     const text = typeof body?.text === 'string' ? body.text.trim() : '';
     if (!text) throw new BadRequest('text is required');
     const rawTo = Array.isArray(body?.to) ? (body.to as unknown[]) : [];
-    // Normalize + dedupe + cap the recipient list.
+    // Normalize + dedupe + cap the recipient list. Preserve full JIDs (group
+    // '@g.us' / 1:1 '@s.whatsapp.net') — normalizeMsisdn strips non-digits and
+    // would mangle a group JID. Only normalize bare phone numbers (no '@').
     const seen = new Set<string>();
     const recipients: string[] = [];
     for (const raw of rawTo) {
-      const n = normalizeMsisdn(raw);
+      const s = typeof raw === 'string' ? raw.trim() : '';
+      const n = s.includes('@') ? s : normalizeMsisdn(s);
       if (n && !seen.has(n)) {
         seen.add(n);
         recipients.push(n);
