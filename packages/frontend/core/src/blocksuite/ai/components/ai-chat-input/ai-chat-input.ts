@@ -2131,6 +2131,18 @@ export class AIChatInput extends SignalWatcher(
   @property({ attribute: false })
   accessor isContextProcessing!: boolean | undefined;
 
+  // ClickDz context props — used in _fetchSmartStarters to request
+  // studio/niche/lang-aware prompt suggestions instead of the generic
+  // studio:'chat' default.
+  @property({ attribute: false })
+  accessor cdzStudio: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzNiche: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzLang: string | undefined;
+
   @query('image-preview-grid')
   accessor imagePreviewGrid: HTMLDivElement | null = null;
 
@@ -2448,7 +2460,14 @@ export class AIChatInput extends SignalWatcher(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ context: { studio: 'chat', recentTitles } }),
+        body: JSON.stringify({
+          context: {
+            studio: this.cdzStudio || 'chat',
+            niche: this.cdzNiche,
+            lang: this.cdzLang,
+            recentTitles,
+          },
+        }),
       });
       if (!res.ok) return;
       const data = (await res.json()) as { suggestions?: unknown };
