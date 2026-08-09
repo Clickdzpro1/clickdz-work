@@ -281,44 +281,17 @@ function AppEntitlementsChart({ points }: { points: AppCountPoint[] }) {
 }
 
 function AnalyticsPageContent() {
-  // Nombre total d'utilisateurs (usersCount via listUsers).
-  const { data: usersData } = useQuery({
-    query: listUsersQuery,
-    variables: { filter: { first: 1, skip: 0 } },
-  });
-  const totalUsers = usersData.usersCount ?? 0;
-
-  // Utilisateurs actifs récents (fenêtre de synchronisation du dashboard).
-  const dashboardVariables = useMemo(
-    () => ({
-      input: { syncHistoryHours: 24, timezone: 'UTC' },
-    }),
-    []
-  );
-  const { data: dashboardData } = useQuery({
-    query: adminDashboardQuery,
-    variables: dashboardVariables,
-  });
-  const activeUsers = dashboardData.adminDashboard.syncActiveUsers;
-  const syncWindow = dashboardData.adminDashboard.syncWindow;
-
   return (
     <div className="h-dvh flex-1 flex-col flex overflow-hidden">
       <Header title="Analytique" />
       <div className="flex-1 overflow-auto p-6 space-y-6">
         <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-          <MetricCard
-            title="Utilisateurs totaux"
-            value={intFormatter.format(totalUsers)}
-            description="Comptes enregistrés"
-            icon={<UsersIcon className="h-4 w-4" />}
-          />
-          <MetricCard
-            title="Utilisateurs actifs (récents)"
-            value={intFormatter.format(activeUsers)}
-            description={`Fenêtre de ${syncWindow.effectiveSize}h`}
-            icon={<ActivityIcon className="h-4 w-4" />}
-          />
+          <AnalyticsErrorBoundary>
+            <TotalUsersMetricCard />
+          </AnalyticsErrorBoundary>
+          <AnalyticsErrorBoundary>
+            <ActiveUsersMetricCard />
+          </AnalyticsErrorBoundary>
           {/* Accès accordés — wrapped so a failure doesn’t kill the page */}
           <AnalyticsErrorBoundary>
             <EntitlementsMetricCard />
@@ -336,6 +309,47 @@ function AnalyticsPageContent() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Section: total users metric (listUsersQuery). */
+function TotalUsersMetricCard() {
+  const { data: usersData } = useQuery({
+    query: listUsersQuery,
+    variables: { filter: { first: 1, skip: 0 } },
+  });
+  const totalUsers = usersData.usersCount ?? 0;
+  return (
+    <MetricCard
+      title="Utilisateurs totaux"
+      value={intFormatter.format(totalUsers)}
+      description="Comptes enregistrés"
+      icon={<UsersIcon className="h-4 w-4" />}
+    />
+  );
+}
+
+/** Section: active users metric (adminDashboardQuery). */
+function ActiveUsersMetricCard() {
+  const dashboardVariables = useMemo(
+    () => ({
+      input: { syncHistoryHours: 24, timezone: 'UTC' },
+    }),
+    []
+  );
+  const { data: dashboardData } = useQuery({
+    query: adminDashboardQuery,
+    variables: dashboardVariables,
+  });
+  const activeUsers = dashboardData.adminDashboard.syncActiveUsers;
+  const syncWindow = dashboardData.adminDashboard.syncWindow;
+  return (
+    <MetricCard
+      title="Utilisateurs actifs (récents)"
+      value={intFormatter.format(activeUsers)}
+      description={`Fenêtre de ${syncWindow.effectiveSize}h`}
+      icon={<ActivityIcon className="h-4 w-4" />}
+    />
   );
 }
 
