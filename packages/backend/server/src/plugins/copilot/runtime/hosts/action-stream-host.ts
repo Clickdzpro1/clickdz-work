@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
+import { metrics } from '../../../../base';
 import type { LlmImageResponse } from '../../../../native';
 import { PromptService } from '../../prompt';
 import type { PromptMessage } from '../../providers/types';
@@ -8,6 +9,8 @@ import { ChatQuerySchema } from '../../types';
 import { projectActionEventToChatEvent } from '../action-output-projector';
 import type { ActionRuntimeBridgeEvent } from '../action-runtime-bridge';
 import { ActionRuntimeBridge } from '../action-runtime-bridge';
+import { CdzModelHealthService } from '../cdz-model-health.service';
+import { isUpstreamScenarioFailed } from '../upstream-error-detector';
 import { ConversationHost } from './conversation-host';
 import { ImageResultHost } from './image-result-host';
 
@@ -15,6 +18,14 @@ export { projectActionEventToChatEvent };
 
 function firstQueryValue(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
+}
+
+// D1: cdz-flash is the reliable fallback model for action stream retries.
+const CDZ_FALLBACK_MODEL = 'cdz-flash';
+
+/** Sleep for ms milliseconds. */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 const ACTION_PROMPTS: Record<string, string> = {
@@ -45,11 +56,13 @@ function actionTextResultSchema() {
 
 @Injectable()
 export class ActionStreamHost {
+  private readonly logger = new Logger(ActionStreamHost.name);
   constructor(
     private readonly conversations: ConversationHost,
     private readonly bridge: ActionRuntimeBridge,
     private readonly prompts: PromptService,
-    private readonly imageResults: ImageResultHost
+    private readonly imageResults: ImageResultHost,
+    private readonly modelHealth: CdzModelHealthService
   ) {}
 
   async stream(
@@ -95,7 +108,9 @@ export class ActionStreamHost {
       signal,
       parsedQuery.modelId
     );
-    const runStream = this.bridge.runStream({
+    const originalModelId =
+      typeof query.modelId === 'string' && query.modelId ? query.modelId : undefined;
+    const buildBridgeInput = (modelIdOverride?: string) => ({
       userId,
       workspaceId: prepared.session.config.workspaceId,
       docId: prepared.session.config.docId,
@@ -121,10 +136,7 @@ export class ActionStreamHost {
         ? undefined
         : {
             stepId: 'generate',
-            modelId:
-              typeof query.modelId === 'string' && query.modelId
-                ? query.modelId
-                : undefined,
+            modelId: modelIdOverride ?? originalModelId,
             messages: finalMessage,
             responseSchemaJson: actionTextResultSchema(),
             options: {
@@ -149,12 +161,120 @@ export class ActionStreamHost {
       signal,
     });
 
+    const runStream = this.bridge.runStream(buildBridgeInput());
+
     return {
       messageId: prepared.messageId,
       actionId,
       actionVersion,
-      stream: runStream,
+      stream: this.withRetrySeam(
+        runStream,
+        buildBridgeInput,
+        originalModelId ?? 'unknown',
+        signal
+      ),
     };
+  }
+
+  /**
+   * D1 — Wrap an action stream with a retry seam: if the upstream scenario
+   * fails (502) before any successful events are yielded, retry ONCE with
+   * cdz-flash. Mirrors the turn-orchestrator retry pattern.
+   */
+  private async *withRetrySeam(
+    original: AsyncIterableIterator<ActionRuntimeBridgeEvent>,
+    rebuildInput: (modelIdOverride?: string) => Parameters<
+      ActionRuntimeBridge['runStream']
+    >[0],
+    originalModel: string,
+    signal?: AbortSignal
+  ): AsyncIterableIterator<ActionRuntimeBridgeEvent> {
+    let eventCount = 0;
+    try {
+      for await (const event of original) {
+        // Detect a scenario-failed error event before any successful events.
+        if (
+          event.type === 'error' &&
+          eventCount === 0 &&
+          isUpstreamScenarioFailed(
+            (event as any).errorMessage ?? (event as any).error ?? event
+          )
+        ) {
+          this.logger.warn(
+            `[action] upstream scenario-failed before any events — retrying once with ${CDZ_FALLBACK_MODEL} (was ${originalModel})`
+          );
+          metrics.ai
+            .counter('cdz_retry_to_flash_attempted')
+            .add(1, { from: originalModel, to: CDZ_FALLBACK_MODEL, route: 'action' });
+          this.modelHealth.recordFailure(originalModel);
+          // Backoff with jitter (200-500ms) before retry.
+          const jitter = 200 + Math.floor(Math.random() * 300);
+          await sleep(jitter);
+          if (signal?.aborted) {
+            yield event;
+            return;
+          }
+          try {
+            const retryStream = this.bridge.runStream(
+              rebuildInput(CDZ_FALLBACK_MODEL)
+            );
+            for await (const retryEvent of retryStream) {
+              yield retryEvent;
+            }
+            metrics.ai.counter('cdz_retry_to_flash_succeeded').add(1, {
+              route: 'action',
+            });
+            this.modelHealth.recordSuccess(CDZ_FALLBACK_MODEL);
+          } catch (retryError) {
+            metrics.ai.counter('cdz_retry_to_flash_failed').add(1, {
+              route: 'action',
+            });
+            this.modelHealth.recordFailure(CDZ_FALLBACK_MODEL);
+            throw retryError;
+          }
+          return;
+        }
+        eventCount++;
+        yield event;
+      }
+    } catch (error) {
+      // If the stream itself throws (not an error event), check for scenario
+      // failure before any events were yielded and retry.
+      if (eventCount === 0 && isUpstreamScenarioFailed(error)) {
+        this.logger.warn(
+          `[action] upstream scenario-failed (thrown) before any events — retrying once with ${CDZ_FALLBACK_MODEL} (was ${originalModel})`
+        );
+        metrics.ai
+          .counter('cdz_retry_to_flash_attempted')
+          .add(1, { from: originalModel, to: CDZ_FALLBACK_MODEL, route: 'action' });
+        this.modelHealth.recordFailure(originalModel);
+        const jitter = 200 + Math.floor(Math.random() * 300);
+        await sleep(jitter);
+        if (signal?.aborted) {
+          throw error;
+        }
+        try {
+          const retryStream = this.bridge.runStream(
+            rebuildInput(CDZ_FALLBACK_MODEL)
+          );
+          for await (const retryEvent of retryStream) {
+            yield retryEvent;
+          }
+          metrics.ai
+            .counter('cdz_retry_to_flash_succeeded')
+            .add(1, { route: 'action' });
+          this.modelHealth.recordSuccess(CDZ_FALLBACK_MODEL);
+        } catch (retryError) {
+          metrics.ai
+            .counter('cdz_retry_to_flash_failed')
+            .add(1, { route: 'action' });
+          this.modelHealth.recordFailure(CDZ_FALLBACK_MODEL);
+          throw retryError;
+        }
+      } else {
+        throw error;
+      }
+    }
   }
 
   private async preparePromptMessages(
@@ -276,3 +396,4 @@ export class ActionStreamHost {
     };
   }
 }
+
