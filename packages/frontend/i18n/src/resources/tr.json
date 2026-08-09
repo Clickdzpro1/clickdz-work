@@ -1882,7 +1882,7 @@
   "com.affine.workspaceList.workspaceListType.local": "Yerel depolama",
   "com.affine.workspaceList.addServer": "Sunucu Ekle",
   "com.affine.workspaceSubPath.all": "Tüm dokümanlar",
-  "com.affine.workspaceSubPath.chat": "İstihbarat",
+  "com.affine.workspaceSubPath.chat": "AI Sohbet",
   "com.affine.workspaceSubPath.trash": "Çöp",
   "com.affine.workspaceSubPath.trash.empty-description": "Silinen dokümanlar burada görünecektir.",
   "com.affine.write_with_a_blank_page": "Boş bir sayfayla yaz",
