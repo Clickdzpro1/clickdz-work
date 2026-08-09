@@ -24,6 +24,7 @@ env:
 jobs:
   build-ios-web:
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     environment: ${{ inputs.build-type }}
     steps:
       - uses: actions/checkout@v6
@@ -53,6 +54,7 @@ jobs:
 
   build-android-web:
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     steps:
       - uses: actions/checkout@v6
       - name: Setup Version
@@ -80,6 +82,7 @@ jobs:
 
   ios:
     runs-on: 'macos-15'
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-ios-web
     steps:
@@ -147,6 +150,7 @@ jobs:
 
   android:
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     permissions:
       id-token: 'write'
     needs:
@@ -226,3 +230,4 @@ jobs:
           track: internal
           status: draft
           existingEditId: ${{ steps.bump.outputs.EDIT_ID }}
+
