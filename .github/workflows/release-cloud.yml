@@ -21,6 +21,7 @@ permissions:
 jobs:
   build-images:
     name: Build Images
+    if: github.repository == 'toeverything/AFFiNE'
     uses: ./.github/workflows/build-images.yml
     secrets: inherit
     with:
@@ -30,6 +31,7 @@ jobs:
 
   deploy:
     name: Deploy to cluster
+    if: github.repository == 'toeverything/AFFiNE'
     environment: ${{ inputs.build-type }}
     needs:
       - build-images
@@ -64,3 +66,4 @@ jobs:
           AFFINE_INDEXER_SEARCH_PROVIDER: ${{ secrets.AFFINE_INDEXER_SEARCH_PROVIDER }}
           AFFINE_INDEXER_SEARCH_ENDPOINT: ${{ secrets.AFFINE_INDEXER_SEARCH_ENDPOINT }}
           AFFINE_INDEXER_SEARCH_API_KEY: ${{ secrets.AFFINE_INDEXER_SEARCH_API_KEY }}
+
