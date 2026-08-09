@@ -1791,7 +1791,7 @@
   "com.affine.workspaceList.workspaceListType.local": "本地儲存",
   "com.affine.workspaceList.addServer": "新增伺服器",
   "com.affine.workspaceSubPath.all": "所有頁面",
-  "com.affine.workspaceSubPath.chat": "Intelligence",
+  "com.affine.workspaceSubPath.chat": "AI 對話",
   "com.affine.workspaceSubPath.trash": "廢紙簍",
   "com.affine.workspaceSubPath.trash.empty-description": "已刪除的文件將顯示在此處。",
   "com.affine.write_with_a_blank_page": "在空白頁書寫",
