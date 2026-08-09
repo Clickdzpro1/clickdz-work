@@ -492,7 +492,8 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
 
   private _hasRenderedMessages = false;
 
-  // Keys that are entering THIS render cycle (get [data-cdz-enter]).
+  // Keys that (ever) entered — persist so [data-cdz-enter] survives the
+  // streaming re-renders and the one-shot entrance animation gets to commit.
   private _enteringKeys = new Set<string>();
 
   // A single user turn appends at most a user + assistant message; a larger
@@ -703,6 +704,14 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
   //  - First population is never animated (initial history batch).
   //  - A large jump in new keys (session switch / history load) is treated as
   //    a batch and skipped; only a normal 1–2 message append animates.
+  //  - Entered keys ACCUMULATE in `_enteringKeys` (never removed here). The
+  //    streamed answer mutates the same message object (stable id) but the list
+  //    re-renders on every token, so a transient set would strip [data-cdz-enter]
+  //    a microtask after it was set — before the CSS animation commits — and
+  //    messages would snap in with no motion. The flag stays applied so the
+  //    one-shot `cdz-msg-in` (fill-mode `both`) runs once on the node's first
+  //    paint and lands at opacity:1; re-renders leave the attribute unchanged,
+  //    so the animation never replays.
   private _computeEnteringKeys(items: HistoryMessage[]) {
     const currentKeys = items.map((item, index) =>
       this._getMessageKey(item, index)
@@ -715,14 +724,12 @@ export class AIChatMessages extends WithDisposable(ShadowlessElement) {
           entering.add(key);
         }
       }
+      // Batch loads (history/session switch) — don't stagger a whole transcript.
+      if (entering.size <= AIChatMessages.ENTRANCE_BATCH_LIMIT) {
+        entering.forEach(key => this._enteringKeys.add(key));
+      }
     }
 
-    // Batch loads (history/session switch) — don't stagger a whole transcript.
-    if (entering.size > AIChatMessages.ENTRANCE_BATCH_LIMIT) {
-      entering.clear();
-    }
-
-    this._enteringKeys = entering;
     this._seenMessageKeys = new Set(currentKeys);
     if (items.length > 0) {
       this._hasRenderedMessages = true;
