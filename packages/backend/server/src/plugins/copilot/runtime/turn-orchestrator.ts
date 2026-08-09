@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { metrics } from '../../../base';
 import { CopilotContextService } from '../context/service';
 import { type Turn } from '../core';
 import {
@@ -10,27 +11,21 @@ import {
 import { ChatSession } from '../session';
 import { ChatQuerySchema } from '../types';
 import { CapabilityRuntime } from './capability-runtime';
+import { CdzModelHealthService } from './cdz-model-health.service';
 import { CapabilityPolicyHost } from './hosts/capability-policy-host';
 import { ConversationHost } from './hosts/conversation-host';
 import { ImageResultHost } from './hosts/image-result-host';
 import { TurnPersistence } from './hosts/turn-persistence';
+import { isUpstreamScenarioFailed } from './upstream-error-detector';
 
 // WS17: cdz-flash is the reliable ClickDz model (0% flake in sustained probes)
 // used as the automatic fallback when the primary model (typically cdz-sage)
 // fails the upstream Make-scenario 502 BEFORE any tokens reach the client.
 const CDZ_FALLBACK_MODEL = 'cdz-flash';
 
-// Matches the upstream cdz-ai "Scenario failed to complete" 502 / engine error
-// that surfaces as a thrown Error inside the stream consumption loop.
-function isUpstreamScenarioFailed(error: unknown): boolean {
-  const raw =
-    (error instanceof Error && error.message) ||
-    (typeof error === 'string' && error) ||
-    '';
-  return (
-    /Scenario failed to complete|engine error/i.test(raw) ||
-    /status.*502|502.*Scenario/i.test(raw)
-  );
+/** Sleep for ms milliseconds. */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 @Injectable()
@@ -42,7 +37,8 @@ export class TurnOrchestrator {
     private readonly capabilityPolicy: CapabilityPolicyHost,
     private readonly runtime: CapabilityRuntime,
     private readonly imageResults: ImageResultHost,
-    private readonly turnPersistence: TurnPersistence
+    private readonly turnPersistence: TurnPersistence,
+    private readonly modelHealth: CdzModelHealthService
   ) {}
 
   private async buildPromptParams(
@@ -193,13 +189,36 @@ export class TurnOrchestrator {
         this.logger.warn(
           `[chat] upstream scenario-failed 502 before any tokens — retrying once with ${CDZ_FALLBACK_MODEL} (was ${model})`
         );
-        for await (const chunk of this.runtime.streamText(
-          { modelId: CDZ_FALLBACK_MODEL },
-          finalMessage,
-          options
-        )) {
-          buffer += chunk;
-          yield chunk;
+        metrics.ai
+          .counter('cdz_retry_to_flash_attempted')
+          .add(1, { from: model, to: CDZ_FALLBACK_MODEL });
+        this.modelHealth.recordFailure(model);
+        // Backoff with jitter (200-500ms) before retry to let the upstream
+        // recover briefly. Check abort signal after the sleep.
+        const jitter = 200 + Math.floor(Math.random() * 300);
+        await sleep(jitter);
+        if (
+          typeof options.signal === 'object' &&
+          options.signal &&
+          (options.signal as AbortSignal).aborted
+        ) {
+          throw error;
+        }
+        try {
+          for await (const chunk of this.runtime.streamText(
+            { modelId: CDZ_FALLBACK_MODEL },
+            finalMessage,
+            options
+          )) {
+            buffer += chunk;
+            yield chunk;
+          }
+          metrics.ai.counter('cdz_retry_to_flash_succeeded').add(1);
+          this.modelHealth.recordSuccess(CDZ_FALLBACK_MODEL);
+        } catch (retryError) {
+          metrics.ai.counter('cdz_retry_to_flash_failed').add(1);
+          this.modelHealth.recordFailure(CDZ_FALLBACK_MODEL);
+          throw retryError;
         }
       } else {
         throw error;
@@ -262,13 +281,35 @@ export class TurnOrchestrator {
         this.logger.warn(
           `[chat-object] upstream scenario-failed 502 before any chunks — retrying once with ${CDZ_FALLBACK_MODEL} (was ${model})`
         );
-        for await (const chunk of this.runtime.streamObject(
-          { modelId: CDZ_FALLBACK_MODEL },
-          finalMessage,
-          options
-        )) {
-          chunks.push(chunk);
-          yield chunk;
+        metrics.ai
+          .counter('cdz_retry_to_flash_attempted')
+          .add(1, { from: model, to: CDZ_FALLBACK_MODEL });
+        this.modelHealth.recordFailure(model);
+        // Backoff with jitter (200-500ms) before retry.
+        const jitter = 200 + Math.floor(Math.random() * 300);
+        await sleep(jitter);
+        if (
+          typeof options.signal === 'object' &&
+          options.signal &&
+          (options.signal as AbortSignal).aborted
+        ) {
+          throw error;
+        }
+        try {
+          for await (const chunk of this.runtime.streamObject(
+            { modelId: CDZ_FALLBACK_MODEL },
+            finalMessage,
+            options
+          )) {
+            chunks.push(chunk);
+            yield chunk;
+          }
+          metrics.ai.counter('cdz_retry_to_flash_succeeded').add(1);
+          this.modelHealth.recordSuccess(CDZ_FALLBACK_MODEL);
+        } catch (retryError) {
+          metrics.ai.counter('cdz_retry_to_flash_failed').add(1);
+          this.modelHealth.recordFailure(CDZ_FALLBACK_MODEL);
+          throw retryError;
         }
       } else {
         throw error;
@@ -368,3 +409,4 @@ export class TurnOrchestrator {
     return Number.isNaN(num) ? undefined : num;
   }
 }
+
