@@ -120,9 +120,9 @@ const GLOBAL_CSS = `
 // Curated fallbacks for the empty-state chips (SHELL's EmptyState renders
 // `examples` as clickable chips that seed the composer).
 const EXAMPLE_GOALS = [
-  "Summarize today's orders and draft a WhatsApp broadcast",
-  'Find leads from last week and prepare a follow-up',
-  'Reconcile this week’s expenses against orders',
+  "Résumer les commandes d’aujourd’hui et préparer un broadcast WhatsApp",
+  'Trouver des prospects la semaine dernière et préparer un suivi',
+  'Rapprocher les dépenses de cette semaine avec les commandes',
 ];
 
 type CapsState = 'loading' | 'ready' | 'error';
@@ -407,9 +407,9 @@ const HermesConsole = ({
                 border: `1px solid ${P.border}`,
               }}
             >
-              ← Dashboard
+              ← Tableau de bord
             </button>
-            <span style={{ fontSize: 12, color: P.muted }}>Streaming console</span>
+            <span style={{ fontSize: 12, color: P.muted }}>Console de streaming</span>
           </div>
         ) : null}
 
@@ -417,24 +417,24 @@ const HermesConsole = ({
             visible from the empty state through an active thread. */}
         {capsState === 'ready' && !plannerReady ? (
           <div className="cdz-hermes-fade" role="alert" style={noticeStyle}>
-            <strong>Planner offline.</strong>&nbsp;Hermes can’t plan runs
-            until the owner configures{' '}
-            <code style={codeStyle}>CDZ_AI_KEY</code> on the server. Threads
-            and tools still load; sending is disabled.
+            <strong>Planificateur hors ligne.</strong>&nbsp;Hermes ne peut pas planifier
+            d’exécutions tant que le propriétaire n’a pas configuré{' '}
+            <code style={codeStyle}>CDZ_AI_KEY</code> sur le serveur. Les fils de
+            discussion et les outils restent disponibles ; l’envoi est désactivé.
           </div>
         ) : null}
         {capsState === 'error' ? (
           <div className="cdz-hermes-fade" role="alert" style={noticeStyle}>
-            <strong>Couldn’t load agent capabilities.</strong>&nbsp;Tool
-            availability is unknown.{' '}
+            <strong>Impossible de charger les capacités de l’agent.</strong>&nbsp;La
+            disponibilité des outils est inconnue.{' '}
             <button style={linkBtnStyle} onClick={() => void loadCaps()}>
-              Retry
+              Réessayer
             </button>
           </div>
         ) : null}
         {error ? (
           <div className="cdz-hermes-fade" role="alert" style={noticeStyle}>
-            <strong>Run error.</strong>&nbsp;{error}
+            <strong>Erreur d’exécution.</strong>&nbsp;{error}
           </div>
         ) : null}
 
@@ -471,8 +471,8 @@ const HermesConsole = ({
             >
               <EmptyState
                 icon={<ChatWithAiIcon style={{ fontSize: 26 }} />}
-                title="Hermes — your operations agent"
-                subtitle="Give Hermes a goal. It plans the steps, calls the right tools across your shops and connected apps, and reports back — streaming every step live. Pick a workflow to start, or type your own below."
+                title="Hermes — votre agent opérationnel"
+                subtitle="Donnez un objectif à Hermes. Il planifie les étapes, appelle les bons outils across vos boutiques et applications connectées, et vous fait un retour — en diffusant chaque étape en direct. Choisissez un flux de travail pour commencer, ou tapez le vôtre ci-dessous."
                 examples={EXAMPLE_GOALS}
                 onPickExample={handlePick}
               >
@@ -516,8 +516,8 @@ const HermesConsole = ({
           disabled={composerDisabled}
           placeholder={
             composerDisabled
-              ? 'Planner offline — sending is disabled'
-              : 'Message Hermes — describe the outcome you want…'
+              ? 'Planificateur hors ligne — l’envoi est désactivé'
+              : 'Écrire à Hermes — décrivez le résultat que vous attendez…'
           }
           leftSlot={
             <ModeToggle mode={mode} disabled={running} onChange={setMode} />
@@ -537,9 +537,9 @@ const HermesConsole = ({
 //   ask  — pause for approval before any consequential tool (writes / sends)
 //   dry  — plan only, execute nothing
 const MODE_META: Record<AgentMode, { label: string; hint: string }> = {
-  auto: { label: 'Auto', hint: 'Run tools without asking' },
-  ask: { label: 'Ask', hint: 'Pause for approval before writes / sends' },
-  dry: { label: 'Dry run', hint: 'Plan only — execute nothing' },
+  auto: { label: 'Auto', hint: 'Exécuter les outils sans demander' },
+  ask: { label: 'Demander', hint: 'Pause pour approbation avant écritures / envois' },
+  dry: { label: 'Simulation', hint: 'Planifier uniquement — rien exécuter' },
 };
 
 const MODE_ORDER: AgentMode[] = ['auto', 'ask', 'dry'];
@@ -555,7 +555,7 @@ const ModeToggle = ({
 }) => (
   <div
     role="group"
-    aria-label="Run mode"
+    aria-label="Mode d’exécution"
     title={MODE_META[mode].hint}
     style={{
       display: 'inline-flex',
@@ -766,7 +766,7 @@ const HermesPage = () => {
                     color: P.muted,
                   }}
                 >
-                  <SharedSpinner /> Loading your Hermes…
+                  <SharedSpinner /> Chargement de votre Hermes…
                 </div>
               ) : state === 'error' ? (
                 <ErrorState message={loadError} onRetry={() => void load()} />
@@ -816,16 +816,16 @@ const ErrorState = ({
 }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 560 }}>
     <Banner tone="error">
-      {message || 'Couldn’t load your Hermes setup.'}
+      {message || 'Impossible de charger votre configuration Hermes.'}
     </Banner>
     <div style={{ display: 'flex', gap: 10 }}>
       <button style={btnStyle('primary')} onClick={onRetry}>
-        Retry
+        Réessayer
       </button>
     </div>
     <p style={{ margin: 0, fontSize: 12.5, color: SC.muted, lineHeight: 1.5 }}>
-      Your setup is stored per-account. If this keeps failing, the streaming
-      console still works — reload the page to try again.
+      Votre configuration est stockée par compte. Si le problème persiste, la console
+      de streaming reste disponible — rechargez la page pour réessayer.
     </p>
   </div>
 );
