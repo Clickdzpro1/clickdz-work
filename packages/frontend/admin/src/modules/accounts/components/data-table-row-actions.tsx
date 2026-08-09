@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import { DiscardChanges } from '../../../components/shared/discard-changes';
 import { useRightPanel } from '../../panel/context';
 import type { UserType } from '../schema';
+import { AppAccessDialog } from './app-access-dialog';
 import { DeleteAccountDialog } from './delete-account';
 import { DisableAccountDialog } from './disable-account';
 import { EnableAccountDialog } from './enable-account';
@@ -41,6 +42,7 @@ export function DataTableRowActions({ user }: DataTableRowActionsProps) {
   const [disableDialogOpen, setDisableDialogOpen] = useState(false);
   const [enableDialogOpen, setEnableDialogOpen] = useState(false);
   const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
+  const [appsDialogOpen, setAppsDialogOpen] = useState(false);
   const {
     openPanel,
     isOpen,
@@ -199,6 +201,13 @@ export function DataTableRowActions({ user }: DataTableRowActionsProps) {
               Enable Email
             </DropdownMenuItem>
           )}
+          <DropdownMenuItem
+            className="px-2 py-[6px] text-sm font-normal gap-2 cursor-pointer"
+            onSelect={() => setAppsDialogOpen(true)}
+          >
+            <LockIcon fontSize={20} />
+            Apps Access
+          </DropdownMenuItem>
           <DropdownMenuSeparator />
           {!user.disabled && (
             <DropdownMenuItem
@@ -250,6 +259,11 @@ export function DataTableRowActions({ user }: DataTableRowActionsProps) {
         onOpenChange={setDiscardDialogOpen}
         onClose={() => setDiscardDialogOpen(false)}
         onConfirm={handleDiscardConfirm}
+      />
+      <AppAccessDialog
+        user={user}
+        open={appsDialogOpen}
+        onOpenChange={setAppsDialogOpen}
       />
     </div>
   );
