@@ -42,6 +42,7 @@ import {
   WorkbenchService,
 } from '@affine/core/modules/workbench';
 import { WorkspaceService } from '@affine/core/modules/workspace';
+import { studioForPath } from '@affine/core/modules/studio';
 import { useI18n } from '@affine/i18n';
 import { RefNodeSlotsProvider } from '@blocksuite/affine/inlines/reference';
 import { BlockStdScope } from '@blocksuite/affine/std';
@@ -202,6 +203,43 @@ export const Component = () => {
       content.aiModelService = framework.get(AIModelService);
       content.onAISubscribe = handleAISubscribe;
       content.onOpenDoc = onOpenDoc;
+
+      // ClickDz context: derive studio from workbench route + read
+      // niche/lang from localStorage profile + recentTitles from workspace docs.
+      try {
+        const pathname = workbench.location$.value?.pathname;
+        if (pathname) {
+          const studio = studioForPath(pathname);
+          content.cdzStudio = studio?.id;
+        }
+      } catch {
+        // workbench.location$ may not be ready — safe to skip.
+      }
+      try {
+        const raw = localStorage.getItem('clickdz:profile:v1');
+        if (raw) {
+          const profile = JSON.parse(raw);
+          content.cdzNiche = Array.isArray(profile?.niches)
+            ? profile.niches[0]
+            : undefined;
+          content.cdzLang = profile?.lang;
+        }
+      } catch {
+        // Profile parse error — safe to skip.
+      }
+      try {
+        const ws = framework.get(WorkspaceService).workspace;
+        const titles: string[] = [];
+        for (const doc of ws.docs.values()) {
+          const title =
+            typeof doc.meta?.title === 'string' ? doc.meta.title : '';
+          if (title) titles.push(title);
+          if (titles.length >= 6) break;
+        }
+        if (titles.length) content.cdzRecentTitles = titles;
+      } catch {
+        // Workspace docs not ready — safe to skip.
+      }
     },
     onElementReady: content => {
       content.independentMode = true;
