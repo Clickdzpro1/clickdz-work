@@ -140,10 +140,10 @@ const AGENTS: readonly AgentDescriptor[] = [
 ];
 
 // --- Redis key helpers (EXACTLY the contract's namespaces).
-// Per-user Telegram outbound binding written by the Telegram channel
-// (clickdz-agent-telegram.ts): userId → { chatId }. Its presence == the caller
-// has a bound Telegram chat, i.e. the `channels.telegram` boolean here.
-const userTgBindKey = (userId: string) => `clickdz:tg:user:${userId}`;
+// WS17: the old per-user Telegram outbound binding key (clickdz:tg:user:{id})
+// is dead in the BYOT model — the telegram channel now writes per-agent records
+// to clickdz:agentchan:{userId}:{agent}:telegram (checked inline in hasTelegram).
+// The unused declaration was removed; the comment is kept to explain the shift.
 // Informational per-user+agent enable flag (POST /state target). Consumed by
 // the R7 UI; the runtime itself does NOT gate on it (runs are gated by env).
 const agentStateKey = (userId: string, agent: AgentName) =>
