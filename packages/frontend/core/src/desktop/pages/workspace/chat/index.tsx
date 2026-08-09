@@ -210,7 +210,7 @@ export const Component = () => {
         const pathname = workbench.location$.value?.pathname;
         if (pathname) {
           const studio = studioForPath(pathname);
-          content.cdzStudio = studio?.id;
+          content.cdzStudio = studio?.id ?? 'chat';
         }
       } catch {
         // workbench.location$ may not be ready — safe to skip.
