@@ -31,6 +31,7 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     env:
       NODE_OPTIONS: --max-old-space-size=14384
     permissions:
@@ -66,6 +67,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-24.04-arm
+    if: github.repository == 'toeverything/AFFiNE'
     steps:
       - uses: actions/checkout@v6
       - name: Setup Go (for actionlint)
@@ -104,6 +106,7 @@ jobs:
   typecheck:
     name: Typecheck
     runs-on: ubuntu-24.04-arm
+    if: github.repository == 'toeverything/AFFiNE'
     env:
       NODE_OPTIONS: --max-old-space-size=14384
     steps:
@@ -138,6 +141,7 @@ jobs:
   mobile-native-build-filter:
     name: Mobile native build filter
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     outputs:
       run-android: ${{ steps.mobile-native-filter.outputs.android }}
       run-ios: ${{ steps.mobile-native-filter.outputs.ios }}
@@ -167,7 +171,7 @@ jobs:
 
   build-android-app:
     name: Build Android app
-    if: ${{ needs.mobile-native-build-filter.outputs.run-android == 'true' }}
+    if: ${{ needs.mobile-native-build-filter.outputs.run-android == 'true' && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     needs:
       - mobile-native-build-filter
@@ -245,7 +249,7 @@ jobs:
 
   test-android-app:
     name: Test Android app
-    if: ${{ needs.mobile-native-build-filter.outputs.run-android == 'true' }}
+    if: ${{ needs.mobile-native-build-filter.outputs.run-android == 'true' && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     needs:
@@ -337,7 +341,7 @@ jobs:
 
   build-ios-app:
     name: Build iOS app
-    if: ${{ needs.mobile-native-build-filter.outputs.run-ios == 'true' }}
+    if: ${{ needs.mobile-native-build-filter.outputs.run-ios == 'true' && github.repository == 'toeverything/AFFiNE' }}
     runs-on: macos-15
     needs:
       - mobile-native-build-filter
@@ -406,6 +410,7 @@ jobs:
   rust-test-filter:
     name: Rust test filter
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     outputs:
       run-rust: ${{ steps.rust-filter.outputs.rust }}
     steps:
@@ -425,7 +430,7 @@ jobs:
 
   lint-rust:
     name: Lint Rust
-    if: ${{ needs.rust-test-filter.outputs.run-rust == 'true' }}
+    if: ${{ needs.rust-test-filter.outputs.run-rust == 'true' && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     needs:
       - rust-test-filter
@@ -450,6 +455,7 @@ jobs:
   check-git-status:
     name: Check Git Status
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-server-native
     steps:
@@ -482,6 +488,7 @@ jobs:
   check-yarn-binary:
     name: Check yarn binary
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     steps:
       - uses: actions/checkout@v6
       - name: Run check
@@ -494,6 +501,7 @@ jobs:
   e2e-blocksuite-test:
     name: E2E BlockSuite Test
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     strategy:
       fail-fast: false
       matrix:
@@ -526,6 +534,7 @@ jobs:
   e2e-blocksuite-cross-browser-test:
     name: E2E BlockSuite Cross Browser Test
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     steps:
       - uses: actions/checkout@v6
       - name: Setup Node.js
@@ -559,6 +568,7 @@ jobs:
   e2e-test:
     name: E2E Test
     runs-on: ubuntu-24.04-arm
+    if: github.repository == 'toeverything/AFFiNE'
     env:
       DISTRIBUTION: web
       IN_CI_TEST: true
@@ -592,6 +602,7 @@ jobs:
   e2e-mobile-test:
     name: E2E Mobile Test
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     env:
       DISTRIBUTION: mobile
       IN_CI_TEST: true
@@ -623,6 +634,7 @@ jobs:
   unit-test:
     name: Unit Test
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-native-linux
     env:
@@ -662,6 +674,7 @@ jobs:
   build-native-linux:
     name: Build ClickDz Work native (x86_64-unknown-linux-gnu)
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     env:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
       CARGO_PROFILE_RELEASE_DEBUG: '1'
@@ -696,6 +709,7 @@ jobs:
   build-native-macos:
     name: Build ClickDz Work native (${{ matrix.spec.target }})
     runs-on: ${{ matrix.spec.os }}
+    if: github.repository == 'toeverything/AFFiNE'
     env:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
       CARGO_PROFILE_RELEASE_DEBUG: '1'
@@ -739,6 +753,7 @@ jobs:
   build-native-windows:
     name: Build ClickDz Work native (${{ matrix.spec.target }})
     runs-on: ${{ matrix.spec.os }}
+    if: github.repository == 'toeverything/AFFiNE'
     env:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
       CARGO_PROFILE_RELEASE_DEBUG: '1'
@@ -788,6 +803,7 @@ jobs:
   build-server-native:
     name: Build Server native
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     env:
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16'
       CARGO_PROFILE_RELEASE_DEBUG: '1'
@@ -815,6 +831,7 @@ jobs:
   build-electron-renderer:
     name: Build @affine/electron renderer
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     steps:
       - uses: actions/checkout@v6
       - name: Setup Node.js
@@ -840,6 +857,7 @@ jobs:
   native-unit-test:
     name: Native Unit Test
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-native-linux
     steps:
@@ -860,6 +878,7 @@ jobs:
   server-test:
     name: Server Test
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-server-native
     strategy:
@@ -934,6 +953,7 @@ jobs:
   server-test-elasticsearch:
     name: Server Test with Elasticsearch
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-server-native
     env:
@@ -1014,6 +1034,7 @@ jobs:
     # the new version of server e2e test should be super fast, so sharding testing is not needed
     name: Server E2E Test
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-server-native
     env:
@@ -1073,7 +1094,7 @@ jobs:
 
   rust-test:
     name: Run native tests
-    if: ${{ needs.rust-test-filter.outputs.run-rust == 'true' }}
+    if: ${{ needs.rust-test-filter.outputs.run-rust == 'true' && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     needs:
       - rust-test-filter
@@ -1099,6 +1120,7 @@ jobs:
   copilot-test-filter:
     name: Copilot test filter
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     outputs:
       run-api: ${{ steps.decision.outputs.run_api }}
       run-e2e: ${{ steps.decision.outputs.run_e2e }}
@@ -1136,7 +1158,7 @@ jobs:
 
   copilot-api-test:
     name: Server Copilot Api Test
-    if: ${{ needs.copilot-test-filter.outputs.run-api == 'true' }}
+    if: ${{ needs.copilot-test-filter.outputs.run-api == 'true' && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     needs:
       - build-server-native
@@ -1208,7 +1230,7 @@ jobs:
 
   copilot-e2e-test:
     name: Frontend Copilot E2E Test
-    if: ${{ needs.copilot-test-filter.outputs.run-e2e == 'true' }}
+    if: ${{ needs.copilot-test-filter.outputs.run-e2e == 'true' && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     env:
       DISTRIBUTION: web
@@ -1275,6 +1297,7 @@ jobs:
   cloud-e2e-test:
     name: ${{ matrix.tests.name }}
     runs-on: ubuntu-latest
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-server-native
       - build-native-linux
@@ -1371,6 +1394,7 @@ jobs:
   desktop-test:
     name: Desktop Test (${{ matrix.spec.os }}, ${{ matrix.spec.platform }}, ${{ matrix.spec.arch }}, ${{ matrix.spec.target }}, ${{ matrix.spec.test }})
     runs-on: ${{ matrix.spec.os }}
+    if: github.repository == 'toeverything/AFFiNE'
     needs:
       - build-electron-renderer
       - build-native-linux
@@ -1538,10 +1562,11 @@ jobs:
       - copilot-e2e-test
       - desktop-test
       - cloud-e2e-test
-    if: always()
+    if: ${{ always() && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     name: 3, 2, 1 Launch
     steps:
       - run: exit 1
         # Thank you, next https://github.com/vercel/next.js/blob/canary/.github/workflows/build_and_test.yml#L379
         if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) }}
+
