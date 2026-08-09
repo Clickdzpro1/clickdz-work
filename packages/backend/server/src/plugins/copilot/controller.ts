@@ -44,6 +44,7 @@ import {
   projectActionEventToChatEvent,
 } from './runtime/hosts/action-stream-host';
 import { TurnOrchestrator } from './runtime/turn-orchestrator';
+import { isUpstreamScenarioFailed } from './runtime/upstream-error-detector';
 import { CopilotStorage } from './storage';
 import { getSignal } from './utils';
 
@@ -478,14 +479,7 @@ export class CopilotController implements BeforeApplicationShutdown {
    * turn from a clean state.
    */
   private cdzChatSseError(originalError: any, info: object) {
-    const raw =
-      (originalError instanceof Error && originalError.message) ||
-      (typeof originalError === 'string' && originalError) ||
-      '';
-    const isScenarioFailed =
-      /Scenario failed to complete|engine error/i.test(raw) ||
-      /status.*502|502.*Scenario/i.test(raw);
-    if (isScenarioFailed) {
+    if (isUpstreamScenarioFailed(originalError)) {
       this.logger.warn(
         `[chat] upstream scenario-failed 502 surfaced to user — model=${(info as any)?.model ?? '?'}`
       );
@@ -994,3 +988,4 @@ export class CopilotController implements BeforeApplicationShutdown {
     body.pipe(res);
   }
 }
+
