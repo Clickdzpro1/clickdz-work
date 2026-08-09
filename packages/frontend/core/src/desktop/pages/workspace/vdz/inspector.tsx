@@ -72,21 +72,21 @@ type CapPosition = 'top' | 'middle' | 'lower';
 
 /** Caption presets for text clips (commit as capPreset via setClipStyle). */
 const CAPTION_PRESETS: { value: CapPreset; label: string }[] = [
-  { value: 'plain', label: 'Plain' },
-  { value: 'boxed', label: 'Boxed' },
-  { value: 'outline', label: 'Outline' },
-  { value: 'shadow', label: 'Shadow' },
-  { value: 'pill', label: 'Pill' },
+  { value: 'plain', label: 'Simple' },
+  { value: 'boxed', label: 'Encadré' },
+  { value: 'outline', label: 'Contour' },
+  { value: 'shadow', label: 'Ombre' },
+  { value: 'pill', label: 'Pastille' },
   // Karaoke only highlights word-by-word when the caption carries `words`
   // (generated captions do); otherwise it renders as the boxed look.
-  { value: 'karaoke', label: 'Karaoke' },
+  { value: 'karaoke', label: 'Karaoké' },
 ];
 
 /** Caption vertical placement (commit as capPosition via setClipStyle). */
 const CAPTION_POSITIONS: { value: CapPosition; label: string }[] = [
-  { value: 'top', label: 'Top' },
-  { value: 'middle', label: 'Middle' },
-  { value: 'lower', label: 'Lower' },
+  { value: 'top', label: 'Haut' },
+  { value: 'middle', label: 'Milieu' },
+  { value: 'lower', label: 'Bas' },
 ];
 
 /** Quick rotation chips for the Transform rotation control. */
@@ -570,28 +570,28 @@ function TimingSection({
           min={0}
           step={0.1}
           unit="s"
-          ariaLabel="Start (seconds)"
+          ariaLabel="Début (secondes)"
           onCommit={commitStart}
         />
       </Field>
-      <Field label="Duration">
+      <Field label="Durée">
         <ScrubField
           value={clip.duration}
           min={0.1}
           step={0.1}
           unit="s"
-          ariaLabel="Duration (seconds)"
+          ariaLabel="Durée (secondes)"
           onCommit={commitDuration}
         />
       </Field>
       {clip.type === 'video' ? (
-        <Field label="Trim head">
+        <Field label="Début de coupe">
           <ScrubField
             value={clip.trimStart ?? 0}
             min={0}
             step={0.1}
             unit="s"
-            ariaLabel="Trim head (seconds)"
+            ariaLabel="Début de coupe (secondes)"
             onCommit={commitTrim}
           />
         </Field>
@@ -616,7 +616,7 @@ function VolumeRow({
           <input
             type="range"
             className={styles.inspRange}
-            aria-label="Clip volume"
+            aria-label="Volume du clip"
             min={0}
             max={1}
             step={0.01}
@@ -628,7 +628,7 @@ function VolumeRow({
         <button
           type="button"
           className={ics.muteBtn}
-          title={muted ? 'Unmute (restore 100%)' : 'Mute this clip'}
+          title={muted ? 'Réactiver le son (100 %)' : 'Couper le son de ce clip'}
           aria-pressed={muted}
           onClick={() => onVolume(muted ? 1 : 0)}
         >
@@ -636,7 +636,7 @@ function VolumeRow({
         </button>
         <ResetButton
           atDefault={round3(volume) === 1}
-          title="Reset to 100%"
+          title="Réinitialiser à 100 %"
           onReset={() => onVolume(1)}
         />
       </div>
@@ -656,7 +656,7 @@ function ColorRow({
 }) {
   const current = (value ?? fallback).toLowerCase();
   return (
-    <Field label="Color">
+    <Field label="Couleur">
       <div className={ics.colorRow}>
         {COLOR_SWATCHES.map(swatch => (
           <button
@@ -744,14 +744,14 @@ function TransformRows({
   return (
     <>
       <RangeField
-        label={`Opacity ${Math.round(opacity * 100)}%`}
+        label={`Opacité ${Math.round(opacity * 100)}%`}
         value={opacity}
         min={0}
         max={1}
         step={0.01}
         defaultValue={1}
         format={v => `${Math.round(v * 100)}%`}
-        ariaLabel="Opacity"
+        ariaLabel="Opacité"
         onChange={v => onStyle({ opacity: v })}
       />
       <Field label="Rotation">
@@ -763,7 +763,7 @@ function TransformRows({
             step={1}
             precision={0}
             unit="°"
-            ariaLabel="Rotation (degrees)"
+            ariaLabel="Rotation (degrés)"
             onCommit={commitRotation}
           />
           {ROTATION_CHIPS.map(chip => (
@@ -783,7 +783,7 @@ function TransformRows({
           ))}
           <ResetButton
             atDefault={rotation === 0}
-            title="Reset to 0°"
+            title="Réinitialiser à 0°"
             onReset={() => {
               if (rotation !== 0) onStyle({ rotation: 0 });
             }}
@@ -824,7 +824,7 @@ function CaptionStyleRows({
 
   return (
     <>
-      <Field label="Caption style">
+      <Field label="Style de sous-titre">
         <SegRow
           options={CAPTION_PRESETS}
           value={capPreset}
@@ -835,13 +835,13 @@ function CaptionStyleRows({
         <button
           type="button"
           className={ics.applyAllBtn}
-          title="Set every text clip in this lane to this caption style (one undo)"
+          title="Appliquer ce style de sous-titre à tous les clips texte de cette piste (une annulation)"
           onClick={() => onApplyLane?.('capPreset')}
         >
-          Apply style to all {laneTextCount} clips in lane
+          Appliquer le style aux {laneTextCount} clips de la piste
         </button>
       ) : null}
-      <Field label="Caption position">
+      <Field label="Position du sous-titre">
         <SegRow
           options={CAPTION_POSITIONS}
           value={capPosition}
@@ -852,10 +852,10 @@ function CaptionStyleRows({
         <button
           type="button"
           className={ics.applyAllBtn}
-          title="Set every text clip in this lane to this position (one undo)"
+          title="Appliquer cette position à tous les clips texte de cette piste (une annulation)"
           onClick={() => onApplyLane?.('capPosition')}
         >
-          Apply position to all {laneTextCount} clips in lane
+          Appliquer la position aux {laneTextCount} clips de la piste
         </button>
       ) : null}
       {/* Karaoke state indicator: karaoke only animates word-by-word when the
@@ -872,8 +872,8 @@ function CaptionStyleRows({
             aria-hidden="true"
           />
           {hasWords
-            ? `Karaoke ready — ${clip.words?.length ?? 0} word timings`
-            : 'Karaoke set, but no word timings — renders as Boxed. Generate captions to add timings.'}
+            ? `Karaoké prêt — ${clip.words?.length ?? 0} minutages de mots`
+            : 'Karaoké défini, mais aucun minutage de mots — rendu comme Encadré. Générez des sous-titres pour ajouter des minutages.'}
         </div>
       ) : null}
     </>
@@ -951,21 +951,21 @@ function CaptionTools({
         className={ics.quickBtn}
         onClick={onGenerate}
         disabled={captions.busy || !captions.ready || !onOps}
-        title="Transcribe this clip and add a caption text clip per phrase"
+        title="Transcrire ce clip et ajouter un clip texte de sous-titre par phrase"
       >
         {captions.busy
           ? '⏳ Transcribing…'
           : !captions.ready
-            ? 'Loading audio…'
-            : '💬 Generate captions'}
+            ? 'Chargement de l’audio…'
+            : '💬 Générer les sous-titres'}
       </button>
       {captions.error ? (
         <div className={styles.inspEmptyHint}>{captions.error}</div>
       ) : null}
       {lastCount !== null ? (
         <div className={styles.inspEmptyHint}>
-          Added {lastCount} caption{lastCount === 1 ? '' : 's'} to the overlay
-          lane (one undo entry). Open the Transcript panel to edit them.
+          {lastCount} sous-titre{lastCount === 1 ? '' : 's'} ajouté{lastCount === 1 ? '' : 's'} à la piste
+          overlay (une entrée d'annulation). Ouvrez le panneau Transcription pour les modifier.
         </div>
       ) : null}
     </>
@@ -1036,22 +1036,22 @@ function ProjectSection({
   return (
     <div className={styles.inspStack}>
       <div className={ics.projectHeader}>
-        {timeline.name || 'Untitled project'}
-        <span className={styles.inspClipType}>project</span>
+        {timeline.name || 'Projet sans titre'}
+        <span className={styles.inspClipType}>projet</span>
       </div>
       <div className={styles.inspEmptyHint}>
-        No clip selected. Set the canvas here, or click a clip in the timeline to
-        edit it.
+        Aucun clip sélectionné. Définissez le canevas ici, ou cliquez sur un clip dans la chronologie pour
+        le modifier.
       </div>
 
       {/* ---- Canvas ratio presets ---- */}
       <Section
         id="proj-canvas"
-        title="Canvas"
+        title="Canevas"
         closed={closed}
         onToggle={onToggle}
       >
-        <Field label="Aspect ratio">
+        <Field label="Format d'image">
           <div className={ics.ratioGrid}>
             {VDZ_RATIO_PRESETS.map(preset => {
               const active = matchId === preset.id;
@@ -1094,7 +1094,7 @@ function ProjectSection({
         </Field>
 
         {/* ---- Custom W×H ---- */}
-        <Field label="Custom size (px, even 320–4096)">
+        <Field label="Taille personnalisée (px, pair 320–4096)">
           <div className={ics.dimRow}>
             <ScrubField
               value={width}
@@ -1103,7 +1103,7 @@ function ProjectSection({
               step={2}
               precision={0}
               unit="w"
-              ariaLabel="Canvas width (pixels)"
+              ariaLabel="Largeur du canevas (pixels)"
               onCommit={w => commitDim(w, height)}
             />
             <span className={ics.dimTimes} aria-hidden="true">
@@ -1116,7 +1116,7 @@ function ProjectSection({
               step={2}
               precision={0}
               unit="h"
-              ariaLabel="Canvas height (pixels)"
+              ariaLabel="Hauteur du canevas (pixels)"
               onCommit={h => commitDim(width, h)}
             />
           </div>
@@ -1126,16 +1126,16 @@ function ProjectSection({
       {/* ---- Read-only project facts ---- */}
       <Section
         id="proj-info"
-        title="Project"
+        title="Projet"
         closed={closed}
         onToggle={onToggle}
       >
         <div className={ics.readonlyLine}>
-          <span>Frame rate</span>
+          <span>Cadence</span>
           <span className={ics.readonlyValue}>{timeline.fps} fps</span>
         </div>
         <div className={ics.readonlyLine}>
-          <span>Total duration</span>
+          <span>Durée totale</span>
           <span className={ics.readonlyValue}>
             {fmtDuration(totalDuration)} ({totalDuration.toFixed(2)}s)
           </span>
@@ -1379,23 +1379,23 @@ export function Inspector({
           type="button"
           className={ics.quickBtn}
           onClick={duplicateClip}
-          title="Duplicate this clip right after itself"
+          title="Dupliquer ce clip juste après lui-même"
         >
-          ⧉ Duplicate
+          ⧉ Dupliquer
         </button>
         <button
           type="button"
           className={ics.quickBtnDanger}
           onClick={deleteClip}
-          title="Delete this clip (leaves a gap)"
+          title="Supprimer ce clip (laisse un trou)"
         >
-          🗑 Delete
+          🗑 Supprimer
         </button>
         <button
           type="button"
           className={ics.quickBtnDanger}
           onClick={rippleDeleteClip}
-          title="Delete and close the gap (ripple)"
+          title="Supprimer et fermer le trou (ripple)"
         >
           ⇤ Ripple
         </button>
@@ -1408,7 +1408,7 @@ export function Inspector({
       {isVisual ? (
         <Section
           id="transform"
-          title="Transform"
+          title="Transformation"
           closed={closedSections}
           onToggle={toggleSection}
         >
@@ -1423,7 +1423,7 @@ export function Inspector({
       {/* ---- Timing ---- */}
       <Section
         id="timing"
-        title="Timing"
+        title="Synchronisation"
         closed={closedSections}
         onToggle={toggleSection}
       >
@@ -1439,16 +1439,16 @@ export function Inspector({
       {clip.type === 'text' || clip.type === 'shape' || clip.type === 'image' ? (
         <Section
           id="appearance"
-          title="Appearance"
+          title="Apparence"
           closed={closedSections}
           onToggle={toggleSection}
         >
           {clip.type === 'text' ? (
             <>
-              <Field label="Text">
+              <Field label="Texte">
                 <textarea
                   className={styles.inspTextarea}
-                  aria-label="Text content"
+                  aria-label="Contenu du texte"
                   value={clip.text}
                   rows={2}
                   onChange={e => patch({ text: e.target.value })}
@@ -1462,7 +1462,7 @@ export function Inspector({
                 step={0.005}
                 defaultValue={DEFAULT_FONT_SIZE}
                 format={v => `${(v * 100).toFixed(0)}%`}
-                ariaLabel="Font size"
+                ariaLabel="Taille de police"
                 onChange={v => patch({ fontSize: v })}
               />
               <ColorRow
@@ -1479,7 +1479,7 @@ export function Inspector({
                   step={0.01}
                   defaultValue={0.5}
                   format={v => `${(v * 100).toFixed(0)}%`}
-                  ariaLabel="Horizontal position"
+                  ariaLabel="Position horizontale"
                   onChange={v => patch({ x: v })}
                 />
                 <RangeField
@@ -1490,16 +1490,16 @@ export function Inspector({
                   step={0.01}
                   defaultValue={0.5}
                   format={v => `${(v * 100).toFixed(0)}%`}
-                  ariaLabel="Vertical position"
+                  ariaLabel="Position verticale"
                   onChange={v => patch({ y: v })}
                 />
               </div>
-              <Field label="Align">
+              <Field label="Alignement">
                 <SegRow
                   options={[
-                    { value: 'left', label: 'Left' },
-                    { value: 'center', label: 'Center' },
-                    { value: 'right', label: 'Right' },
+                    { value: 'left', label: 'Gauche' },
+                    { value: 'center', label: 'Centre' },
+                    { value: 'right', label: 'Droite' },
                   ]}
                   value={clip.align ?? 'center'}
                   onPick={value => patch({ align: value })}
@@ -1511,7 +1511,7 @@ export function Inspector({
           {clip.type === 'shape' ? (
             <>
               <div className={ics.readonlyLine}>
-                <span>Shape</span>
+                <span>Forme</span>
                 <span className={ics.readonlyValue}>{clip.shape}</span>
               </div>
               <ColorRow
@@ -1528,7 +1528,7 @@ export function Inspector({
                   step={0.01}
                   defaultValue={0}
                   format={v => `${(v * 100).toFixed(0)}%`}
-                  ariaLabel="Horizontal position"
+                  ariaLabel="Position horizontale"
                   onChange={v => patch({ x: v })}
                 />
                 <RangeField
@@ -1539,7 +1539,7 @@ export function Inspector({
                   step={0.01}
                   defaultValue={0}
                   format={v => `${(v * 100).toFixed(0)}%`}
-                  ariaLabel="Vertical position"
+                  ariaLabel="Position verticale"
                   onChange={v => patch({ y: v })}
                 />
               </div>
@@ -1563,7 +1563,7 @@ export function Inspector({
                   step={0.01}
                   defaultValue={1}
                   format={v => `${(v * 100).toFixed(0)}%`}
-                  ariaLabel="Height"
+                  ariaLabel="Hauteur"
                   onChange={v => patch({ h: v })}
                 />
               </div>
@@ -1571,11 +1571,11 @@ export function Inspector({
           ) : null}
 
           {clip.type === 'image' ? (
-            <Field label="Fit">
+            <Field label="Ajustement">
               <SegRow
                 options={[
-                  { value: 'cover', label: 'Cover' },
-                  { value: 'contain', label: 'Contain' },
+                  { value: 'cover', label: 'Remplir' },
+                  { value: 'contain', label: 'Contenir' },
                 ]}
                 value={clip.fit ?? 'cover'}
                 onPick={value => patch({ fit: value })}
@@ -1608,7 +1608,7 @@ export function Inspector({
                   step={0.1}
                   defaultValue={0}
                   format={v => `${v.toFixed(1)}s`}
-                  ariaLabel="Fade in (seconds)"
+                  ariaLabel="Fondu entrée (secondes)"
                   onChange={v =>
                     onOp({
                       op: 'setAudioMix',
@@ -1627,7 +1627,7 @@ export function Inspector({
                   step={0.1}
                   defaultValue={0}
                   format={v => `${v.toFixed(1)}s`}
-                  ariaLabel="Fade out (seconds)"
+                  ariaLabel="Fondu sortie (secondes)"
                   onChange={v =>
                     onOp({
                       op: 'setAudioMix',
@@ -1638,10 +1638,10 @@ export function Inspector({
                   }
                 />
               </div>
-              <Field label="Duck other audio while this plays">
+              <Field label="Réduire les autres audio pendant la lecture">
                 <input
                   type="checkbox"
-                  aria-label="Duck other audio"
+                  aria-label="Réduire les autres audio"
                   checked={clip.duck ?? false}
                   onChange={e =>
                     onOp({
@@ -1662,7 +1662,7 @@ export function Inspector({
       {clip.type === 'text' ? (
         <Section
           id="captions"
-          title="Text & Captions"
+          title="Texte & Sous-titres"
           closed={closedSections}
           onToggle={toggleSection}
         >
@@ -1680,7 +1680,7 @@ export function Inspector({
       {clip.type === 'audio' ? (
         <Section
           id="gencaptions"
-          title="Captions"
+          title="Sous-titres"
           closed={closedSections}
           onToggle={toggleSection}
         >
@@ -1697,16 +1697,16 @@ export function Inspector({
         onToggle={toggleSection}
       >
         <div className={styles.inspRow}>
-          <Field label="In">
+          <Field label="Entrée">
             <select
               className={styles.inspSelect}
-              aria-label="Entrance animation"
+              aria-label="Animation d'entrée"
               value={anim.in?.kind ?? ''}
               onChange={e =>
                 setAnimSide('in', e.target.value as VdzAnimationKind | '')
               }
             >
-              <option value="">none</option>
+              <option value="">aucun</option>
               {ANIMATION_KINDS.map(k => (
                 <option key={k} value={k}>
                   {k}
@@ -1721,22 +1721,22 @@ export function Inspector({
             max={2}
             step={0.1}
             format={v => `${v.toFixed(1)}s`}
-            ariaLabel="Entrance duration (seconds)"
+            ariaLabel="Durée d'entrée (secondes)"
             disabled={!anim.in}
             onChange={v => setAnimDuration('in', v)}
           />
         </div>
         <div className={styles.inspRow}>
-          <Field label="Out">
+          <Field label="Sortie">
             <select
               className={styles.inspSelect}
-              aria-label="Exit animation"
+              aria-label="Animation de sortie"
               value={anim.out?.kind ?? ''}
               onChange={e =>
                 setAnimSide('out', e.target.value as VdzAnimationKind | '')
               }
             >
-              <option value="">none</option>
+              <option value="">aucun</option>
               {ANIMATION_KINDS.map(k => (
                 <option key={k} value={k}>
                   {k}
@@ -1751,7 +1751,7 @@ export function Inspector({
             max={2}
             step={0.1}
             format={v => `${v.toFixed(1)}s`}
-            ariaLabel="Exit duration (seconds)"
+            ariaLabel="Durée de sortie (secondes)"
             disabled={!anim.out}
             onChange={v => setAnimDuration('out', v)}
           />
@@ -1762,7 +1762,7 @@ export function Inspector({
       {clip.type === 'video' || clip.type === 'image' ? (
         <Section
           id="effectpresets"
-          title="Effect presets"
+          title="Préréglages d'effets"
           closed={closedSections}
           onToggle={toggleSection}
         >
@@ -1779,13 +1779,13 @@ export function Inspector({
       {isVisual ? (
         <Section
           id="effects"
-          title="Effects"
+          title="Effets"
           count={effects.length}
           closed={closedSections}
           onToggle={toggleSection}
         >
           {effects.length === 0 ? (
-            <div className={styles.inspEmptyHint}>No effects.</div>
+            <div className={styles.inspEmptyHint}>Aucun effet.</div>
           ) : (
             effects.map((effect, i) => (
               <div key={`${effect.kind}-${i}`} className={styles.inspEffectRow}>
@@ -1794,7 +1794,7 @@ export function Inspector({
                   <input
                     type="range"
                     className={styles.inspRange}
-                    aria-label={`${effect.kind} amount`}
+                    aria-label={`Intensité ${effect.kind}`}
                     min={0}
                     max={1}
                     step={0.01}
@@ -1808,8 +1808,8 @@ export function Inspector({
                 <button
                   type="button"
                   className={styles.inspIconButton}
-                  title="Remove effect"
-                  aria-label={`Remove ${effect.kind}`}
+                  title="Supprimer l'effet"
+                  aria-label={`Supprimer ${effect.kind}`}
                   onClick={() => removeEffect(i)}
                 >
                   ✕
@@ -1819,13 +1819,13 @@ export function Inspector({
           )}
           <select
             className={styles.inspSelect}
-            aria-label="Add effect"
+            aria-label="Ajouter un effet"
             value=""
             onChange={e => {
               if (e.target.value) addEffect(e.target.value as VdzEffectKind);
             }}
           >
-            <option value="">+ add effect…</option>
+            <option value="">+ ajouter un effet…</option>
             {EFFECT_KINDS.map(k => (
               <option key={k} value={k}>
                 {k}
@@ -1838,7 +1838,7 @@ export function Inspector({
               className={ics.clearAllBtn}
               onClick={clearEffects}
             >
-              Clear all effects
+              Effacer tous les effets
             </button>
           ) : null}
         </Section>
@@ -1852,14 +1852,14 @@ export function Inspector({
           aria-expanded={rawOpen}
           onClick={() => setRawOpen(o => !o)}
         >
-          {rawOpen ? '▾' : '▸'} Raw JSON
+          {rawOpen ? '▾' : '▸'} JSON brut
         </button>
         {rawOpen ? (
           <>
             <pre className={styles.jsonBlock}>
               {JSON.stringify(clip, null, 2)}
             </pre>
-            <div className={styles.inspectorMeta}>track: {trackId}</div>
+            <div className={styles.inspectorMeta}>piste : {trackId}</div>
           </>
         ) : null}
       </div>
