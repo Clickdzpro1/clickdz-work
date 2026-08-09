@@ -63,7 +63,7 @@ const VoiceStudioPage = () => {
 
   return (
     <>
-      <ViewTitle title="Voice Studio" />
+      <ViewTitle title="Studio Vocal" />
       <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
@@ -79,7 +79,7 @@ const VoiceStudioPage = () => {
           }}
         >
           <span style={{ fontSize: 16 }}>🎙️</span>
-          Voice Studio
+          Studio Vocal
           <span
             style={{
               fontSize: 10,
@@ -135,11 +135,11 @@ const VoiceStudioPage = () => {
                   color: C.text,
                 }}
               >
-                <span>🎙️</span> Voice Studio
+                <span>🎙️</span> Studio Vocal
               </h1>
               <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
-                Compose multi-voice narration with emotion, transcribe speech to
-                text, and generate natural voice-overs — all in one place.
+                Composez des narrations multi-voix avec émotion, transcrivez la parole en
+                texte, et générez des voix-off naturelles — tout au même endroit.
               </p>
             </header>
 
@@ -173,19 +173,19 @@ const VoiceStudioPage = () => {
                 active={tab === 'transcribe'}
                 onClick={() => setTab('transcribe')}
               >
-                Transcribe
+                Transcription
               </TabButton>
               <TabButton
                 active={tab === 'generate'}
                 onClick={() => setTab('generate')}
               >
-                Generate
+                Générer
               </TabButton>
               <TabButton
                 active={tab === 'library'}
                 onClick={() => setTab('library')}
               >
-                Library
+                Bibliothèque
               </TabButton>
             </div>
 
@@ -202,7 +202,7 @@ const VoiceStudioPage = () => {
                   gap: 10,
                 }}
               >
-                <PageSpinner /> Loading Voice Studio…
+                <PageSpinner /> Chargement du Studio Vocal…
               </div>
             ) : state === 'error' || !caps ? (
               <div
@@ -215,7 +215,7 @@ const VoiceStudioPage = () => {
                   color: C.text,
                 }}
               >
-                Couldn&apos;t load Voice Studio.{' '}
+                Impossible de charger le Studio Vocal.{' '}
                 <button
                   type="button"
                   onClick={() => void load()}
@@ -230,7 +230,7 @@ const VoiceStudioPage = () => {
                     textDecoration: 'underline',
                   }}
                 >
-                  Retry
+                  Réessayer
                 </button>
               </div>
             ) : tab === 'studio' ? (
