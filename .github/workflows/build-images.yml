@@ -283,3 +283,8 @@ jobs:
           provenance: true
           file: .github/deployment/node/Dockerfile
           tags: ghcr.io/clickdzpro1/clickdz-work:${{inputs.build-type}}-${{ inputs.git-short-hash }},ghcr.io/clickdzpro1/clickdz-work:${{inputs.build-type}}
+          # H7: Docker layer caching via GitHub Actions cache — cuts build time
+          # from ~25-30min (cold) to ~8-15min on cache hits.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
