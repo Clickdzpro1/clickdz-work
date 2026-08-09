@@ -202,6 +202,15 @@ class AdminDashboardValueDayPoint {
 }
 
 @ObjectType()
+class AdminDashboardSignupPoint {
+  @Field(() => Date)
+  date!: Date;
+
+  @Field(() => SafeIntResolver)
+  count!: number;
+}
+
+@ObjectType()
 class AdminSharedLinkTopItem {
   @Field(() => String)
   workspaceId!: string;
@@ -268,6 +277,9 @@ class AdminDashboard {
 
   @Field(() => TimeWindow)
   topSharedLinksWindow!: TimeWindow;
+
+  @Field(() => [AdminDashboardSignupPoint])
+  signupsTimeline!: AdminDashboardSignupPoint[];
 
   @Field(() => Date)
   generatedAt!: Date;
@@ -520,6 +532,18 @@ export class AdminWorkspaceResolver {
       )
     );
 
+    const includeSignupsTimeline = Boolean(
+      info?.fieldNodes.some(
+        node =>
+          node.selectionSet &&
+          hasSelectedField(
+            node.selectionSet.selections,
+            'signupsTimeline',
+            info.fragments
+          )
+      )
+    );
+
     const dashboard = await this.models.workspaceAnalytics.adminGetDashboard({
       timezone: input?.timezone,
       storageHistoryDays: input?.storageHistoryDays,
@@ -528,6 +552,10 @@ export class AdminWorkspaceResolver {
       copilotWindowDays: input?.copilotWindowDays,
       includeTopSharedLinks,
     });
+
+    const signupsTimeline = includeSignupsTimeline
+      ? await this.models.user.signupsTimeline(30)
+      : [];
 
     return {
       ...dashboard,
@@ -539,6 +567,7 @@ export class AdminWorkspaceResolver {
             ),
           }))
         : [],
+      signupsTimeline,
     };
   }
 
