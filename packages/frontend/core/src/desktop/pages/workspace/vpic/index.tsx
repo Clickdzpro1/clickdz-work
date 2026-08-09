@@ -4,6 +4,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { lazy, Suspense } from 'react';
 
 import { dirFor, useVpicLang } from '../../../../modules/vpic/i18n';
@@ -238,6 +239,7 @@ const VpicStudioPage = () => {
       </ViewHeader>
 
       <ViewBody>
+        <AppAccessGate app="VPIC">
         <CdzResponsive />
         {/* Direction-stamped host so the entire editor lays out RTL-aware in
             darja. The panel and every section inside inherit `dir` from here.
@@ -260,6 +262,7 @@ const VpicStudioPage = () => {
             <VpicEditorPanel />
           </Suspense>
         </div>
+        </AppAccessGate>
       </ViewBody>
     </>
   );
