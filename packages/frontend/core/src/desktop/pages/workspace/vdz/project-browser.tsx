@@ -39,7 +39,7 @@ function formatUpdatedAt(iso: string): string {
   if (!Number.isFinite(then)) return '';
   const diffMs = Date.now() - then;
   const min = Math.round(diffMs / 60_000);
-  if (min < 1) return 'Modifié à l'instant';
+  if (min < 1) return 'Modifié à l’instant';
   if (min < 60) return `Modifié il y a ${min} min`;
   const hr = Math.round(min / 60);
   if (hr < 24) return `Modifié il y a ${hr} h`;
