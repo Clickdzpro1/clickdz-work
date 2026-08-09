@@ -7,6 +7,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import {
   type CSSProperties,
   useCallback,
@@ -221,6 +222,7 @@ const ShopErpPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="SHOPERP">
         <div
           style={{
             height: '100%',
@@ -311,6 +313,7 @@ const ShopErpPage = () => {
             )}
           </div>
         </div>
+        </AppAccessGate>
       </ViewBody>
     </>
   );
