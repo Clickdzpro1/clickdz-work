@@ -1,4 +1,5 @@
 import { ViewBody, ViewIcon, ViewTitle } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { useCallback } from 'react';
 
 // Side-effect import: registers <clickdz-builder-home>, which in turn registers
@@ -39,6 +40,7 @@ export const Component = () => {
       <ViewTitle title="ClickDz Apps" />
       <ViewIcon icon="ai" />
       <ViewBody>
+        <AppAccessGate app="APPS">
         <CdzResponsive />
         {/*
           `width: '100%'` is load-bearing, not decorative. ViewBody portals its
@@ -59,6 +61,7 @@ export const Component = () => {
           style={{ height: '100%', width: '100%', maxWidth: '100%', overflow: 'hidden' }}
           ref={onContainerRef}
         />
+        </AppAccessGate>
       </ViewBody>
     </>
   );
