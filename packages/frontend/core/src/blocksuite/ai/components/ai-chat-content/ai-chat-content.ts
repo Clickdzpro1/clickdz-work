@@ -185,6 +185,19 @@ export class AIChatContent extends SignalWatcher(
   @property({ attribute: false })
   accessor onAISubscribe!: () => Promise<void>;
 
+  // ClickDz context props — drilled through to suggestions + smart starters.
+  @property({ attribute: false })
+  accessor cdzStudio: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzNiche: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzLang: string | undefined;
+
+  @property({ attribute: false })
+  accessor cdzRecentTitles: string[] | undefined;
+
   @state()
   accessor chatContextValue: ChatContextValue = DEFAULT_CHAT_CONTEXT_VALUE;
 
@@ -380,6 +393,10 @@ export class AIChatContent extends SignalWatcher(
         .docDisplayService=${this.docDisplayConfig}
         .peekViewService=${this.peekViewService}
         .onOpenDoc=${this.onOpenDoc}
+        .cdzStudio=${this.cdzStudio}
+        .cdzNiche=${this.cdzNiche}
+        .cdzLang=${this.cdzLang}
+        .cdzRecentTitles=${this.cdzRecentTitles}
       ></ai-chat-messages>
       <ai-chat-composer
         style=${styleMap({
@@ -407,6 +424,9 @@ export class AIChatContent extends SignalWatcher(
         .subscriptionService=${this.subscriptionService}
         .aiModelService=${this.aiModelService}
         .onAISubscribe=${this.onAISubscribe}
+        .cdzStudio=${this.cdzStudio}
+        .cdzNiche=${this.cdzNiche}
+        .cdzLang=${this.cdzLang}
         .trackOptions=${{
           where: 'chat-panel',
           control: 'chat-send',
