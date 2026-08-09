@@ -5,14 +5,13 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 /**
  * App access gate — checks whether the signed-in user has an active
- * entitlement for a gated application (SLIDE_PRO, SOCIAL_PLUS, COURSE_PRO,
- * ZOOM_PLUS). If the entitlement is inactive or absent, renders an
+ * entitlement for a gated application (all studios + AI Chat + Whiteboard).
+ * If the entitlement is inactive or absent, renders an
  * "Upgrade to get access" screen instead of the children.
  *
  * The check is a lightweight GraphQL query against the backend
- * `userAppEntitlements(userId: String!)` field, passing the current user's
- * own session id (obtained from `AuthService`). The backend resolver allows
- * a user to query their own entitlements.
+ * `myAppEntitlements` field (public, uses the session user) with a fallback
+ * to the admin-only `userAppEntitlements(userId: String!)` field.
  *
  * FAIL-OPEN: if the entitlement check itself errors (network, 401, 403, etc.),
  * the gate renders the children unchanged. This preserves existing access for
@@ -29,7 +28,23 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 // Types
 // ---------------------------------------------------------------------------
 
-export type GatedApp = 'SLIDE_PRO' | 'SOCIAL_PLUS' | 'COURSE_PRO' | 'ZOOM_PLUS';
+export type GatedApp =
+  | 'SLIDE_PRO'
+  | 'SOCIAL_PLUS'
+  | 'COURSE_PRO'
+  | 'ZOOM_PLUS'
+  | 'VDZ'
+  | 'VOICE'
+  | 'APPS'
+  | 'SHOPERP'
+  | 'HERMES'
+  | 'OPENCLAW'
+  | 'AGENTS'
+  | 'VPIC'
+  | 'INTEGRATIONS'
+  | 'WHATSAPPMAX'
+  | 'AI_CHAT'
+  | 'WHITEBOARD';
 
 interface EntitlementRow {
   app: string;
@@ -41,6 +56,7 @@ interface EntitlementRow {
 interface EntitlementsResponse {
   data?: {
     userAppEntitlements?: EntitlementRow[];
+    myAppEntitlements?: EntitlementRow[];
   };
   errors?: Array<{ message: string }>;
 }
@@ -50,14 +66,67 @@ interface EntitlementsResponse {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch the signed-in user's own app entitlements. Uses the same `cdzApiUrl`
- * + `credentials: 'include'` idiom as the agents REST client
- * (modules/agents/api.ts) so desktop/native builds resolve correctly.
+ * Fetch the signed-in user's own app entitlements. Uses the public
+ * `myAppEntitlements` GraphQL query (no userId arg — the backend resolver
+ * uses @CurrentUser to read the session). Falls back to the admin-only
+ * `userAppEntitlements(userId)` query if the public one is not yet
+ * deployed, ensuring backward compatibility.
+ *
+ * Uses the same `cdzApiUrl` + `credentials: 'include'` idiom as the agents
+ * REST client (modules/agents/api.ts) so desktop/native builds resolve
+ * correctly.
  *
  * The GraphQL endpoint is at `/graphql` (the same path the AFFiNE framework
  * uses). We send a minimal query selecting only the fields the gate needs.
  */
 async function fetchEntitlements(userId: string): Promise<EntitlementRow[]> {
+  // Primary: the public myAppEntitlements query (no userId arg, uses session).
+  const publicQuery = `query myAppEntitlementsSelf {
+  myAppEntitlements {
+    app
+    active
+    plan
+    expiresAt
+  }
+}`;
+
+  let res: Response;
+  try {
+    res = await fetch(cdzApiUrl('/graphql'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ query: publicQuery }),
+    });
+  } catch {
+    // Network error — fail open.
+    return [];
+  }
+
+  if (!res.ok) {
+    // Non-OK response — fail open.
+    return [];
+  }
+
+  try {
+    const json = (await res.json()) as EntitlementsResponse;
+    if (json.errors || !json.data?.myAppEntitlements) {
+      // Public query may not be deployed yet — fall back to the admin query.
+      return await fetchEntitlementsFallback(userId);
+    }
+    return json.data.myAppEntitlements;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fallback: use the admin-only userAppEntitlements(userId) query.
+ * This requires the user to be an admin, but preserves backward compatibility
+ * for deployments where the public myAppEntitlements resolver is not yet
+ * available.
+ */
+async function fetchEntitlementsFallback(userId: string): Promise<EntitlementRow[]> {
   const query = `query userAppEntitlementsSelf($userId: String!) {
   userAppEntitlements(userId: $userId) {
     app
@@ -76,12 +145,10 @@ async function fetchEntitlements(userId: string): Promise<EntitlementRow[]> {
       body: JSON.stringify({ query, variables: { userId } }),
     });
   } catch {
-    // Network error — fail open.
     return [];
   }
 
   if (!res.ok) {
-    // Non-OK response — fail open.
     return [];
   }
 
@@ -105,6 +172,18 @@ const APP_LABELS: Record<GatedApp, string> = {
   SOCIAL_PLUS: `Social`,
   COURSE_PRO: `CoursePro`,
   ZOOM_PLUS: `ZOOM+`,
+  VDZ: `Vdz Studio`,
+  VOICE: `Voice Studio`,
+  APPS: `ClickDz Apps`,
+  SHOPERP: `DzOS`,
+  HERMES: `Hermes`,
+  OPENCLAW: `OpenClaw`,
+  AGENTS: `Agents`,
+  VPIC: `Studio Image`,
+  INTEGRATIONS: `Integrations Flows`,
+  WHATSAPPMAX: `WhatsappMax`,
+  AI_CHAT: `AI Chat`,
+  WHITEBOARD: `Whiteboard`,
 };
 
 // ---------------------------------------------------------------------------
