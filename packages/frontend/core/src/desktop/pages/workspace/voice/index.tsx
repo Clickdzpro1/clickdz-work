@@ -4,6 +4,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 
 import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
@@ -98,6 +99,7 @@ const VoiceStudioPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="VOICE">
         <CdzResponsive />
         <div
           data-cdz-surface=""
@@ -247,6 +249,7 @@ const VoiceStudioPage = () => {
             )}
           </div>
         </div>
+        </AppAccessGate>
       </ViewBody>
     </>
   );
