@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { EntitlementModule } from '../entitlement';
 import {
   AdminFeatureManagementResolver,
+  UserAppEntitlementResolver,
   UserFeatureResolver,
 } from './resolver';
 import { FeatureService } from './service';
@@ -12,6 +13,7 @@ import { FeatureService } from './service';
   providers: [
     UserFeatureResolver,
     AdminFeatureManagementResolver,
+    UserAppEntitlementResolver,
     FeatureService,
   ],
   exports: [FeatureService],
