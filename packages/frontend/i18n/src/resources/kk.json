@@ -1882,7 +1882,7 @@
   "com.affine.workspaceList.workspaceListType.local": "Жергілікті қойма",
   "com.affine.workspaceList.addServer": "Сервер қос",
   "com.affine.workspaceSubPath.all": "Барлық құжаттар",
-  "com.affine.workspaceSubPath.chat": "Интеллект",
+  "com.affine.workspaceSubPath.chat": "AI чат",
   "com.affine.workspaceSubPath.trash": "Себет",
   "com.affine.workspaceSubPath.trash.empty-description": "Жойылған құжаттар осында көрсетіледі.",
   "com.affine.write_with_a_blank_page": "Бос беттен бастап жаз",
