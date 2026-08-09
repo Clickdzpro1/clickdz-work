@@ -2099,7 +2099,7 @@
   "com.affine.workspaceList.addWorkspace.create": "إنشاء مساحة عمل",
   "com.affine.workspaceList.workspaceListType.local": "تخزين محلي",
   "com.affine.workspaceSubPath.all": "كل المستندات",
-  "com.affine.workspaceSubPath.chat": "الذكاء",
+  "com.affine.workspaceSubPath.chat": "محادثة AI",
   "com.affine.workspaceSubPath.trash": "سلة المهملات",
   "com.affine.workspaceSubPath.trash.empty-description": "سيتم عرض المستندات المحذوفة هنا.",
   "com.affine.write_with_a_blank_page": "اكتب بصفحة فارغة",
