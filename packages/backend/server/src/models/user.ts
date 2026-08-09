@@ -409,6 +409,35 @@ export class UserModel extends BaseModel {
     return this.db.user.count({ where });
   }
 
+  /**
+   * Daily signup counts for the admin analytics dashboard.
+   * Returns one row per day with a signup count, covering the last `days`
+   * days (default 30). Days with zero signups are omitted (no rows) — the
+   * frontend fills gaps client-side.
+   */
+  async signupsTimeline(
+    days = 30
+  ): Promise<{ date: Date; count: number }[]> {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const rows = await this.db.$queryRaw<
+      Array<{ date: Date; count: bigint }>
+    >`
+      SELECT DATE(created_at) as date, COUNT(*)::bigint as count
+      FROM "users"
+      WHERE created_at >= ${since}
+      GROUP BY DATE(created_at)
+      ORDER BY date
+    `;
+
+    // Prisma returns bigint for COUNT(*); convert to number for GraphQL SafeInt
+    return rows.map(row => ({
+      date: row.date,
+      count: Number(row.count),
+    }));
+  }
+
   // #region ConnectedAccount
 
   async createConnectedAccount(data: CreateConnectedAccountInput) {
