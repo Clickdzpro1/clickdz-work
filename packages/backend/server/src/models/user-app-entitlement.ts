@@ -77,6 +77,17 @@ export class UserAppEntitlementModel extends BaseModel {
     });
   }
 
+  /**
+   * List ALL app entitlements across all users, ordered by userId.
+   * Used by the admin analytics `adminUserAppEntitlements` query which
+   * groups the rows by userId on the resolver side.
+   */
+  async listAll() {
+    return await this.entitlement.findMany({
+      orderBy: { userId: 'asc' },
+    });
+  }
+
   async upsert(
     userId: string,
     app: string,
