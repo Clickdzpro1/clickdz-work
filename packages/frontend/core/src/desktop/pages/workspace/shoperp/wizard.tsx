@@ -102,9 +102,6 @@ export const ShopWizard = ({ onDone, onCancel, hasExistingApps }: {
   const [pinConfirm, setPinConfirm] = useState('');
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [blockReason, setBlockReason] = useState<string | null>(null);
-  // Non-fatal: set when the ERP copy could not be prepared. The shop still
-  // publishes; the DoneCard warns the user the ERP step failed and can be retried.
-  const [erpPrepFailed, setErpPrepFailed] = useState(false);
 
   const nameErr = validateStoreName(storeName);
   const waErr = validateWhatsapp(whatsapp);
@@ -154,19 +151,13 @@ export const ShopWizard = ({ onDone, onCancel, hasExistingApps }: {
       const storeSlug = shop.storeSlug || shop.slug;
       saveArtifact({ slug: shop.slug, title: settings.storeName, html: shop.html, storeSlug, kind: 'shop' });
 
-      setPhase({ kind: 'creating', label: 'Préparation de l'ERP associé…' });
+      setPhase({ kind: 'creating', label: 'Préparation de l’ERP associé…' });
       let erpSlug = '';
-      setErpPrepFailed(false);
       try {
         const erp = await fetchTemplate({ kind: 'erp', storeSlug, settings });
         erpSlug = erp.slug;
         saveArtifact({ slug: erp.slug, title: 'ERP — ' + settings.storeName, html: erp.html, storeSlug, kind: 'erp' });
-      } catch {
-        // Non-fatal: the shop still publishes. Surface it on the DoneCard so the
-        // user is not left silently broken (the ERP is prepared/stored again on
-        // a retry or from the Studio).
-        setErpPrepFailed(true);
-      }
+      } catch {}
 
       setPhase({ kind: 'creating', label: 'Publication de votre ERP…' });
       const outcome = await deployApp({
@@ -196,18 +187,18 @@ export const ShopWizard = ({ onDone, onCancel, hasExistingApps }: {
   if (phase.kind === 'error') {
     return <Card><Banner tone="error">{phase.message}</Banner><div style={{ display: 'flex', gap: 10, marginTop: 16 }}><button style={btnStyle('primary')} onClick={() => void create()}>Réessayer</button><button style={btnStyle('secondary')} onClick={() => setPhase({ kind: 'idle' })}>Retour</button></div></Card>;
   }
-  if (phase.kind === 'done') { return <DoneCard result={phase.result} settings={settings} onFinish={onDone} erpPrepFailed={erpPrepFailed} />; }
+  if (phase.kind === 'done') { return <DoneCard result={phase.result} settings={settings} onFinish={onDone} />; }
 
   return (
     <Card>
       <StepDots total={FLOW.length} current={stepIdx} />
-      {step === 'welcome' ? <StepShell emoji="🛍️" title="Créez votre ERP" subtitle="On prépare votre ERP en ligne — paiement à la livraison, commande par WhatsApp et un tableau de bord assorti. Quelques questions rapides et vous êtes en ligne."><ul style={{ margin: '4px 0 0', paddingInlineStart: 18, color: C.muted, fontSize: 13, lineHeight: 1.7 }}><li>Le nom de votre ERP &amp; sa couleur</li><li>Un numéro WhatsApp pour les commandes</li><li>Un PIN gérant pour protéger l'espace admin</li></ul></StepShell> : null}
-      {step === 'template' ? <StepShell emoji="🎨" title="Choisissez un modèle" subtitle="Un point de départ adapté à votre activité — couleurs, catégories et produits d'exemple. Vous pourrez tout changer ensuite.">{templatesState.kind === 'ready' ? <TemplatePicker templates={templatesState.templates} selectedTemplateId={selectedTemplateId} onSelect={setSelectedTemplateId} /> : <TemplatePickerLoading />}</StepShell> : null}
-      {step === 'name' ? <StepShell emoji="🏷️" title="Nom de votre ERP" subtitle="Quel nom vos clients verront-ils en haut de votre site ?"><Field label="Nom de votre ERP" hint="Jusqu'à 60 caractères." error={touchedErr(storeName, nameErr, '')}><input style={inputStyle} value={storeName} maxLength={60} placeholder="Mon ERP" onChange={e => { setStoreName(e.target.value); setBlockReason(null); }} autoFocus /></Field></StepShell> : null}
-      {step === 'whatsapp' ? <StepShell emoji="💬" title="Numéro WhatsApp" subtitle="Les commandes arrivent sur ce numéro en message WhatsApp. Vos clients l'utilisent aussi pour vous joindre."><Field label="Numéro WhatsApp" hint="Format international, chiffres uniquement, sans « + ». Exemple : 213600000000 (Algérie)." error={touchedErr(whatsapp, waErr, '')}><input style={inputStyle} value={whatsapp} inputMode="numeric" placeholder="213600000000" onChange={e => { setWhatsapp(e.target.value.replace(/[^0-9]/g, '').slice(0, 15)); setBlockReason(null); }} autoFocus /></Field></StepShell> : null}
-      {step === 'accent' ? <StepShell emoji="🎨" title="Couleur d'accent" subtitle="Vos boutons, vos accents et l'en-tête utilisent cette couleur."><div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>{SWATCHES.map(sw => { const on = accent.toLowerCase() === sw.toLowerCase(); return <button key={sw} type="button" onClick={() => { setAccent(sw); setBlockReason(null); }} aria-label={sw} title={sw} style={{ width: 38, height: 38, borderRadius: 10, cursor: 'pointer', background: sw, border: on ? '3px solid #fff' : '2px solid ' + C.border, boxShadow: on ? '0 0 0 2px ' + C.accent : 'none', transition: 'box-shadow 150ms ease' }} />; })}</div><Field label="Hex personnalisé" hint="Ou saisissez la vôtre." error={accentErr}><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span aria-hidden style={{ width: 34, height: 34, flexShrink: 0, borderRadius: 8, background: accentErr ? C.panel2 : accent, border: '1px solid ' + C.border }} /><input style={{ ...inputStyle, maxWidth: 160 }} value={accent} maxLength={7} placeholder="#0f766e" onChange={e => { let v = e.target.value.trim(); if (v && !v.startsWith('#')) v = '#' + v; setAccent(v.slice(0, 7)); setBlockReason(null); }} /></div></Field></div></StepShell> : null}
-      {step === 'pin' ? <StepShell emoji="🔑" title="PIN du gérant" subtitle="Il déverrouille l'espace admin de votre ERP. Choisissez un code facile à retenir."><div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}><Field label="PIN" hint="4–8 chiffres." error={touchedErr(pin, pinErr, '')}><input style={inputStyle} value={pin} inputMode="numeric" type="password" placeholder="4–8 chiffres" onChange={e => { setPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8)); setBlockReason(null); }} autoFocus /></Field><Field label="Confirmez le PIN" error={pinConfirm.length > 0 ? pinMatchErr : null}><input style={inputStyle} value={pinConfirm} inputMode="numeric" type="password" placeholder="Saisissez le PIN à nouveau" onChange={e => { setPinConfirm(e.target.value.replace(/[^0-9]/g, '').slice(0, 8)); setBlockReason(null); }} /></Field></div></StepShell> : null}
-      {step === 'review' ? <StepShell emoji="✅" title="Récapitulatif" subtitle="Voici votre ERP. Vous pourrez tout changer plus tard depuis l'espace admin."><div style={{ display: 'flex', flexDirection: 'column', gap: 2, borderRadius: 10, overflow: 'hidden', border: '1px solid ' + C.border }}><ReviewRow label="Nom de votre ERP" value={settings.storeName} onEdit={() => goToStep('name')} /><ReviewRow label="WhatsApp" value={settings.whatsapp} onEdit={() => goToStep('whatsapp')} /><ReviewRow label="Couleur" value={settings.accentColor} swatch={settings.accentColor} onEdit={() => goToStep('accent')} /><ReviewRow label="PIN du gérant" value={'•'.repeat(settings.adminPin.length)} onEdit={() => goToStep('pin')} /></div><Banner tone="info">Votre ERP sera publié en ligne et son tableau de bord sera prêt dans votre Studio.</Banner></StepShell> : null}
+      {step === 'welcome' ? <StepShell emoji="🛍️" title="Créez votre ERP" subtitle="On prépare votre ERP en ligne — paiement à la livraison, commande par WhatsApp et un tableau de bord assorti. Quelques questions rapides et vous êtes en ligne."><ul style={{ margin: '4px 0 0', paddingInlineStart: 18, color: C.muted, fontSize: 13, lineHeight: 1.7 }}><li>Le nom de votre ERP &amp; sa couleur</li><li>Un numéro WhatsApp pour les commandes</li><li>Un PIN gérant pour protéger l’espace admin</li></ul></StepShell> : null}
+      {step === 'template' ? <StepShell emoji="🎨" title="Choisissez un modèle" subtitle="Un point de départ adapté à votre activité — couleurs, catégories et produits d’exemple. Vous pourrez tout changer ensuite.">{templatesState.kind === 'ready' ? <TemplatePicker templates={templatesState.templates} selectedTemplateId={selectedTemplateId} onSelect={setSelectedTemplateId} /> : <TemplatePickerLoading />}</StepShell> : null}
+      {step === 'name' ? <StepShell emoji="🏷️" title="Nom de votre ERP" subtitle="Quel nom vos clients verront-ils en haut de votre site ?"><Field label="Nom de votre ERP" hint="Jusqu’à 60 caractères." error={touchedErr(storeName, nameErr, '')}><input style={inputStyle} value={storeName} maxLength={60} placeholder="Mon ERP" onChange={e => { setStoreName(e.target.value); setBlockReason(null); }} autoFocus /></Field></StepShell> : null}
+      {step === 'whatsapp' ? <StepShell emoji="💬" title="Numéro WhatsApp" subtitle="Les commandes arrivent sur ce numéro en message WhatsApp. Vos clients l’utilisent aussi pour vous joindre."><Field label="Numéro WhatsApp" hint="Format international, chiffres uniquement, sans « + ». Exemple : 213600000000 (Algérie)." error={touchedErr(whatsapp, waErr, '')}><input style={inputStyle} value={whatsapp} inputMode="numeric" placeholder="213600000000" onChange={e => { setWhatsapp(e.target.value.replace(/[^0-9]/g, '').slice(0, 15)); setBlockReason(null); }} autoFocus /></Field></StepShell> : null}
+      {step === 'accent' ? <StepShell emoji="🎨" title="Couleur d’accent" subtitle="Vos boutons, vos accents et l’en-tête utilisent cette couleur."><div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}><div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>{SWATCHES.map(sw => { const on = accent.toLowerCase() === sw.toLowerCase(); return <button key={sw} type="button" onClick={() => { setAccent(sw); setBlockReason(null); }} aria-label={sw} title={sw} style={{ width: 38, height: 38, borderRadius: 10, cursor: 'pointer', background: sw, border: on ? '3px solid #fff' : '2px solid ' + C.border, boxShadow: on ? '0 0 0 2px ' + C.accent : 'none', transition: 'box-shadow 150ms ease' }} />; })}</div><Field label="Hex personnalisé" hint="Ou saisissez la vôtre." error={accentErr}><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span aria-hidden style={{ width: 34, height: 34, flexShrink: 0, borderRadius: 8, background: accentErr ? C.panel2 : accent, border: '1px solid ' + C.border }} /><input style={{ ...inputStyle, maxWidth: 160 }} value={accent} maxLength={7} placeholder="#0f766e" onChange={e => { let v = e.target.value.trim(); if (v && !v.startsWith('#')) v = '#' + v; setAccent(v.slice(0, 7)); setBlockReason(null); }} /></div></Field></div></StepShell> : null}
+      {step === 'pin' ? <StepShell emoji="🔑" title="PIN du gérant" subtitle="Il déverrouille l’espace admin de votre ERP. Choisissez un code facile à retenir."><div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}><Field label="PIN" hint="4–8 chiffres." error={touchedErr(pin, pinErr, '')}><input style={inputStyle} value={pin} inputMode="numeric" type="password" placeholder="4–8 chiffres" onChange={e => { setPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 8)); setBlockReason(null); }} autoFocus /></Field><Field label="Confirmez le PIN" error={pinConfirm.length > 0 ? pinMatchErr : null}><input style={inputStyle} value={pinConfirm} inputMode="numeric" type="password" placeholder="Saisissez le PIN à nouveau" onChange={e => { setPinConfirm(e.target.value.replace(/[^0-9]/g, '').slice(0, 8)); setBlockReason(null); }} /></Field></div></StepShell> : null}
+      {step === 'review' ? <StepShell emoji="✅" title="Récapitulatif" subtitle="Voici votre ERP. Vous pourrez tout changer plus tard depuis l’espace admin."><div style={{ display: 'flex', flexDirection: 'column', gap: 2, borderRadius: 10, overflow: 'hidden', border: '1px solid ' + C.border }}><ReviewRow label="Nom de votre ERP" value={settings.storeName} onEdit={() => goToStep('name')} /><ReviewRow label="WhatsApp" value={settings.whatsapp} onEdit={() => goToStep('whatsapp')} /><ReviewRow label="Couleur" value={settings.accentColor} swatch={settings.accentColor} onEdit={() => goToStep('accent')} /><ReviewRow label="PIN du gérant" value={'•'.repeat(settings.adminPin.length)} onEdit={() => goToStep('pin')} /></div><Banner tone="info">Votre ERP sera publié en ligne et son tableau de bord sera prêt dans votre Studio.</Banner></StepShell> : null}
       {blockReason ? <div style={{ marginTop: 14 }}><Banner tone="error">{blockReason}</Banner></div> : null}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 22 }}>
         {stepIdx > 0 ? <button style={btnStyle('secondary')} onClick={back}>← Retour</button> : hasExistingApps && onCancel ? <button style={btnStyle('secondary')} onClick={onCancel}>Annuler</button> : <span />}
@@ -247,7 +238,7 @@ const ReviewRow = ({ label, value, swatch, onEdit }: { label: string; value: str
     <span style={{ fontSize: 12, color: C.muted, width: 108, flexShrink: 0 }}>{label}</span>
     {swatch ? <span aria-hidden style={{ width: 16, height: 16, borderRadius: 4, background: swatch, border: '1px solid ' + C.border }} /> : null}
     <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: C.text, wordBreak: 'break-word' }}>{value || '—'}</span>
-    <button style={{ appearance: 'none', background: 'none', border: 'none', cursor: 'pointer', color: C.accent, fontSize: 12, fontWeight: 600, padding: 0 }} onClick={onEdit}>Modifier</button>
+    <button style={{ appearance: 'none', background: 'none', border: 'none', cursor: 'pointer', color: C.accent, fontSize: 12, fontWeight: 600, padding: 0 }} onClick={onEdit}>Edit</button>
   </div>
 );
 
@@ -272,7 +263,7 @@ const ReplaceCap = ({ info, onReplace, onCancel }: { info: PublishCapInfo; onRep
 // The ERP-publishing state machine and its publishErp() callback lived here and
 // went with the tile below — the dashboard is an in-app admin surface, so
 // "publishing" it was never a real action.
-const DoneCard = ({ result, settings, onFinish, erpPrepFailed }: { result: CreateResult; settings: ShopSettings; onFinish: () => void; erpPrepFailed: boolean }) => {
+const DoneCard = ({ result, settings, onFinish }: { result: CreateResult; settings: ShopSettings; onFinish: () => void }) => {
   return (
     <Card>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', textAlign: 'center' }}>
@@ -290,10 +281,7 @@ const DoneCard = ({ result, settings, onFinish, erpPrepFailed }: { result: Creat
             the button offered an action with no meaning, and its « Préparé dans
             votre Studio — publiez-le » subtitle implied the ERP was somehow not
             ready yet. « Accéder à mon ERP → » below already goes there. */}
-        <Banner tone="info">Votre boutique est sur votre shelf <strong>Studio</strong> — ouvrez-la pour continuer l'édition.</Banner>
-        {erpPrepFailed ? (
-          <Banner tone="warn">Votre boutique est publiée, mais l'étape ERP a échoué et peut être retentée. Accédez à votre ERP depuis le Studio pour la relancer.</Banner>
-        ) : null}
+        <Banner tone="info">Votre boutique est sur votre shelf <strong>Studio</strong> — ouvrez-la pour continuer l’édition.</Banner>
       </div>
       <div style={{ display: 'flex', marginTop: 22 }}>
         <div style={{ flex: 1 }} />
