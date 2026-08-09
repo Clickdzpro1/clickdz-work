@@ -21,6 +21,7 @@ import {
   type UserFeatureName,
 } from '../../models';
 import { Admin } from '../common';
+import { CurrentUser } from '../auth/session';
 import { EntitlementService } from '../entitlement';
 import { UserType } from '../user/types';
 import { AvailableUserFeatureConfig } from './types';
@@ -239,5 +240,26 @@ export class AdminFeatureManagementResolver extends AvailableUserFeatureConfig {
       userId,
       entitlements,
     }));
+  }
+}
+
+/**
+ * Public app-entitlement resolver — lets any authenticated user query their
+ * OWN app entitlements without admin privileges. The AppAccessGate on the
+ * frontend uses this to determine whether to show the "Upgrade" screen.
+ *
+ * Unlike {@link AdminFeatureManagementResolver} which is @Admin()-guarded and
+ * exposes userAppEntitlements(userId) for admin management, this resolver
+ * uses @CurrentUser() so the user can only see their own entitlements.
+ */
+@Resolver(() => UserAppEntitlementType)
+export class UserAppEntitlementResolver {
+  constructor(private readonly models: Models) {}
+
+  @Query(() => [UserAppEntitlementType], {
+    description: 'List the current user\u{2019}s own ClickDz app entitlements (public, no admin required)',
+  })
+  async myAppEntitlements(@CurrentUser() user: CurrentUser) {
+    return await this.models.userAppEntitlement.list(user.id);
   }
 }
