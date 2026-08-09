@@ -52,8 +52,8 @@ const dateFormatter = new Intl.DateTimeFormat('fr-FR', {
  * que la page de détail (agrégation côté client).
  */
 const adminAppEntitlementsQuery = {
-  id: 'userAppEntitlementsQuery' as const,
-  op: 'userAppEntitlements',
+  id: 'adminUserAppEntitlementsQuery' as const,
+  op: 'adminUserAppEntitlements',
   query: `query adminUserAppEntitlements {
   adminUserAppEntitlements {
     userId
