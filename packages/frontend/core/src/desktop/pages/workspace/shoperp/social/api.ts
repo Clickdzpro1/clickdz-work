@@ -185,7 +185,12 @@ export async function composeContent(opts: {
     { method: 'POST', body: JSON.stringify(opts) }
   );
   if (r.ok) return { ok: true, data: r.data };
-  return { ok: false, error: (r.data as Record<string, unknown>).error as string | undefined };
+  // WS17: r.data may be undefined when the response has no JSON body — guard
+  // before casting so a malformed error response can't throw a TypeError.
+  return {
+    ok: false,
+    error: r.data ? (r.data as Record<string, unknown>).error as string | undefined : undefined,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -205,10 +210,13 @@ export async function createOrUpdatePost(body: {
     { method: 'POST', body: JSON.stringify(body) }
   );
   if (r.ok) return { ok: true, post: r.data as SocialPost };
+  // WS17: r.data may be undefined for an empty/non-JSON body — guard before
+  // casting so a malformed error response can't throw a TypeError.
+  const errData = r.data as Record<string, unknown> | undefined;
   return {
     ok: false,
-    error: (r.data as Record<string, unknown>).error as string | undefined,
-    message: (r.data as Record<string, unknown>).message as string | undefined,
+    error: errData ? (errData.error as string | undefined) : undefined,
+    message: errData ? (errData.message as string | undefined) : undefined,
   };
 }
 

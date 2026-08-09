@@ -482,8 +482,8 @@ const PaymentsSection = ({
         setNotice({
           tone: 'ok',
           text: next
-            ? 'Online payments enabled — the storefront shows a « Payer en ligne » option on next load.'
-            : 'Online payments disabled — the storefront stays cash-on-delivery only.',
+            ? 'Paiement en ligne activé — la boutique propose « Payer en ligne » au prochain chargement.'
+            : 'Paiement en ligne désactivé — la boutique reste en paiement à la livraison uniquement.',
         });
         onMutated();
       } else if (out.status === 'unavailable') {
@@ -684,7 +684,7 @@ const PaymentsSection = ({
                 on={onlinePay}
                 disabled={readOnly || payToggling}
                 onChange={next => void toggleOnlinePay(next)}
-                label="Accepter le paiement en ligne on the storefront"
+                label="Accepter le paiement en ligne sur la boutique"
               />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
