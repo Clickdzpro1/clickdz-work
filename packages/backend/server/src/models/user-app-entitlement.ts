@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { BaseModel } from './base';
 
-// ClickDz per-user app entitlement (slidepro/socialplus/coursepro/zoomplus).
+// ClickDz per-user app entitlement (all studios + AI Chat + Whiteboard).
 // Mirrors user-feature.ts (get/has/list/upsert/remove over a per-user join
 // table). The schema model `UserAppEntitlement` (@@map "user_app_entitlements")
 // backs the `userAppEntitlement` Prisma delegate. `has()` is the provisioning
@@ -14,6 +14,18 @@ export const APP_ENTITLEMENT_APPS = [
   'socialplus',
   'coursepro',
   'zoomplus',
+  'vdz',
+  'voice',
+  'apps',
+  'shoperp',
+  'hermes',
+  'openclaw',
+  'agents',
+  'vpic',
+  'integrations',
+  'whatsappmax',
+  'ai_chat',
+  'whiteboard',
 ] as const;
 export type AppEntitlementApp = (typeof APP_ENTITLEMENT_APPS)[number];
 
