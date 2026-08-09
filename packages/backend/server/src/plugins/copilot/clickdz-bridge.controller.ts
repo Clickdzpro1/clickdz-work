@@ -598,11 +598,11 @@ const APP_SLUG_RE = /^[a-z0-9-]{3,50}$/;
 //
 // Same NX-lock idiom as clickdz-courier.controller.ts's shipLockKey, for the
 // same reason and with the same properties: keyed per (slug, orderRef), short
-// TTL so a crashed holder auto-heals, and FAIL-OPEN on a Redis outage —
-// availability beats a rare double-count, and the `already` short-circuit still
-// covers sequential retries. On contention we return 'in_progress'; the webhook
-// answers 200 regardless (it must, or Chargily retries forever), and the next
-// provider retry lands after the lock clears and hits `already`.
+// TTL so a crashed holder auto-heals. H4: FAIL-CLOSED on a Redis outage — a
+// double-processed payment is worse than a delayed one, and the provider
+// (Chargily/Stripe) retries for hours. On contention or Redis-down we return
+// 'in_progress'/'lock_failed' and the webhook answers 429 so the provider
+// retries; the next attempt either acquires the lock or hits `already`.
 // orderRef is bounded to 80 chars here (matching CHARGILY_ORDER_REF_MAX, which
 // is declared further down) so a forged webhook can never mint an unbounded
 // Redis key. The literal avoids a use-before-declaration on that const.
@@ -6356,6 +6356,39 @@ export class ClickDzBridgeController {
       res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
       return;
     }
+    // H1 BUG4: serialize concurrent receives on the SAME PO with a Redis SETNX
+    // lock. Without this, two concurrent receive calls on the same PO both
+    // read the same qtyReceived, both compute the same outstanding qty, both
+    // write movements, and the PO gets double-incremented. The lock is
+    // fail-open on a Redis error (a receive should not be blocked by a Redis
+    // outage) but we log the failure. TTL 30s auto-heals a crashed holder.
+    const poReceiveLockKey = `clickdz:erp:po-receive:${slug}:${pid}`;
+    let poReceiveLocked = false;
+    try {
+      const acquired = await this.redis.set(
+        poReceiveLockKey,
+        new Date().toISOString(),
+        'EX',
+        30,
+        'NX'
+      );
+      poReceiveLocked = acquired === 'OK';
+      if (!poReceiveLocked) {
+        this.logger.warn(
+          `[erp] po-receive lock contention slug=${slug} id=${pid} — another receive in progress`
+        );
+        res
+          .status(HttpStatus.CONFLICT)
+          .json({ error: 'po_receive_in_progress', poId: pid });
+        return;
+      }
+    } catch (lockErr) {
+      // Redis down — fail open (proceed unlocked) but log.
+      this.logger.warn(
+        `[erp] po-receive lock unavailable slug=${slug} id=${pid}: ${String((lockErr as Error)?.message || lockErr).slice(0, 120)}`
+      );
+    }
+    try {
     const [pos, warehouses] = await Promise.all([
       this.erpList(slug, 'purchase-orders'),
       this.erpList(slug, 'warehouses'),
@@ -6409,18 +6442,51 @@ export class ClickDzBridgeController {
       this.erpWriteFailed(res, poWrote.status);
       return;
     }
-    // Append movements through the EXISTING ledger (movements-YYYYMM), exactly
-    // like erpInventoryMovement. A full partition surfaces as data_rejected.
+    // H1 BUG4: track which movements have been SUCCESSFULLY written so we can
+    // compensate on a mid-loop failure. If a movement write fails after some
+    // movements already landed, the PO says received but the stock ledger is
+    // missing movements — a retry can't fix it (computeReceive sees the
+    // already-incremented qtyReceived and produces 0 outstanding). The
+    // compensation writes inverse-delta movements for each succeeded movement,
+    // reverts the PO to its pre-receive state, and returns the error.
     const collection = erpMovementCollection();
+    const succeededMovements: { productKey: string; warehouseId: string; delta: number }[] = [];
     for (const mv of result.movements) {
       if (Buffer.byteLength(JSON.stringify(mv), 'utf8') > ERP_MAX_WRITE_BYTES) {
+        // Compensation: this is a client bug (oversized record), not a data API
+        // failure. Revert the PO and compensate any movements already written.
+        await this.compensatePoReceive(
+          slug,
+          pid,
+          po,
+          collection,
+          succeededMovements,
+          token
+        );
         throw new BadRequest('Movement record too large');
       }
       const created = await this.erpCreateRecord(slug, collection, mv as unknown as ErpRecord, token);
       if (!created.ok) {
+        // H1 BUG4: a movement write failed mid-loop. Write compensating negative
+        // movements for each SUCCEEDED movement, revert the PO to its pre-receive
+        // value, log the compensation, and surface the error.
+        this.logger.error(
+          `[erp] po-receive movement write FAILED slug=${slug} poId=${pid} ` +
+            `succeeded=${succeededMovements.length}/${result.movements.length} ` +
+            `status=${created.status} — compensating + reverting PO`
+        );
+        await this.compensatePoReceive(
+          slug,
+          pid,
+          po,
+          collection,
+          succeededMovements,
+          token
+        );
         this.erpWriteFailed(res, created.status);
         return;
       }
+      succeededMovements.push(mv);
     }
     // Recompute + persist each affected product's roll-up from the ledger (now
     // including the just-appended movements) — reuses erpApplyStockRollup. This
@@ -6435,28 +6501,20 @@ export class ClickDzBridgeController {
       }
     }
     // Bump the supplier balance by the received cost (we now owe more).
-    // WS17: re-read the supplier FRESH here (not the copy from the top of the
-    // route) so the delta applies to the latest balance, narrowing the
-    // lost-update window for concurrent PO receives on the same supplier. The
-    // prior code reused the `supplier` read much earlier, so two concurrent
-    // receives both added their delta to the same stale balance and the last
-    // PUT won — losing one delta. Full atomicity (HINCRBY on a per-supplier
-    // counter) is deferred to the Prisma lift; this re-read is the safe
-    // incremental fix.
+    // H2 BUG5: use a dedicated Redis HINCRBY counter for atomic balance updates,
+    // then sync the counter value back to the supplier record. This eliminates
+    // the lost-update race where two concurrent receives both read the same
+    // stale balance and the last PUT wins (losing one delta).
     let supplierBalance: number | undefined;
     if (result.receivedCost > 0) {
-      const freshSuppliers = await this.erpList(slug, 'suppliers');
-      const freshSupplier = freshSuppliers?.find(s => erpStr(s.id) === erpStr(po.supplierId));
-      if (freshSupplier) {
-        const updated = applySupplierBalanceDelta(freshSupplier, result.receivedCost);
-        const sw = await putErpRecord(
-          this.erpDataBase(slug),
-          'suppliers',
-          erpStr(freshSupplier.id),
-          updated,
+      const supplierId = erpStr(po.supplierId).trim();
+      if (supplierId) {
+        supplierBalance = await this.atomicSupplierBalanceDelta(
+          slug,
+          supplierId,
+          result.receivedCost,
           token
         );
-        if (sw.ok) supplierBalance = Math.round(erpNum(sw.record.balance));
       }
     }
     this.logger.log(
@@ -6468,6 +6526,179 @@ export class ClickDzBridgeController {
       movements: result.movements.length,
       ...(supplierBalance !== undefined ? { supplierBalance } : {}),
     };
+    } finally {
+      // H1: release the per-PO receive lock.
+      if (poReceiveLocked) {
+        try {
+          await this.redis.del(poReceiveLockKey);
+        } catch {
+          // Lock expires on its own; nothing to do.
+        }
+      }
+    }
+  }
+
+  /**
+   * H1 BUG4 — compensate a partially-failed PO receive by writing inverse-delta
+   * movements for each SUCCEEDED movement and reverting the PO to its
+   * pre-receive state. Best-effort: if a compensating movement write also fails,
+   * it is logged but does not block the PO revert (the ledger is the source of
+   * truth and the stock roll-up is self-correcting on the next read).
+   */
+  private async compensatePoReceive(
+    slug: string,
+    poId: string,
+    originalPo: ErpRecord,
+    collection: string,
+    succeededMovements: { productKey: string; warehouseId: string; delta: number }[],
+    token: string
+  ): Promise<void> {
+    // (a) Write compensating negative movements for each succeeded movement.
+    for (const mv of succeededMovements) {
+      const compMovement: ErpRecord = {
+        ts: new Date().toISOString(),
+        productKey: mv.productKey,
+        warehouseId: mv.warehouseId,
+        delta: -Math.abs(mv.delta),
+        reason: 'adjust' as ErpMovementReason,
+        ref: `receive_reversal:${poId}`,
+      };
+      try {
+        const comp = await this.erpCreateRecord(
+          slug,
+          collection,
+          compMovement,
+          token
+        );
+        if (!comp.ok) {
+          this.logger.error(
+            `[erp] po-receive COMPENSATION movement write FAILED slug=${slug} ` +
+              `poId=${poId} productKey=${mv.productKey.slice(0, 40)} ` +
+              `warehouseId=${mv.warehouseId} delta=${-Math.abs(mv.delta)} status=${comp.status}`
+          );
+        }
+      } catch (e) {
+        this.logger.error(
+          `[erp] po-receive COMPENSATION error slug=${slug} poId=${poId}: ${String((e as Error)?.message || e).slice(0, 200)}`
+        );
+      }
+    }
+    // (b) Revert the PO to its pre-receive value.
+    try {
+      const reverted = await putErpRecord(
+        this.erpDataBase(slug),
+        'purchase-orders',
+        poId,
+        originalPo,
+        token
+      );
+      if (!reverted.ok) {
+        this.logger.error(
+          `[erp] po-receive PO REVERT FAILED slug=${slug} poId=${poId} status=${reverted.status} ` +
+            `— PO may show received but movements were compensated; manual cleanup needed`
+        );
+      } else {
+        this.logger.log(
+          `[erp] po-receive compensated slug=${slug} poId=${poId} ` +
+            `movementsReverted=${succeededMovements.length} poReverted=true`
+        );
+      }
+    } catch (e) {
+      this.logger.error(
+        `[erp] po-receive PO REVERT error slug=${slug} poId=${poId}: ${String((e as Error)?.message || e).slice(0, 200)}`
+      );
+    }
+    // (c) Recompute stock roll-ups for affected products so the product.stock
+    // snapshot reflects the compensated (net-zero) ledger.
+    if (succeededMovements.length > 0) {
+      try {
+        const { totals } = await this.erpReadMovements(slug, ERP_MOVEMENT_MONTHS_READ);
+        const affectedKeys = new Set(succeededMovements.map(m => m.productKey));
+        for (const key of affectedKeys) {
+          const newStock = Math.max(0, Math.round(totals.get(key) ?? 0));
+          await this.erpApplyStockRollup(slug, key, newStock, token);
+        }
+      } catch {
+        // Best-effort — the ledger is the source of truth.
+      }
+    }
+  }
+
+  /**
+   * H2 BUG5 — atomically increment a supplier's balance using a dedicated Redis
+   * counter key (HINCRBY is atomic). The counter is the source of truth; the
+   * supplier record's `balance` field is a denormalized snapshot synced
+   * best-effort. On first use for a supplier, the counter is initialized from
+   * the current record balance via SETNX (so HINCRBY starts from the right
+   * base). Returns the new balance after the increment, or undefined on failure.
+   */
+  private async atomicSupplierBalanceDelta(
+    slug: string,
+    supplierId: string,
+    delta: number,
+    token: string
+  ): Promise<number | undefined> {
+    const balanceKey = `clickdz:erp:supplier-balance:${slug}:${supplierId}`;
+    try {
+      // SETNX: if the counter doesn't exist yet, initialize it from the current
+      // record balance. Returns 1 if it set (first time) or 0 if it already
+      // existed — either way the counter is correct after this.
+      const freshSuppliers = await this.erpList(slug, 'suppliers');
+      const freshSupplier = freshSuppliers?.find(
+        s => erpStr(s.id) === supplierId
+      );
+      if (freshSupplier) {
+        const currentBalance = Math.round(erpNum(freshSupplier.balance));
+        await this.redis.set(balanceKey, String(currentBalance), 'NX');
+      }
+      // HINCRBY is atomic — no lost update possible even under concurrency.
+      // The counter is a plain Redis string key holding an integer; SETNX above
+      // initializes it, and INCRBY atomically increments it.
+      const newBalance = await this.redis.incrby(balanceKey, delta);
+      const roundedBalance = Math.round(Number(newBalance) || 0);
+      // Sync the counter value back to the supplier record (best-effort
+      // snapshot). The counter is the source of truth.
+      if (freshSupplier) {
+        const updated = applySupplierBalanceDelta(freshSupplier, 0);
+        updated.balance = roundedBalance;
+        await putErpRecord(
+          this.erpDataBase(slug),
+          'suppliers',
+          supplierId,
+          updated,
+          token
+        );
+      }
+      this.logger.log(
+        `[erp] supplier-balance atomic delta slug=${slug} supplierId=${supplierId} ` +
+          `delta=${delta} newBalance=${roundedBalance}`
+      );
+      return roundedBalance;
+    } catch (e) {
+      // Fallback to the old read-modify-write path if Redis is down.
+      this.logger.warn(
+        `[erp] supplier-balance HINCRBY failed, falling back to read-modify-write ` +
+          `slug=${slug} supplierId=${supplierId}: ${String((e as Error)?.message || e).slice(0, 120)}`
+      );
+      try {
+        const fs = await this.erpList(slug, 'suppliers');
+        const fSup = fs?.find(s => erpStr(s.id) === supplierId);
+        if (fSup) {
+          const updated = applySupplierBalanceDelta(fSup, delta);
+          const sw = await putErpRecord(
+            this.erpDataBase(slug),
+            'suppliers',
+            supplierId,
+            updated,
+            token
+          );
+          if (sw.ok) return Math.round(erpNum(sw.record.balance));
+        }
+      } catch {
+        // Both Redis and data API are down — nothing more we can do.
+      }
+      return undefined;
+    }
   }
 
   /**
@@ -7165,12 +7396,10 @@ export class ClickDzBridgeController {
     // MONEY-4: a cross-month move must not leave the entry in BOTH partitions.
     // The PUT above wrote it into the new month; if removing the old copy fails
     // silently, the same money is counted twice by any report that spans both
-    // months. erpDeleteRecord already logs its own failure, but that is invisible
-    // to the merchant, so retry once and then say so loudly in the log with the
-    // exact ids needed to clean it up by hand. WS17: also surface a warning in
-    // the response body so the FE can alert the merchant (a silent ok:true with
-    // a double-counted entry is a hidden money bug).
-    let doubleCountRisk = false;
+    // months. H3: change from a warning to a BLOCK — return HTTP 409 with the
+    // exact ids for manual cleanup. The frontend should surface a modal requiring
+    // acknowledgment. Best-effort write a superseded:true flag on the old copy so
+    // a human cleaning up knows which one is stale.
     if (foundCollection && foundCollection !== targetCollection) {
       let dropped = await this.erpDeleteRecord(
         slug,
@@ -7187,18 +7416,41 @@ export class ClickDzBridgeController {
         );
       }
       if (!dropped) {
-        doubleCountRisk = true;
+        // Best-effort: write a superseded:true flag on the old copy so a human
+        // can identify it for cleanup. If even this flag update fails, the 409
+        // still surfaces the ids.
+        try {
+          const oldRows = await this.erpList(slug, foundCollection);
+          const oldCopy = oldRows?.find(r => caisseStr(r.id) === entryId);
+          if (oldCopy) {
+            const flagged: ErpRecord = {};
+            for (const k of Object.keys(oldCopy)) {
+              if (k !== 'id' && k !== 'createdAt') flagged[k] = (oldCopy as ErpRecord)[k];
+            }
+            flagged.superseded = true;
+            await this.erpPutRecord(slug, foundCollection, entryId, flagged, token);
+          }
+        } catch {
+          // The 409 still surfaces the ids for manual cleanup.
+        }
         this.logger.error(
-          `[erp] caisse-update DOUBLE-COUNT RISK slug=${slug} id=${entryId} ` +
+          `[erp] caisse-update DOUBLE-COUNT BLOCKED slug=${slug} id=${entryId} ` +
             `moved ${foundCollection} -> ${targetCollection} but the old copy ` +
-            `could not be deleted; it now exists in BOTH partitions`
+            `could not be deleted; it now exists in BOTH partitions (superseded flag best-effort)`
         );
+        res.status(HttpStatus.CONFLICT).json({
+          error: 'double_count_risk',
+          entryId,
+          oldPartition: foundCollection,
+          newPartition: targetCollection,
+        });
+        return;
       }
     }
     this.logger.log(
       `[erp] caisse-update slug=${slug} user=${user.id} id=${entryId} coll=${targetCollection}`
     );
-    return { ok: true, entry: saved.record, ...(doubleCountRisk ? { warning: 'double_count_risk' } : {}) };
+    return { ok: true, entry: saved.record };
   }
 
   /**
@@ -10000,6 +10252,20 @@ export class ClickDzBridgeController {
     this.logger.log(
       `[pay] webhook slug=${slug} type=${type} ref=${orderRef.slice(0, 40)} -> ${marked}`
     );
+    // H4: FAIL-CLOSED — if the settlement lock could not be acquired (Redis down
+    // or already locked), return 429 so the provider retries. A double-processed
+    // payment is worse than a delayed one. For 'in_progress' (another delivery
+    // holds the lock), also return 429 so the provider retries and the next
+    // attempt hits 'already'. For all other outcomes (paid, already, not_found,
+    // write_failed, no_token), ack 200 so the provider stops retrying.
+    if (marked === 'lock_failed' || marked === 'in_progress') {
+      res.status(HttpStatus.TOO_MANY_REQUESTS).json({
+        ok: false,
+        retry: true,
+        reason: marked,
+      });
+      return;
+    }
     // Always 200 on a verified event so the provider stops retrying.
     res.status(HttpStatus.OK).json({ ok: true });
   }
@@ -10014,9 +10280,10 @@ export class ClickDzBridgeController {
    *
    * MONEY-2: serialised per (slug, orderRef) by an NX lock so two concurrent
    * deliveries of the same payment event cannot both pass the `already` check
-   * and both write a caisse entry. 'in_progress' means another delivery holds
-   * the lock — the caller acks anyway and the provider's next retry sees
-   * 'already'.
+   * and both write a caisse entry. H4: FAIL-CLOSED — if the lock cannot be
+   * acquired (Redis down OR already locked), returns 'lock_failed' or
+   * 'in_progress' and the caller returns 429 so the provider retries. A
+   * double-processed payment is worse than a delayed one.
    */
   private async markOrderPaid(
     slug: string,
@@ -10028,12 +10295,15 @@ export class ClickDzBridgeController {
     | 'write_failed'
     | 'no_token'
     | 'in_progress'
+    | 'lock_failed'
   > {
     const token = dataWriteToken(slug);
     if (!token) return 'no_token';
-    // Acquire the settlement lock. FAIL-OPEN: if Redis is unreachable we still
-    // settle the payment (availability over a rare double-count), exactly as the
-    // courier ship lock does.
+    // H4: FAIL-CLOSED for payment webhooks. A double-processed payment is worse
+    // than a delayed one — the provider (Chargily/Stripe) retries for hours. If
+    // the NX lock cannot be acquired (Redis down OR already locked), do NOT
+    // process the payment unlocked. Return 'lock_failed' or 'in_progress' so the
+    // caller can return a 429 and the provider retries.
     const lockKey = payLockKey(slug, orderRef);
     let locked = false;
     try {
@@ -10046,9 +10316,13 @@ export class ClickDzBridgeController {
       );
       locked = acquired === 'OK';
       if (!locked) return 'in_progress';
-    } catch {
-      // Redis down — proceed unlocked rather than dropping a payment.
-      locked = false;
+    } catch (lockErr) {
+      // H4: Redis down — FAIL-CLOSED. Do NOT proceed unlocked. The provider will
+      // retry and the next attempt will either acquire the lock or hit 'already'.
+      this.logger.error(
+        `[pay] settlement lock FAILED (Redis down) slug=${slug} ref=${orderRef.slice(0, 40)}: ${String((lockErr as Error)?.message || lockErr).slice(0, 120)} — NOT processing, provider will retry`
+      );
+      return 'lock_failed';
     }
     try {
       return await this.markOrderPaidLocked(slug, orderRef, token);
