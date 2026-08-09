@@ -163,7 +163,7 @@ const VdzStudioPage = () => {
           'La tâche de rendu a été perdue — veuillez exporter à nouveau.'
         );
       }
-      return exportState.error || 'Échec de l'export';
+      return exportState.error || 'Échec de l’export';
     }
     if (timelineExport.preparing) return 'Préparation des médias…';
     const notes: string[] = [];
