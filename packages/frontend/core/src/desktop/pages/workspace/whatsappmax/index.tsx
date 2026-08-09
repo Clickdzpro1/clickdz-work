@@ -157,6 +157,19 @@ interface ConnectResp {
   ok: boolean;
   qr?: string;
   status: string;
+  connId?: string;
+}
+
+interface AccountMeta {
+  connId: string;
+  phoneNumber: string;
+  status: string;
+  connectedAt: number;
+  active: boolean;
+}
+
+interface AccountsResp {
+  accounts: AccountMeta[];
 }
 
 // Gateway returns snake_case; E1 adds camelCase aliases on the same row.
@@ -304,9 +317,20 @@ interface QrPairingProps {
   onStatus: (s: StatusResp) => void;
   onDark: () => void;
   onConnected: () => void;
+  connId: string | null;
+  mode: 'first' | 'add' | 'connected';
+  onAdded: (connId: string, phoneNumber?: string) => void;
 }
 
-const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) => {
+const QrPairing = ({
+  status,
+  onStatus,
+  onDark,
+  onConnected,
+  connId,
+  mode,
+  onAdded,
+}: QrPairingProps) => {
   const [phone, setPhone] = useState('');
   const [busy, setBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -318,11 +342,17 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
   const [qrLoaded, setQrLoaded] = useState(false);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // In add-mode, /connect mints a new connId — we store it locally so the
+  // status poll and QR refresh target the new connection (not the prop connId).
+  const [pairConnId, setPairConnId] = useState<string | null>(null);
 
   const connected = status?.connected === true;
   const currentStatus = status?.status ?? '';
   const showQr =
     connecting || currentStatus === 'qr' || currentStatus === 'connecting' || currentStatus === 'created';
+
+  // Use the locally-minted connId (add-mode) if available, else the prop connId
+  const activeConnId = pairConnId ?? connId;
 
   const stopPolls = useCallback(() => {
     if (statusPollRef.current) {
@@ -348,7 +378,9 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
     // Status poll every 2.5s
     statusPollRef.current = setInterval(() => {
       void (async () => {
-        const s = await apiGet<StatusResp>('/api/v1/whatsappmax/status');
+        const s = await apiGet<StatusResp>(
+          `/api/v1/whatsappmax/status${activeConnId ? `?connId=${encodeURIComponent(activeConnId)}` : ''}`
+        );
         if (isDark(s)) {
           stopPolls();
           onDark();
@@ -360,12 +392,16 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
             stopPolls();
             setConnecting(false);
             setQrTs(null);
-            onConnected();
+            if (mode === 'add' && pairConnId) {
+              onAdded(pairConnId);
+            } else {
+              onConnected();
+            }
           }
         }
       })();
     }, 2500);
-  }, [stopPolls, onDark, onStatus, onConnected]);
+  }, [stopPolls, onDark, onStatus, onConnected, activeConnId, mode, pairConnId, onAdded]);
 
   useEffect(() => () => stopPolls(), [stopPolls]);
 
@@ -396,22 +432,29 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
       setErr('Connexion impossible pour le moment. Réessayez.');
       return;
     }
+    if (mode === 'add' && out.connId) {
+      // Store the minted connId so status poll + QR target the new connection
+      setPairConnId(out.connId);
+    }
     setConnecting(true);
     startPolls();
-  }, [phone, onDark, startPolls]);
+  }, [phone, onDark, startPolls, mode]);
 
   const disconnect = useCallback(async () => {
     setBusy(true);
-    const out = await apiPost<{ ok: boolean }>('/api/v1/whatsappmax/disconnect', {});
+    const out = await apiPost<{ ok: boolean }>(
+      '/api/v1/whatsappmax/disconnect',
+      activeConnId ? { connId: activeConnId } : {}
+    );
     setBusy(false);
     if (isDark(out)) return onDark();
     stopPolls();
     setConnecting(false);
     setQrTs(null);
     onStatus({ connected: false, status: 'disconnected' });
-  }, [onDark, onStatus, stopPolls]);
+  }, [onDark, onStatus, stopPolls, activeConnId]);
 
-  if (connected) {
+  if (connected && mode !== 'add') {
     return (
       <div style={{ ...panelStyle, flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
         <div
@@ -512,7 +555,7 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
               </div>
             )}
             <img
-              src={cdzApiUrl(`/api/v1/whatsappmax/qr.png?ts=${qrTs}`)}
+              src={cdzApiUrl(`/api/v1/whatsappmax/qr.png?ts=${qrTs}${activeConnId ? `&connId=${encodeURIComponent(activeConnId)}` : ''}`)}
               alt="QR WhatsApp"
               width={256}
               height={256}
@@ -559,7 +602,7 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
             disabled={busy}
             onClick={() => void connect()}
           >
-            {busy ? 'Connexion…' : 'Lier via QR'}
+            {busy ? 'Connexion…' : mode === 'add' ? 'Lier un autre numéro' : 'Lier via QR'}
           </button>
           <div style={{ fontSize: 11.5, color: C.muted, textAlign: 'center' }}>
             Le numéro est optionnel — la liaison QR fonctionne sans le renseigner.
@@ -579,9 +622,10 @@ const QrPairing = ({ status, onStatus, onDark, onConnected }: QrPairingProps) =>
 interface AiToggleProps {
   chatJid: string;
   onDark: () => void;
+  connId: string | null;
 }
 
-const AiToggle = ({ chatJid, onDark }: AiToggleProps) => {
+const AiToggle = ({ chatJid, onDark, connId }: AiToggleProps) => {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -589,12 +633,12 @@ const AiToggle = ({ chatJid, onDark }: AiToggleProps) => {
     if (!chatJid) return;
     void (async () => {
       const out = await apiGet<{ enabled: boolean }>(
-        `/api/v1/whatsappmax/ai?chatJid=${encodeURIComponent(chatJid)}`
+        `/api/v1/whatsappmax/ai?chatJid=${encodeURIComponent(chatJid)}${connId ? `&connId=${encodeURIComponent(connId)}` : ''}`
       );
       if (isDark(out)) { onDark(); return; }
       if (out) setEnabled(out.enabled);
     })();
-  }, [chatJid, onDark]);
+  }, [chatJid, onDark, connId]);
 
   const toggle = useCallback(async () => {
     if (enabled === null) return;
@@ -602,12 +646,12 @@ const AiToggle = ({ chatJid, onDark }: AiToggleProps) => {
     const next = !enabled;
     const out = await apiPost<{ ok: boolean; enabled: boolean }>(
       '/api/v1/whatsappmax/ai',
-      { chatJid, enabled: next }
+      { chatJid, enabled: next, ...(connId ? { connId } : {}) }
     );
     setBusy(false);
     if (isDark(out)) { onDark(); return; }
     if (out) setEnabled(out.enabled);
-  }, [enabled, chatJid, onDark]);
+  }, [enabled, chatJid, onDark, connId]);
 
   if (enabled === null) return null;
 
@@ -644,11 +688,12 @@ interface MediaBubbleProps {
   messageId: string;
   type: string;
   fromMe: boolean;
+  connId: string | null;
 }
 
-const MediaBubble = ({ messageId, type, fromMe }: MediaBubbleProps) => {
+const MediaBubble = ({ messageId, type, fromMe, connId }: MediaBubbleProps) => {
   const mediaUrl = cdzApiUrl(
-    `/api/v1/whatsappmax/media?messageId=${encodeURIComponent(messageId)}`
+    `/api/v1/whatsappmax/media?messageId=${encodeURIComponent(messageId)}${connId ? `&connId=${encodeURIComponent(connId)}` : ''}`
   );
   const textColor = fromMe ? '#0b1f14' : C.text;
   const mutedColor = fromMe ? '#1a4a2e' : C.muted;
@@ -722,9 +767,10 @@ interface ComposerProps {
   connected: boolean;
   onDark: () => void;
   onSent: (msg: MessageRow) => void;
+  connId: string | null;
 }
 
-const Composer = ({ chatJid, connected, onDark, onSent }: ComposerProps) => {
+const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps) => {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -741,7 +787,7 @@ const Composer = ({ chatJid, connected, onDark, onSent }: ComposerProps) => {
     setErr(null);
     const out = await apiPost<{ ok: boolean; sent: boolean; note?: string }>(
       '/api/v1/whatsappmax/send',
-      { to: chatJid, text: body }
+      { to: chatJid, text: body, ...(connId ? { connId } : {}) }
     );
     setBusy(false);
     if (isDark(out)) { onDark(); return; }
@@ -762,7 +808,7 @@ const Composer = ({ chatJid, connected, onDark, onSent }: ComposerProps) => {
     } else {
       setErr(out?.note === 'not_connected' ? 'Liez un numéro WhatsApp d\'abord.' : 'Envoi échoué.');
     }
-  }, [text, busy, connected, chatJid, onDark, onSent]);
+  }, [text, busy, connected, chatJid, onDark, onSent, connId]);
 
   const sendMedia = useCallback(async () => {
     const url = mediaUrl.trim();
@@ -776,6 +822,7 @@ const Composer = ({ chatJid, connected, onDark, onSent }: ComposerProps) => {
         kind: mediaKind,
         url,
         caption: mediaCaption.trim() || undefined,
+        ...(connId ? { connId } : {}),
       }
     );
     setBusy(false);
@@ -791,7 +838,7 @@ const Composer = ({ chatJid, connected, onDark, onSent }: ComposerProps) => {
           : 'Envoi du média échoué.'
       );
     }
-  }, [mediaUrl, mediaKind, mediaCaption, busy, connected, chatJid, onDark]);
+  }, [mediaUrl, mediaKind, mediaCaption, busy, connected, chatJid, onDark, connId]);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -924,6 +971,7 @@ interface ConversationProps {
   connected: boolean;
   onDark: () => void;
   onClose: () => void;
+  connId: string | null;
 }
 
 const Conversation = ({
@@ -933,6 +981,7 @@ const Conversation = ({
   connected,
   onDark,
   onClose,
+  connId,
 }: ConversationProps) => {
   const [messages, setMessages] = useState<ReturnType<typeof normalizeMessage>[]>([]);
   const [loading, setLoading] = useState(false);
@@ -944,8 +993,8 @@ const Conversation = ({
 
   // Mark as read when opened
   useEffect(() => {
-    void apiPost('/api/v1/whatsappmax/read', { chatJid });
-  }, [chatJid]);
+    void apiPost('/api/v1/whatsappmax/read', { chatJid, ...(connId ? { connId } : {}) });
+  }, [chatJid, connId]);
 
   const fetchMessages = useCallback(
     async (opts?: { before?: number; prepend?: boolean }) => {
@@ -954,6 +1003,7 @@ const Conversation = ({
 
       const params = new URLSearchParams({ chatJid, limit: '50' });
       if (opts?.before) params.set('before', String(opts.before));
+      if (connId) params.set('connId', connId);
 
       const out = await apiGet<{ messages: MessageRow[] }>(
         `/api/v1/whatsappmax/messages?${params.toString()}`
@@ -988,7 +1038,7 @@ const Conversation = ({
         setHasOlder(prev => prev && normalized.length >= 50);
       }
     },
-    [chatJid, onDark]
+    [chatJid, onDark, connId]
   );
 
   // Scroll to bottom on initial load
@@ -1026,7 +1076,7 @@ const Conversation = ({
       document.removeEventListener('visibilitychange', onVisChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatJid]);
+  }, [chatJid, connId]);
 
   const loadOlder = useCallback(() => {
     const oldest = messages[0];
@@ -1102,7 +1152,7 @@ const Conversation = ({
             <div style={{ fontSize: 11, color: C.muted }}>Groupe</div>
           )}
         </div>
-        <AiToggle chatJid={chatJid} onDark={onDark} />
+        <AiToggle chatJid={chatJid} onDark={onDark} connId={connId} />
       </div>
 
       {/* Messages area */}
@@ -1209,7 +1259,7 @@ const Conversation = ({
                       }}
                     >
                       {isMedia && m.id ? (
-                        <MediaBubble messageId={m.id} type={m.type ?? ''} fromMe={m.fromMe} />
+                        <MediaBubble messageId={m.id} type={m.type ?? ''} fromMe={m.fromMe} connId={connId} />
                       ) : (
                         m.text || '—'
                       )}
@@ -1234,7 +1284,7 @@ const Conversation = ({
                     }}
                   >
                     {isMedia && m.id ? (
-                      <MediaBubble messageId={m.id} type={m.type ?? ''} fromMe={m.fromMe} />
+                      <MediaBubble messageId={m.id} type={m.type ?? ''} fromMe={m.fromMe} connId={connId} />
                     ) : (
                       m.text || '—'
                     )}
@@ -1257,6 +1307,7 @@ const Conversation = ({
         connected={connected}
         onDark={onDark}
         onSent={onSent}
+        connId={connId}
       />
     </div>
   );
@@ -1268,9 +1319,10 @@ interface ChatListProps {
   active: string | null;
   onSelect: (jid: string, name: string, isGroup: boolean) => void;
   onDark: () => void;
+  connId: string | null;
 }
 
-const ChatList = ({ active, onSelect, onDark }: ChatListProps) => {
+const ChatList = ({ active, onSelect, onDark, connId }: ChatListProps) => {
   const [chats, setChats] = useState<ChatRow[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1284,13 +1336,15 @@ const ChatList = ({ active, onSelect, onDark }: ChatListProps) => {
   const fetchChats = useCallback(async () => {
     setLoading(true);
     setChatError(false);
-    const out = await apiGet<{ chats: ChatRow[] }>('/api/v1/whatsappmax/chats');
+    const out = await apiGet<{ chats: ChatRow[] }>(
+      `/api/v1/whatsappmax/chats${connId ? `?connId=${encodeURIComponent(connId)}` : ''}`
+    );
     if (!mountedRef.current) return;
     setLoading(false);
     if (isDark(out)) { onDark(); return; }
     if (out === null) { setChatError(true); return; }
     if (out && Array.isArray(out.chats)) setChats(out.chats);
-  }, [onDark]);
+  }, [onDark, connId]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1318,7 +1372,7 @@ const ChatList = ({ active, onSelect, onDark }: ChatListProps) => {
       document.removeEventListener('visibilitychange', onVisChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [connId]);
 
   const filtered = chats.filter(c => {
     if (!search) return true;
@@ -1486,9 +1540,10 @@ const ChatList = ({ active, onSelect, onDark }: ChatListProps) => {
 interface BroadcastModalProps {
   onDark: () => void;
   onClose: () => void;
+  connId: string | null;
 }
 
-const BroadcastModal = ({ onDark, onClose }: BroadcastModalProps) => {
+const BroadcastModal = ({ onDark, onClose, connId }: BroadcastModalProps) => {
   const [to, setTo] = useState('');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1506,7 +1561,7 @@ const BroadcastModal = ({ onDark, onClose }: BroadcastModalProps) => {
     setNote(null);
     const out = await apiPost<{ ok: boolean; sent: number; failed: number; total: number }>(
       '/api/v1/whatsappmax/broadcast',
-      { to: recipients, text: body }
+      { to: recipients, text: body, ...(connId ? { connId } : {}) }
     );
     setBusy(false);
     if (isDark(out)) { onDark(); return; }
@@ -1515,7 +1570,7 @@ const BroadcastModal = ({ onDark, onClose }: BroadcastModalProps) => {
     } else {
       setNote('Diffusion échouée.');
     }
-  }, [to, text, onDark]);
+  }, [to, text, onDark, connId]);
 
   return (
     <div
@@ -1573,14 +1628,150 @@ const BroadcastModal = ({ onDark, onClose }: BroadcastModalProps) => {
   );
 };
 
+// ── Account switcher ───────────────────────────────────────────────────────
+
+interface AccountSwitcherProps {
+  accounts: AccountMeta[];
+  selectedConnId: string | null;
+  onSelect: (connId: string) => void;
+  onAdd: () => void;
+}
+
+const AccountSwitcher = ({
+  accounts,
+  selectedConnId,
+  onSelect,
+  onAdd,
+}: AccountSwitcherProps) => {
+  const [open, setOpen] = useState(false);
+  const selected = accounts.find(a => a.connId === selectedConnId);
+  const label = selected
+    ? `+${selected.phoneNumber}`
+    : accounts.length > 0
+      ? 'Aucun compte'
+      : 'Aucun compte';
+  const dotColor = (status: string) =>
+    status === 'connected' ? C.accent : status === 'qr' || status === 'connecting' ? C.orange : C.muted;
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-flex' }}>
+      <button
+        style={{
+          ...btn('secondary', false),
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 12,
+        }}
+        onClick={() => setOpen(v => !v)}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: selected ? dotColor(selected.status) : C.muted,
+            flexShrink: 0,
+          }}
+        />
+        {label}
+        <span style={{ fontSize: 10, color: C.muted }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+            onClick={() => setOpen(false)}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              marginTop: 4,
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              borderRadius: 10,
+              padding: 6,
+              minWidth: 220,
+              zIndex: 9999,
+              boxShadow: '0 8px 28px rgba(0,0,0,0.45)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+            }}
+          >
+            {accounts.map(a => (
+              <button
+                key={a.connId}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 10px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: a.connId === selectedConnId ? `${C.accent}18` : 'transparent',
+                  color: C.text,
+                  fontSize: 12.5,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+                onClick={() => { onSelect(a.connId); setOpen(false); }}
+              >
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: dotColor(a.status),
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ flex: 1 }}>+{a.phoneNumber}</span>
+                {a.status === 'connected' ? (
+                  <span style={{ fontSize: 10, color: C.accent, fontWeight: 600 }}>Connecté</span>
+                ) : (
+                  <span style={{ fontSize: 10, color: C.muted }}>Inconnu</span>
+                )}
+              </button>
+            ))}
+            <div style={{ borderTop: `1px solid ${C.border}`, margin: '4px 0' }} />
+            <button
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 10px',
+                borderRadius: 6,
+                border: 'none',
+                background: 'transparent',
+                color: C.accent,
+                fontSize: 12.5,
+                cursor: 'pointer',
+                textAlign: 'left',
+                fontWeight: 600,
+              }}
+              onClick={() => { onAdd(); setOpen(false); }}
+            >
+              + Lier un autre numéro
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 // ── Chat app (two-pane) ────────────────────────────────────────────────────
 
 interface ChatAppProps {
   status: StatusResp | null;
   onDark: () => void;
+  connId: string | null;
 }
 
-const ChatApp = ({ status, onDark }: ChatAppProps) => {
+const ChatApp = ({ status, onDark, connId }: ChatAppProps) => {
   const [activeJid, setActiveJid] = useState<string | null>(null);
   const [activeName, setActiveName] = useState('');
   const [activeIsGroup, setActiveIsGroup] = useState(false);
@@ -1616,7 +1807,7 @@ const ChatApp = ({ status, onDark }: ChatAppProps) => {
           overflow: 'hidden',
         }}
       >
-        <ChatList active={activeJid} onSelect={selectChat} onDark={onDark} />
+        <ChatList active={activeJid} onSelect={selectChat} onDark={onDark} connId={connId} />
         {/* Broadcast CTA */}
         <div
           style={{
@@ -1645,6 +1836,7 @@ const ChatApp = ({ status, onDark }: ChatAppProps) => {
             connected={connected}
             onDark={onDark}
             onClose={() => setActiveJid(null)}
+            connId={connId}
           />
         ) : (
           <div
@@ -1682,7 +1874,7 @@ const ChatApp = ({ status, onDark }: ChatAppProps) => {
       </div>
 
       {showBroadcast && (
-        <BroadcastModal onDark={onDark} onClose={() => setShowBroadcast(false)} />
+        <BroadcastModal onDark={onDark} onClose={() => setShowBroadcast(false)} connId={connId} />
       )}
     </div>
   );
@@ -1695,15 +1887,30 @@ const WhatsappMaxPage = () => {
   const [dark, setDark] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [showChat, setShowChat] = useState(false);
+  const [accounts, setAccounts] = useState<AccountMeta[]>([]);
+  const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
+  const [showAddMode, setShowAddMode] = useState(false);
 
   useEffect(() => {
     void (async () => {
-      const s = await apiGet<StatusResp>('/api/v1/whatsappmax/status');
-      if (isDark(s)) {
+      const out = await apiGet<AccountsResp>('/api/v1/whatsappmax/accounts');
+      if (isDark(out)) {
         setDark(true);
-      } else if (s) {
-        setStatus(s);
-        if (s.connected) setShowChat(true);
+      } else if (out && Array.isArray(out.accounts)) {
+        setAccounts(out.accounts);
+        // Auto-select first connected account, or first account
+        const firstConnected = out.accounts.find(a => a.status === 'connected');
+        const first = firstConnected ?? out.accounts[0];
+        if (first) {
+          setSelectedConnId(first.connId);
+          setStatus({
+            connected: first.status === 'connected',
+            phoneNumber: first.phoneNumber,
+            status: first.status,
+            connectedAt: first.connectedAt,
+          });
+          if (first.status === 'connected') setShowChat(true);
+        }
       }
       setLoaded(true);
     })();
@@ -1717,7 +1924,74 @@ const WhatsappMaxPage = () => {
 
   const handleConnected = useCallback(() => {
     setShowChat(true);
+    setShowAddMode(false);
   }, []);
+
+  const handleSelectAccount = useCallback(
+    (connId: string) => {
+      setSelectedConnId(connId);
+      const acct = accounts.find(a => a.connId === connId);
+      if (acct) {
+        setStatus({
+          connected: acct.status === 'connected',
+          phoneNumber: acct.phoneNumber,
+          status: acct.status,
+          connectedAt: acct.connectedAt,
+        });
+        if (acct.status === 'connected') {
+          setShowChat(true);
+          setShowAddMode(false);
+        } else {
+          setShowChat(false);
+        }
+      }
+    },
+    [accounts]
+  );
+
+  const handleAdded = useCallback(
+    (newConnId: string) => {
+      // Refresh accounts list, select the new one, hide QR
+      void (async () => {
+        const out = await apiGet<AccountsResp>('/api/v1/whatsappmax/accounts');
+        if (isDark(out)) {
+          setDark(true);
+          return;
+        }
+        if (out && Array.isArray(out.accounts)) {
+          setAccounts(out.accounts);
+          const added = out.accounts.find(a => a.connId === newConnId);
+          if (added) {
+            setSelectedConnId(added.connId);
+            setStatus({
+              connected: added.status === 'connected',
+              phoneNumber: added.phoneNumber,
+              status: added.status,
+              connectedAt: added.connectedAt,
+            });
+            if (added.status === 'connected') setShowChat(true);
+          } else {
+            // Fallback: select it by ID even if not in the list yet
+            setSelectedConnId(newConnId);
+          }
+        }
+        setShowAddMode(false);
+      })();
+    },
+    []
+  );
+
+  const handleAdd = useCallback(() => {
+    setShowAddMode(true);
+  }, []);
+
+  // Determine QrPairing mode
+  const qrMode: 'first' | 'add' | 'connected' =
+    showAddMode
+      ? 'add'
+      : status?.connected
+        ? 'connected'
+        : 'first';
 
   return (
     <>
@@ -1742,7 +2016,16 @@ const WhatsappMaxPage = () => {
             </span>
           </div>
           <span style={{ flex: 1 }} />
-          {status?.connected && (
+          {/* Account switcher — visible when accounts are loaded */}
+          {accounts.length > 0 && !showAddMode && (
+            <AccountSwitcher
+              accounts={accounts}
+              selectedConnId={selectedConnId}
+              onSelect={handleSelectAccount}
+              onAdd={handleAdd}
+            />
+          )}
+          {status?.connected && !showAddMode && (
             <div
               style={{
                 fontSize: 11.5,
@@ -1789,21 +2072,25 @@ const WhatsappMaxPage = () => {
             <div style={{ fontSize: 13, color: C.muted, padding: 16 }}>Chargement…</div>
           ) : (
             <>
-              {/* QR pairing / connected badge */}
+              {/* QR pairing / connected badge / add-mode */}
               <QrPairing
                 status={status}
                 onStatus={handleStatus}
                 onDark={() => setDark(true)}
                 onConnected={handleConnected}
+                connId={selectedConnId}
+                mode={qrMode}
+                onAdded={handleAdded}
               />
-              {/* Chat app — shown only when connected */}
-              {showChat && (
+              {/* Chat app — shown only when connected (not in add-mode) */}
+              {showChat && !showAddMode && (
                 <ChatApp
                   status={status}
                   onDark={() => setDark(true)}
+                  connId={selectedConnId}
                 />
               )}
-              {!showChat && !status?.connected && loaded && (
+              {!showChat && !status?.connected && loaded && !showAddMode && (
                 <div style={{ ...panelStyle, background: C.surface, border: `1px dashed ${C.border}` }}>
                   <div style={{ fontSize: 12.5, color: C.muted, textAlign: 'center' }}>
                     Liez un numéro WhatsApp via QR pour accéder à la messagerie.
