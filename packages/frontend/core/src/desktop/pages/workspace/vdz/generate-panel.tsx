@@ -186,7 +186,7 @@ export const VdzGeneratePanel = ({
   );
 
   // Listen for the frame's duration handshake. We accept a message only when it
-  // originates from OUR iframe's contentWindow (the frame can't spoof source).
+  // originates from OUR iframe's contentWindow (the frame can’t spoof source).
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const frameWin = iframeRef.current?.contentWindow;
@@ -249,7 +249,7 @@ export const VdzGeneratePanel = ({
     const trimmed = prompt.trim();
     if (!trimmed || busy) return;
     // "In editor" mode delegates to the host (switch to Edit + run through the
-    // AI dock pipeline). We don't clear the prompt so it's still there if the
+    // AI dock pipeline). We don't clear the prompt so it’s still there if the
     // user flips back to the HTML tool.
     if (genMode === 'editor' && onGenerateInEditor) {
       onGenerateInEditor(trimmed);
@@ -326,7 +326,7 @@ export const VdzGeneratePanel = ({
         <h2 className={styles.title}>Générateur Vidéo IA</h2>
         <p className={styles.subtitle}>
           {editorMode
-            ? 'Décrivez une vidéo — arrivez dans l'éditeur de chronologie avec une proposition IA modifiable.'
+            ? 'Décrivez une vidéo — arrivez dans l’éditeur de chronologie avec une proposition IA modifiable.'
             : 'Décrivez une vidéo et regardez-la jouer — puis affinez-la avec des mots.'}
         </p>
       </div>
@@ -394,7 +394,7 @@ export const VdzGeneratePanel = ({
                 Génération…
               </>
             ) : editorMode ? (
-              'Générer dans l'éditeur'
+              'Générer dans l’éditeur'
             ) : hasVideo ? (
               'Régénérer'
             ) : (
@@ -466,7 +466,7 @@ export const VdzGeneratePanel = ({
               </span>
             ) : exportStatus === 'error' ? (
               <span className={styles.exportHint}>
-                {exportError || 'Échec de l'export. Veuillez réessayer.'}
+                {exportError || 'Échec de l’export. Veuillez réessayer.'}
               </span>
             ) : null}
           </div>
