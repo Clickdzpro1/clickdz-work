@@ -4,6 +4,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import {
   type CSSProperties,
@@ -2068,6 +2069,7 @@ const WhatsappMaxPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="WHATSAPPMAX">
         {/* WS17: keyframes for the QR placeholder spinner (inline styles can't
             define @keyframes, so inject once at the page root). */}
         <style>{`@keyframes cdz-qr-spin{to{transform:rotate(360deg)}}`}</style>
@@ -2125,6 +2127,7 @@ const WhatsappMaxPage = () => {
             </>
           )}
         </div>
+        </AppAccessGate>
       </ViewBody>
     </>
   );
