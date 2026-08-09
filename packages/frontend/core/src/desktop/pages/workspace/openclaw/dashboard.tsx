@@ -80,10 +80,10 @@ const OC_BORDER = `color-mix(in srgb, ${OC.accent} 45%, transparent)`;
 
 // The example prompts double as quick-start tasks (same set the console uses).
 const QUICK_TASKS: string[] = [
-  'Build a small Express API with a /health route and show it running',
-  'Write a Python script that computes and prints the first 20 prime numbers',
-  'Scaffold a Vite + React counter app and open the live preview',
-  'Write a Python fizzbuzz function with a test, then run the test',
+  'Construire une petite API Express avec une route /health et la voir s'exécuter',
+  'Écrire un script Python qui calcule et affiche les 20 premiers nombres premiers',
+  'Générer une application Vite + React avec un compteur et ouvrir l'aperçu en direct',
+  'Écrire une fonction Python fizzbuzz avec un test, puis exécuter le test',
 ];
 
 interface OpenFile {
@@ -455,11 +455,11 @@ export const OpenClawDashboard = ({
 
       {/* Recent projects/threads */}
       <Panel
-        title="Recent tasks"
+        title="Tâches récentes"
         action={
           threads.length > 0 ? (
             <span style={{ fontSize: 11, color: C.muted }}>
-              {threads.length} total
+              {threads.length} au total
             </span>
           ) : undefined
         }
@@ -474,22 +474,22 @@ export const OpenClawDashboard = ({
               padding: '8px 2px',
             }}
           >
-            <Spinner /> Loading your tasks…
+            <Spinner /> Chargement de vos tâches…
           </div>
         ) : threadsState === 'error' ? (
           <Banner tone="error">
-            Couldn’t load your tasks.{' '}
+            Impossible de charger vos tâches.{' '}
             <button
               style={{ ...btnStyle('secondary'), padding: '2px 8px', fontSize: 12 }}
               onClick={() => void loadThreads()}
             >
-              Retry
+              Réessayer
             </button>
           </Banner>
         ) : threads.length === 0 ? (
           <EmptyNote>
-            No tasks yet. Hit <strong>New task</strong> above to build your
-            first project.
+            Aucune tâche. Appuyez sur <strong>Nouvelle tâche</strong> ci-dessus pour
+            créer votre premier projet.
           </EmptyNote>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -509,24 +509,24 @@ export const OpenClawDashboard = ({
       {/* Last thread's workspace (files + preview) — reuses CLAWX components */}
       {lastId ? (
         <Panel
-          title={`Last project — ${threads[0]?.title ?? ''}`}
+          title={`Dernier projet — ${threads[0]?.title ?? ''}`}
           action={
             <div style={{ display: 'flex', gap: 4 }}>
               <MiniTab
                 on={wsTab === 'files'}
                 onClick={() => setWsTab('files')}
-                label={`Files${lastFiles.length ? ` (${lastFiles.length})` : ''}`}
+                label={`Fichiers${lastFiles.length ? ` (${lastFiles.length})` : ''}`}
               />
               <MiniTab
                 on={wsTab === 'preview'}
                 onClick={() => setWsTab('preview')}
-                label="Preview"
+                label="Aperçu"
               />
               <button
                 style={{ ...btnStyle('secondary'), padding: '4px 10px', fontSize: 12 }}
                 onClick={() => onOpenThread(lastId)}
               >
-                Open in console →
+                Ouvrir dans la console →
               </button>
             </div>
           }
@@ -557,10 +557,10 @@ export const OpenClawDashboard = ({
                   ) : (
                     <EmptyNote>
                       {lastFiles.length > 0
-                        ? 'Select a file to view it.'
+                        ? 'Sélectionnez un fichier pour le consulter.'
                         : caps?.sandbox
-                          ? 'No files from this task yet.'
-                          : 'Live execution is off — files appear once a task runs in the sandbox.'}
+                          ? 'Aucun fichier pour cette tâche pour le moment.'
+                          : "L'exécution en direct est désactivée — les fichiers apparaîtront une fois qu'une tâche s'exécute dans le sandbox."}
                     </EmptyNote>
                   )}
                 </div>
@@ -586,11 +586,11 @@ export const OpenClawDashboard = ({
       {threadsState === 'ready' && threads.length === 0 ? (
         <EmptyState
           icon="🐾"
-          title="Build something and watch it run"
+          title="Construisez quelque chose et regardez-le s'exécuter"
           subtitle={
             caps?.sandbox
-              ? 'Describe a coding task. OpenClaw writes the files, runs them in an isolated sandbox, streams the output, and (for web apps) shows a live preview.'
-              : 'Describe a coding task. OpenClaw writes and explains the code. Live execution is off on this server, so nothing is run.'
+              ? "Décrivez une tâche de codage. OpenClaw écrit les fichiers, les exécute dans un sandbox isolé, diffuse la sortie, et (pour les applications web) affiche un aperçu en direct."
+              : "Décrivez une tâche de codage. OpenClaw écrit et explique le code. L'exécution en direct est désactivée sur ce serveur, rien n'est exécuté."
           }
           examples={QUICK_TASKS}
           onPickExample={seed => onNewTask(seed)}
@@ -1197,7 +1197,7 @@ const ThreadRow = ({
             whiteSpace: 'nowrap',
           }}
         >
-          {thread.title || 'Untitled task'}
+          {thread.title || 'Tâche sans titre'}
         </span>
         <span style={{ fontSize: 12, color: C.muted }}>
           {thread.messageCount} message{thread.messageCount === 1 ? '' : 's'}
