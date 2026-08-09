@@ -17,7 +17,23 @@ import { toast } from 'sonner';
  * mutations grantUserApp / revokeUserApp).
  */
 
-export type UserAppKey = 'SLIDE_PRO' | 'SOCIAL_PLUS' | 'COURSE_PRO' | 'ZOOM_PLUS';
+export type UserAppKey =
+  | 'SLIDE_PRO'
+  | 'SOCIAL_PLUS'
+  | 'COURSE_PRO'
+  | 'ZOOM_PLUS'
+  | 'VDZ'
+  | 'VOICE'
+  | 'APPS'
+  | 'SHOPERP'
+  | 'HERMES'
+  | 'OPENCLAW'
+  | 'AGENTS'
+  | 'VPIC'
+  | 'INTEGRATIONS'
+  | 'WHATSAPPMAX'
+  | 'AI_CHAT'
+  | 'WHITEBOARD';
 
 export interface UserAppEntitlement {
   app: string;
@@ -69,12 +85,24 @@ export const revokeUserAppMutation = {
 }`,
 } satisfies GraphQLQuery;
 
-/** The four gateable applications, with their French display labels. */
+/** All gateable applications, with their display labels. */
 export const USER_APPS: { key: UserAppKey; label: string }[] = [
   { key: 'SLIDE_PRO', label: 'SlidePro' },
-  { key: 'SOCIAL_PLUS', label: 'Social+' },
+  { key: 'SOCIAL_PLUS', label: 'Social' },
   { key: 'COURSE_PRO', label: 'CoursePro' },
   { key: 'ZOOM_PLUS', label: 'ZOOM+' },
+  { key: 'VDZ', label: 'Vdz Studio' },
+  { key: 'VOICE', label: 'Voice Studio' },
+  { key: 'APPS', label: 'ClickDz Apps' },
+  { key: 'SHOPERP', label: 'DzOS' },
+  { key: 'HERMES', label: 'Hermes' },
+  { key: 'OPENCLAW', label: 'OpenClaw' },
+  { key: 'AGENTS', label: 'Agents' },
+  { key: 'VPIC', label: 'Studio Image' },
+  { key: 'INTEGRATIONS', label: 'Integrations Flows' },
+  { key: 'WHATSAPPMAX', label: 'WhatsappMax' },
+  { key: 'AI_CHAT', label: 'AI Chat' },
+  { key: 'WHITEBOARD', label: 'Whiteboard' },
 ];
 
 /**
