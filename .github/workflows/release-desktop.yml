@@ -49,7 +49,7 @@ env:
 
 jobs:
   before-make:
-    if: ${{ inputs.desktop_macos || inputs.desktop_windows || inputs.desktop_linux }}
+    if: ${{ inputs.desktop_macos || inputs.desktop_windows || inputs.desktop_linux && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.build-type }}
     steps:
@@ -79,7 +79,7 @@ jobs:
           path: packages/frontend/apps/electron/resources/web-static
 
   windows-signer-gate:
-    if: ${{ inputs.desktop_windows }}
+    if: ${{ inputs.desktop_windows && github.repository == 'toeverything/AFFiNE' }}
     runs-on: ubuntu-latest
     outputs:
       signer_available: ${{ steps.check.outputs.signer_available }}
@@ -98,7 +98,7 @@ jobs:
           WINDOWS_SIGNER_PUBLIC_CERT_BASE64: ${{ secrets.WINDOWS_SIGNER_PUBLIC_CERT_BASE64 }}
 
   make-distribution-macos:
-    if: ${{ inputs.desktop_macos }}
+    if: ${{ inputs.desktop_macos && github.repository == 'toeverything/AFFiNE' }}
     strategy:
       fail-fast: false
       matrix:
@@ -125,7 +125,7 @@ jobs:
       apple_codesign: true
 
   make-distribution-linux:
-    if: ${{ inputs.desktop_linux }}
+    if: ${{ inputs.desktop_linux && github.repository == 'toeverything/AFFiNE' }}
     strategy:
       fail-fast: false
       matrix:
@@ -148,7 +148,7 @@ jobs:
       install_linux_deps: true
 
   build-and-sign-windows:
-    if: ${{ inputs.desktop_windows && needs.windows-signer-gate.outputs.signer_available == 'true' }}
+    if: ${{ inputs.desktop_windows && needs.windows-signer-gate.outputs.signer_available == 'true' && github.repository == 'toeverything/AFFiNE' }}
     needs:
       - before-make
       - windows-signer-gate
@@ -364,7 +364,8 @@ jobs:
           !inputs.desktop_windows ||
           !inputs.require-windows-signing ||
           needs.build-and-sign-windows.result == 'success'
-        )
+        ) &&
+        github.repository == 'toeverything/AFFiNE'
       }}
     needs:
       [
@@ -428,3 +429,4 @@ jobs:
           prerelease: ${{ inputs.build-type != 'stable' }}
           tag_name: v${{ env.RELEASE_VERSION}}
           files: ./release/*
+
