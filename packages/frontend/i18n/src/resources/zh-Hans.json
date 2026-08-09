@@ -1935,7 +1935,7 @@
   "com.affine.workspaceList.workspaceListType.local": "本地储存",
   "com.affine.workspaceList.addServer": "添加服务器",
   "com.affine.workspaceSubPath.all": "全部文档",
-  "com.affine.workspaceSubPath.chat": "Intelligence",
+  "com.affine.workspaceSubPath.chat": "AI 对话",
   "com.affine.workspaceSubPath.trash": "回收站",
   "com.affine.workspaceSubPath.trash.empty-description": "已删除的文档将显示在此处。",
   "com.affine.write_with_a_blank_page": "在空白页面书写",
