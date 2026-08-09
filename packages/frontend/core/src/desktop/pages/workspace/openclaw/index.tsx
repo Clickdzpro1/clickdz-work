@@ -105,10 +105,10 @@ const RUNTIME_LABELS: Record<string, string> = {
 // EmptyState example chips — real, runnable coding tasks that exercise write +
 // run (+ preview). Passed to the SHELL EmptyState (string[] + onPickExample).
 const EXAMPLES: string[] = [
-  'Build a small Express API with a /health route and show it running',
-  'Write a Python script that computes and prints the first 20 prime numbers',
-  'Write a Node script that fetches https://jsonplaceholder.typicode.com/todos/1 and summarizes the fields',
-  'Write a Python fizzbuzz function and a small test that asserts the first 15 outputs, then run the test',
+  'Construire une petite API Express avec une route /health et la voir s'exécuter',
+  'Écrire un script Python qui calcule et affiche les 20 premiers nombres premiers',
+  'Écrire un script Node qui récupère https://jsonplaceholder.typicode.com/todos/1 et résume les champs',
+  'Écrire une fonction Python fizzbuzz et un petit test qui vérifie les 15 premières sorties, puis exécuter le test',
 ];
 
 // Inject the shared CDZ responsive stylesheet once (idempotent). Rendered as a
@@ -261,12 +261,12 @@ const OpenClawPage = () => {
           : 'generate-only';
   const headerLampTitle =
     capsState === 'loading'
-      ? 'Probing sandbox…'
+      ? 'Sonde du sandbox…'
       : capsState === 'error'
-        ? 'Sandbox capabilities failed to load.'
+        ? 'Échec du chargement des capacités du sandbox.'
         : caps?.sandbox
-          ? 'Vercel Sandbox is enabled — tasks run live.'
-          : caps?.reason ?? 'Sandbox off — code is generated, not run.';
+          ? 'Le sandbox Vercel est activé — les tâches s'exécutent en direct.'
+          : caps?.reason ?? 'Sandbox désactivé — le code est généré, pas exécuté.';
   const headerChip = (
     <span style={capChipStyle} title={headerLampTitle}>
       <AgentPresence
@@ -293,9 +293,9 @@ const OpenClawPage = () => {
             <button
               style={headerBackBtnStyle}
               onClick={backToDashboard}
-              title="Back to dashboard"
+              title="Retour au tableau de bord"
             >
-              ← Dashboard
+              ← Tableau de bord
             </button>
           ) : null}
         </div>
@@ -323,13 +323,13 @@ const OpenClawPage = () => {
                   <span style={{ fontFamily: monoFamily, color: OC.accent }}>
                     {'>_'}
                   </span>
-                  <StudioSpinner /> Boot OpenClaw…
+                  <StudioSpinner /> Démarrage d'OpenClaw…
                 </div>
               ) : bootState === 'error' ? (
                 <StudioBanner tone="error">
-                  Couldn’t load your OpenClaw setup.{' '}
+                  Impossible de charger votre configuration OpenClaw.{' '}
                   <button style={linkBtnStyle} onClick={() => void loadBoot()}>
-                    Retry
+                    Réessayer
                   </button>
                 </StudioBanner>
               ) : showWizard ? (
@@ -572,7 +572,7 @@ const OpenClawConsole = ({
           content: '',
           language: known?.language,
           loading: false,
-          error: 'No active thread.',
+          error: 'Aucun fil de discussion actif.',
         });
         return;
       }
@@ -593,7 +593,7 @@ const OpenClawConsole = ({
           content: '',
           language: known?.language,
           loading: false,
-          error: 'Could not read this file from the sandbox.',
+          error: 'Impossible de lire ce fichier depuis le sandbox.',
         });
       }
     },
@@ -774,12 +774,12 @@ const OpenClawConsole = ({
   const runtimePicker = (
     <div
       role="radiogroup"
-      aria-label="Runtime"
+      aria-label="Environnement d'exécution"
       style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
       title={
         sandboxOn
-          ? 'Runtime the sandbox executes in'
-          : 'Runtime steers the generated language (execution is off)'
+          ? "L'environnement d'exécution du sandbox"
+          : "L'environnement guide le langage généré (l'exécution est désactivée)"
       }
     >
       {runtimes.map(rt => {
@@ -835,8 +835,8 @@ const OpenClawConsole = ({
             type="button"
             style={stripBtnStyle}
             onClick={() => setSidebarCollapsed(false)}
-            title="Show projects"
-            aria-label="Show projects"
+            title="Afficher les projets"
+            aria-label="Afficher les projets"
           >
             <span style={{ fontFamily: monoFamily }}>☰</span>
           </button>
@@ -844,13 +844,13 @@ const OpenClawConsole = ({
       ) : (
         <div data-cdz-rail="" style={sidebarWrapStyle}>
           <div style={railHeadStyle}>
-            <span style={railHeadLabelStyle}>Projects</span>
+            <span style={railHeadLabelStyle}>Projets</span>
             <button
               type="button"
               style={railToggleBtnStyle}
               onClick={() => setSidebarCollapsed(true)}
-              title="Collapse projects"
-              aria-label="Collapse projects"
+              title="Réduire les projets"
+              aria-label="Réduire les projets"
             >
               ⟨
             </button>
@@ -881,16 +881,16 @@ const OpenClawConsole = ({
         {/* hero header — mono chrome: tabs live below; this strip carries the
             live-build affordance + the rail toggle when the rail is hidden. */}
         <div data-cdz-actions="" style={heroHeadStyle}>
-          <span style={heroTitleStyle}>{'>_'} Workspace</span>
+          <span style={heroTitleStyle}>{'>_'} Espace de travail</span>
           {building ? (
-            <span style={buildingChipStyle} title="Files are streaming in">
+            <span style={buildingChipStyle} title="Les fichiers arrivent en flux">
               <AgentPresence
                 agent="openclaw"
                 phase="writing"
                 running
                 size={7}
               />
-              building…
+              construction…
             </span>
           ) : null}
           <span style={{ flex: 1 }} />
@@ -899,10 +899,10 @@ const OpenClawConsole = ({
               type="button"
               style={heroRailBtnStyle}
               onClick={() => setRailCollapsed(false)}
-              title="Show copilot"
-              aria-label="Show copilot"
+              title="Afficher le copilote"
+              aria-label="Afficher le copilote"
             >
-              Copilot ⟩
+              Copilote ⟩
             </button>
           ) : null}
         </div>
@@ -953,8 +953,8 @@ const OpenClawConsole = ({
                 ) : (
                   <PanelHint>
                     {files.length > 0
-                      ? 'Select a file to view it.'
-                      : 'Files the agent writes will appear here.'}
+                      ? 'Sélectionnez un fichier pour le consulter.'
+                      : 'Les fichiers écrits par l'agent apparaîtront ici.'}
                   </PanelHint>
                 )}
               </div>
@@ -982,8 +982,8 @@ const OpenClawConsole = ({
             type="button"
             style={stripBtnStyle}
             onClick={() => setRailCollapsed(false)}
-            title="Show copilot"
-            aria-label="Show copilot"
+            title="Afficher le copilote"
+            aria-label="Afficher le copilote"
           >
             <span style={{ fontFamily: monoFamily }}>💬</span>
           </button>
@@ -995,12 +995,12 @@ const OpenClawConsole = ({
               type="button"
               style={railToggleBtnStyle}
               onClick={() => setRailCollapsed(true)}
-              title="Collapse copilot"
-              aria-label="Collapse copilot"
+              title="Réduire le copilote"
+              aria-label="Réduire le copilote"
             >
               ⟩
             </button>
-            <span style={railHeadLabelStyle}>Copilot</span>
+            <span style={railHeadLabelStyle}>Copilote</span>
           </div>
 
           {/* status bar (phase chip + label + running) */}
@@ -1014,30 +1014,30 @@ const OpenClawConsole = ({
 
           {/* capabilities / planner banners */}
           {capsState === 'loading' ? (
-            <Banner tone="info">Checking sandbox availability…</Banner>
+            <Banner tone="info">Vérification de la disponibilité du sandbox…</Banner>
           ) : capsState === 'error' ? (
             <Banner tone="error">
-              Couldn&apos;t load OpenClaw capabilities.{' '}
+              Impossible de charger les capacités d'OpenClaw.{' '}
               <button style={linkBtnStyle} onClick={onReloadCaps}>
-                Retry
+                Réessayer
               </button>
             </Banner>
           ) : !sandboxOn ? (
             <Banner tone="warn">
-              <strong>Generate-only — sandbox off.</strong> Code gets written
-              and explained, but nothing runs. No exec, no ports, no preview.
+              <strong>Génération uniquement — sandbox désactivé.</strong> Le code est écrit
+              et expliqué, mais rien n'est exécuté. Pas d'exécution, pas de ports, pas d'aperçu.
               {caps?.reason ? (
                 <div style={{ marginTop: 4, color: C.muted, fontSize: 12 }}>
-                  Reason: {caps.reason}
+                  Raison : {caps.reason}
                 </div>
               ) : null}
             </Banner>
           ) : null}
           {plannerDown ? (
             <Banner tone="warn">
-              The AI planner isn&apos;t configured — ask the owner to set{' '}
-              <code style={codeChipStyle}>CDZ_AI_KEY</code>. Running is disabled
-              until then.
+              Le planificateur IA n'est pas configuré — demandez au propriétaire de définir{' '}
+              <code style={codeChipStyle}>CDZ_AI_KEY</code>. L'exécution est désactivée
+              en attendant.
             </Banner>
           ) : null}
 
@@ -1082,11 +1082,11 @@ const OpenClawConsole = ({
             ) : (
               <EmptyState
                 icon="🐾"
-                title="Build something and watch it run"
+                title="Construisez quelque chose et regardez-le s'exécuter"
                 subtitle={
                   sandboxOn
-                    ? 'Describe a coding task. OpenClaw writes the files, runs them in an isolated sandbox, streams the output, and (for web apps) shows a live preview.'
-                    : 'Describe a coding task. OpenClaw writes and explains the code. Live execution is off on this server, so nothing is run.'
+                    ? "Décrivez une tâche de codage. OpenClaw écrit les fichiers, les exécute dans un sandbox isolé, diffuse la sortie, et (pour les applications web) affiche un aperçu en direct."
+                    : "Décrivez une tâche de codage. OpenClaw écrit et explique le code. L'exécution en direct est désactivée sur ce serveur, rien n'est exécuté."
                 }
                 examples={EXAMPLES}
                 onPickExample={pickExample}
@@ -1106,8 +1106,8 @@ const OpenClawConsole = ({
               autoFocus
               placeholder={
                 sandboxOn
-                  ? 'Describe a coding task — e.g. build an Express API with a /health route and show it running'
-                  : 'Describe a coding task — code will be generated but not executed'
+                  ? "Décrivez une tâche de codage — ex : construire une API Express avec une route /health et la voir s'exécuter"
+                  : 'Décrivez une tâche de codage — le code sera généré mais pas exécuté'
               }
               leftSlot={runtimePicker}
             />
@@ -1153,7 +1153,7 @@ const WorkspaceTabs = ({
   }[] = [
     {
       id: 'files',
-      label: 'Files',
+      label: 'Fichiers',
       badge: fileCount > 0 ? String(fileCount) : undefined,
     },
     {
@@ -1163,12 +1163,12 @@ const WorkspaceTabs = ({
     },
     {
       id: 'preview',
-      label: 'Preview',
+      label: 'Aperçu',
       dot: previewReady,
     },
   ];
   return (
-    <div data-cdz-actions="" style={tabsBarStyle} role="tablist" aria-label="Workspace">
+    <div data-cdz-actions="" style={tabsBarStyle} role="tablist" aria-label="Espace de travail">
       {tabs.map(t => {
         const on = t.id === tab;
         return (
