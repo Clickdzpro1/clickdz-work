@@ -1,6 +1,7 @@
 import {
   Args,
   Field,
+  InputType,
   Int,
   Mutation,
   ObjectType,
@@ -50,6 +51,39 @@ class UserAppEntitlementType {
 
   @Field(() => Date)
   updatedAt!: Date;
+}
+
+@ObjectType('AdminUserAppEntitlement')
+class AdminUserAppEntitlementType {
+  @Field()
+  userId!: string;
+
+  @Field(() => [UserAppEntitlementType])
+  entitlements!: UserAppEntitlementType[];
+}
+
+@InputType()
+class GrantUserAppInput {
+  @Field()
+  userId!: string;
+
+  @Field()
+  app!: string;
+
+  @Field(() => String, { nullable: true })
+  plan?: string;
+
+  @Field(() => Date, { nullable: true })
+  expiresAt?: Date;
+}
+
+@InputType()
+class RevokeUserAppInput {
+  @Field()
+  userId!: string;
+
+  @Field()
+  app!: string;
 }
 
 @Resolver(() => UserType)
@@ -148,36 +182,33 @@ export class AdminFeatureManagementResolver extends AvailableUserFeatureConfig {
     return true;
   }
 
-  @Mutation(() => Boolean, {
+  @Mutation(() => UserAppEntitlementType, {
     description: 'Grant a ClickDz app entitlement to a user (admin)',
   })
   async grantUserApp(
-    @Args('userId') userId: string,
-    @Args('app') app: string,
-    @Args('plan', { type: () => String, nullable: true }) plan?: string,
-    @Args('expiresAt', { type: () => Date, nullable: true }) expiresAt?: Date
+    @Args('input', { type: () => GrantUserAppInput }) input: GrantUserAppInput
   ) {
-    const normalized = app.toLowerCase();
+    const normalized = input.app.toLowerCase();
     if (!APP_ENTITLEMENT_APPS.includes(normalized as any)) {
-      throw new BadRequest(`Unknown app "${app}"`);
+      throw new BadRequest(`Unknown app "${input.app}"`);
     }
-    await this.models.userAppEntitlement.upsert(userId, normalized, {
-      plan: plan ?? 'manual',
-      expiresAt: expiresAt ?? null,
+    return await this.models.userAppEntitlement.upsert(input.userId, normalized, {
+      plan: input.plan ?? 'manual',
+      expiresAt: input.expiresAt ?? null,
       reason: 'admin panel',
     });
-    return true;
   }
 
-  @Mutation(() => Boolean, {
+  @Mutation(() => UserAppEntitlementType, {
     description: 'Revoke a ClickDz app entitlement from a user (admin)',
   })
   async revokeUserApp(
-    @Args('userId') userId: string,
-    @Args('app') app: string
+    @Args('input', { type: () => RevokeUserAppInput }) input: RevokeUserAppInput
   ) {
-    await this.models.userAppEntitlement.remove(userId, app.toLowerCase());
-    return true;
+    const normalized = input.app.toLowerCase();
+    await this.models.userAppEntitlement.remove(input.userId, normalized);
+    // Return the deactivated row so the frontend gets the updated entitlement
+    return await this.models.userAppEntitlement.get(input.userId, normalized);
   }
 
   @Query(() => [UserAppEntitlementType], {
@@ -185,5 +216,28 @@ export class AdminFeatureManagementResolver extends AvailableUserFeatureConfig {
   })
   async userAppEntitlements(@Args('userId') userId: string) {
     return await this.models.userAppEntitlement.list(userId);
+  }
+
+  @Query(() => [AdminUserAppEntitlementType], {
+    description: 'List ClickDz app entitlements grouped by user (admin analytics)',
+  })
+  async adminUserAppEntitlements() {
+    const rows = await this.models.userAppEntitlement.listAll();
+
+    // Group by userId, preserving the order of first appearance
+    const map = new Map<string, UserAppEntitlementType[]>();
+    for (const row of rows) {
+      const group = map.get(row.userId);
+      if (group) {
+        group.push(row);
+      } else {
+        map.set(row.userId, [row]);
+      }
+    }
+
+    return Array.from(map.entries()).map(([userId, entitlements]) => ({
+      userId,
+      entitlements,
+    }));
   }
 }
