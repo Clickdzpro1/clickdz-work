@@ -118,7 +118,7 @@ export const HermesConfigPanel = ({
       workflows
         .map(w => ({ title: w.title.trim(), goal: w.goal.trim() }))
         .filter(w => w.goal.length > 0)
-        .map(w => ({ title: w.title || 'Saved workflow', goal: w.goal })),
+        .map(w => ({ title: w.title || 'Flux enregistré', goal: w.goal })),
     [workflows]
   );
 
@@ -179,23 +179,23 @@ export const HermesConfigPanel = ({
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <div style={{ flex: 1 }}>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: C.text }}>
-            ⚙ Hermes settings
+            ⚙ Configuration Hermes
           </h1>
           <p style={{ margin: '4px 0 0', fontSize: 13, color: C.muted }}>
-            Edit your agent’s name, focus, tools and saved workflows.
+            Modifiez le nom, le focus, les outils et les flux enregistrés de votre agent.
           </p>
         </div>
         <button style={btnStyle('secondary')} onClick={onClose}>
-          ← Back
+          ← Retour
         </button>
       </div>
 
       {save.kind === 'error' ? <Banner tone="error">{save.message}</Banner> : null}
 
       {/* Identity */}
-      <Panel title="Identity">
+      <Panel title="Identité">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <Field label="Agent name" error={nameErr}>
+          <Field label="Nom de l'agent" error={nameErr}>
             <input
               style={inputStyle}
               value={agentName}
@@ -203,7 +203,7 @@ export const HermesConfigPanel = ({
               onChange={e => setAgentName(e.target.value)}
             />
           </Field>
-          <Field label="Persona / standing goal" error={personaErr}>
+          <Field label="Persona / objectif permanent" error={personaErr}>
             <textarea
               style={textareaStyle}
               value={persona}
@@ -215,7 +215,7 @@ export const HermesConfigPanel = ({
       </Panel>
 
       {/* Default mode */}
-      <Panel title="Default run mode">
+      <Panel title="Mode d'exécution par défaut">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {(['auto', 'ask', 'dry'] as AgentMode[]).map(m => {
             const on = mode === m;
@@ -262,7 +262,7 @@ export const HermesConfigPanel = ({
           the existing config PUT. The All/None action + the load / error / empty
           faces are kept; only the grid body is now the shared component. */}
       <Panel
-        title={`Tools (${enabled.size} enabled)`}
+        title={`Outils (${enabled.size} activé${enabled.size > 1 ? 's' : ''})`}
         action={
           caps && caps.tools.length > 0 ? (
             <span style={{ display: 'flex', gap: 8 }}>
@@ -270,13 +270,13 @@ export const HermesConfigPanel = ({
                 style={miniBtnStyle('secondary')}
                 onClick={() => setEnabled(new Set(caps.tools.map(t => t.slug)))}
               >
-                All
+                Tout
               </button>
               <button
                 style={miniBtnStyle('secondary')}
                 onClick={() => setEnabled(new Set())}
               >
-                None
+                Aucun
               </button>
             </span>
           ) : undefined
@@ -284,12 +284,12 @@ export const HermesConfigPanel = ({
       >
         {capsError ? (
           <Banner tone="warn">
-            Couldn’t load the tool catalog.{' '}
+            Impossible de charger le catalogue d'outils.{' '}
             <button
               style={{ ...miniBtnStyle('secondary'), display: 'inline-flex' }}
               onClick={() => void loadCaps()}
             >
-              Retry
+              Réessayer
             </button>
           </Banner>
         ) : !caps ? (
@@ -302,12 +302,12 @@ export const HermesConfigPanel = ({
               color: C.muted,
             }}
           >
-            <Spinner /> Loading tools…
+            <Spinner /> Chargement des outils…
           </div>
         ) : caps.tools.length === 0 ? (
           <Banner tone="info">
-            No tools published yet. Connect apps from Integrations to unlock
-            actions.
+            Aucun outil publié pour le moment. Connectez des applications depuis Intégrations pour
+            débloquer des actions.
           </Banner>
         ) : (
           <ToolPermissions
@@ -325,16 +325,16 @@ export const HermesConfigPanel = ({
 
       {/* Saved workflows */}
       <Panel
-        title={`Saved workflows (${cleanWorkflows.length})`}
+        title={`Flux enregistrés (${cleanWorkflows.length})`}
         action={
           <button style={miniBtnStyle('primary')} onClick={addWorkflow}>
-            + Add
+            + Ajouter
           </button>
         }
       >
         {workflows.length === 0 ? (
           <div style={{ fontSize: 12.5, color: C.muted, padding: '8px 4px' }}>
-            No saved workflows. Add one so it appears on your dashboard.
+            Aucun flux enregistré. Ajoutez-en un pour qu'il apparaisse sur votre tableau de bord.
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -356,22 +356,22 @@ export const HermesConfigPanel = ({
                     style={{ ...inputStyle, flex: 1 }}
                     value={wf.title}
                     maxLength={60}
-                    placeholder="Workflow title"
+                    placeholder="Titre du flux"
                     onChange={e => updateWorkflow(i, { title: e.target.value })}
                   />
                   <button
                     style={miniBtnStyle('danger')}
                     onClick={() => removeWorkflow(i)}
-                    title="Remove workflow"
+                    title="Supprimer le flux"
                   >
-                    Remove
+                    Supprimer
                   </button>
                 </div>
                 <textarea
                   style={textareaStyle}
                   value={wf.goal}
                   maxLength={800}
-                  placeholder="Goal — phrase it the way you’d ask Hermes."
+                  placeholder="Objectif — formulez-le comme vous le demanderiez à Hermes."
                   onChange={e => updateWorkflow(i, { goal: e.target.value })}
                 />
               </div>
@@ -384,20 +384,20 @@ export const HermesConfigPanel = ({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         {save.kind === 'saved' ? (
           <span style={{ fontSize: 12.5, color: C.okText, fontWeight: 600 }}>
-            ✓ Saved
+            ✓ Enregistré
           </span>
         ) : null}
         <div style={{ flex: 1 }} />
         <button style={btnStyle('secondary')} onClick={onClose}>
-          Cancel
+          Annuler
         </button>
         <button style={btnStyle('primary', !canSave)} disabled={!canSave} onClick={() => void doSave()}>
           {save.kind === 'saving' ? (
             <>
-              <Spinner dark /> Saving…
+              <Spinner dark /> Enregistrement…
             </>
           ) : (
-            'Save changes'
+            'Enregistrer les modifications'
           )}
         </button>
       </div>
