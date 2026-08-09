@@ -2257,7 +2257,7 @@
   "com.affine.settings.workspace.sharing.workspace-sharing.description": "Contrôlez si les pages de cet espace de travail peuvent être partagées publiquement. Désactivez pour bloquer les nouveaux partages et l'accès externe aux partages existants.",
   "com.affine.settings.workspace.sharing.workspace-sharing.title": "Autoriser le partage des pages de l'espace de travail",
   "com.affine.share-menu.workspace-sharing.disabled.tooltip": "Le partage est désactivé pour cet espace de travail. Veuillez contacter un administrateur pour l'activer.",
-  "com.affine.workspaceSubPath.chat": "Intelligence",
+  "com.affine.workspaceSubPath.chat": "Chat IA",
   "error.BLOB_INVALID": "Le blob est invalide.",
   "error.CALENDAR_PROVIDER_REQUEST_ERROR": "Erreur de requête du fournisseur de calendrier, statut : {{status}}, message : {{message}}",
   "error.MANAGED_BY_APP_STORE_OR_PLAY": "Cet abonnement est géré par l'App Store ou Google Play. Veuillez le gérer dans la boutique correspondante.",
