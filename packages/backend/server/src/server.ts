@@ -19,6 +19,7 @@ import {
 } from './base';
 import { SocketIoAdapter } from './base/websocket';
 import { AuthGuard } from './core/auth';
+import { notifyPostHogDeployBoot } from './core/telemetry/posthog-deploy-event';
 import { TelemetryService } from './core/telemetry/service';
 import { securityHeaders } from './middleware/security-headers';
 import { serverTimingAndCache } from './middleware/timing';
@@ -182,6 +183,11 @@ export async function run() {
 
   await app.listen(config.server.port, config.server.listenAddr);
 
+  // PostHog deploy analytics — fire a `deploy_boot` event once when the server
+  // starts on Railway (or any platform). Fail-safe: never blocks or crashes
+  // the server if PostHog is unreachable or env vars are missing.
+  notifyPostHogDeployBoot().catch(() => {});
+
   const formattedAddr = config.server.listenAddr.includes(':')
     ? `[${config.server.listenAddr}]`
     : config.server.listenAddr;
@@ -190,3 +196,4 @@ export async function run() {
   logger.log(`Listening on http://${formattedAddr}:${config.server.port}`);
   logger.log(`And the public server should be recognized as ${url.baseUrl}`);
 }
+
