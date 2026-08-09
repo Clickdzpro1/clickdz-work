@@ -886,4 +886,17 @@ export class ClickDzSocialService {
         };
       });
   }
+
+  /**
+   * WS17: validate that every media URL is publicly fetchable (http/https).
+   * Browser blob: URLs (URL.createObjectURL) are only valid in the originating
+   * browser — Composio's servers cannot fetch them, so a post with a blob:
+   * media URL silently fails at publish time with a cryptic API error. This
+   * returns the list of offending URLs so the caller can throw a clear 400.
+   */
+  invalidMediaUrls(media: SocialMedia[]): string[] {
+    return media
+      .map(m => m.url)
+      .filter(u => !/^https?:\/\//i.test(u));
+  }
 }

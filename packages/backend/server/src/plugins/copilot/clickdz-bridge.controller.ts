@@ -1842,7 +1842,7 @@ export class ClickDzBridgeController {
     // replaceSlug: unpublish that slug first (Vercel delete + srem), freeing a
     // slot before the cap check. Fail-soft on Vercel 404 (still srem).
     if (replaceSlug && replaceSlug !== slug) {
-      await this.deleteAppFromVercel(replaceSlug);
+      await this.deleteAppFromVercel(replaceSlug, ownerId);
       await this.sremPublishedApp(ownerId, replaceSlug);
     }
     const existing = await this.readPublishedApps(ownerId);
@@ -1946,32 +1946,53 @@ export class ClickDzBridgeController {
    * still srem's the Redis record; other errors are logged, never thrown (the
    * srem must still happen so the user isn't wedged over the cap).
    */
-  private async deleteAppFromVercel(slug: string): Promise<void> {
+  private async deleteAppFromVercel(slug: string, ownerId?: string): Promise<void> {
     if (!VERCEL_TOKEN) return;
-    const projectName = `clickdz-app-${slug}`.slice(0, 52);
+    // WS17: namespace the Vercel project name per-owner so a slug collision
+    // across users can't overwrite another user's live app. Vercel project names
+    // are GLOBAL within a team; the prior `clickdz-app-${slug}` let a user pass
+    // another user's slug and deploy over their project. The 8-char owner prefix
+    // is unique per user and stays within the 52-char Vercel cap. Falls back to
+    // the legacy `clickdz-app-${slug}` name for apps deployed before this change.
+    const ownerPrefix = ownerId ? ownerId.slice(0, 8) : 'shared';
+    const projectName = `cdz-${ownerPrefix}-${slug}`.slice(0, 52);
+    const legacyProjectName = `clickdz-app-${slug}`.slice(0, 52);
     const teamQuery = VERCEL_TEAM_ID
       ? `?teamId=${encodeURIComponent(VERCEL_TEAM_ID)}`
       : '';
-    try {
-      const res = await fetch(
-        `https://api.vercel.com/v9/projects/${encodeURIComponent(projectName)}${teamQuery}`,
-        {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
-          signal: AbortSignal.timeout(15000),
-        }
-      );
-      // 200/204 = deleted; 404 = already absent (fail-soft). Anything else is
-      // logged but swallowed so the Redis bookkeeping still proceeds.
-      if (!res.ok && res.status !== 404) {
-        this.logger.warn(
-          `[apps] Vercel project delete for ${projectName} returned ${res.status}`
+    // Try the new namespaced name; if Vercel 404s, try the legacy name too so
+    // apps deployed before this change can still be unpublished.
+    for (const name of [projectName, legacyProjectName]) {
+      try {
+        const res = await fetch(
+          `https://api.vercel.com/v9/projects/${encodeURIComponent(name)}${teamQuery}`,
+          {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
+            signal: AbortSignal.timeout(15000),
+          }
         );
+        // 200/204 = deleted; 404 = absent. A 404 on the first name means try the
+        // legacy fallback; a 404 on the legacy name too is fine (already gone).
+        if (res.ok || res.status === 404) {
+          if (res.ok) {
+            this.logger.log(`[apps] Vercel project ${name} deleted`);
+          }
+          // If the new name was found+deleted, no need to try legacy. If 404,
+          // continue to the legacy fallback.
+          if (res.ok || name === legacyProjectName) break;
+          continue;
+        }
+        this.logger.warn(
+          `[apps] Vercel project delete for ${name} returned ${res.status}`
+        );
+        break; // non-404 error on the first name — don't blindly retry legacy
+      } catch (e) {
+        this.logger.warn(
+          `[apps] Vercel project delete for ${name} failed: ${String(e)}`
+        );
+        break;
       }
-    } catch (e) {
-      this.logger.warn(
-        `[apps] Vercel project delete for ${projectName} failed: ${String(e)}`
-      );
     }
   }
 
@@ -3183,7 +3204,8 @@ export class ClickDzBridgeController {
   private async deployAppToVercel(
     slug: string,
     html: string,
-    res: Response
+    res: Response,
+    ownerId?: string
   ): Promise<
     | {
         ok: true;
@@ -3204,7 +3226,14 @@ export class ClickDzBridgeController {
       });
       return { ok: false };
     }
-    const projectName = `clickdz-app-${slug}`.slice(0, 52);
+    // WS17: namespace the Vercel project name per-owner so a slug collision
+    // across users can't overwrite another user's live app. Vercel project names
+    // are GLOBAL within a team; the prior `clickdz-app-${slug}` let a user pass
+    // another user's slug and deploy over their project. The 8-char owner prefix
+    // is unique per user and stays within the 52-char Vercel cap. Falls back to
+    // the legacy `clickdz-app-${slug}` name for apps deployed before this change.
+    const ownerPrefix = ownerId ? ownerId.slice(0, 8) : 'shared';
+    const projectName = `cdz-${ownerPrefix}-${slug}`.slice(0, 52);
     const teamQuery = VERCEL_TEAM_ID
       ? `?teamId=${encodeURIComponent(VERCEL_TEAM_ID)}`
       : '';
@@ -3589,6 +3618,12 @@ export class ClickDzBridgeController {
     // deliver it at the end, which is exactly the spinner we are removing.
     res.setHeader('X-Accel-Buffering', 'no');
     const emit = (event: string, data: unknown) => {
+      // WS17: guard against writing to a response the client already closed
+      // (tab close / navigate away). Without this, the Path-B heartbeat
+      // interval keeps calling res.write() on a finished/closed stream and
+      // throws an uncaught exception. res.writableEnded is set after res.end();
+      // res.destroyed is set when the socket is gone.
+      if (res.writableEnded || res.destroyed) return;
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     // Abort upstream when the merchant closes the tab or navigates away, so a
@@ -3607,7 +3642,15 @@ export class ClickDzBridgeController {
     // its own timeout. A disconnect there lets the Make run finish and be
     // discarded; the heartbeat below is cleared either way.
     const upstream = new AbortController();
-    res.on('close', () => upstream.abort());
+    // WS17: hoist the Path-B heartbeat handle so the close handler can clear it
+    // too — otherwise a client disconnect leaves the 4s interval running, calling
+    // emit() on a closed response (the guard above stops the throw, but the
+    // interval itself must be cleared to stop the leak).
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    res.on('close', () => {
+      upstream.abort();
+      if (heartbeat) clearInterval(heartbeat);
+    });
 
     /** Substitute the per-slug Data API URL + token, then emit `done`. */
     const finish = (raw: string) => {
@@ -3727,7 +3770,7 @@ export class ClickDzBridgeController {
     // ---- Path B: the Make code agent. ONE buffered body, so no token stream
     // exists to forward. Emit honest elapsed-time heartbeats instead of
     // fabricating per-token progress, and keep the same `done` contract. ------
-    const heartbeat = setInterval(() => {
+    heartbeat = setInterval(() => {
       emit('phase', {
         phase: 'code',
         label: 'Génération en cours…',
@@ -3945,7 +3988,7 @@ export class ClickDzBridgeController {
     // C2 (VERCEL HARDENING): the helper owns `res` on failure (typed 503/502/
     // 402/429 already written) — stop WITHOUT recording, so there is no silent
     // partial success. Only a READY deploy reaches recordPublishedApp.
-    const result = await this.deployAppToVercel(slug, html, res);
+    const result = await this.deployAppToVercel(slug, html, res, user.id);
     if (!result.ok) return;
     const deployed = result.deployed;
     this.logger.log(`[apps] deployed: ${deployed.url} (${deployed.state})`);
@@ -4168,7 +4211,7 @@ export class ClickDzBridgeController {
     }
     // Vercel project deletion mirrors deployAppToVercel's conventions (v9 DELETE,
     // same teamQuery/Bearer), fail-soft on 404 — then always srem.
-    await this.deleteAppFromVercel(slug);
+    await this.deleteAppFromVercel(slug, user.id);
     await this.sremPublishedApp(user.id, slug);
     this.logger.log(`[apps] unpublished slug=${slug} user=${user.id}`);
     return { ok: true };
@@ -5181,25 +5224,54 @@ export class ClickDzBridgeController {
     // Sending it while the gate is OFF is a no-op: the @Public GET ignores an
     // Authorization header it does not need. So this is safe to ship BEFORE the
     // flag flips, which is exactly the staged rollout the gate was designed for.
+    //
+    // WS17: the data API caps a single list at 500 rows. Previously this helper
+    // made ONE request with ?limit=500 and silently dropped anything older — a
+    // monthly invoice partition or products/orders collection with >500 records
+    // was truncated, causing missed invoices and stale counts. Now it paginates
+    // with ?offset until the collection is exhausted (or ERP_LIST_MAX_ROWS is
+    // reached, a hard guard against unbounded reads on a runaway collection).
     const token = dataWriteToken(slug);
-    const res = await fetch(
-      `${this.erpDataBase(slug)}/${collection}?limit=500`,
-      {
-        headers: {
-          Accept: 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+    const out: ErpRecord[] = [];
+    let offset = 0;
+    const pageSize = 500;
+    // Hard guard: 5000 rows is far beyond any realistic ERP collection and stops
+    // a degenerate collection from fanning out into 10s of requests.
+    const ERP_LIST_MAX_ROWS = 5000;
+    while (offset < ERP_LIST_MAX_ROWS) {
+      const res = await fetch(
+        `${this.erpDataBase(slug)}/${collection}?limit=${pageSize}&offset=${offset}`,
+        {
+          headers: {
+            Accept: 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+        }
+      ).catch(() => null);
+      if (!res || !res.ok) {
+        if (offset === 0) {
+          this.logger.warn(
+            `[erp] list failed slug=${slug} coll=${collection} status=${res ? res.status : 'unreachable'}`
+          );
+          return null;
+        }
+        // Partial result on a later page is better than nothing; break and
+        // return what we have so far.
+        break;
       }
-    ).catch(() => null);
-    if (!res || !res.ok) {
-      this.logger.warn(
-        `[erp] list failed slug=${slug} coll=${collection} status=${res ? res.status : 'unreachable'}`
-      );
-      return null;
+      const data = (await res.json().catch(() => null)) as unknown;
+      if (!Array.isArray(data)) {
+        if (offset === 0) return null;
+        break;
+      }
+      const page = data as ErpRecord[];
+      out.push(...page);
+      // Fewer than a full page means we've reached the end.
+      if (page.length < pageSize) break;
+      offset += pageSize;
     }
-    const data = (await res.json().catch(() => null)) as unknown;
-    return Array.isArray(data) ? (data as ErpRecord[]) : null;
+    return out;
   }
 
   /**
@@ -7654,7 +7726,7 @@ export class ClickDzBridgeController {
     }
     // Re-deploy via the SAME internal path as deployApp. deployAppToVercel owns
     // `res` on failure (typed 503/502 already written) -> stop without recording.
-    const result = await this.deployAppToVercel(slug, html, res);
+    const result = await this.deployAppToVercel(slug, html, res, user.id);
     if (!result.ok) return;
     const deployed = result.deployed;
     this.logger.log(

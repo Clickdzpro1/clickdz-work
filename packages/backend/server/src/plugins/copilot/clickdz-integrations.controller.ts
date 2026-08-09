@@ -35,6 +35,7 @@ import {
   SOCIAL_MEDIA_MAX,
   SOCIAL_SCHEDULE_MAX_AHEAD_MS,
   SOCIAL_NETWORKS,
+  SOCIAL_ACTIONS,
 } from './clickdz-social.service';
 import type { SocialPost, PublishedLogEntry } from './clickdz-social.service';
 import { ClickDzSocialJob } from './clickdz-social.job';
@@ -1162,6 +1163,23 @@ export class ClickDzIntegrationsController {
       typeof body?.callbackUrl === 'string' && body.callbackUrl.length
         ? body.callbackUrl
         : undefined;
+    // WS17: validate callbackUrl origin to prevent an open-redirect phishing
+    // vector. The user-supplied URL is passed to Composio's OAuth redirect; an
+    // attacker could set it to a malicious URL. Only allow the app's own origin.
+    if (callbackUrl) {
+      const allowedOrigin = (
+        process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+      ).replace(/\/+$/, '');
+      try {
+        const u = new URL(callbackUrl);
+        if (`${u.protocol}//${u.host}` !== allowedOrigin) {
+          throw new BadRequest('"callbackUrl" must match the app origin');
+        }
+      } catch (e) {
+        if (e instanceof BadRequest) throw e;
+        throw new BadRequest('"callbackUrl" must be a valid URL');
+      }
+    }
 
     try {
       // Resolve the auth config id for the FIRST attempt. When the caller gave
@@ -2566,6 +2584,23 @@ export class ClickDzIntegrationsController {
       typeof body?.callbackUrl === 'string' && body.callbackUrl.length
         ? body.callbackUrl
         : undefined;
+    // WS17: validate callbackUrl origin to prevent an open-redirect phishing
+    // vector. The user-supplied URL is passed to Composio's OAuth redirect; an
+    // attacker could set it to a malicious URL. Only allow the app's own origin.
+    if (callbackUrl) {
+      const allowedOrigin = (
+        process.env.AFFINE_SERVER_EXTERNAL_URL || 'https://work.clickdz.ai'
+      ).replace(/\/+$/, '');
+      try {
+        const u = new URL(callbackUrl);
+        if (`${u.protocol}//${u.host}` !== allowedOrigin) {
+          throw new BadRequest('"callbackUrl" must match the app origin');
+        }
+      } catch (e) {
+        if (e instanceof BadRequest) throw e;
+        throw new BadRequest('"callbackUrl" must be a valid URL');
+      }
+    }
     try {
       let authConfigId = await this.ensureAuthConfig(toolkit) ?? toolkit;
       let attempt = await this.initiateConnect(authConfigId, user.id, callbackUrl);
@@ -2664,6 +2699,27 @@ export class ClickDzIntegrationsController {
 
     const rawMedia = Array.isArray(body?.media) ? body.media : [];
     const media = this.socialService.normalizeMedia(rawMedia);
+    // WS17: reject browser blob: URLs — Composio's servers can't fetch them, so
+    // a post with uploaded-media would silently fail at publish time. Surface a
+    // clear 400 so the user knows to use a public image URL or the AI image gen.
+    const invalidUrls = this.socialService.invalidMediaUrls(media);
+    if (invalidUrls.length) {
+      throw new BadRequest(
+        'Media URLs must be publicly fetchable (https://...). Uploaded files are not yet supported — use the AI image generator or a public image URL.'
+      );
+    }
+    // WS17: enforce requiresMedia server-side for IG/YouTube/TikTok/Pinterest.
+    // The FE checks this, but the backend never did — a media-less post to a
+    // network that requires media was sent to Composio and failed opaquely.
+    const mediaRequiredTargets = targets.filter(
+      t => SOCIAL_ACTIONS[t.network]?.requiresMedia && media.length === 0
+    );
+    if (mediaRequiredTargets.length) {
+      const nets = mediaRequiredTargets.map(t => t.network).join(', ');
+      throw new BadRequest(
+        `These networks require media (image/video): ${nets}. Add at least one media item.`
+      );
+    }
 
     const now = Date.now();
     let scheduledAt: number | undefined;

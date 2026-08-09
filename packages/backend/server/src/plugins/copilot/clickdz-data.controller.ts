@@ -301,6 +301,7 @@ export class ClickDzDataController {
     @Param('slug') slug: string,
     @Param('collection') collection: string,
     @Query('limit') limit: string | undefined,
+    @Query('offset') offset: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response
   ) {
@@ -338,7 +339,12 @@ export class ClickDzDataController {
       Math.max(Number(limit) || MAX_LIST_LIMIT, 1),
       MAX_LIST_LIMIT
     );
-    return records.slice(0, max);
+    // WS17: optional offset so internal callers (erpList) can paginate past the
+    // 500-row cap instead of silently truncating collections with more records.
+    // Negative/non-numeric offset is treated as 0 (fail-safe). The slice is
+    // bounded by the records length so an over-large offset simply returns [].
+    const start = Math.max(Number(offset) || 0, 0);
+    return records.slice(start, start + max);
   }
 
   @Post([
