@@ -18,6 +18,7 @@ import {
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { ChatWithAiIcon } from '@blocksuite/icons/rc';
 import {
   type CSSProperties,
@@ -720,6 +721,7 @@ const HermesPage = () => {
         </div>
       </ViewHeader>
       <ViewBody>
+        <AppAccessGate app="HERMES">
         {/* The console needs the full-bleed flex layout; the wizard / dashboard
             / settings live inside a scrolling, centered canvas (shoperp idiom). */}
         {state === 'ready' && view.kind === 'console' ? (
@@ -800,6 +802,7 @@ const HermesPage = () => {
             </div>
           </div>
         )}
+        </AppAccessGate>
       </ViewBody>
     </>
   );
