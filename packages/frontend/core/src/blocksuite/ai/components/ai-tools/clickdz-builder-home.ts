@@ -68,6 +68,21 @@ interface CdzAppTemplateSummary {
   gradient?: [string, string];
 }
 
+/**
+ * The "Blank app" prompt: build the smallest possible app shell so the merchant
+ * starts from a clean, functional canvas in the studio instead of a template or
+ * a long-form generation. Same single-file + inline-CSS/JS contract as every
+ * generated app. It is deliberately terse so the merchant's own additions fill
+ * the canvas rather than fighting pre-built screens.
+ */
+const CDZ_BLANK_APP_PROMPT =
+  "Une application web vide mais fonctionnelle : un seul fichier index.html, " +
+  "un écran minimal avec un titre, un court message d'accueil et un bouton " +
+  '« Commencer » sans action. Tout le CSS dans un style inline, tout le JS ' +
+  "dans un script inline, aucune librairie externe, responsive mobile, " +
+  "interface en français simple. Pas de données, pas d'admin, pas de PIN — " +
+  'un canevas propre à compléter dans le studio.';
+
 /** The app currently open in the studio overlay. */
 interface CdzOpenApp {
   slug: string;
@@ -322,6 +337,48 @@ export class ClickDzBuilderHome extends LitElement {
       padding: 2px 8px;
       background: var(--affine-background-secondary-color, #f4f4f5);
       color: var(--affine-text-secondary-color, #8e8d91);
+    }
+    /* Blank-app action — a first-class start button distinct from the template
+       gallery: a canvas built from scratch rather than from a pre-built brief. */
+    .blank {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 14px;
+      padding: 10px 14px;
+      border: 1px dashed var(--affine-primary-color, #1e96eb);
+      border-radius: 12px;
+      background: rgba(30, 150, 235, 0.06);
+      color: inherit;
+      text-align: start;
+      cursor: pointer;
+      font: inherit;
+    }
+    .blank:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .blank .b-emoji {
+      flex-shrink: 0;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      background: var(--affine-background-primary-color, #fff);
+      border: 1px solid var(--affine-border-color, #e3e2e4);
+    }
+    .blank .b-text .b-title {
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .blank .b-text .b-sub {
+      margin-top: 2px;
+      font-size: 11.5px;
+      color: var(--affine-text-secondary-color, #8e8d91);
+      line-height: 1.45;
     }
     .badge.live {
       background: rgba(16, 185, 129, 0.14);
@@ -1252,6 +1309,23 @@ export class ClickDzBuilderHome extends LitElement {
               </button>`
             )}
           </div>
+          <button
+            class="blank"
+            ?disabled=${this.busy}
+            title="Partir d'une page vide à remplir vous-même dans le studio"
+            @click=${() => void this.generate(CDZ_BLANK_APP_PROMPT, {
+              title: 'Application vide',
+            })}
+          >
+            <span class="b-emoji" aria-hidden>📄</span>
+            <span class="b-text">
+              <span class="b-title">Application vide</span>
+              <span class="b-sub"
+                >Partez d'une page blanche et construisez-la à la main dans le
+                studio, sans aucun modèle.</span
+              >
+            </span>
+          </button>
           ${this.busy && this.busyLabel
             ? html`<div class="busy">${this.busyLabel}</div>`
             : nothing}

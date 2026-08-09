@@ -590,3 +590,330 @@ export function writeHistory(items: GenerationHistoryItem[]): void {
     // ignore — history is a convenience, never load-bearing
   }
 }
+
+// -------------------------------------------------------------------------
+// Audio Library, bulk TTS + AI analysis (added surfaces on the Voice Studio).
+//
+// These hit the newer backend routes:
+//   · POST /api/v1/voice/library/clips          save a clip (tts) or transcript
+//   · GET  /api/v1/voice/library/clips          list the caller's library
+//   · DELETE /api/v1/voice/library/clips/:id    remove a library row
+//   · POST /api/v1/voice/tts-bulk               long-script TTS -> { clip, chunks }
+//   · POST /api/v1/voice/analyze                transcript -> { summary, speakers, ... }
+// All session-authed; all fail-soft (network errors => typed null/outcome).
+// -------------------------------------------------------------------------
+
+/** A saved audio clip or transcript in the caller's Voice Library. */
+export interface LibraryClipItem {
+  id: string;
+  url: string;
+  name: string;
+  createdAt: number;
+  kind: 'tts' | 'transcript';
+}
+
+/** Outcome of listing the library ([] on any failure). */
+export type LibraryListOutcome =
+  | { ok: true; clips: LibraryClipItem[] }
+  | { ok: false };
+
+/** Fetch the caller's saved clips, newest first. Fail-soft to { ok:false }. */
+export async function listLibraryClips(): Promise<LibraryListOutcome> {
+  try {
+    const res = await fetch(cdzApiUrl('/api/v1/voice/library/clips'), {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return { ok: false };
+    const data = (await res.json()) as { clips?: unknown };
+    const raw = Array.isArray(data?.clips) ? data.clips : [];
+    const clips = raw
+      .map(c => {
+        const it = (c ?? {}) as Partial<LibraryClipItem>;
+        if (
+          typeof it.id === 'string' &&
+          typeof it.url === 'string' &&
+          typeof it.name === 'string' &&
+          (it.kind === 'tts' || it.kind === 'transcript')
+        ) {
+          return {
+            id: it.id,
+            url: it.url,
+            name: it.name,
+            kind: it.kind as 'tts' | 'transcript',
+            createdAt: typeof it.createdAt === 'number' ? it.createdAt : Date.now(),
+          };
+        }
+        return null;
+      })
+      .filter((c): c is LibraryClipItem => c !== null);
+    return { ok: true, clips };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Outcome of saving / deleting a library row. */
+export type LibrarySaveOutcome =
+  | { ok: true; item: LibraryClipItem }
+  | { ok: false; reason: 'bad' | 'error' };
+
+/**
+ * Save an audio clip (bytes) to the caller's Voice Library. The backend stores
+ * the raw bytes under the user's copilot scope and returns a replay URL for
+ * <audio>. Fail-soft: 'bad' for an empty blob / HTTP 400, 'error' otherwise.
+ */
+export async function saveLibraryClip(
+  blob: Blob,
+  name: string,
+  mime?: string
+): Promise<LibrarySaveOutcome> {
+  if (!blob || blob.size === 0) return { ok: false, reason: 'bad' };
+  try {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < buf.length; i += CHUNK) {
+      binary += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+    }
+    const bytes = btoa(binary);
+    const res = await fetch(cdzApiUrl('/api/v1/voice/library/clips'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kind: 'tts',
+        name,
+        blob: bytes,
+        ...(mime ? { mime } : {}),
+      }),
+    });
+    if (!res.ok) return { ok: false, reason: res.status === 400 ? 'bad' : 'error' };
+    const data = (await res.json()) as Partial<LibraryClipItem> & { kind?: string };
+    if (
+      typeof data.id === 'string' &&
+      typeof data.url === 'string' &&
+      typeof data.name === 'string'
+    ) {
+      return {
+        ok: true,
+        item: {
+          id: data.id,
+          url: data.url,
+          name: data.name,
+          kind: data.kind === 'transcript' ? 'transcript' : 'tts',
+          createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
+        },
+      };
+    }
+    return { ok: false, reason: 'error' };
+  } catch {
+    return { ok: false, reason: 'error' };
+  }
+}
+
+/**
+ * Save a plain-text transcript to the caller's Voice Library (kind
+ * 'transcript'). Fail-soft like saveLibraryClip.
+ */
+export async function saveLibraryTranscript(
+  text: string,
+  name: string
+): Promise<LibrarySaveOutcome> {
+  if (!text || !text.trim()) return { ok: false, reason: 'bad' };
+  try {
+    const res = await fetch(cdzApiUrl('/api/v1/voice/library/clips'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'transcript', name, transcript: text }),
+    });
+    if (!res.ok) return { ok: false, reason: res.status === 400 ? 'bad' : 'error' };
+    const data = (await res.json()) as Partial<LibraryClipItem> & { kind?: string };
+    if (
+      typeof data.id === 'string' &&
+      typeof data.url === 'string' &&
+      typeof data.name === 'string'
+    ) {
+      return {
+        ok: true,
+        item: {
+          id: data.id,
+          url: data.url,
+          name: data.name,
+          kind: 'transcript',
+          createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
+        },
+      };
+    }
+    return { ok: false, reason: 'error' };
+  } catch {
+    return { ok: false, reason: 'error' };
+  }
+}
+
+/** Outcome of deleting a library row. */
+export type LibraryDeleteOutcome = { ok: boolean };
+
+/** Delete a saved clip/transcript from the caller's library. */
+export async function deleteLibraryClip(id: string): Promise<LibraryDeleteOutcome> {
+  try {
+    const res = await fetch(
+      cdzApiUrl(`/api/v1/voice/library/clips/${encodeURIComponent(id)}`),
+      { method: 'DELETE', credentials: 'include' }
+    );
+    return { ok: res.ok };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Shape returned by POST /api/v1/voice/tts-bulk. */
+export interface BulkTtsResult {
+  clip: LibraryClipItem & { kind: 'tts' };
+  chunks: number;
+}
+
+/** Outcome of a bulk synthesis attempt. */
+export type BulkTtsOutcome =
+  | { ok: true; result: BulkTtsResult }
+  | { ok: false; reason: 'bad' | 'error' };
+
+/**
+ * POST /api/v1/voice/tts-bulk — long-script TTS. Splits the text on the server
+ * (sentence-aware, chunk <= 1500 chars), synthesizes serially, byte-concats and
+ * persists to the caller's library. Mirror of {@link TtsRequest}: all TTS fields
+ * optional, same semantics. Fail-soft with reason:'bad' for 400s.
+ */
+export async function ttsBulk(params: {
+  text: string;
+  provider: TtsProviderId;
+  voice: string;
+  model?: string | null;
+  speed?: number;
+  instructions?: string;
+  format?: string;
+  name?: string;
+}): Promise<BulkTtsOutcome> {
+  if (!params.text || !params.text.trim()) return { ok: false, reason: 'bad' };
+  try {
+    const body: Record<string, unknown> = {
+      text: params.text,
+      provider: params.provider,
+      voice: params.voice,
+    };
+    if (typeof params.model === 'string' && params.model) body.model = params.model;
+    if (typeof params.speed === 'number' && Number.isFinite(params.speed)) {
+      body.speed = params.speed;
+    }
+    if (typeof params.instructions === 'string' && params.instructions.trim()) {
+      body.instructions = params.instructions.trim().slice(0, TTS_MAX_INSTRUCTIONS);
+    }
+    if (typeof params.format === 'string' && params.format) body.format = params.format;
+    if (typeof params.name === 'string' && params.name.trim()) body.name = params.name;
+    const res = await fetch(cdzApiUrl('/api/v1/voice/tts-bulk'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { ok: false, reason: res.status === 400 ? 'bad' : 'error' };
+    const data = (await res.json()) as {
+      clip?: Partial<LibraryClipItem> & { kind?: string };
+      chunks?: unknown;
+    };
+    const clip = data?.clip;
+    if (!clip || typeof clip.id !== 'string' || typeof clip.url !== 'string') {
+      return { ok: false, reason: 'error' };
+    }
+    return {
+      ok: true,
+      result: {
+        clip: {
+          id: clip.id,
+          url: clip.url,
+          name: typeof clip.name === 'string' ? clip.name : 'Clip',
+          kind: 'tts',
+          createdAt: typeof clip.createdAt === 'number' ? clip.createdAt : Date.now(),
+        },
+        chunks: typeof data?.chunks === 'number' ? data.chunks : 0,
+      },
+    };
+  } catch {
+    return { ok: false, reason: 'error' };
+  }
+}
+
+/** One distinct speaker from {@link VoiceAnalysis}. */
+export interface VoiceSpeaker {
+  name: string;
+  lines: string[];
+}
+
+/** Structured analysis returned by POST /api/v1/voice/analyze. */
+export interface VoiceAnalysis {
+  summary: string;
+  speakers: VoiceSpeaker[];
+  language: string;
+  sentiment?: string;
+}
+
+/** Outcome of an analysis attempt. */
+export type AnalyzeOutcome =
+  | { ok: true; analysis: VoiceAnalysis }
+  | { ok: false; reason: 'bad' | 'unavailable' | 'error' };
+
+/** POST /api/v1/voice/analyze — turn a transcript into a structured read. */
+export async function analyzeVoice(
+  text: string,
+  lang?: string
+): Promise<AnalyzeOutcome> {
+  if (!text || !text.trim()) return { ok: false, reason: 'bad' };
+  try {
+    const res = await fetch(cdzApiUrl('/api/v1/voice/analyze'), {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        ...(lang && lang !== 'auto' ? { lang } : {}),
+      }),
+    });
+    if (res.status === 404) return { ok: false, reason: 'unavailable' };
+    if (res.status === 400) return { ok: false, reason: 'bad' };
+    if (!res.ok) return { ok: false, reason: 'error' };
+    const data = (await res.json()) as Partial<VoiceAnalysis> & {
+      speakers?: unknown;
+    };
+    if (typeof data.summary !== 'string' || !data.summary) {
+      return { ok: false, reason: 'error' };
+    }
+    const speakers: VoiceSpeaker[] = Array.isArray(data.speakers)
+      ? data.speakers
+          .map(sp => {
+            const s = (sp ?? {}) as Partial<VoiceSpeaker>;
+            return {
+              name: typeof s.name === 'string' ? s.name : 'Speaker',
+              lines: Array.isArray(s.lines)
+                ? s.lines.filter((l): l is string => typeof l === 'string')
+                : [],
+            };
+          })
+          .filter(sp => sp.name || sp.lines.length)
+      : [];
+    return {
+      ok: true,
+      analysis: {
+        summary: data.summary,
+        speakers,
+        language: typeof data.language === 'string' ? data.language : 'auto',
+        ...(typeof data.sentiment === 'string' && data.sentiment.trim()
+          ? { sentiment: data.sentiment.trim() }
+          : {}),
+      },
+    };
+  } catch {
+    return { ok: false, reason: 'error' };
+  }
+}

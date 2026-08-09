@@ -36,6 +36,7 @@ import { ClickDzVdzComposeController } from './clickdz-vdz-compose.controller';
 import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
 import { ClickDzVpicController } from './clickdz-vpic.controller';
 import { ClickDzVoiceAiController } from './clickdz-voice-ai.controller';
+import { ClickDzAudioLibraryController } from './clickdz-audio-library.controller';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import { McpCredentialService } from './mcp/credential';
@@ -147,6 +148,10 @@ export class CopilotApiModule {}
     // typed 404), so registering the controller is byte-inert until the owner
     // enables the flag.
     ClickDzVoiceAiController,
+    // CDZ Voice Studio audio library (POST/GET/DELETE /api/v1/voice/library/
+    // clips). Additive + session-authed; the clip bytes reuse the existing
+    // @Public copilot blob GET route for <audio> playback.
+    ClickDzAudioLibraryController,
     WorkspaceMcpController,
   ],
 })

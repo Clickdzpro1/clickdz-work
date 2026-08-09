@@ -23,6 +23,7 @@ import {
 } from 'react';
 
 import {
+  analyzeVoice,
   C,
   countWords,
   cuesToSrt,
@@ -31,8 +32,10 @@ import {
   formatClock,
   pickRecorderMime,
   REALTIME_CHUNK_SECONDS,
+  saveLibraryTranscript,
   textToCues,
   transcribeAudio,
+  type VoiceAnalysis,
   type VoiceWord,
   wordsToCues,
 } from './voice-shared';
@@ -61,6 +64,20 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
   const [language, setLanguage] = useState<string | undefined>(undefined);
   const [notice, setNotice] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // ---- playback + saved-transcript + analysis state ----
+  // A local <audio> player lets a click on a word seek straight to that word's
+  // timestamp. Fed by the file-upload path (object URL); mp3/wav/etc play
+  // natively. Mic transcripts have no standalone audio file, so the player is
+  // only shown when a playable source exists.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [analysis, setAnalysis] = useState<VoiceAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // ---- mic state ----
   const [micState, setMicState] = useState<MicState>('idle');
@@ -103,6 +120,21 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
       }
       streamRef.current?.getTracks().forEach(t => t.stop());
     };
+  }, []);
+
+  // Revoke a replaced/cleared audio object URL when it changes or on unmount.
+  useEffect(() => {
+    return () => {
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    };
+  }, []);
+
+  const setPlayableUrl = useCallback((url: string | null) => {
+    if (audioUrlRef.current && audioUrlRef.current !== url) {
+      URL.revokeObjectURL(audioUrlRef.current);
+    }
+    audioUrlRef.current = url;
+    setAudioUrl(url);
   }, []);
 
   const fullText = useMemo(
@@ -274,6 +306,11 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
       setLanguage(undefined);
       setElapsed(0);
       sessionOffsetRef.current = 0;
+      setSaved(false);
+      setAnalysis(null);
+      setAnalysisError(null);
+      // Make the uploaded file playable so a click on a word can seek to it.
+      setPlayableUrl(URL.createObjectURL(file));
       const mime = file.type || 'audio/mpeg';
       const outcome = await transcribeAudio(file, mime, file.name || 'audio');
       setUploading(false);
@@ -347,6 +384,61 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
     if (!cues.length) return;
     downloadTextFile('transcript.srt', cuesToSrt(cues), 'text/plain');
   }, [fullText, allWords, durationSec]);
+
+  // Click-to-seek: seek the local <audio> player to a word's on-set time.
+  const seekTo = useCallback((seconds: number) => {
+    const el = audioRef.current;
+    if (!el) return;
+    try {
+      el.currentTime = Math.max(0, seconds);
+      void el.play().catch(() => {
+        /* ignore autoplay-denied */
+      });
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  // Save the current transcript (plain text) into the Audio Library.
+  const saveTranscript = useCallback(async () => {
+    if (!fullText) return;
+    setSaving(true);
+    setNotice(null);
+    const out = await saveLibraryTranscript(
+      fullText,
+      uploadName ? uploadName.replace(/\.\w+$/, '') : 'Transcription'
+    );
+    setSaving(false);
+    if (out.ok) {
+      setSaved(true);
+    } else {
+      setNotice(
+        out.reason === 'bad'
+          ? 'La transcription est vide — rien à sauvegarder.'
+          : 'Impossible de sauvegarder la transcription.'
+      );
+    }
+  }, [fullText, uploadName]);
+
+  // Analyze the transcript with cdz-flash (summary + speakers).
+  const runAnalyze = useCallback(async () => {
+    if (!fullText) return;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    const out = await analyzeVoice(fullText, language);
+    setAnalyzing(false);
+    if (out.ok) {
+      setAnalysis(out.analysis);
+    } else if (out.reason === 'unavailable') {
+      setAnalysisError(
+        'Analyse non disponible — Activez CDZ_VOICE_AI_ENABLED sur le serveur.'
+      );
+    } else {
+      setAnalysisError(
+        "L'analyse a échoué. Réessayez dans un instant."
+      );
+    }
+  }, [fullText, language]);
 
   const busy = micState === 'recording' || micState === 'finishing';
   const hasTranscript = fullText.length > 0;
@@ -652,7 +744,32 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
           <ActionButton disabled={!hasTranscript} onClick={downloadSrt}>
             .srt
           </ActionButton>
+          <ActionButton disabled={!hasTranscript} onClick={() => void saveTranscript()}>
+            {saved ? 'Sauvegardée ✓' : saving ? '…' : 'Sauvegarder'}
+          </ActionButton>
+          <ActionButton disabled={!hasTranscript} onClick={() => void runAnalyze()}>
+            {analyzing ? '…' : 'Analyser'}
+          </ActionButton>
         </div>
+
+        {/* playable source (file-upload transcripts) — supports click-to-seek */}
+        {audioUrl ? (
+          <audio
+            ref={audioRef}
+            src={audioUrl}
+            controls
+            preload="metadata"
+            style={{
+              width: '100%',
+              height: 38,
+              borderTop: `1px solid ${C.border}`,
+              display: 'block',
+              background: C.panel,
+            }}
+          >
+            Your browser does not support audio playback.
+          </audio>
+        ) : null}
 
         {/* rolling transcript body */}
         <div
@@ -681,11 +798,44 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
             </div>
           ) : (
             <>
-              {chunks.map((chunk, i) => (
-                <span key={i} style={{ color: C.text }}>
-                  {chunk.text}{' '}
+              {allWords.length ? (
+                // Word-level interactive transcript — each aligned word is
+                // clickable and seeks the local player to that word's on-set
+                // time (click-to-seek). Falls back to the grouped chunk text
+                // when Whisper returned no word timings.
+                <span style={{ color: C.text }}>
+                  {allWords.map((w, i) => (
+                    <span
+                      key={i}
+                      onClick={() => seekTo(w.t0)}
+                      title={`${formatClock(w.t0)}`}
+                      style={{
+                        cursor: audioUrl ? 'pointer' : 'default',
+                        borderRadius: 4,
+                        transition: 'background 120ms ease',
+                      }}
+                      onMouseEnter={e => {
+                        if (!audioUrl) return;
+                        e.currentTarget.style.background =
+                          'var(--affine-hover-color, rgba(255,255,255,0.08))';
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.background = 'transparent';
+                      }}
+                    >
+                      {w.w}{' '}
+                    </span>
+                  ))}
                 </span>
-              ))}
+              ) : (
+                <>
+                  {chunks.map((chunk, i) => (
+                    <span key={i} style={{ color: C.text }}>
+                      {chunk.text}{' '}
+                    </span>
+                  ))}
+                </>
+              )}
               {(pending || uploading) && (micState === 'recording' || uploading) ? (
                 <span
                   className="cdz-voice-shimmer"
@@ -702,6 +852,94 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
           )}
         </div>
       </div>
+
+      {/* AI analysis result */}
+      {(analysis || analysisError) ? (
+        <div
+          style={{
+            borderRadius: 12,
+            border: `1px solid ${C.border}`,
+            background: C.panel,
+            padding: 16,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
+              Analyse
+            </span>
+            {analysis?.language ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  padding: '1px 8px',
+                  borderRadius: 999,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                  color: C.accent,
+                  background: C.accentSoft,
+                }}
+              >
+                {analysis.language}
+              </span>
+            ) : null}
+            {analysis?.sentiment ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: C.muted,
+                  padding: '1px 8px',
+                  borderRadius: 999,
+                  border: `1px solid ${C.border}`,
+                }}
+              >
+                {analysis.sentiment}
+              </span>
+            ) : null}
+          </div>
+
+          {analysisError ? (
+            <p style={{ margin: 0, fontSize: 12.5, color: C.errText }}>
+              {analysisError}
+            </p>
+          ) : null}
+
+          {analysis ? (
+            <>
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: C.text }}>
+                {analysis.summary}
+              </p>
+              {analysis.speakers.length ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {analysis.speakers.map((sp, i) => (
+                    <div key={i} style={{ fontSize: 12.5, color: C.text }}>
+                      <strong>{sp.name}</strong>
+                      {sp.lines.length ? (
+                        <ul
+                          style={{
+                            margin: '4px 0 0',
+                            paddingLeft: 18,
+                            color: C.muted,
+                          }}
+                        >
+                          {sp.lines.map((line, j) => (
+                            <li key={j} style={{ margin: '2px 0' }}>
+                              {line}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 };

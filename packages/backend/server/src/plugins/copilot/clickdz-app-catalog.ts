@@ -48,7 +48,10 @@ export type AppTemplateCategory =
   | 'Finance'
   | 'Éducation'
   | 'Immobilier'
-  | 'Santé';
+  | 'Santé'
+  | 'Marketing'
+  | 'Restauration'
+  | 'Événements';
 
 /**
  * One Data API collection a template's brief instructs the app to use.
@@ -108,7 +111,7 @@ export interface AppTemplateDef {
  * Catalog version — bump when template ids/briefs change materially so clients
  * can detect a stale gallery. Mirrors TEMPLATE_CATALOG_VERSION (shop catalog).
  * ------------------------------------------------------------------------- */
-export const APP_TEMPLATE_CATALOG_VERSION = 1 as const;
+export const APP_TEMPLATE_CATALOG_VERSION = 2 as const;
 
 /* ---------------------------------------------------------------------------
  * Env gate — the exact idiom of templateCatalogEnabled() in
@@ -156,7 +159,7 @@ const BRIEF_QUALITY_RULES =
   '- Téléphones algériens : 10 chiffres commençant par 05, 06 ou 07 (valide la saisie) ; les liens WhatsApp utilisent https://wa.me/213 + numéro sans le 0 initial.';
 
 /* ---------------------------------------------------------------------------
- * The 10 templates.
+ * The 14 templates.
  *
  * Order = gallery order (most-wanted first). Ids are stable; briefs are the
  * product. Prices DZD. Every brief is structured: CONTEXTE → ÉCRANS → DONNÉES →
@@ -543,6 +546,161 @@ ${BRIEF_ADMIN_RULES}
 
 ${BRIEF_QUALITY_RULES}
 - Données de démo : 7 tickets du jour (n° 1 à 7) — 3 passés, 1 en consultation, 2 en attente, 1 absent — pour que l'écran TV et la page patient montrent tout de suite quelque chose de vivant.`,
+  },
+
+  /* ── 11 · Marketing — Campagnes agence ─────────────────────────────────── */
+  {
+    id: 'agence-marketing',
+    name: 'Agence marketing',
+    nameDarja: 'الماركتينغ',
+    emoji: '📣',
+    category: 'Marketing',
+    pitch: 'Clients, campagnes et relances pour agence ou freelance marketing — les leads à ne pas perdre.',
+    accent: '#db2777',
+    gradient: ['#db2777', '#9d174d'],
+    collections: [
+      { name: 'clients', purpose: 'Les fiches clients de l\'agence (nom, téléphone, entreprise, secteur, statut). Nom canonique protégé côté serveur.', personalData: true },
+      { name: 'campagnes', purpose: 'Les campagnes (client, canal, budget DZD, dates, statut, notes).', personalData: false },
+      { name: 'taches', purpose: 'Les actions à faire (campagne, tâche, échéance, fait).', personalData: false },
+      { name: 'settings', purpose: 'Réglages : PIN admin, nom de l\'agence, WhatsApp.', personalData: false },
+    ],
+    brief: `MODÈLE « Agence marketing » — mini-pipeline pour une agence marketing ou un freelance (social media, pub, référencement) en Algérie.
+
+CONTEXTE : les clients arrivent par WhatsApp et Instagram, les campagnes se suivent dans la tête et les factures oubliées restent impayées. L'app centralise clients, campagnes et relances.
+
+APP INTERNE : tout est derrière le PIN.
+
+ÉCRANS :
+- Tableau de bord : KPI en haut — clients actifs, campagnes en cours, à relancer, chiffre affiché en DZD (encaissé ce mois-ci pour les plans suivis).
+- Clients : liste avec recherche (nom ou téléphone) ; chaque fiche porte nom, téléphone (05/06/07, liens tel: / wa.me), entreprise, secteur (Resto, E-commerce, Service, Santé…), statut coloré (Prospect / Actif / En pause / Perdu) ; bouton 💬 WhatsApp pré-rempli.
+- Campagnes : une campagne = client + canal (Instagram, Facebook, TikTok, Google, WhatsApp, Presse) + budget en DZD + dates de début/fin + statut (Brouillon / En cours / En pause / Terminée) ; liste filtrable par statut et par client, KPI total dépensé du mois.
+- Tâches / relances : liste d'actions avec échéance (appeler le prospect, envoyer le rapport, relancer la facture) ; la vue « À relancer » regroupe celles en retard en premier, badge compteur, bouton wa.me vers le client concerné.
+- KPI agence : clients actifs, campagnes en cours, montant total des campagnes en cours en DZD, tâches en retard.
+
+DONNÉES : \`clients\` — nom canonique EXPRÈS (collection protégée côté serveur, lecture avec le token obligatoire) ; \`campagnes\`, \`taches\`, \`settings\` (unique).
+
+${BRIEF_DATA_RULES}
+
+${BRIEF_ADMIN_RULES}
+
+${BRIEF_QUALITY_RULES}
+- Données de démo : 8 clients (dont 2 à relancer), 5 campagnes (Instagram resto 60 000 DZD en cours, TikTok e-commerce…), 6 tâches dont 2 en retard.`,
+  },
+
+  /* ── 12 · Restauration — Menu / carte ──────────────────────────────────── */
+  {
+    id: 'resto-menu',
+    name: 'Menu resto',
+    nameDarja: 'المنيو',
+    emoji: '🍽️',
+    category: 'Restauration',
+    pitch: 'Une carte numérique pour votre resto ou fast-food, avec commande par WhatsApp en un tap.',
+    accent: '#ea580c',
+    gradient: ['#ea580c', '#9a3412'],
+    collections: [
+      { name: 'plats', purpose: 'Les plats et boissons (nom, catégorie, prix DZD, description, URL image, disponible).', personalData: false },
+      { name: 'commandes', purpose: 'Les commandes reçues (client, téléphone, plats, montant DZD, statut).', personalData: true },
+      { name: 'settings', purpose: 'Réglages : PIN admin, nom du resto, numéro WhatsApp, adresse.', personalData: false },
+    ],
+    brief: `MODÈLE « Menu resto » — carte numérique pour un restaurant, fast-food ou food-truck algérien, avec commande WhatsApp.
+
+CONTEXTE : la carte est une photo floue dans les stories ; le client hésite et n'ose pas appeler. L'app est une carte propre, consultable, qui envoie la commande direct sur WhatsApp.
+
+ÉCRAN PUBLIC (carte) :
+- En-tête : nom du resto, horaires (depuis les réglages), bouton « 🛵 Commander sur WhatsApp » avec le panier.
+- Catégories en onglets (Entrées, Plats, Grillades, Pizzas, Desserts, Boissons…).
+- Chaque plat : nom, description courte, prix en DZD (« 1 200 DZD »), badge « Nouveau » / « Populaire », petit bouton « + » pour l'ajouter au panier.
+- Panier flottant en bas : liste des plats et quantités, total en DZD, bouton « Envoyer la commande » → ouvre wa.me du resto avec la commande écrite en clair (plat × quantité + total) ; tout est géré côté client, aucune inscription nécessaire.
+
+ADMIN (derrière PIN) :
+- CRUD des plats (nom, catégorie, prix DZD, description, URL image, disponible / épuisé).
+- Commandes reçues : les commandes enregistrées par le client laissent ici leur trace (clients qui préfèrent un parcours en ligne) — nom, téléphone, plat, montant DZD, statut Reçue / En préparation / Prête / Servie, bouton wa.me pour confirmer.
+- KPI : plats au menu, commandes aujourd'hui, montant des commandes du jour en DZD.
+
+DONNÉES : \`plats\` (public), \`commandes\` (noms + téléphones : lecture TOUJOURS avec le token), \`settings\` (unique).
+
+${BRIEF_DATA_RULES}
+
+${BRIEF_ADMIN_RULES}
+
+${BRIEF_QUALITY_RULES}
+- Données de démo : 10 plats sur 4 catégories (couscous 900 DZD, pizza 1 100 DZD, tajine 1 200 DZD, thé 100 DZD…) et 3 commandes du jour dont 1 en préparation.`,
+  },
+
+  /* ── 13 · Santé — Carnet de suivi santé ────────────────────────────────── */
+  {
+    id: 'sante-bienetre',
+    name: 'Bien-être',
+    nameDarja: 'الصحة',
+    emoji: '💚',
+    category: 'Santé',
+    pitch: 'Suivi de poids, activité et habitudes pour coach, nutritionniste ou usage personnel.',
+    accent: '#059669',
+    gradient: ['#059669', '#065f46'],
+    collections: [
+      { name: 'releves', purpose: 'Les relevés (jour, poids kg, activité, humeur, notes).', personalData: true },
+      { name: 'objectifs', purpose: 'Les objectifs (type, valeur cible, date visée).', personalData: false },
+      { name: 'settings', purpose: 'Réglages : PIN admin, nom du profil, unités.', personalData: false },
+    ],
+    brief: `MODÈLE « Bien-être » — carnet de suivi santé et forme pour un coach, un nutritionniste ou un usage personnel en Algérie.
+
+CONTEXTE : suivre son poids et son activité dans un cahier revient vite à abandonner. L'app rend le suivi visuel et motivant avec des courbes et des rappels discrets.
+
+APP INTERNE : derrière un PIN léger (usage personnel ou coach avec ses clients).
+
+ÉCRANS :
+- Accueil : carte du jour — poids actuel, objectif restant, activité d'aujourd'hui ; grande frise des derniers relevés.
+- Saisie rapide : poids en kg, activité du jour, humeur (émojis), note libre ; chaque relevé est horodaté dans \`releves\`.
+- Courbe : graphique de l'évolution du poids et de l'activité sur 30 jours (dessiné en SVG ou en barres HTML/CSS inline — pas de librairie, tout doit marcher dans le fichier seul).
+- Objectifs : type (poids, pas, séances) + valeur cible + date visée ; l'acceuil affiche la progression en % et un badge quand l'objectif est atteint ou en retard.
+- Séries / habitudes : compteur de jours consécutifs (streak) avec flammes, petit message motivant en darja (ex. « رانا هنا ! Continue 💪 »).
+
+DONNÉES : \`releves\` (données personnelles de santé : lecture TOUJOURS avec le token), \`objectifs\`, \`settings\` (unique).
+
+${BRIEF_DATA_RULES}
+
+${BRIEF_ADMIN_RULES}
+
+${BRIEF_QUALITY_RULES}
+- Données de démo : 15 relevés sur les 30 derniers jours avec une tendance réaliste (ex. 86,4 → 84,1 kg), 1 objectif en cours et 1 atteint.`,
+  },
+
+  /* ── 14 · Événements — Gestion d'événement ─────────────────────────────── */
+  {
+    id: 'evenementiel',
+    name: 'Événementiel',
+    nameDarja: 'الحدث',
+    emoji: '🎪',
+    category: 'Événements',
+    pitch: 'Invités, places et paiements pour un mariage, un gala ou un concert — tout suivi.',
+    accent: '#7c3aed',
+    gradient: ['#7c3aed', '#5b21b6'],
+    collections: [
+      { name: 'invites', purpose: 'Les invités (nom, téléphone, catégorie, statut réponse, nombre de places).', personalData: true },
+      { name: 'tables', purpose: 'Les tables / catégories de places (nom, capacité, prix DZD si payant).', personalData: false },
+      { name: 'settings', purpose: 'Réglages : PIN admin, nom de l\'événement, date, lieu.', personalData: false },
+    ],
+    brief: `MODÈLE « Événementiel » — gestion des invités et des places d'un événement algérien (mariage, gala, conférence, concert).
+
+CONTEXTE : les réponses affluent par téléphone et WhatsApp, personne n'a la liste à jour le jour J. L'app tient la liste des invités, leurs réponses et le compte des places.
+
+APP INTERNE : tout est derrière le PIN.
+
+ÉCRANS :
+- Tableau de bord (le jour J) : liste des invités attendus, confirmés, présents ; badge compteur « sur 150 places ».
+- Invités : nom, téléphone (05/06/07), catégorie (Famille, Ami, Table VIP, Orateur, Presse…), statut en un tap (Invité / Confirmé / Présent / Absent / Annulé), nombre de places par invité.
+- Listes pratiques : « Liste d'attente » (non confirmés à relancer), « Liste du jour » (à vérifier à l'entrée) ; chaque invité a un bouton 💬 wa.me pré-rempli de confirmation.
+- Tables / places : tables avec capacité et prix DZD (si événement payant), suivi des places restantes par catégorie ; un invité confirme sur une table.
+- KPI : invités confirmés, places restantes, présents le jour J, montant encaissé en DZD (si billetterie).
+
+DONNÉES : \`invites\` (noms + téléphones : lecture TOUJOURS avec le token), \`tables\`, \`settings\` (unique).
+
+${BRIEF_DATA_RULES}
+
+${BRIEF_ADMIN_RULES}
+
+${BRIEF_QUALITY_RULES}
+- Données de démo : 12 invités (8 confirmés, 2 en attente, 1 absent, 1 annulé) sur 3 tables + 150 places annoncées, pour montrer la liste du jour dès l'ouverture.`,
   },
 ];
 

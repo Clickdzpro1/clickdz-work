@@ -64,7 +64,7 @@ export const ManageView = ({
             Vos boutiques &amp; applications
           </div>
           <div style={{ fontSize: 12.5, color: C.muted }}>
-            {apps.length} published {apps.length === 1 ? 'app' : 'apps'}
+            {apps.length} publié{apps.length === 1 ? '' : 'es'} {apps.length === 1 ? 'application' : 'applications'}
           </div>
         </div>
         <button style={btnStyle('primary')} onClick={onNewShop}>

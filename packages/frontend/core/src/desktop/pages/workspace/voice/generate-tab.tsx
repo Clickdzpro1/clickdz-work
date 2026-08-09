@@ -23,6 +23,7 @@ import {
   readHistory,
   synthesizeSpeech,
   TTS_MAX_CHARS,
+  ttsBulk,
   type TtsProviderCap,
   type TtsProviderId,
   downloadBlob,
@@ -44,6 +45,11 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [history, setHistory] = useState<GenerationHistoryItem[]>([]);
+  // Bulk (long-script) TTS state — a separate button for texts too long for a
+  // single-shot call; the result is persisted to the Library automatically.
+  const [bulking, setBulking] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
 
   // Track the current object URL so we can revoke the previous one on replace.
   const urlRef = useRef<string | null>(null);
@@ -136,6 +142,43 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
   const onGenerate = useCallback(() => {
     void runGeneration({ text, provider, voice, speed });
   }, [runGeneration, text, provider, voice, speed]);
+
+  // Bulk / long-script synthesis: the server splits the text, synthesizes each
+  // chunk serially, byte-concats and persists the clip to the Library.
+  const onBulk = useCallback(async () => {
+    const trimmed = text.trim();
+    if (!trimmed || bulking) return;
+    const cap = providers.find(p => p.id === provider);
+    if (!cap?.available) {
+      setBulkError("Le fournisseur sélectionné n'est pas disponible.");
+      return;
+    }
+    setBulking(true);
+    setBulkError(null);
+    setBulkResult(null);
+    const out = await ttsBulk({
+      text: trimmed,
+      provider,
+      voice: activeProvider?.voices.includes(voice) ? voice : activeProvider?.defaultVoice || voice,
+      model: activeProvider?.models?.includes(activeProvider?.defaultModel as string)
+        ? activeProvider?.defaultModel
+        : undefined,
+      speed: cap?.supportsSpeed ? speed : undefined,
+      format: 'mp3',
+    });
+    setBulking(false);
+    if (out.ok) {
+      setBulkResult(
+        `${out.result.chunks} segment(s) — clip enregistré dans la bibliothèque : « ${out.result.clip.name} ».`
+      );
+    } else {
+      setBulkError(
+        out.reason === 'bad'
+          ? 'Texte invalide ou trop long pour la synthèse longue.'
+          : 'Échec de la synthèse longue. Réessayez dans un instant.'
+      );
+    }
+  }, [text, bulking, providers, provider, activeProvider, voice, speed]);
 
   // Replay a history row: restore its params and re-run the request.
   const regenerate = useCallback(
@@ -456,6 +499,67 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
           </button>
         </div>
       ) : null}
+
+      {/* Bulk / long-script TTS ------------------------------------------ */}
+      <div
+        style={{
+          borderRadius: 12,
+          border: `1px dashed ${C.border}`,
+          background: C.panel,
+          padding: 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+            🔊 Synthèse longue (script long)
+          </span>
+          <span style={{ fontSize: 11, color: C.muted }}>
+            {text.length} caractères
+          </span>
+        </div>
+        <p style={{ margin: 0, fontSize: 12.5, color: C.muted, lineHeight: 1.5 }}>
+          Pour un script dépassant la saisie simple, le serveur découpe le texte
+          par phrases, synthétise chaque segment puis rassemble le tout en un
+          seul fichier, enregistré automatiquement dans la bibliothèque.
+        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            disabled={!anyProviderAvailable || !text.trim() || bulking}
+            onClick={() => void onBulk()}
+            style={{
+              appearance: 'none',
+              padding: '9px 16px',
+              borderRadius: 8,
+              border: 'none',
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#fff',
+              cursor:
+                !anyProviderAvailable || !text.trim() || bulking
+                  ? 'not-allowed'
+                  : 'pointer',
+              background:
+                !anyProviderAvailable || !text.trim()
+                  ? 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 45%, #555)'
+                  : C.accent,
+              opacity: bulking ? 0.7 : 1,
+            }}
+          >
+            {bulking ? <GenSpinner /> : null}
+            {bulking ? 'Génération longue…' : 'Générer le script complet'}
+          </button>
+          {bulkResult ? (
+            <span style={{ fontSize: 12, color: C.okText }}>{bulkResult}</span>
+          ) : null}
+        </div>
+        {bulkError ? (
+          <p style={{ margin: 0, fontSize: 12, color: C.errText }}>{bulkError}</p>
+        ) : null}
+      </div>
 
       {/* History ----------------------------------------------------------- */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>

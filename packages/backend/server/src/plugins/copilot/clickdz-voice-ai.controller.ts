@@ -18,7 +18,10 @@ import {
 // AuthGuard requires a signed-in session, exactly like the vdz dock.
 import { CurrentUser } from '../../core/auth';
 import {
+  ANALYSIS_SYSTEM_PROMPT,
+  buildVoiceAnalysisTurn,
   buildVoiceScriptTurn,
+  MAX_VOICE_ANALYSIS_INPUT_CHARS,
   MAX_VOICE_SCRIPT_INPUT_CHARS,
   MAX_VOICE_TONE_CHARS,
   VOICE_SCRIPT_SYSTEM_PROMPT,
@@ -179,5 +182,119 @@ export class ClickDzVoiceAiController {
       throw new InternalServerError('Voice AI produced no script');
     }
     return { script: out.trim() };
+  }
+
+  // POST /api/v1/voice/analyze — turn a transcript into a structured read
+  // ({ summary, speakers:[{name,lines}], language, sentiment? }). Session-
+  // authed, @Throttle('strict') (a paid model call), gated by assertEnabled
+  // (typed 404 when off), SAME cdz-flash engine call as the script route. The
+  // model is told to answer only JSON; we parse it defensively and fail-soft to
+  // a typed 5xx on any malformed/non-JSON upstream output.
+  @Throttle('strict')
+  @Post('/api/v1/voice/analyze')
+  async analyze(
+    @CurrentUser() _user: CurrentUser,
+    @Body() body: unknown
+  ): Promise<{
+    summary: string;
+    speakers: Array<{ name: string; lines: string[] }>;
+    language: string;
+    sentiment?: string;
+  }> {
+    this.assertEnabled();
+
+    if (!CDZ_AI_KEY) {
+      throw new InternalServerError('Voice AI engine is not configured');
+    }
+
+    const payload = (body ?? {}) as Record<string, unknown>;
+
+    const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+    if (!text) {
+      throw new BadRequest('A non-empty "text" is required');
+    }
+    if (text.length > MAX_VOICE_ANALYSIS_INPUT_CHARS) {
+      throw new BadRequest(
+        `"text" is too long (max ${MAX_VOICE_ANALYSIS_INPUT_CHARS} characters)`
+      );
+    }
+
+    const lang: VoiceScriptLang =
+      typeof payload.lang === 'string' &&
+      (VOICE_LANGS as readonly string[]).includes(payload.lang)
+        ? (payload.lang as VoiceScriptLang)
+        : 'auto';
+
+    const messages = [
+      { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: buildVoiceAnalysisTurn({ text, lang }),
+      },
+    ];
+
+    let response: Response | null;
+    try {
+      response = (await fetch(`${CDZ_AI_BASE_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${CDZ_AI_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: VOICE_FAST_MODEL,
+          messages,
+          max_tokens: VOICE_MODEL_MAX_TOKENS,
+        }),
+        signal: AbortSignal.timeout(VOICE_MODEL_TIMEOUT_MS),
+      })) as unknown as Response;
+    } catch {
+      throw new InternalServerError('Voice AI engine request failed');
+    }
+
+    const data = (await response.json().catch(() => null)) as {
+      choices?: Array<{ message?: { content?: unknown } }>;
+    } | null;
+    const raw = data?.choices?.[0]?.message?.content;
+    if (!response.ok || typeof raw !== 'string' || !raw.trim()) {
+      throw new InternalServerError('Voice AI produced no analysis');
+    }
+
+    // The model is instructed to return a JSON object. Strip any accidental
+    // markdown code fences, then parse defensively.
+    const cleaned = raw.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      throw new InternalServerError('Voice AI returned malformed analysis');
+    }
+    const obj = (parsed ?? {}) as Record<string, unknown>;
+
+    const summary = typeof obj.summary === 'string' ? obj.summary.trim() : '';
+    if (!summary) {
+      throw new InternalServerError('Voice AI analysis missing a summary');
+    }
+    const speakersRaw = Array.isArray(obj.speakers) ? obj.speakers : [];
+    const speakers = speakersRaw
+      .map(sp => {
+        const s = (sp ?? {}) as Record<string, unknown>;
+        const nm = typeof s.name === 'string' ? s.name.trim() : '';
+        const lines = Array.isArray(s.lines)
+          ? s.lines.map(l => (typeof l === 'string' ? l : '')).filter(Boolean)
+          : [];
+        if (!nm && !lines.length) return null;
+        return { name: nm || 'Speaker', lines };
+      })
+      .filter((s): s is { name: string; lines: string[] } => s !== null);
+
+    return {
+      summary,
+      speakers,
+      language: typeof obj.language === 'string' ? obj.language : 'auto',
+      ...(typeof obj.sentiment === 'string' && obj.sentiment.trim()
+        ? { sentiment: obj.sentiment.trim() }
+        : {}),
+    };
   }
 }

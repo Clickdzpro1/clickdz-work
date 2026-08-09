@@ -896,8 +896,8 @@ const Overview = ({
         <Panel title="CA livré — 14 derniers jours">
           {revenueData.length === 0 ? (
             <EmptyNote>
-              No data yet — the curve appears with your first delivered
-              (« Livrée ») order.
+              Aucune donnée pour le moment — la courbe apparaît avec votre
+              première commande livrée (« Livrée »).
             </EmptyNote>
           ) : (
             <>

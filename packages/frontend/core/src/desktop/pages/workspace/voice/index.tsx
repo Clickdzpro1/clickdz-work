@@ -8,6 +8,7 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react';
 
 import { ensureClickDzResponsiveCss } from '@affine/core/clickdz/responsive';
 import { GenerateTab } from './generate-tab';
+import { LibraryTab } from './library-tab';
 import { StudioTab } from './studio-tab';
 import { TranscribeTab } from './transcribe-tab';
 import {
@@ -37,7 +38,7 @@ const CdzResponsive = () => {
 // inline styles only, mirroring the Integrations page's `C` palette scaffold.
 // ---------------------------------------------------------------------------
 
-type Tab = 'studio' | 'transcribe' | 'generate';
+type Tab = 'studio' | 'transcribe' | 'generate' | 'library';
 type LoadState = 'loading' | 'ready' | 'error';
 
 const VoiceStudioPage = () => {
@@ -180,6 +181,12 @@ const VoiceStudioPage = () => {
               >
                 Generate
               </TabButton>
+              <TabButton
+                active={tab === 'library'}
+                onClick={() => setTab('library')}
+              >
+                Library
+              </TabButton>
             </div>
 
             {state === 'loading' ? (
@@ -230,6 +237,8 @@ const VoiceStudioPage = () => {
               <StudioTab caps={caps} />
             ) : tab === 'transcribe' ? (
               <TranscribeTab available={caps.transcription.available} />
+            ) : tab === 'library' ? (
+              <LibraryTab />
             ) : (
               <GenerateTab
                 providers={caps.tts.providers}

@@ -38,10 +38,15 @@ import { createPostHogClientFromEnv } from '../../core/telemetry/posthog-client'
 // WS4: BadRequest/NotFound are the typed 4xx (a raw HttpException becomes a
 // generic 500 through the global filter — see the vdz controller / LANDMINES).
 // WS11/C6: ActionForbidden is the typed 403 for the ERP ownership gate.
-import { ActionForbidden, AuthenticationRequired, BadRequest, NotFound, Throttle } from '../../base';
+import { ActionForbidden, AuthenticationRequired, BadRequest, InternalServerError, NotFound, Throttle } from '../../base';
 // WS4: per-owner published-apps set, mimicking the vdz controller's CacheRedis
 // pattern. RedisModule is @Global, so injecting it needs no module wiring.
 import { CacheRedis } from '../../base/redis';
+// CDZ VOICE (bulk TTS): CopilotStorage persists the concatenated clip bytes
+// under the user's copilot scope and returns the replay URL for <audio>. The
+// same provider the ClickDzAudioLibraryController uses, so a bulk clip lands in
+// the Library list too. Injectable from the backend plugin provider list.
+import { CopilotStorage } from './storage';
 // WS4 premium gate (env-gated OFF by default): ModelsModule is @Global, so
 // `models.userFeature.has(userId, 'pro_plan_v1')` needs no module wiring.
 import { EntitlementService } from '../../core/entitlement';
@@ -458,6 +463,18 @@ const VOICE_TTS_DEFAULT_FORMAT = 'mp3';
 // Cap the free-text OpenAI `instructions` field so it can't be abused as a
 // giant prompt against the paid speech API.
 const MAX_TTS_INSTRUCTIONS_CHARS = 1_000;
+// CDZ VOICE (bulk/long-script TTS): splitting + persistence bounds for the
+// /api/v1/voice/tts-bulk route. A long script is split sentence-aware into
+// chunks of at most BULK_TTS_MAX_CHUNK_CHARS, synthesized serially with the
+// SAME provider/voice/format logic the single-shot /api/voice/tts uses, then
+// byte-concatenated into one clip and persisted to the Library via
+// CopilotStorage. The whole script is capped (a realistic long read) and a
+// single chunk stays under OpenAI/Deepgram's comfortable per-request text
+// limits while still being prosody-friendly.
+const BULK_TTS_MAX_INPUT_CHARS = 48_000;
+const BULK_TTS_MAX_CHUNK_CHARS = 1_500;
+// Upper bound on chunks per request protects the serial loop and rate budget.
+const BULK_TTS_MAX_CHUNKS = 120;
 const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
 const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
 const MAKE_BUILDER_AGENT_ID = process.env.MAKE_BUILDER_AGENT_ID || '';
@@ -1664,7 +1681,8 @@ export class ClickDzBridgeController {
   constructor(
     private readonly redis: CacheRedis,
     private readonly models: Models,
-    private readonly entitlement: EntitlementService
+    private readonly entitlement: EntitlementService,
+    private readonly copilotStorage: CopilotStorage
   ) {}
 
   // WS4 — per-owner published-apps set (Redis). Mirrors the vdz controller's
@@ -4659,6 +4677,248 @@ export class ClickDzBridgeController {
       return;
     }
     await this.streamAudioBody(res, response, fmt.contentType);
+  }
+
+  /**
+   * POST /api/v1/voice/tts-bulk — long-script / bulk text-to-speech.
+   *
+   * Splits a long text into sentence-boundary-respecting chunks (each <=
+   * BULK_TTS_MAX_CHUNK_CHARS), synthesizes every chunk S E R I A L L Y with the
+   * SAME provider/voice/model/speed/instructions/format logic the single-shot
+   * /api/voice/tts route above uses (an identical request shape + headers +
+   * format table), byte-concatenates the audio, persists the resulting clip to
+   * the user's Voice Library (CopilotStorage), and returns the Library record
+   * so the Studio can play/download it immediately.
+   *
+   * BODY: `{ text, provider?, voice?, model?, speed?, instructions?, format?,
+   *          name? }` (all TTS fields optional, same semantics as /api/voice/tts).
+   * RESPONSE: `{ clip: { id, url, name, createdAt, kind:'tts' }, chunks: n }`.
+   *
+   * Auth: session-authed like every voice surface. Errors: typed 4xx/5xx —
+   * BadRequest for a bad/oversized body, InternalServerError/509-style 502 for
+   * an upstream TTS failure or persist failure. Bytes are concatenated per-format
+   * the same way the Studio's client-side concatBlobs works, so mp3 stays
+   * byte-compatible for existing players.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/voice/tts-bulk')
+  async ttsBulk(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any
+  ): Promise<{
+    clip: {
+      id: string;
+      url: string;
+      name: string;
+      createdAt: number;
+      kind: 'tts';
+    };
+    chunks: number;
+  }> {
+    const provider = body?.provider === 'openai' ? 'openai' : 'deepgram';
+    const text = typeof body?.text === 'string' ? body.text : '';
+    const trimmed = text.trim();
+    if (!trimmed) {
+      throw new BadRequest('A non-empty "text" is required');
+    }
+    if (trimmed.length > BULK_TTS_MAX_INPUT_CHARS) {
+      throw new BadRequest(
+        `"text" is too long for bulk TTS (max ${BULK_TTS_MAX_INPUT_CHARS} characters)`
+      );
+    }
+
+    // Shared, additive format selection (default mp3 => audio/mpeg), identical
+    // to the single-shot route.
+    const fmtKey =
+      typeof body?.format === 'string' && body.format in VOICE_TTS_FORMATS
+        ? body.format
+        : VOICE_TTS_DEFAULT_FORMAT;
+    const fmt = VOICE_TTS_FORMATS[fmtKey];
+
+    // Resolve the same per-provider voice/model/params the single-shot route
+    // resolves, so a bulk clip is byte-identical to N consecutive /api/voice/tts
+    // calls under the same body.
+    const openaiVoice = OPENAI_TTS_VOICES.includes(body?.voice)
+      ? body.voice
+      : OPENAI_TTS_DEFAULT_VOICE;
+    const openaiModel =
+      typeof body?.model === 'string' &&
+      (OPENAI_TTS_MODELS as readonly string[]).includes(body.model)
+        ? body.model
+        : OPENAI_TTS_DEFAULT_MODEL;
+    const speedNum = Number(body?.speed);
+    const hasSpeed = Number.isFinite(speedNum) && speedNum > 0;
+    const speed = hasSpeed ? Math.max(0.25, Math.min(4, speedNum)) : undefined;
+    const instructions =
+      OPENAI_TTS_INSTRUCTION_MODELS.has(openaiModel) &&
+      typeof body?.instructions === 'string' &&
+      body.instructions.trim()
+        ? body.instructions.trim().slice(0, MAX_TTS_INSTRUCTIONS_CHARS)
+        : undefined;
+    const dgVoice = body?.voice || DEEPGRAM_TTS_DEFAULT_VOICE;
+
+    // Sentence-boundary-respecting chunking: pack whole sentences together up
+    // to the per-chunk cap; only hard-wrap (best effort) when a single sentence
+    // alone exceeds the cap. ASCII sentence punctuation only.
+    const sentenceParts = trimmed
+      .replace(/\s+/g, ' ')
+      .split(/(?<=[.!?])\s+/)
+      .map(chunk => chunk.trim())
+      .filter(Boolean);
+    const chunks: string[] = [];
+    let current = '';
+    const finishCurrent = () => {
+      if (current) {
+        chunks.push(current);
+        current = '';
+      }
+    };
+    const pushHardWrapped = (long: string) => {
+      let slice = long;
+      while (slice.length > BULK_TTS_MAX_CHUNK_CHARS) {
+        chunks.push(slice.slice(0, BULK_TTS_MAX_CHUNK_CHARS));
+        slice = slice.slice(BULK_TTS_MAX_CHUNK_CHARS);
+      }
+      if (slice) chunks.push(slice);
+    };
+    for (const sentence of sentenceParts) {
+      if (!current) {
+        if (sentence.length <= BULK_TTS_MAX_CHUNK_CHARS) {
+          current = sentence;
+        } else {
+          // A single over-cap sentence: hard-wrap at the char cap.
+          pushHardWrapped(sentence);
+        }
+        continue;
+      }
+      if ((current + ' ' + sentence).length <= BULK_TTS_MAX_CHUNK_CHARS) {
+        current += ' ' + sentence;
+      } else {
+        finishCurrent();
+        if (sentence.length <= BULK_TTS_MAX_CHUNK_CHARS) {
+          current = sentence;
+        } else {
+          pushHardWrapped(sentence);
+        }
+      }
+    }
+    finishCurrent();
+
+    if (!chunks.length || chunks.length > BULK_TTS_MAX_CHUNKS) {
+      throw new BadRequest('"text" could not be chunked for synthesis');
+    }
+
+    // Serial synthesis — reuse the exact per-provider fetch shape of the
+    // single-shot /api/voice/tts route, collecting raw audio buffers.
+    const buffers: Buffer[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const part = chunks[i];
+      let out: Buffer | null = null;
+      if (provider === 'openai') {
+        if (!OPENAI_VOICE_API_KEY) {
+          throw new InternalServerError('Voice provider is not configured');
+        }
+        const payload: Record<string, unknown> = {
+          model: openaiModel,
+          input: part,
+          voice: openaiVoice,
+          response_format: fmt.openai,
+        };
+        if (typeof speed === 'number') payload.speed = speed;
+        if (instructions) payload.instructions = instructions;
+        const response = await fetch(OPENAI_SPEECH_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${OPENAI_VOICE_API_KEY}`,
+            'Content-Type': 'application/json',
+            Accept: fmt.contentType,
+          },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(VOICE_TTS_TIMEOUT_MS),
+        }).catch(() => null);
+        if (!response) {
+          throw new InternalServerError(
+            `Bulk TTS failed on chunk ${i + 1}/${chunks.length}`
+          );
+        }
+        if (!response.ok) {
+          throw new InternalServerError(
+            `Bulk TTS upstream error on chunk ${i + 1}/${chunks.length}`
+          );
+        }
+        out = Buffer.from(await response.arrayBuffer());
+      } else {
+        if (!DEEPGRAM_API_KEY) {
+          throw new InternalServerError('Voice provider is not configured');
+        }
+        let dgUrl = `https://api.deepgram.com/v1/speak?model=${encodeURIComponent(
+          dgVoice
+        )}&encoding=${encodeURIComponent(fmt.deepgram)}`;
+        if (typeof speed === 'number' && speed !== 1) {
+          dgUrl += `&speed=${encodeURIComponent(String(speed))}`;
+        }
+        const response = await fetch(dgUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Token ${DEEPGRAM_API_KEY}`,
+            'Content-Type': 'application/json',
+            Accept: fmt.contentType,
+          },
+          body: JSON.stringify({ text: part }),
+          signal: AbortSignal.timeout(VOICE_TTS_TIMEOUT_MS),
+        }).catch(() => null);
+        if (!response) {
+          throw new InternalServerError(
+            `Bulk TTS failed on chunk ${i + 1}/${chunks.length}`
+          );
+        }
+        if (!response.ok) {
+          throw new InternalServerError(
+            `Bulk TTS upstream error on chunk ${i + 1}/${chunks.length}`
+          );
+        }
+        out = Buffer.from(await response.arrayBuffer());
+      }
+      if (!out || out.length === 0) {
+        throw new InternalServerError(
+          `Bulk TTS produced empty audio on chunk ${i + 1}/${chunks.length}`
+        );
+      }
+      buffers.push(out);
+    }
+
+    // Byte-concatenate (the same container-less / frame-concat semantics as
+    // the Studio's concatBlobs) and persist to the Library via CopilotStorage.
+    const concatenated = Buffer.concat(buffers);
+    const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const key = `voice-library/tts/${id}`;
+    const rawName = typeof body?.name === 'string' ? body.name : '';
+    const name = (rawName.trim().slice(0, 200) || 'Clip').trim();
+    let url: string;
+    let createdAt = Date.now();
+    try {
+      url = await this.copilotStorage.put(
+        user.id,
+        'voice',
+        key,
+        concatenated,
+        fmt.contentType
+      );
+    } catch (e) {
+      throw new InternalServerError(
+        e instanceof Error && e.message
+          ? `Failed to persist clip: ${e.message}`
+          : 'Failed to persist clip'
+      );
+    }
+
+    this.logger.log(
+      `[voice] tts-bulk user=${user.id} provider=${provider} chunks=${chunks.length} bytes=${concatenated.length}`
+    );
+    return {
+      clip: { id, url, name, createdAt, kind: 'tts' },
+      chunks: chunks.length,
+    };
   }
 
   /**

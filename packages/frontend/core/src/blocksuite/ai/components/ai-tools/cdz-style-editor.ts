@@ -32,11 +32,14 @@
  * One editable CSS property surfaced in the studio's visual edit panel.
  *
  * `kind` selects the control the panel renders:
- *   - `'color'`  → a colour input / swatch (value is any CSS colour string);
- *   - `'select'` → a `<select>` populated from {@link options};
- *   - `'number'` → a numeric stepper, clamped to {@link min}/{@link max} and
- *                  written back with {@link unit} appended (e.g. `16px`);
- *   - `'text'`   → a free-text field (raw CSS value).
+ *   - `'color'`     → a colour input / swatch (value is any CSS colour string);
+ *   - `'select'`    → a `<select>` populated from {@link options};
+ *   - `'number'`    → a numeric stepper, clamped to {@link min}/{@link max} and
+ *                     written back with {@link unit} appended (e.g. `16px`);
+ *   - `'text'`      → a free-text field (raw CSS value);
+ *   - `'animation'` → a `<select>` of motion presets (fade-in-up, zoom-in,
+ *                     count-up, marquee, hover-lift) whose value is a preset
+ *                     token the studio expands, rather than a raw CSS value.
  */
 export interface CdzStyleProp {
   /** CSS property name, always lower-cased, e.g. `'background-color'`. */
@@ -44,7 +47,7 @@ export interface CdzStyleProp {
   /** Human label shown next to the control, e.g. `'Background'`. */
   label: string;
   /** Which control the edit panel renders for this property. */
-  kind: 'color' | 'select' | 'number' | 'text';
+  kind: 'color' | 'select' | 'number' | 'text' | 'animation';
   /** Unit appended to numeric values on write, e.g. `'px'` for `number` kinds. */
   unit?: string;
   /** Choices for `select` kinds. `value` is the raw CSS written to `style`. */
@@ -112,6 +115,85 @@ const TEXT_ALIGN_OPTIONS: { value: string; label: string }[] = [
 ];
 
 /**
+ * The synthetic key used for the Animation preset control. It is NOT a real CSS
+ * property — the studio special-cases it (a) to seed it from the element's
+ * `data-cdz-anim` attribute rather than the inline style, and (b) to expand the
+ * preset into the runtime instead of writing it verbatim into `style`.
+ */
+export const CDZ_ANIMATION_KEY = 'cdz-animation';
+
+/**
+ * Selectable motion presets for the studio's Animation row. `value` is a
+ * preset TOKEN (not a raw CSS value): the studio expands it into the inline
+ * `animation` shorthand (via {@link CDZ_ANIMATION_INLINE}) and injects the
+ * matching @keyframes + interaction runtime once into the app's <head> (see
+ * {@link CDZ_ANIMATION_RUNTIME_CSS}/{@link CDZ_ANIMATION_RUNTIME_JS}). Purely
+ * self-contained inline CSS/JS — no external libraries (app-builder constraint).
+ */
+export const CDZ_ANIMATION_PRESETS: { value: string; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'fade-in-up', label: 'Fade in up' },
+  { value: 'zoom-in', label: 'Zoom in' },
+  { value: 'count-up', label: 'Count up' },
+  { value: 'marquee', label: 'Marquee (scroll)' },
+  { value: 'hover-lift', label: 'Hover lift' },
+];
+
+/**
+ * The inline `animation` shorthand applied to the element for each PURE-CSS
+ * preset. `count-up` and `hover-lift` are interaction-driven so they map to ''
+ * (their effect comes from the injected runtime via the element's
+ * `data-cdz-anim` tag, not an inline animation value); `none` also maps to ''.
+ */
+export const CDZ_ANIMATION_INLINE: Record<string, string> = {
+  'fade-in-up': 'cdz-anim-fade-up 0.6s ease both',
+  'zoom-in': 'cdz-anim-zoom-in 0.45s ease both',
+  'count-up': '',
+  marquee: 'cdz-anim-marquee 14s linear infinite',
+  'hover-lift': '',
+};
+
+/**
+ * The CSS runtime (keyframes + interaction rules) the studio injects once into
+ * the app's <head>. Pure inline CSS, self-contained, scoped under a
+ * `data-cdz-anim` attribute so it never bleeds into unrelated elements.
+ */
+export const CDZ_ANIMATION_RUNTIME_CSS =
+  '@keyframes cdz-anim-fade-up{from{opacity:0;transform:translateY(16px)}' +
+  'to{opacity:1;transform:translateY(0)}}' +
+  '@keyframes cdz-anim-zoom-in{from{opacity:0;transform:scale(.92)}' +
+  'to{opacity:1;transform:scale(1)}}' +
+  '@keyframes cdz-anim-marquee{from{transform:translateX(100%)}' +
+  'to{transform:translateX(-100%)}}' +
+  '[data-cdz-anim="hover-lift"]{transition:transform .2s ease, box-shadow .2s ease;}' +
+  '[data-cdz-anim="hover-lift"]:hover{transform:translateY(-4px);' +
+  'box-shadow:0 10px 24px rgba(0,0,0,.14);}';
+
+/**
+ * The tiny vanilla-JS runtime for `count-up`: animates the numeric part of any
+ * element tagged `data-cdz-anim="count-up"` from 0 up to its text value. Pure
+ * inline JS, self-contained, dependency-free, respects existing suffixes (%, DZD).
+ */
+export const CDZ_ANIMATION_RUNTIME_JS =
+  '(function(){' +
+  'var els=document.querySelectorAll(\'[data-cdz-anim="count-up"]\');' +
+  'for(var i=0;i<els.length;i++){(function(el){' +
+  'var txt=el.textContent||"";' +
+  'var m=txt.replace(/[^0-9.,]/g,"");' +
+  'var num=parseFloat(m.replace(/,/g,""));' +
+  'if(!isFinite(num)||num<=0)return;' +
+  'var suf=txt.replace(/[0-9.,]+/g,"");' +
+  'var start=0,dur=1100,t0=null;' +
+  'function fmt(n){return Math.round(n).toLocaleString("fr-FR")+suf;}' +
+  'function step(ts){if(!t0)t0=ts;var p=Math.min(1,(ts-t0)/dur);' +
+  'el.textContent=fmt(start+(num-start)*(p*p));' +
+  'if(p<1&&typeof requestAnimationFrame==="function")requestAnimationFrame(step);' +
+  '}' +
+  'if(typeof requestAnimationFrame==="function")requestAnimationFrame(step);' +
+  '})(els[i]);}' +
+  '})();';
+
+/**
  * The ordered set of CSS properties the studio's edit panel exposes as
  * controls. Order here is the render order in the panel.
  *
@@ -162,6 +244,12 @@ export const CDZ_EDIT_STYLE_PROPS: CdzStyleProp[] = [
     unit: 'px',
     min: 0,
     max: 96,
+  },
+  {
+    key: CDZ_ANIMATION_KEY,
+    label: 'Animation',
+    kind: 'animation',
+    options: CDZ_ANIMATION_PRESETS,
   },
 ];
 

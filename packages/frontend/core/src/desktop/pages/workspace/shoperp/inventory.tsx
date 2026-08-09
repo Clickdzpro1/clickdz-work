@@ -281,7 +281,7 @@ export const Inventory = ({
           color: C.muted,
         }}
       >
-        <Spinner /> Chargement de l’inventaire…
+        <Spinner /> Chargement de l'inventaire…
       </div>
     );
   }
@@ -325,9 +325,9 @@ export const Inventory = ({
 
       {fallback ? (
         <Banner tone="info">
-          Multi-warehouse inventory isn’t available on this server yet — showing
-          each product’s <strong>total stock</strong>. Stock edits stay
-          available on the <strong>Stock</strong> tab.
+          L'inventaire multi-dépôts n'est pas encore disponible sur ce serveur —
+          le <strong>stock total</strong> de chaque produit est affiché. Les
+          modifications de stock restent disponibles dans l'onglet <strong>Stock</strong>.
         </Banner>
       ) : null}
 
@@ -363,7 +363,7 @@ export const Inventory = ({
             <EmptyNote>
               No warehouses yet — add your first one (e.g. « Dépôt principal ») to
               start tracking stock per location. Until then the table shows each
-              product’s total stock.
+              product's total stock.
             </EmptyNote>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -422,8 +422,8 @@ export const Inventory = ({
       <Panel title={`Stock by product · ${products.length}`}>
         {products.length === 0 ? (
           <EmptyNote>
-            No products yet — add products on the <strong>Stock</strong> tab,
-            then record movements here.
+            Aucun produit pour le moment — ajoutez des produits dans l'onglet <strong>Stock</strong>,
+            puis enregistrez les mouvements ici.
           </EmptyNote>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -570,7 +570,7 @@ export const Inventory = ({
                             disabled={readOnly || busy || noWarehouses}
                             title={
                               noWarehouses
-                                ? 'Ajoutez d’abord un dépôt'
+                                ? 'Ajoutez d'abord un dépôt'
                                 : 'Enregistrer un mouvement de stock'
                             }
                             onClick={() => setMovementFor(p)}

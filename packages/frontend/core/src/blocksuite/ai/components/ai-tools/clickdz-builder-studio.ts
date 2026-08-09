@@ -26,8 +26,15 @@ import {
 } from './cdz-console-bridge';
 import { renderProblems } from './cdz-problems-panel';
 import {
+  CDZ_ANIMATION_INLINE,
+  CDZ_ANIMATION_KEY,
+  CDZ_ANIMATION_PRESETS,
+  CDZ_ANIMATION_RUNTIME_CSS,
+  CDZ_ANIMATION_RUNTIME_JS,
   CDZ_EDIT_STYLE_PROPS,
+  parseInlineStyle,
   readStyleValue,
+  serializeInlineStyle,
   type CdzStyleProp,
 } from './cdz-style-editor';
 import {
@@ -42,6 +49,7 @@ import {
   downloadHtml,
   htmlFilename,
 } from './cdz-export';
+import { qrSvg } from './cdz-qr';
 import { applyTokens, parseTokens, type CdzToken } from './cdz-tokens';
 
 /**
@@ -1349,6 +1357,60 @@ export class ClickDzBuilderStudio extends LitElement {
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
+    /* Publish share sheet — reuses the .cdz-versions dialog chrome. */
+    .cdz-share .cdz-versions-body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 14px;
+    }
+    .cdz-share-success {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #10a37f;
+      font-size: 12.5px;
+      font-weight: 700;
+    }
+    .cdz-qr-wrap {
+      padding: 8px;
+      border: 1px solid var(--cdz-border);
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+      line-height: 0;
+    }
+    .cdz-qr-wrap svg {
+      display: block;
+    }
+    .cdz-share-linkrow {
+      display: flex;
+      gap: 6px;
+      width: 100%;
+      align-items: stretch;
+    }
+    .cdz-share-linkrow .cdz-share-url {
+      flex: 1;
+      min-width: 0;
+      font-size: 11.5px;
+      cursor: text;
+    }
+    .cdz-share-linkrow .cdz-share-copy {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+    .cdz-share-linkrow .cdz-share-copy svg {
+      vertical-align: -3px;
+      margin-right: 4px;
+    }
+    .cdz-share-hint {
+      color: var(--cdz-text-2);
+      font-size: 11px;
+      line-height: 1.45;
+      text-align: center;
+    }
   `;
 
   /* ─────────────────── public API ─────────────────── */
@@ -1475,6 +1537,15 @@ export class ClickDzBuilderStudio extends LitElement {
   private accessor imageBusy = false;
   @state()
   private accessor showTokens = false;
+  // Share sheet (publish success): when the app is published, a button opens a
+  // small panel with a copy-link + a client-side QR. Shown only when there's a
+  // URL to share; closed by the panel's ✕, Escape, or republish.
+  @state()
+  private accessor showShare = false;
+  // "Copied ✓" flash for the share sheet's copy button.
+  @state()
+  private accessor shareCopied = false;
+  private shareCopyTimer: ReturnType<typeof setTimeout> | null = null;
 
   @state()
   private accessor previewSrc = '';
@@ -1617,6 +1688,12 @@ export class ClickDzBuilderStudio extends LitElement {
       this.pendingTokenEdits = {};
       this.previewDevice = CDZ_DEFAULT_DEVICE;
       this.copied = false;
+      this.showShare = false;
+      if (this.shareCopyTimer) {
+        clearTimeout(this.shareCopyTimer);
+        this.shareCopyTimer = null;
+      }
+      this.shareCopied = false;
       this.showShopConfirm = false;
       this.shopBusy = false;
       this.shopNotice = '';
@@ -2316,6 +2393,16 @@ export class ClickDzBuilderStudio extends LitElement {
       const style = el.getAttribute('style') ?? '';
       const next: Record<string, string> = {};
       for (const prop of CDZ_EDIT_STYLE_PROPS) {
+        // The animation preset token lives on the element as a `data-cdz-anim`
+        // attribute (seeded by applyAnimationPreset), not in the inline style —
+        // read it there, falling back to ''.
+        if (prop.kind === 'animation') {
+          const tok = el.getAttribute('data-cdz-anim') ?? '';
+          if (tok && CDZ_ANIMATION_PRESETS.some(o => o.value === tok)) {
+            next[prop.key] = tok;
+          }
+          continue;
+        }
         // readStyleValue returns '' when the prop is absent from the inline
         // style (mirrors setInlineStyle's lowercase-key merge semantics).
         const raw = readStyleValue(style, prop.key).trim();
@@ -2375,6 +2462,24 @@ export class ClickDzBuilderStudio extends LitElement {
 
   private toggleTokens() {
     this.showTokens = !this.showTokens;
+  }
+
+  // Open/close the publish share sheet.
+  private toggleShare() {
+    this.showShare = !this.showShare;
+  }
+
+  // Copy the published link from the share sheet (async clipboard, fail-soft).
+  private async copyShareLink() {
+    const url = this.publishedUrl || '';
+    if (!url) return;
+    if (this.shareCopyTimer) clearTimeout(this.shareCopyTimer);
+    const ok = await copyToClipboard(url);
+    this.shareCopied = ok;
+    this.shareCopyTimer = setTimeout(() => {
+      this.shareCopied = false;
+      this.shareCopyTimer = null;
+    }, 1600);
   }
 
   private setPreviewDevice(id: string) {
@@ -2518,12 +2623,29 @@ export class ClickDzBuilderStudio extends LitElement {
     const out: Record<string, string> = {};
     for (const prop of CDZ_EDIT_STYLE_PROPS) {
       if (!this.editDirty.has(prop.key)) continue;
+      // The animation preset is expanded into a runtime + data attribute by
+      // applyAnimationPreset, never written as a raw CSS declaration.
+      if (prop.kind === 'animation') continue;
       const raw = (this.editStyles[prop.key] ?? '').trim();
       if (!raw) continue;
       out[prop.key] =
         prop.kind === 'number' ? `${raw}${prop.unit ?? 'px'}` : raw;
     }
     return out;
+  }
+
+  /**
+   * Edit-panel Apply: when the Animation control was touched this selection, the
+   * change is an animation preset (expanded by applyAnimationPreset into a
+   * runtime + data tag) rather than a set of raw CSS declarations — route to it.
+   * Otherwise fall through to the generic applyEdit for text + style props.
+   */
+  private onApply() {
+    if (this.editDirty.has(CDZ_ANIMATION_KEY)) {
+      this.applyAnimationPreset(this.editStyles[CDZ_ANIMATION_KEY] ?? '');
+      return;
+    }
+    this.applyEdit();
   }
 
   private applyEdit() {
@@ -2588,6 +2710,79 @@ export class ClickDzBuilderStudio extends LitElement {
     // as the new history tip (the pre-edit state is already on the stack).
     this.commitBodyMutation(doc, 'edit');
     this.selected = null;
+  }
+
+  /**
+   * Apply the selected Animation preset to the currently-selected element. The
+   * preset token is expanded (not written as raw CSS):
+   *   - pure-CSS presets (fade-in-up / zoom-in / marquee) set the inline
+   *     `animation` shorthand and tag the element `data-cdz-anim="<preset>"`;
+   *   - interaction presets (count-up / hover-lift) only need the tag;
+   *   - 'none' (or empty) removes both the inline animation and the tag.
+   * The matching keyframes + tiny runtime are injected once into the app's
+   * <head> by {@link ensureAnimationRuntime}, so the preview and the deployed
+   * app both animate (self-contained inline CSS/JS, no external libs).
+   *
+   * Routes through the same walkBody id order, strips bookkeeping ids, and
+   * serializes the FULL document (head changes included) via serializeFullDoc —
+   * unlike commitBodyMutation, which would discard the head injection.
+   */
+  private applyAnimationPreset(token: string) {
+    const sel = this.selected;
+    if (!sel) return;
+    const preset = token.trim();
+    const isNone = preset === '' || preset === 'none';
+    let matched = false;
+    const doc = this.walkBody(this.workingHtml, (el, id) => {
+      if (id !== sel.id) return;
+      matched = true;
+      // Bare inline-style map for the element; set/clear the animation decl.
+      const map = parseInlineStyle(el.getAttribute('style') ?? '');
+      if (isNone) {
+        map.delete('animation');
+      } else {
+        const inline = CDZ_ANIMATION_INLINE[preset] || '';
+        if (inline) map.set('animation', inline);
+        else map.delete('animation');
+      }
+      const serialized = serializeInlineStyle(map);
+      if (serialized) el.setAttribute('style', serialized);
+      else el.removeAttribute('style');
+      if (isNone) el.removeAttribute('data-cdz-anim');
+      else el.setAttribute('data-cdz-anim', preset);
+      this.ensureAnimationRuntime(doc);
+    });
+    if (!doc || !matched) {
+      this.selected = null;
+      return;
+    }
+    doc.body
+      .querySelectorAll('[data-cdz-id]')
+      .forEach(el => el.removeAttribute('data-cdz-id'));
+    this.workingHtml = serializeFullDoc(doc);
+    this.pushHistory(this.workingHtml, makeMeta('edit'));
+    this.buildPreviewNow();
+    this.scheduleHtmlChange();
+    this.selected = null;
+  }
+
+  /**
+   * Inject the animation runtime (keyframes CSS + the tiny count-up JS) into the
+   * document's <head>, idempotently (a `data-cdz-anim-runtime` marker skips a
+   * second insertion). No-op when the doc lacks a usable <head>. All self-
+   * contained inline CSS/JS — no external assets (app-builder constraint).
+   */
+  private ensureAnimationRuntime(doc: Document) {
+    const head = doc.head;
+    if (!head || head.querySelector('[data-cdz-anim-runtime]')) return;
+    const style = doc.createElement('style');
+    style.setAttribute('data-cdz-anim-runtime', '');
+    style.textContent = CDZ_ANIMATION_RUNTIME_CSS;
+    head.appendChild(style);
+    const script = doc.createElement('script');
+    script.setAttribute('data-cdz-anim-runtime', '');
+    script.textContent = CDZ_ANIMATION_RUNTIME_JS;
+    head.appendChild(script);
   }
 
   /**
@@ -2898,7 +3093,18 @@ export class ClickDzBuilderStudio extends LitElement {
         );
       }
       const url = String(data?.url || data?.deploymentUrl || '');
+      const firstPublish = !this.publishedUrl && !!url;
       this.publishedUrl = url;
+      // A republish may have changed the URL — drop any open share sheet so the
+      // next open shows the fresh link + QR. On the FIRST publish we auto-open
+      // the share sheet so the visible success card (link + QR) greets the
+      // merchant right after the deploy completes.
+      if (firstPublish) {
+        this.showShare = true;
+      } else {
+        this.showShare = false;
+      }
+      this.shareCopied = false;
       this.chatLog = [
         ...this.chatLog,
         { role: 'system', text: url ? `Published → ${url}` : 'Published ✓' },
@@ -3230,6 +3436,10 @@ export class ClickDzBuilderStudio extends LitElement {
         this.showTokens = false;
         return;
       }
+      if (this.showShare) {
+        this.showShare = false;
+        return;
+      }
       this.close();
       return;
     }
@@ -3486,6 +3696,22 @@ export class ClickDzBuilderStudio extends LitElement {
                 >${CDZ_ICONS.openExternal} Open</a
               >`
             : nothing}
+          ${openUrl
+            ? html`<button
+                class=${classMap({
+                  'cdz-btn': true,
+                  'ghost': true,
+                  'icon': true,
+                  toggled: this.showShare,
+                })}
+                title="Partagez votre application (lien + QR code)"
+                aria-label="Share app"
+                aria-pressed=${this.showShare}
+                @click=${() => this.toggleShare()}
+              >
+                ${CDZ_ICONS.share}
+              </button>`
+            : nothing}
           <button
             class="cdz-btn ghost icon"
             title="Download index.html"
@@ -3672,7 +3898,7 @@ export class ClickDzBuilderStudio extends LitElement {
         >
           Cancel
         </button>
-        <button class="cdz-btn primary" @click=${() => this.applyEdit()}>
+        <button class="cdz-btn primary" @click=${() => this.onApply()}>
           Apply
         </button>
       </div>
@@ -3714,7 +3940,7 @@ export class ClickDzBuilderStudio extends LitElement {
         </div>
       </div>`;
     }
-    if (prop.kind === 'select') {
+    if (prop.kind === 'select' || prop.kind === 'animation') {
       return html`<div class="cdz-field">
         <label>${prop.label}</label>
         <select
@@ -4051,6 +4277,69 @@ export class ClickDzBuilderStudio extends LitElement {
     </div>`;
   }
 
+  // Publish "share" panel: a visible success card (your app is live) plus a
+  // client-side QR and a copy-link button. The QR is drawn inline by our tiny
+  // dependency-free encoder (cdz-qr) — no external lib — and the copy button
+  // is the always-available fallback if the QR yields null (too long input).
+  private renderSharePanel() {
+    const url = this.publishedUrl || '';
+    if (!url) return nothing;
+    const qr = qrSvg(url, 128);
+    return html`<div
+      class="cdz-versions cdz-share"
+      role="dialog"
+      aria-label="Partager l'application"
+    >
+      <div class="cdz-versions-head">
+        <span>${CDZ_ICONS.share} Share — votre app est en ligne</span>
+        <button
+          class="cdz-btn ghost icon"
+          title="Close"
+          aria-label="Close share"
+          @click=${() => (this.showShare = false)}
+        >
+          ${CDZ_ICONS.close}
+        </button>
+      </div>
+      <div class="cdz-versions-body">
+        <div class="cdz-share-success" role="status">
+          ${CDZ_ICONS.check} Publiée — partagez le lien avec vos clients.
+        </div>
+        ${qr
+          ? html`<div class="cdz-qr-wrap" title="Scannez pour ouvrir">${qr}</div>`
+          : nothing}
+        <div class="cdz-share-linkrow">
+          <input
+            class="cdz-text-input cdz-share-url"
+            type="text"
+            readonly
+            .value=${url}
+            aria-label="Lien de l'application"
+            @click=${(e: Event) =>
+              (e.target as HTMLInputElement).select()}
+          />
+          <button
+            class="cdz-btn secondary cdz-share-copy"
+            title="Copier le lien"
+            aria-label="Copier le lien"
+            @click=${() => void this.copyShareLink()}
+          >
+            ${this.shareCopied ? CDZ_ICONS.check : CDZ_ICONS.link}
+            ${this.shareCopied ? 'Copié' : 'Copier'}
+          </button>
+        </div>
+        ${qr
+          ? html`<div class="cdz-share-hint">
+              Scannez le code avec l'appareil photo pour ouvrir l'application.
+            </div>`
+          : html`<div class="cdz-share-hint">
+              Ce lien est un peu long pour un QR code ; utilisez le bouton
+              « Copier ».
+            </div>`}
+      </div>
+    </div>`;
+  }
+
   private renderTokenRow(token: CdzToken) {
     // A pending edit (if any) wins over the parsed value for the live control.
     const value = this.pendingTokenEdits[token.name] ?? token.value;
@@ -4198,6 +4487,7 @@ export class ClickDzBuilderStudio extends LitElement {
         ${this.showProblems ? this.renderProblemsPanel() : nothing}
         ${this.showImageGen ? this.renderImageGenPanel() : nothing}
         ${this.showTokens ? this.renderTokensPanel() : nothing}
+        ${this.showShare ? this.renderSharePanel() : nothing}
         ${this.showShopConfirm ? this.renderShopConfirmPanel() : nothing}
       </div>
     </div>`;
@@ -4304,6 +4594,39 @@ const CDZ_ICONS = {
       d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"
     ></path>
     <path d="M16 16l-4-4-4 4"></path>
+  </svg>`,
+  // share — three radiating nodes (publish success share sheet)
+  share: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx="18" cy="5" r="3"></circle>
+    <circle cx="6" cy="12" r="3"></circle>
+    <circle cx="18" cy="19" r="3"></circle>
+    <line x1="8.6" y1="10.6" x2="15.4" y2="6.4"></line>
+    <line x1="8.6" y1="13.4" x2="15.4" y2="17.6"></line>
+  </svg>`,
+  // copy-link — two overlapping rounded rectangles (share sheet)
+  link: html`<svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
   </svg>`,
   // undo — arrow-counterclockwise
   undo: html`<svg

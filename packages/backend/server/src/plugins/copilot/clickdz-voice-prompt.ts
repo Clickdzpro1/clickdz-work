@@ -5,8 +5,8 @@
  * nothing from the bridge controller or the frontend, exactly like the peer
  * `clickdz-vdz-prompt.ts` / `clickdz-app-prompt.ts` modules. The Voice AI
  * controller imports {@link VOICE_SCRIPT_SYSTEM_PROMPT} +
- * {@link buildVoiceScriptTurn} and forwards them to the same cdz-ai
- * `/v1/chat/completions` engine the Vdz dock uses.
+ * {@link buildVoiceScriptTurn} (and the analysis pair below) and forwards them
+ * to the same cdz-ai `/v1/chat/completions` engine the Vdz dock uses.
  *
  * WHAT IT DOES: turns a rough brief into a spoken-ready narration script,
  * cleans a raw transcript, or condenses one — always in the operator's
@@ -28,6 +28,14 @@ export const MAX_VOICE_SCRIPT_INPUT_CHARS = 8_000;
 
 /** Max chars of the free-text `tone` hint the controller forwards. */
 export const MAX_VOICE_TONE_CHARS = 120;
+
+/**
+ * Max chars of an AI-analysis input transcript the controller forwards to
+ * /api/v1/voice/analyze. A transcript is longer than a script brief (a full
+ * meeting read), so this is more generous than the script-writer cap while
+ * still bounding the model call.
+ */
+export const MAX_VOICE_ANALYSIS_INPUT_CHARS = 40_000;
 
 /**
  * Approximate spoken words-per-second budgets by language, used only to render
@@ -153,6 +161,71 @@ export function buildVoiceScriptTurn(input: VoiceScriptInput): string {
     input.text,
     '',
     'Return ONLY the resulting spoken script — no preamble, no explanation.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// AI ANALYSIS — turn a transcript into a structured read (summary + speakers).
+//
+// Consumed by POST /api/v1/voice/analyze (clickdz-voice-ai.controller.ts). The
+// model returns { summary, speakers:[{name,lines}], language, sentiment? } as
+// JSON — the controller parses it. Same Algeria-awareness discipline as the
+// script writer.
+// ---------------------------------------------------------------------------
+
+export const ANALYSIS_SYSTEM_PROMPT = [
+  'You are the ClickDz Voice Studio analyst. You read a voice transcript and',
+  'produce a clear, structured analysis for an Algerian audience.',
+  '',
+  'LANGUAGE:',
+  '- Detect the language of the transcript: French, Modern Standard Arabic, or',
+  '  Algerian Darija (Arabic script OR Latin "arabizi" like "salam, kifach, wach,',
+  '  bezef", including digit substitutions 3/7/9 for ع/ح/ق).',
+  '- Write the summary and speaker names/lines in the SAME language as the',
+  '  transcript. Keep Arabic script for Darija; never answer in English unless',
+  '  the input itself is English.',
+  '',
+  'OUTPUT — a JSON object with exactly these fields (no markdown, no fences):',
+  '- "summary": a concise paragraph (3-6 sentences) capturing the content, main',
+  '  points and any decisions/next steps. Spoken, listener-friendly style.',
+  '- "speakers": an array of { "name": string, "lines": string[] } — attribute',
+  '  lines to distinct speakers when the transcript allows it (names like',
+  '  "Locuteur 1", "Speaker A" are fine). When it is a single narration, return',
+  '  one entry named "Narrateur"/"Narrador" with all lines.',
+  '- "language": the detected language code: "fr", "ar", "darija" or "auto".',
+  '- "sentiment" (optional): a short phrase sizing the overall tone (e.g.',
+  '  "positif", "neutre", "préoccupé", "urgent"). Omit when unclear.',
+  '',
+  'Return ONLY the JSON — no preamble, no surrounding text.',
+].join('\n');
+
+/** The per-turn input for {@link buildVoiceAnalysisTurn}. */
+export interface VoiceAnalysisInput {
+  /** The transcript / text to analyze. */
+  text: string;
+  /** Optional language hint to steer detection ('fr'|'ar'|'darija'|'auto'). */
+  lang?: VoiceScriptLang;
+}
+
+/**
+ * Build the user turn for a voice-analysis request. The transcript text is
+ * forwarded verbatim; an optional language hint steers detection without being
+ * authoritative.
+ */
+export function buildVoiceAnalysisTurn(input: VoiceAnalysisInput): string {
+  const langHint =
+    input.lang && input.lang !== 'auto'
+      ? `The operator believes the language is: ${input.lang}. Confirm from the text and use it if consistent.`
+      : 'Detect the language from the text itself.';
+  return [
+    'ANALYZE THE FOLLOWING VOICE TRANSCRIPT:',
+    langHint,
+    '',
+    input.text,
+    '',
+    'Return ONLY the JSON analysis object.',
   ]
     .filter(Boolean)
     .join('\n');

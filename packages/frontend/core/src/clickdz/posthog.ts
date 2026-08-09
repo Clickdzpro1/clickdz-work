@@ -71,9 +71,11 @@ export async function initCdzPostHog(): Promise<PostHogLike | null> {
   }
 
   try {
-    // Dynamic import: posthog-js is an optional dependency — the app builds
-    // and runs fine without it; capture simply stays a no-op until the dep
-    // is added (`yarn workspace @affine/core add posthog-js`).
+    // Dynamic import: posthog-js is NOT yet a dependency — the app builds and
+    // runs fine without it; every capture/identify call stays a documented
+    // no-op until analytics is actually wanted. To activate:
+    // `yarn workspace @affine/core add posthog-js`, then set CDZ_POSTHOG_KEY
+    // and CDZ_POSTHOG_HOST at build time (see the header note).
     const mod = (await import('posthog-js')) as {
       default?: {
         init: (
