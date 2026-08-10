@@ -1,3 +1,4 @@
+import type { ClickDzThemeBase } from '@affine/core/modules/clickdz-theme';
 import {
   CLICKDZ_THEMES,
   ClickDzThemeService,
@@ -7,6 +8,13 @@ import { useLiveData, useService } from '@toeverything/infra';
 import { useCallback } from 'react';
 
 import * as styles from './theme-picker.css';
+
+// Display-only French labels for the theme base. Do NOT use these for logic —
+// `theme.base` itself stays 'light' | 'dark' everywhere else.
+const BASE_LABEL_FR: Record<ClickDzThemeBase, string> = {
+  dark: 'sombre',
+  light: 'clair',
+};
 
 export const ThemePicker = () => {
   const themeService = useService(ClickDzThemeService);
@@ -72,7 +80,9 @@ export const ThemePicker = () => {
             </div>
             <div className={styles.label}>
               <span>{theme.name}</span>
-              <span className={styles.baseTag}>{theme.base}</span>
+              <span className={styles.baseTag}>
+                · {BASE_LABEL_FR[theme.base]}
+              </span>
             </div>
             {selected ? (
               <span className={styles.checkBadge}>
