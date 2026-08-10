@@ -13,7 +13,7 @@ import type { ExtensionType } from '@blocksuite/affine/store';
 import type { NotificationService } from '@blocksuite/affine-shared/services';
 import type { Signal } from '@preact/signals-core';
 import { css, html, nothing } from 'lit';
-import { property, state } from 'lit/decorators.js';
+import { property } from 'lit/decorators.js';
 
 import {
   EdgelessEditorActions,
@@ -27,7 +27,7 @@ import {
   type StreamObject,
 } from '../../components/ai-chat-messages';
 import { AIChatErrorRenderer } from '../../messages/error';
-import { AIAppEvents, type AIError, cdzApiUrl } from '../../provider';
+import type { AIError } from '../../provider';
 import { mergeStreamContent } from '../../utils/stream-objects';
 
 export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
@@ -37,70 +37,8 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       font-size: var(--affine-font-xs);
       font-weight: 400;
     }
-    .cdz-followups {
-      display: flex;
-      flex-direction: column;
-      gap: 7px;
-      margin: 12px 0 2px;
-    }
-    .cdz-followups-title {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--affine-v2-text-secondary);
-      opacity: 0.72;
-    }
-    .cdz-followups-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-    }
-    .cdz-followup {
-      --cdz-fu-accent: #2f7bff;
-      display: inline-flex;
-      align-items: center;
-      max-width: 100%;
-      min-width: 0;
-      overflow: hidden;
-      border: 1px solid var(--affine-v2-layer-insideBorder-border);
-      border-radius: 999px;
-      padding: 6px 13px;
-      cursor: pointer;
-      color: var(--affine-v2-text-secondary);
-      background: transparent;
-      font: inherit;
-      font-size: 12.5px;
-      font-weight: 500;
-      line-height: 1.35;
-      text-align: start;
-      /* WS17: allow wrapping so the full suggestion label is visible instead of
-         truncated with "..." (nowrap+ellipsis made long French labels unreadable
-         and caused each chip to take a full row, making the block too tall). */
-      white-space: normal;
-      word-break: break-word;
-      transition:
-        background 0.15s ease,
-        color 0.15s ease,
-        border-color 0.15s ease;
-    }
-    .cdz-followup:hover {
-      color: var(--affine-v2-text-primary);
-      background: color-mix(in srgb, var(--cdz-fu-accent) 8%, transparent);
-      border-color: color-mix(in srgb, var(--cdz-fu-accent) 40%, transparent);
-    }
-    .cdz-followup:focus-visible {
-      outline: none;
-      box-shadow: 0 0 0 2px
-        color-mix(in srgb, var(--cdz-fu-accent) 35%, transparent);
-    }
-    @media (prefers-reduced-motion: reduce) {
-      .cdz-followup {
-        transition: none;
-      }
+    .item-wrapper {
+      line-height: 1.6;
     }
   `;
 
@@ -163,32 +101,6 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
   @property({ attribute: false })
   accessor pulseTask = '';
 
-  // Surface context forwarded to the follow-ups route so suggestions are
-  // grounded in the active studio, recent work and niche — not just raw Q/A.
-  // All optional; the route degrades gracefully when absent.
-  @property({ attribute: false })
-  accessor cdzStudio: string | undefined;
-
-  @property({ attribute: false })
-  accessor cdzNiche: string | undefined;
-
-  @property({ attribute: false })
-  accessor cdzLang: string | undefined;
-
-  @property({ attribute: false })
-  accessor cdzRecentTitles: string[] | undefined;
-
-  // AI-upgraded follow-up pairs for THIS message; null until the fetch lands
-  // (the deterministic row renders in the meantime, or nothing when the model
-  // row arrives fast).
-  @state()
-  private accessor _followUps: Array<{ label: string; prompt: string }> | null =
-    null;
-
-  // Guards against an out-of-date fetch overwriting a newer message's row.
-  private _followUpsRunId = 0;
-  private _followUpsFetchedFor = '';
-
   get state() {
     const { isLast, status } = this;
     return isLast
@@ -224,22 +136,8 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
         ? this.renderStreamObjects(streamObjects)
         : this.renderRichText(content)}
       ${shouldRenderError ? AIChatErrorRenderer(error, host) : nothing}
-      ${this.renderEditorActions()} ${this.renderFollowUps()}
+      ${this.renderEditorActions()}
     `;
-  }
-
-  protected override updated() {
-    // Fetch AI-upgraded follow-ups once per settled message. The row renders the
-    // instant French heuristic immediately; this upgrades it in place. Keyed on
-    // the message id + settled status so a re-send / retry re-fetches.
-    const { isLast, status, item } = this;
-    const settled = status === 'success' || status === 'idle';
-    const key = settled && isLast && item.content ? `${item.id}:${status}` : '';
-    if (key && key !== this._followUpsFetchedFor) {
-      this._followUpsFetchedFor = key;
-      this._followUps = null;
-      void this._fetchFollowUps();
-    }
   }
 
   private renderImages() {
@@ -278,191 +176,6 @@ export class ChatMessageAssistant extends WithDisposable(ShadowlessElement) {
       .affineFeatureFlagService=${this.affineFeatureFlagService}
       .theme=${this.affineThemeService.appTheme.themeSignal}
     ></chat-content-rich-text>`;
-  }
-
-  /**
-   * Follow-up suggestions, decoupled: a short French LABEL on the chip, a rich
-   * self-contained PROMPT that is what actually gets sent on click.
-   *
-   * Two layers, per the modern pattern (Perplexity "Related", Theo's
-   * follow_ups: [{label, prompt}]): an instant deterministic FRENCH fallback
-   * renders immediately (never an empty row), and a fast-model call to
-   * POST /api/v1/ai/suggestions upgrades it with pairs grounded in the actual
-   * question + answer. The model labels stay questions (≤ ~9 words); the
-   * prompts are 1-2 sentence instructions that stand alone, so clicking a chip
-   * sends a fully-formed next turn — not a bare 3-word label. French-first to
-   * match the product voice (quick-starts are French; these were English, an
-   * inconsistency the user flagged).
-   */
-  private _cdzHeuristicFollowUps(): Array<{ label: string; prompt: string }> {
-    const { item } = this;
-    const text = item.content ?? '';
-
-    const tools = new Set<string>();
-    for (const object of item.streamObjects ?? []) {
-      if (object.type === 'tool-call' || object.type === 'tool-result') {
-        tools.add(object.toolName);
-      }
-    }
-
-    const out: Array<{ label: string; prompt: string }> = [];
-    const add = (label: string, prompt: string) => {
-      if (out.length < 3 && !out.some(f => f.label === label))
-        out.push({ label, prompt });
-    };
-
-    // 1. What this turn produced.
-    if (tools.has('clickdz_app')) {
-      add(
-        'Rendre cela plus abouti ?',
-        'Peux-tu rendre cette application plus aboutie : meilleure mise en page, transitions et finition visuelle ?'
-      );
-      add(
-        'Ajouter une fonctionnalité utile ?',
-        'Ajoute une fonctionnalité vraiment utile à cette application, adaptée à mon activité.'
-      );
-    }
-    if (item.attachments?.length) {
-      add(
-        'Créer une variante raffinée ?',
-        'Crée une variante plus raffinée de ce résultat, avec un rendu plus soigné.'
-      );
-      add(
-        'Le rendre plus cinématographique ?',
-        'Rends ce résultat plus cinématographique : lumière, cadrage et ambiance.'
-      );
-    }
-
-    // 2. How the answer is shaped.
-    if (text.includes('```')) {
-      add(
-        'M’expliquer ce code pas à pas ?',
-        'Peux-tu m’expliquer ce code pas à pas, en français, de façon simple ?'
-      );
-      add(
-        'Ajouter la gestion des erreurs ?',
-        'Ajoute une gestion des erreurs robuste à ce code, en expliquant chaque ajout.'
-      );
-    }
-    if (/^\s*\|.*\|/m.test(text)) {
-      add(
-        'Transformer ces données en graphique ?',
-        'Transforme ces données en un graphique clair et lisible, avec un titre et des libellés en français.'
-      );
-    }
-    if (/^\s*(?:\d+[.)]|[-*+])\s+\S/m.test(text)) {
-      add(
-        'Transformer en plan d’action ?',
-        'Transforme cette réponse en plan d’action clair, étape par étape, que je peux suivre.'
-      );
-    }
-    if (/https?:\/\//.test(text)) {
-      add(
-        'Résumer les sources ?',
-        'Peux-tu résumer les points clés des sources citées dans cette réponse ?'
-      );
-    }
-
-    // 3. Bulk heuristics — a wall of text and a one-liner want opposite things.
-    if (text.length > 1400) {
-      add(
-        'Résumer en trois points ?',
-        'Résume cette réponse en trois points clés, simples et directs.'
-      );
-    }
-    if (text.length > 0 && text.length < 320) {
-      add(
-        'Approfondir avec des exemples ?',
-        'Peux-tu approfondir cette réponse avec des exemples concrets adaptés à mon activité ?'
-      );
-    }
-
-    // 4. Backstop: only add generic prompts if the row is still empty after
-    // signal-based heuristics (keeps first-paint non-generic when context is
-    // available; the model row upgrades this regardless).
-    if (!out.length) {
-      add(
-        'Approfondir avec des exemples ?',
-        'Peux-tu approfondir cette réponse avec des exemples concrets adaptés à mon activité ?'
-      );
-    }
-    if (out.length < 2) {
-      add(
-        "Transformer en plan d'action ?",
-        "Transforme cette réponse en plan d'action clair, étape par étape, que je peux suivre."
-      );
-    }
-
-    return out;
-  }
-
-  private async _fetchFollowUps() {
-    const { item } = this;
-    const runId = ++this._followUpsRunId;
-    const answer = (item.content ?? '').slice(0, 2000);
-    if (!answer) return;
-    const question = (this.pulseTask ?? '').slice(0, 2000);
-
-    // Build the context envelope the follow-ups route accepts (mirrors the
-    // prompt-suggestions route). Passing studio + recentTitles + niche/lang
-    // grounds suggestions in the active surface and recent work, not just Q/A.
-    const context: Record<string, unknown> = {};
-    if (this.cdzStudio) context.studio = this.cdzStudio;
-    if (this.cdzNiche) context.niche = this.cdzNiche;
-    if (this.cdzLang) context.lang = this.cdzLang;
-    if (this.cdzRecentTitles?.length) context.recentTitles = this.cdzRecentTitles;
-
-    try {
-      const res = await fetch(cdzApiUrl('/api/v1/ai/suggestions'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, answer, context }),
-      });
-      if (!res.ok) return;
-      const data = (await res.json()) as { suggestions?: unknown };
-      // Ignore if a newer fetch started (message flipped / re-sent).
-      if (runId !== this._followUpsRunId) return;
-      const list = Array.isArray(data?.suggestions) ? data.suggestions : [];
-      const cleaned: Array<{ label: string; prompt: string }> = [];
-      for (const s of list) {
-        if (!s || typeof s !== 'object') continue;
-        const label = String((s as any).label ?? '').trim();
-        const prompt = String((s as any).prompt ?? '').trim();
-        if (label && prompt) cleaned.push({ label, prompt });
-        if (cleaned.length >= 3) break;
-      }
-      if (cleaned.length) this._followUps = cleaned;
-    } catch {
-      // Cosmetic route — keep the heuristic row on any failure.
-    }
-  }
-
-  private renderFollowUps() {
-    const { isLast, status, host } = this;
-    if (!isLast || !host || (status !== 'success' && status !== 'idle')) {
-      return nothing;
-    }
-    const suggestions = this._followUps ?? this._cdzHeuristicFollowUps();
-    if (!suggestions.length) return nothing;
-    return html`<div class="cdz-followups" data-testid="clickdz-followups">
-      <span class="cdz-followups-title">Suggestions</span>
-      <div class="cdz-followups-row">
-        ${suggestions.map(
-          s => html`<button
-            class="cdz-followup"
-            title=${s.prompt}
-            @click=${() =>
-              AIAppEvents.requestOpenWithChat.next({
-                host,
-                input: s.prompt,
-                fromAnswer: true,
-              })}
-          >
-            ${s.label}
-          </button>`
-        )}
-      </div>
-    </div>`;
   }
 
   private renderEditorActions() {
