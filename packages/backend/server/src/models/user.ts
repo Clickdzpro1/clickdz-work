@@ -9,6 +9,7 @@ import {
   EmailAlreadyUsed,
   EventBus,
   UserNotFound,
+  UserSuspended,
   WrongSignInCredentials,
   WrongSignInMethod,
 } from '../base';
@@ -140,10 +141,16 @@ export class UserModel extends BaseModel {
   }
 
   async signIn(email: string, password: string): Promise<User> {
-    const user = await this.getUserByEmail(email);
+    // Fetch the user even if disabled, so we can give a proper
+    // "suspended" error instead of a generic "wrong credentials".
+    const user = await this.getUserByEmail(email, { withDisabled: true });
 
     if (!user) {
       throw new WrongSignInCredentials({ email });
+    }
+
+    if (user.disabled) {
+      throw new UserSuspended({ email });
     }
 
     if (!user.password) {
@@ -335,17 +342,46 @@ export class UserModel extends BaseModel {
     });
   }
 
+  /**
+   * Suspend a user without deleting their data.
+   *
+   * Unlike {@link ban} which deletes the user and recreates them with
+   * `disabled = true` (triggering all cleanups), this method simply flips
+   * the `disabled` flag. The user cannot sign in (the sign-in guard throws
+   * `UserSuspended`), but all workspaces, documents, and app entitlements
+   * are preserved so the account can be reactivated at any time.
+   */
+  async suspend(id: string) {
+    const user = await this.db.user.update({
+      where: { id },
+      data: { disabled: true },
+    });
+
+    this.event.emitDetached('user.updated', user);
+    return user;
+  }
+
   private buildListWhere(options: {
     keyword?: string | null;
     features?: UserFeatureName[] | null;
     after?: Date;
+    before?: Date;
+    disabled?: boolean | null;
   }): Prisma.UserWhereInput {
     const where: Prisma.UserWhereInput = {};
 
-    if (options.after) {
-      where.createdAt = {
-        gt: options.after,
-      };
+    if (options.after || options.before) {
+      where.createdAt = {};
+      if (options.after) {
+        where.createdAt.gt = options.after;
+      }
+      if (options.before) {
+        where.createdAt.lt = options.before;
+      }
+    }
+
+    if (options.disabled !== null && options.disabled !== undefined) {
+      where.disabled = options.disabled;
     }
 
     const keyword = options.keyword?.trim();
@@ -385,6 +421,8 @@ export class UserModel extends BaseModel {
     keyword?: string | null;
     features?: UserFeatureName[] | null;
     after?: Date;
+    before?: Date;
+    disabled?: boolean | null;
   }) {
     const where = this.buildListWhere(options);
 
@@ -403,6 +441,8 @@ export class UserModel extends BaseModel {
       keyword?: string | null;
       features?: UserFeatureName[] | null;
       after?: Date;
+      before?: Date;
+      disabled?: boolean | null;
     } = {}
   ) {
     const where = this.buildListWhere(options);
