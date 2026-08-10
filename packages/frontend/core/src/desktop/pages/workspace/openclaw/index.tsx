@@ -254,12 +254,12 @@ const OpenClawPage = () => {
           : 'waiting_approval';
   const headerLampLabel =
     capsState === 'loading'
-      ? 'boot…'
+      ? 'démarrage…'
       : capsState === 'error'
-        ? 'sandbox down'
+        ? 'sandbox hors service'
         : caps?.sandbox
-          ? 'live'
-          : 'generate-only';
+          ? 'en direct'
+          : 'génération uniquement';
   const headerLampTitle =
     capsState === 'loading'
       ? 'Sonde du sandbox…'
