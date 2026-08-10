@@ -1476,8 +1476,13 @@ const RunLiveView = ({
             title="Fermer"
             style={{
               appearance: 'none',
-              width: 26,
-              height: 26,
+              width: 36,
+              height: 36,
+              minWidth: 36,
+              minHeight: 36,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
               borderRadius: 7,
               border: `1px solid ${C.border}`,
               background: 'transparent',
