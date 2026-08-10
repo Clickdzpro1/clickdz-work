@@ -6,6 +6,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@affine/admin/components/ui/dropdown-menu';
+import { FeatureType } from '@affine/graphql';
 import {
   AccountBanIcon,
   DeleteIcon,
@@ -18,6 +19,11 @@ import { toast } from 'sonner';
 
 import { DiscardChanges } from '../../../components/shared/discard-changes';
 import { useRightPanel } from '../../panel/context';
+import {
+  useGrantAdmin,
+  useRevokeAdmin,
+  useSuspendUser,
+} from '../admin-operations';
 import type { UserType } from '../schema';
 import { AppAccessDialog } from './app-access-dialog';
 import { DeleteAccountDialog } from './delete-account';
@@ -31,6 +37,7 @@ import {
   useResetUserPassword,
 } from './use-user-management';
 import { UpdateUserForm } from './user-form';
+import { UserDetailPanel } from './user-detail-panel';
 
 interface DataTableRowActionsProps {
   user: UserType;
@@ -56,6 +63,11 @@ export function DataTableRowActions({ user }: DataTableRowActionsProps) {
   const disableUser = useDisableUser();
   const enableUser = useEnableUser();
   const { resetPasswordLink, onResetPassword } = useResetUserPassword();
+  const { suspend, suspending: suspendingUser } = useSuspendUser();
+  const { grantAdmin, granting: grantingAdmin } = useGrantAdmin();
+  const { revokeAdmin, revoking: revokingAdmin } = useRevokeAdmin();
+
+  const isAdmin = user.features.includes(FeatureType.Admin);
 
   const openResetPasswordDialog = useCallback(() => {
     onResetPassword(user.id, () => setResetPasswordDialogOpen(true)).catch(
@@ -106,6 +118,24 @@ export function DataTableRowActions({ user }: DataTableRowActionsProps) {
     enableUser(user.id, handleEnabling);
   }, [enableUser, handleEnabling, user.id]);
 
+  const handleSuspend = useCallback(() => {
+    suspend(user.id, () => {
+      if (isOpen) closePanel();
+    });
+  }, [suspend, user.id, isOpen, closePanel]);
+
+  const handleGrantAdmin = useCallback(() => {
+    grantAdmin(user.id, () => {
+      if (isOpen) closePanel();
+    });
+  }, [grantAdmin, user.id, isOpen, closePanel]);
+
+  const handleRevokeAdmin = useCallback(() => {
+    revokeAdmin(user.id, () => {
+      if (isOpen) closePanel();
+    });
+  }, [revokeAdmin, user.id, isOpen, closePanel]);
+
   const openDeleteDialog = useCallback(() => {
     setDeleteDialogOpen(true);
   }, []);
@@ -149,6 +179,27 @@ export function DataTableRowActions({ user }: DataTableRowActionsProps) {
     setHasDirtyChanges,
   ]);
 
+  const handleViewDetails = useCallback(() => {
+    setHasDirtyChanges(false);
+    setPanelContent(
+      <UserDetailPanel
+        user={user}
+        onComplete={closePanel}
+        onResetPassword={openResetPasswordDialog}
+        onDeleteAccount={openDeleteDialog}
+      />
+    );
+    openPanel();
+  }, [
+    closePanel,
+    openDeleteDialog,
+    openPanel,
+    openResetPasswordDialog,
+    setPanelContent,
+    user,
+    setHasDirtyChanges,
+  ]);
+
   const handleEdit = useCallback(() => {
     if (hasDirtyChanges) {
       setDiscardDialogOpen(true);
@@ -179,6 +230,13 @@ export function DataTableRowActions({ user }: DataTableRowActionsProps) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-[214px] p-1.5">
           <DropdownMenuItem
+            onSelect={handleViewDetails}
+            className="px-2 py-[6px] text-sm font-normal gap-2 cursor-pointer"
+          >
+            <AccountBanIcon fontSize={20} />
+            View Details
+          </DropdownMenuItem>
+          <DropdownMenuItem
             onSelect={handleEdit}
             className="px-2 py-[6px] text-sm font-normal gap-2 cursor-pointer"
           >
@@ -208,6 +266,46 @@ export function DataTableRowActions({ user }: DataTableRowActionsProps) {
             <LockIcon fontSize={20} />
             Apps Access
           </DropdownMenuItem>
+          {/* Suspend / Activate (non-destructive) */}
+          {!user.disabled ? (
+            <DropdownMenuItem
+              className="cursor-pointer gap-2 px-2 py-[6px] text-sm font-normal text-destructive focus:text-destructive"
+              onSelect={handleSuspend}
+              disabled={suspendingUser}
+            >
+              <AccountBanIcon fontSize={20} />
+              Suspendre
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              className="cursor-pointer gap-2 px-2 py-[6px] text-sm font-normal"
+              onSelect={handleEnable}
+              disabled={false}
+            >
+              <AccountBanIcon fontSize={20} />
+              Activer
+            </DropdownMenuItem>
+          )}
+          {/* Grant / Revoke Admin */}
+          {isAdmin ? (
+            <DropdownMenuItem
+              className="cursor-pointer gap-2 px-2 py-[6px] text-sm font-normal text-destructive focus:text-destructive"
+              onSelect={handleRevokeAdmin}
+              disabled={revokingAdmin}
+            >
+              <LockIcon fontSize={20} />
+              {`Révoquer l\u{2019}admin`}
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              className="cursor-pointer gap-2 px-2 py-[6px] text-sm font-normal"
+              onSelect={handleGrantAdmin}
+              disabled={grantingAdmin}
+            >
+              <LockIcon fontSize={20} />
+              {`Accorder l\u{2019}admin`}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           {!user.disabled && (
             <DropdownMenuItem
