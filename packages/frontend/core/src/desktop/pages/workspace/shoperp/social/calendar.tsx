@@ -109,7 +109,7 @@ export const CalendarView = ({ lang, dict, onNewAtTime, refresh }: Props) => {
     if (!selected || !reschedAt) return;
     const epoch = new Date(reschedAt).getTime();
     if (isNaN(epoch) || epoch <= Date.now()) {
-      setReschedNote(dict.scheduleFuture ?? 'Must be in the future.');
+      setReschedNote(dict.scheduleFuture ?? 'Doit être dans le futur.');
       return;
     }
     setReschedBusy(true);
@@ -117,14 +117,14 @@ export const CalendarView = ({ lang, dict, onNewAtTime, refresh }: Props) => {
     try {
       const res = await reschedulePost(selected.id, epoch);
       if (res.ok) {
-        setReschedNote(dict.rescheduled ?? 'Rescheduled.');
+        setReschedNote(dict.rescheduled ?? 'Replanifié.');
         setSelected(null);
         await load();
       } else {
-        setReschedNote(res.error ?? dict.reschedFail ?? 'Reschedule failed.');
+        setReschedNote(res.error ?? dict.reschedFail ?? 'La replanification a échoué.');
       }
     } catch {
-      setReschedNote(dict.reschedFail ?? 'Reschedule failed.');
+      setReschedNote(dict.reschedFail ?? 'La replanification a échoué.');
     } finally {
       setReschedBusy(false);
     }
@@ -140,19 +140,19 @@ export const CalendarView = ({ lang, dict, onNewAtTime, refresh }: Props) => {
         </span>
         <button style={miniBtnStyle('secondary')} onClick={nextMonth}>{'>'}</button>
         <button style={miniBtnStyle('secondary')} onClick={() => void load()}>
-          {dict.refresh ?? 'Refresh'}
+          {dict.refresh ?? 'Actualiser'}
         </button>
       </div>
 
       {loading && (
         <div style={{ display: 'flex', gap: 8, color: C.muted }}>
-          <Spinner /> {dict.loading ?? 'Loading...'}
+          <Spinner /> {dict.loading ?? 'Chargement…'}
         </div>
       )}
 
       {/* Calendar grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
-        {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => (
+        {['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'].map(d => (
           <div key={d} style={{ fontSize: 10.5, fontWeight: 700, color: C.muted, textAlign: 'center', padding: '4px 0' }}>
             {d}
           </div>
@@ -225,21 +225,21 @@ export const CalendarView = ({ lang, dict, onNewAtTime, refresh }: Props) => {
       {selected && (
         <div style={{ borderRadius: 12, border: `1px solid ${C.border}`, background: C.panel, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{dict.postDetail ?? 'Post detail'}</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{dict.postDetail ?? 'Détail de la publication'}</span>
             <button style={miniBtnStyle('secondary')} onClick={() => setSelected(null)}>
-              {dict.close ?? 'Close'}
+              {dict.close ?? 'Fermer'}
             </button>
           </div>
           <div style={{ fontSize: 12.5, color: C.text, direction: rtl ? 'rtl' : undefined, wordBreak: 'break-word' }}>{selected.text}</div>
           <div style={{ fontSize: 11, color: C.muted }}>
-            {dict.networks ?? 'Networks:'} {selected.networks.map(s => getNetworkMeta(s)?.label ?? s).join(', ')}
+            {dict.networks ?? 'Réseaux :'} {selected.networks.map(s => getNetworkMeta(s)?.label ?? s).join(', ')}
           </div>
           <div style={{ fontSize: 11, color: STATUS_COLOR[selected.status] ?? C.muted }}>
             {dict[`status_${selected.status}`] ?? selected.status}
           </div>
           {(selected.status === 'scheduled' || selected.status === 'draft') && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 11.5, color: C.muted }}>{dict.reschedule ?? 'Reschedule:'}</span>
+              <span style={{ fontSize: 11.5, color: C.muted }}>{dict.reschedule ?? 'Replanifier :'}</span>
               <input
                 type="datetime-local"
                 value={reschedAt}
@@ -251,7 +251,7 @@ export const CalendarView = ({ lang, dict, onNewAtTime, refresh }: Props) => {
                 disabled={reschedBusy || !reschedAt}
                 style={{ ...miniBtnStyle('primary'), opacity: (reschedBusy || !reschedAt) ? 0.5 : 1 }}
               >
-                {reschedBusy ? '...' : (dict.rescheduleBtn ?? 'Reschedule')}
+                {reschedBusy ? '…' : (dict.rescheduleBtn ?? 'Replanifier')}
               </button>
             </div>
           )}
