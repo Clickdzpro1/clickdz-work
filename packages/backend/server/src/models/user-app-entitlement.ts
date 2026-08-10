@@ -10,10 +10,10 @@ import { BaseModel } from './base';
 // = no expiry).
 
 export const APP_ENTITLEMENT_APPS = [
-  'slidepro',
-  'socialplus',
-  'coursepro',
-  'zoomplus',
+  'slide_pro',
+  'social_plus',
+  'course_pro',
+  'zoom_plus',
   'vdz',
   'voice',
   'apps',
