@@ -10,6 +10,13 @@ import { aiIslandBtn, aiIslandWrapper, toolStyle } from './styles.css';
 const hideChat: Array<string | ((path: string) => boolean)> = [
   '/chat',
   path => path.includes('attachments'),
+  // WS-MAXP: WhatsApp Max ships its own AI assistant in the composer — the
+  // floating island sat exactly on top of the send/mic button (bottom-right
+  // overlap), covering it whenever a message was typed.
+  path => path.includes('/whatsappmax'),
+  // ZOOM+ hosts a full-bleed meeting iframe whose own controls live in the
+  // same corner — keep the island out of the call surface.
+  path => path.includes('/zoomplus'),
 ];
 
 export const AIIsland = () => {
