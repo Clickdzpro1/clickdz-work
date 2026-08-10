@@ -22,6 +22,7 @@ import {
   useState,
 } from 'react';
 
+import { useIsNarrow } from './use-voice-responsive';
 import {
   analyzeVoice,
   C,
@@ -58,6 +59,7 @@ interface FinalizedChunk {
 }
 
 export const TranscribeTab = ({ available }: { available: boolean }) => {
+  const isPhone = useIsNarrow(480);
   // ---- shared transcript state (fed by BOTH mic + upload) ----
   const [chunks, setChunks] = useState<FinalizedChunk[]>([]);
   const [pending, setPending] = useState(false); // a chunk is transcribing
@@ -538,6 +540,7 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
                 alignItems: 'center',
                 gap: 9,
                 padding: '9px 16px',
+                minHeight: 40,
                 borderRadius: 999,
                 border: 'none',
                 cursor:
@@ -631,6 +634,7 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
               style={{
                 appearance: 'none',
                 padding: '9px 16px',
+                minHeight: 40,
                 borderRadius: 8,
                 border: `1px solid ${C.border}`,
                 background: C.panel2,
@@ -639,6 +643,7 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
                 fontWeight: 600,
                 cursor: !available || uploading || busy ? 'not-allowed' : 'pointer',
                 opacity: !available || uploading || busy ? 0.6 : 1,
+                flexShrink: 0,
               }}
             >
               Choose file
@@ -663,7 +668,8 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  maxWidth: 180,
+                  maxWidth: isPhone ? 120 : 180,
+                  minWidth: 0,
                 }}
               >
                 {uploadName}
@@ -972,6 +978,7 @@ const ActionButton = ({
     style={{
       appearance: 'none',
       padding: '5px 11px',
+      minHeight: 40,
       borderRadius: 7,
       border: `1px solid ${C.border}`,
       background: 'transparent',
