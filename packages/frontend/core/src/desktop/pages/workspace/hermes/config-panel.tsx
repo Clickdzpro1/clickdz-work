@@ -50,9 +50,9 @@ import {
 //   • make      → the built-in drafting/reasoning assistant (server-side)
 type Kind = 'internal' | 'composio' | 'make';
 const KIND_TITLE: Record<Kind, string> = {
-  internal: '🧾 Internal — shops & data',
-  composio: '🔗 Connected apps (Composio)',
-  make: '🤖 Assistant — drafting & reasoning',
+  internal: '🧾 Interne — boutiques et données',
+  composio: '🔗 Applications connectées (Composio)',
+  make: '🤖 Assistant — rédaction et raisonnement',
 };
 function classify(slug: string): Kind {
   const s = slug.toLowerCase();
