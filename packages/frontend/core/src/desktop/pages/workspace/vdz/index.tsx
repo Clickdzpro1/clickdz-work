@@ -1052,7 +1052,7 @@ const VdzStudioPage = () => {
                         onReset={() => resetPanelSize('shorts')}
                         axis="x"
                         dir={-1}
-                        aria-label="Resize AI Shorts"
+                        aria-label="Redimensionner les Shorts IA"
                       />
                       <div
                         className={styles.sidePanelSlot}
@@ -1086,7 +1086,7 @@ const VdzStudioPage = () => {
                         onReset={() => resetPanelSize('effects')}
                         axis="x"
                         dir={-1}
-                        aria-label="Resize effects"
+                        aria-label="Redimensionner les effets"
                       />
                       <div
                         className={styles.sidePanelSlot}
@@ -1117,7 +1117,7 @@ const VdzStudioPage = () => {
                         onReset={() => resetPanelSize('transcript')}
                         axis="x"
                         dir={-1}
-                        aria-label="Resize transcript"
+                        aria-label="Redimensionner la transcription"
                       />
                       <div
                         className={styles.sidePanelSlot}
