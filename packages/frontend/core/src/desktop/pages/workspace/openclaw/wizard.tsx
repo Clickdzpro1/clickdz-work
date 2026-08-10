@@ -16,6 +16,7 @@
 import { useAgentLang } from '@affine/core/modules/agents/i18n';
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
 
+import { useIsNarrow } from './use-openclaw-responsive';
 import {
   Banner,
   btnStyle,
@@ -416,22 +417,28 @@ export const OpenClawWizard = ({
 
 // ---- sub-components --------------------------------------------------------
 
-const Card = ({ children }: { children: ReactNode }) => (
-  <div
-    style={{
-      maxWidth: 560,
-      margin: '0 auto',
-      padding: 24,
-      borderRadius: 14,
-      background: C.panel,
-      border: `1px solid ${C.border}`,
-      display: 'flex',
-      flexDirection: 'column',
-    }}
-  >
-    {children}
-  </div>
-);
+const Card = ({ children }: { children: ReactNode }) => {
+  // ≤480px: trim the card's own padding so the review rows below (which
+  // reserve a fixed label column) have more room, rather than the value +
+  // edit link getting squeezed into a sliver.
+  const isPhone = useIsNarrow(480);
+  return (
+    <div
+      style={{
+        maxWidth: 560,
+        margin: '0 auto',
+        padding: isPhone ? 16 : 24,
+        borderRadius: 14,
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      {children}
+    </div>
+  );
+};
 
 const StepShell = ({
   glyph,
@@ -578,47 +585,63 @@ const ReviewRow = ({
   value: string;
   onEdit: () => void;
   editLabel: string;
-}) => (
-  <div
-    style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      padding: '11px 14px',
-      background: C.bg,
-    }}
-  >
-    <span style={{ fontSize: 12, color: C.muted, width: 132, flexShrink: 0 }}>
-      {label}
-    </span>
-    <span
+}) => {
+  // ≤480px: the label column shrinks (and rows wrap to two lines if needed)
+  // instead of squeezing the value + edit link into a thin sliver.
+  const isPhone = useIsNarrow(480);
+  return (
+    <div
       style={{
-        flex: 1,
-        fontSize: 13.5,
-        fontWeight: 600,
-        color: C.text,
-        wordBreak: 'break-word',
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: isPhone ? 'wrap' : 'nowrap',
+        rowGap: 4,
+        gap: 10,
+        padding: '11px 14px',
+        background: C.bg,
       }}
     >
-      {value || '—'}
-    </span>
-    <button
-      style={{
-        appearance: 'none',
-        background: 'none',
-        border: 'none',
-        cursor: 'pointer',
-        color: C.accent,
-        fontSize: 12,
-        fontWeight: 600,
-        padding: 0,
-      }}
-      onClick={onEdit}
-    >
-      {editLabel}
-    </button>
-  </div>
-);
+      <span
+        style={{
+          fontSize: 12,
+          color: C.muted,
+          width: isPhone ? '100%' : 132,
+          flexShrink: 0,
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 13.5,
+          fontWeight: 600,
+          color: C.text,
+          wordBreak: 'break-word',
+        }}
+      >
+        {value || '—'}
+      </span>
+      <button
+        style={{
+          appearance: 'none',
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          color: C.accent,
+          fontSize: 12,
+          fontWeight: 600,
+          minHeight: 32,
+          padding: '0 2px',
+        }}
+        onClick={onEdit}
+      >
+        {editLabel}
+      </button>
+    </div>
+  );
+};
 
 // The success screen: confirms the saved defaults + honest sandbox status, then
 // hands off to the dashboard.
