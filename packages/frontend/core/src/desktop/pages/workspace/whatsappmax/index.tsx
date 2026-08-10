@@ -763,6 +763,138 @@ interface MediaBubbleProps {
   connId: string | null;
 }
 
+// Fetches media bytes lazily (on first play/open) and hands back a blob URL.
+// Shared by the audio/video lazy-load paths and the image lightbox below.
+function useLazyMediaBlob(messageId: string, connId: string | null) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const blobUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) {
+        URL.revokeObjectURL(blobUrlRef.current);
+        blobUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  const load = useCallback(async () => {
+    if (blobUrlRef.current || loading) return blobUrlRef.current;
+    setLoading(true);
+    setFailed(false);
+    try {
+      const res = await fetch(
+        cdzApiUrl(
+          `/api/v1/whatsappmax/media?messageId=${encodeURIComponent(messageId)}${connId ? `&connId=${encodeURIComponent(connId)}` : ''}`
+        ),
+        { credentials: 'include' }
+      );
+      if (!res.ok) {
+        setFailed(true);
+        setLoading(false);
+        return null;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      blobUrlRef.current = url;
+      setBlobUrl(url);
+      setLoading(false);
+      return url;
+    } catch {
+      setFailed(true);
+      setLoading(false);
+      return null;
+    }
+  }, [messageId, connId, loading]);
+
+  return { blobUrl, loading, failed, load };
+}
+
+// Full-size image lightbox — dark backdrop, click-outside/Échap to close.
+function ImageLightbox({
+  src,
+  onClose,
+}: {
+  src: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.85)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'column',
+        gap: 12,
+        zIndex: 10000,
+        padding: 16,
+        boxSizing: 'border-box',
+      }}
+      onClick={e => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <img
+        src={src}
+        alt="image"
+        style={{
+          maxWidth: '92vw',
+          maxHeight: '80vh',
+          borderRadius: 8,
+          objectFit: 'contain',
+          boxShadow: '0 8px 40px rgba(0,0,0,0.6)',
+        }}
+      />
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <a
+          href={src}
+          download
+          style={{
+            color: '#fff',
+            fontSize: 12.5,
+            fontWeight: 600,
+            background: 'rgba(255,255,255,0.12)',
+            padding: '6px 14px',
+            borderRadius: 8,
+            textDecoration: 'none',
+          }}
+        >
+          Télécharger
+        </a>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            color: '#fff',
+            fontSize: 12.5,
+            fontWeight: 600,
+            background: 'rgba(255,255,255,0.12)',
+            border: 'none',
+            padding: '6px 14px',
+            borderRadius: 8,
+            cursor: 'pointer',
+          }}
+        >
+          Fermer
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const MediaBubble = ({ messageId, type, fromMe, connId }: MediaBubbleProps) => {
   const mediaUrl = cdzApiUrl(
     `/api/v1/whatsappmax/media?messageId=${encodeURIComponent(messageId)}${connId ? `&connId=${encodeURIComponent(connId)}` : ''}`
@@ -770,38 +902,107 @@ const MediaBubble = ({ messageId, type, fromMe, connId }: MediaBubbleProps) => {
   const textColor = fromMe ? '#0b1f14' : C.text;
   const mutedColor = fromMe ? '#1a4a2e' : C.muted;
 
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const audioLazy = useLazyMediaBlob(messageId, connId);
+  const videoLazy = useLazyMediaBlob(messageId, connId);
+
   if (type === 'imageMessage' || type === 'stickerMessage') {
     return (
-      <img
-        src={mediaUrl}
-        alt="image"
-        style={{
-          maxWidth: 200,
-          maxHeight: 200,
-          borderRadius: 8,
-          display: 'block',
-          objectFit: 'cover',
-        }}
-        onError={e => {
-          (e.target as HTMLImageElement).style.display = 'none';
-        }}
-      />
+      <>
+        <img
+          src={mediaUrl}
+          alt="image"
+          onClick={() => setLightboxOpen(true)}
+          style={{
+            maxWidth: 240,
+            maxHeight: 240,
+            borderRadius: 8,
+            display: 'block',
+            objectFit: 'cover',
+            cursor: 'pointer',
+          }}
+          onError={e => {
+            (e.target as HTMLImageElement).style.display = 'none';
+          }}
+        />
+        {lightboxOpen && (
+          <ImageLightbox src={mediaUrl} onClose={() => setLightboxOpen(false)} />
+        )}
+      </>
     );
   }
   if (type === 'videoMessage') {
+    if (videoLazy.failed) {
+      return <span style={{ fontSize: 12, color: mutedColor }}>Média indisponible</span>;
+    }
+    if (!videoLazy.blobUrl) {
+      return (
+        <button
+          type="button"
+          onClick={() => void videoLazy.load()}
+          disabled={videoLazy.loading}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: fromMe ? 'rgba(0,0,0,0.08)' : C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 8,
+            padding: '10px 14px',
+            cursor: videoLazy.loading ? 'wait' : 'pointer',
+            color: textColor,
+            fontSize: 12.5,
+            fontWeight: 600,
+          }}
+        >
+          {videoLazy.loading ? '⏳ Chargement…' : '▶ Lire la vidéo'}
+        </button>
+      );
+    }
     return (
       <video
-        src={mediaUrl}
+        src={videoLazy.blobUrl}
         controls
-        style={{ maxWidth: 240, borderRadius: 8, display: 'block' }}
+        preload="none"
+        autoPlay
+        style={{ maxWidth: 280, borderRadius: 8, display: 'block' }}
       />
     );
   }
   if (type === 'audioMessage') {
+    if (audioLazy.failed) {
+      return <span style={{ fontSize: 12, color: mutedColor }}>Média indisponible</span>;
+    }
+    if (!audioLazy.blobUrl) {
+      return (
+        <button
+          type="button"
+          onClick={() => void audioLazy.load()}
+          disabled={audioLazy.loading}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: fromMe ? 'rgba(0,0,0,0.08)' : C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 999,
+            padding: '7px 14px',
+            cursor: audioLazy.loading ? 'wait' : 'pointer',
+            color: textColor,
+            fontSize: 12.5,
+            fontWeight: 600,
+          }}
+        >
+          {audioLazy.loading ? '⏳ Chargement…' : '▶ Écouter la note vocale'}
+        </button>
+      );
+    }
     return (
       <audio
-        src={mediaUrl}
+        src={audioLazy.blobUrl}
         controls
+        preload="none"
+        autoPlay
         style={{ maxWidth: 240 }}
       />
     );
@@ -832,6 +1033,282 @@ const MediaBubble = ({ messageId, type, fromMe, connId }: MediaBubbleProps) => {
   );
 };
 
+// ── Voice recorder helper ───────────────────────────────────────────────────
+// Wraps navigator.mediaDevices.getUserMedia + MediaRecorder. Prefers
+// 'audio/webm;codecs=opus'; falls back to the browser default mimeType when
+// unsupported (e.g. Safari). Callers get a base64 payload ready for the
+// existing sendMedia (base64) path.
+function useVoiceRecorder() {
+  const [recording, setRecording] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [permError, setPermError] = useState<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const startedAtRef = useRef(0);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mimeTypeRef = useRef('audio/webm');
+
+  const stopTracks = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => stopTracks, [stopTracks]);
+
+  const start = useCallback(async () => {
+    setPermError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const preferred = 'audio/webm;codecs=opus';
+      const mimeType =
+        typeof MediaRecorder !== 'undefined' &&
+        MediaRecorder.isTypeSupported &&
+        MediaRecorder.isTypeSupported(preferred)
+          ? preferred
+          : '';
+      mimeTypeRef.current = mimeType || 'audio/webm';
+      const rec = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = e => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mediaRecorderRef.current = rec;
+      rec.start();
+      startedAtRef.current = Date.now();
+      setElapsedMs(0);
+      setRecording(true);
+      tickRef.current = setInterval(() => {
+        setElapsedMs(Date.now() - startedAtRef.current);
+      }, 250);
+    } catch {
+      setPermError(
+        "Micro inaccessible — vérifiez l'autorisation d'enregistrement audio."
+      );
+      stopTracks();
+    }
+  }, [stopTracks]);
+
+  const cancel = useCallback(() => {
+    const rec = mediaRecorderRef.current;
+    if (rec && rec.state !== 'inactive') {
+      rec.onstop = null;
+      rec.stop();
+    }
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+    stopTracks();
+    setRecording(false);
+    setElapsedMs(0);
+  }, [stopTracks]);
+
+  // Resolves with the recorded blob (or null if nothing was captured).
+  const stopAndGetBlob = useCallback((): Promise<Blob | null> => {
+    return new Promise(resolve => {
+      const rec = mediaRecorderRef.current;
+      if (!rec || rec.state === 'inactive') {
+        resolve(null);
+        return;
+      }
+      rec.onstop = () => {
+        const blob =
+          chunksRef.current.length > 0
+            ? new Blob(chunksRef.current, { type: mimeTypeRef.current })
+            : null;
+        chunksRef.current = [];
+        stopTracks();
+        setRecording(false);
+        setElapsedMs(0);
+        resolve(blob);
+      };
+      rec.stop();
+    });
+  }, [stopTracks]);
+
+  return { recording, elapsedMs, permError, start, cancel, stopAndGetBlob };
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('read_failed'));
+        return;
+      }
+      // Strip the data: URL prefix — backend expects raw base64.
+      const comma = result.indexOf(',');
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('read_failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+// ── AI Assist popover ───────────────────────────────────────────────────────
+
+interface AiAssistProps {
+  chatJid: string;
+  connId: string | null;
+  onDark: () => void;
+  onDraft: (text: string) => void;
+  onOverlay: (title: string, body: string) => void;
+  isNarrow: boolean;
+  disabled?: boolean;
+}
+
+type AiAction = 'draft' | 'summary' | 'translate' | null;
+
+const AiAssist = ({ chatJid, connId, onDark, onDraft, onOverlay, isNarrow, disabled = false }: AiAssistProps) => {
+  const [open, setOpen] = useState(false);
+  const [instruction, setInstruction] = useState('');
+  const [acting, setActing] = useState<AiAction>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = useCallback(
+    async (action: Exclude<AiAction, null>) => {
+      setActing(action);
+      setErr(null);
+      const path = `/api/v1/whatsappmax/ai/${action}`;
+      const body: Record<string, unknown> = { chatJid, ...(connId ? { connId } : {}) };
+      if (action === 'draft' && instruction.trim()) body.instruction = instruction.trim();
+      const out = await apiPost<
+        | { ok: true; draft?: string; summary?: string; translation?: string; original?: string }
+        | { ok: false; error?: string }
+      >(path, body);
+      setActing(null);
+      if (isDark(out)) { onDark(); return; }
+      if (!out || !(out as { ok?: boolean }).ok) {
+        setErr('Service IA indisponible — réessayez.');
+        return;
+      }
+      if (action === 'draft') {
+        const draft = (out as { draft?: string }).draft ?? '';
+        if (draft) {
+          onDraft(draft);
+          setOpen(false);
+        } else {
+          setErr('Service IA indisponible — réessayez.');
+        }
+      } else if (action === 'summary') {
+        const summary = (out as { summary?: string }).summary ?? '';
+        onOverlay('Résumé de la conversation', summary || 'Aucun résumé disponible.');
+        setOpen(false);
+      } else if (action === 'translate') {
+        const translation = (out as { translation?: string }).translation ?? '';
+        onOverlay('Traduction du dernier message', translation || 'Aucune traduction disponible.');
+        setOpen(false);
+      }
+    },
+    [chatJid, connId, instruction, onDark, onDraft, onOverlay]
+  );
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+      <button
+        type="button"
+        style={{
+          ...btn('ghost', disabled),
+          padding: '8px 10px',
+          minWidth: 40,
+          minHeight: 40,
+          fontSize: 12.5,
+          fontWeight: 700,
+          border: `1px solid ${open ? C.accent : C.border}`,
+          color: open ? C.accent : C.text,
+          borderRadius: 8,
+          flexShrink: 0,
+        }}
+        title="Assistant IA"
+        disabled={disabled}
+        onClick={() => setOpen(v => !v)}
+      >
+        ✨ IA
+      </button>
+      {open && !disabled && (
+        <>
+          <div
+            style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+            onClick={() => setOpen(false)}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              bottom: '100%',
+              right: 0,
+              marginBottom: 6,
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              borderRadius: 10,
+              padding: 10,
+              width: isNarrow ? 'min(88vw, 300px)' : 280,
+              maxWidth: '100%',
+              zIndex: 9999,
+              boxShadow: '0 8px 28px rgba(0,0,0,0.45)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>
+              Assistant IA
+            </div>
+            <input
+              style={{ ...inputStyle, fontSize: 12 }}
+              value={instruction}
+              placeholder="Consigne… (optionnel)"
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setInstruction(e.target.value)}
+            />
+            <button
+              type="button"
+              style={{ ...btn('secondary', acting !== null), width: '100%', fontSize: 12, textAlign: 'left' }}
+              disabled={acting !== null}
+              onClick={() => void run('draft')}
+            >
+              {acting === 'draft' ? '⏳ Rédaction…' : '✍️ Rédiger une réponse'}
+            </button>
+            <button
+              type="button"
+              style={{ ...btn('secondary', acting !== null), width: '100%', fontSize: 12, textAlign: 'left' }}
+              disabled={acting !== null}
+              onClick={() => void run('summary')}
+            >
+              {acting === 'summary' ? '⏳ Résumé…' : '🧾 Résumer la conversation'}
+            </button>
+            <button
+              type="button"
+              style={{ ...btn('secondary', acting !== null), width: '100%', fontSize: 12, textAlign: 'left' }}
+              disabled={acting !== null}
+              onClick={() => void run('translate')}
+            >
+              {acting === 'translate' ? '⏳ Traduction…' : '🌐 Traduire le dernier message'}
+            </button>
+            {err ? <div style={{ fontSize: 11.5, color: C.danger }}>{err}</div> : null}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 // ── Composer ──────────────────────────────────────────────────────────────
 
 interface ComposerProps {
@@ -851,6 +1328,12 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
   const [mediaKind, setMediaKind] = useState<'image' | 'video' | 'audio' | 'document'>('image');
   const [mediaCaption, setMediaCaption] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [aiOverlay, setAiOverlay] = useState<{ title: string; body: string } | null>(null);
+  const [aiCopied, setAiCopied] = useState(false);
+  const voice = useVoiceRecorder();
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceErr, setVoiceErr] = useState<string | null>(null);
+  const isNarrowComposer = useIsNarrow(768);
 
   const sendText = useCallback(async () => {
     const body = text.trim();
@@ -912,6 +1395,69 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
     }
   }, [mediaUrl, mediaKind, mediaCaption, busy, connected, chatJid, onDark, connId]);
 
+  // Sends a locally-recorded voice note through the SAME sendMedia endpoint
+  // used above, but via the base64 field (there's no URL for a local
+  // recording) — matches the backend's { to, kind, base64, fileName,
+  // mimetype, connId } contract exactly.
+  const sendVoiceNote = useCallback(
+    async (blob: Blob) => {
+      setVoiceBusy(true);
+      setVoiceErr(null);
+      try {
+        const base64 = await blobToBase64(blob);
+        const fileName = `note-vocale-${Date.now()}.webm`;
+        const out = await apiPost<{ ok: boolean; messageId?: string; note?: string }>(
+          '/api/v1/whatsappmax/sendMedia',
+          {
+            to: chatJid,
+            kind: 'audio',
+            base64,
+            fileName,
+            mimetype: blob.type || 'audio/webm',
+            ...(connId ? { connId } : {}),
+          }
+        );
+        setVoiceBusy(false);
+        if (isDark(out)) { onDark(); return; }
+        if (!out || !out.ok || (out as { note?: string }).note) {
+          setVoiceErr(
+            (out as { note?: string })?.note === 'not_connected'
+              ? 'Liez un numéro WhatsApp d\'abord.'
+              : "Envoi de la note vocale échoué."
+          );
+        }
+      } catch {
+        setVoiceBusy(false);
+        setVoiceErr("Envoi de la note vocale échoué.");
+      }
+    },
+    [chatJid, connId, onDark]
+  );
+
+  const handleVoiceSend = useCallback(async () => {
+    const blob = await voice.stopAndGetBlob();
+    if (blob) void sendVoiceNote(blob);
+  }, [voice, sendVoiceNote]);
+
+  const handleAiDraft = useCallback((draft: string) => {
+    setText(draft);
+  }, []);
+
+  const handleAiOverlay = useCallback((title: string, body: string) => {
+    setAiCopied(false);
+    setAiOverlay({ title, body });
+  }, []);
+
+  const copyOverlay = useCallback(() => {
+    if (!aiOverlay) return;
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(aiOverlay.body)
+        .then(() => setAiCopied(true))
+        .catch(() => setAiCopied(false));
+    }
+  }, [aiOverlay]);
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -920,6 +1466,7 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
   };
 
   const disabled = !connected || busy;
+  const aiDisabled = !connected || !chatJid;
 
   return (
     <div
@@ -933,6 +1480,46 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
         flexShrink: 0,
       }}
     >
+      {/* AI overlay — summary/translation results, dismissible */}
+      {aiOverlay && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            padding: '10px 12px',
+            background: C.surface,
+            borderRadius: 8,
+            border: `1px solid ${C.accent}55`,
+            maxWidth: '100%',
+            boxSizing: 'border-box',
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: C.accent }}>{aiOverlay.title}</span>
+            <button
+              type="button"
+              style={{ background: 'none', border: 'none', color: C.muted, fontSize: 14, cursor: 'pointer', padding: 2 }}
+              onClick={() => setAiOverlay(null)}
+              aria-label="Fermer"
+            >
+              ✕
+            </button>
+          </div>
+          <div style={{ fontSize: 12.5, color: C.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {aiOverlay.body}
+          </div>
+          <div>
+            <button
+              type="button"
+              style={{ ...btn('secondary', false), fontSize: 11.5, padding: '4px 10px' }}
+              onClick={copyOverlay}
+            >
+              {aiCopied ? 'Copié ✓' : 'Copier'}
+            </button>
+          </div>
+        </div>
+      )}
       {showMedia && (
         <div
           style={{
@@ -985,8 +1572,62 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
           </div>
         </div>
       )}
+      {/* Voice recorder bar — replaces the text row while recording */}
+      {voice.recording ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 12px',
+            background: C.surface,
+            borderRadius: 8,
+            border: `1px solid ${C.border}`,
+            flexWrap: 'wrap' as const,
+            maxWidth: '100%',
+            boxSizing: 'border-box',
+          }}
+        >
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: C.danger,
+              flexShrink: 0,
+              animation: 'cdz-rec-pulse 1s ease-in-out infinite',
+            }}
+          />
+          <span style={{ fontSize: 12.5, color: C.text, fontWeight: 600, flexShrink: 0 }}>
+            {formatElapsed(voice.elapsedMs)}
+          </span>
+          <span style={{ fontSize: 11.5, color: C.muted, flex: 1, minWidth: 60 }}>
+            Enregistrement de la note vocale…
+          </span>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <button
+              type="button"
+              style={{ ...btn('ghost', voiceBusy), fontSize: 11.5, padding: '5px 10px' }}
+              disabled={voiceBusy}
+              onClick={() => voice.cancel()}
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              style={{ ...btn('primary', voiceBusy), fontSize: 11.5, padding: '5px 10px' }}
+              disabled={voiceBusy}
+              onClick={() => void handleVoiceSend()}
+            >
+              {voiceBusy ? 'Envoi…' : 'Envoyer'}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {err ? <div style={{ fontSize: 12, color: C.danger }}>{err}</div> : null}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+      {voice.permError ? <div style={{ fontSize: 12, color: C.danger }}>{voice.permError}</div> : null}
+      {voiceErr ? <div style={{ fontSize: 12, color: C.danger }}>{voiceErr}</div> : null}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' as const, maxWidth: '100%' }}>
         <button
           style={{
             ...btn('ghost', disabled),
@@ -1000,37 +1641,70 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
             flexShrink: 0,
           }}
           title="Joindre un média"
-          disabled={disabled}
+          disabled={disabled || voice.recording}
           onClick={() => setShowMedia(v => !v)}
         >
           📎
         </button>
+        <button
+          style={{
+            ...btn('ghost', disabled),
+            padding: '8px',
+            minWidth: 40,
+            minHeight: 40,
+            fontSize: 18,
+            lineHeight: 1,
+            border: `1px solid ${voice.recording ? C.danger : C.border}`,
+            color: voice.recording ? C.danger : C.text,
+            borderRadius: 8,
+            flexShrink: 0,
+          }}
+          title={voice.recording ? 'Enregistrement en cours' : 'Enregistrer une note vocale'}
+          disabled={disabled && !voice.recording}
+          onClick={() => {
+            if (!voice.recording) void voice.start();
+          }}
+        >
+          🎙️
+        </button>
+        {chatJid ? (
+          <AiAssist
+            chatJid={chatJid}
+            connId={connId}
+            onDark={onDark}
+            onDraft={handleAiDraft}
+            onOverlay={handleAiOverlay}
+            isNarrow={isNarrowComposer}
+            disabled={aiDisabled || voice.recording}
+          />
+        ) : null}
         <textarea
           ref={textareaRef}
           style={{
             ...inputStyle,
             flex: 1,
+            minWidth: isNarrowComposer ? '100%' : 120,
             minHeight: 38,
             maxHeight: 120,
             resize: 'none',
             lineHeight: 1.5,
           }}
           value={text}
-          disabled={disabled}
+          disabled={disabled || voice.recording}
           placeholder={connected ? 'Votre message… (Entrée pour envoyer)' : 'Liez un numéro pour écrire…'}
           onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value)}
           onKeyDown={onKeyDown}
         />
         <button
           style={{
-            ...btn('primary', !text.trim() || disabled),
+            ...btn('primary', !text.trim() || disabled || voice.recording),
             padding: '9px 16px',
             minWidth: 40,
             minHeight: 40,
             fontSize: 14,
             flexShrink: 0,
           }}
-          disabled={!text.trim() || disabled}
+          disabled={!text.trim() || disabled || voice.recording}
           onClick={() => void sendText()}
         >
           ➤
@@ -2188,8 +2862,9 @@ const WhatsappMaxPage = () => {
       <ViewBody>
         <AppAccessGate app="WHATSAPPMAX">
         {/* WS17: keyframes for the QR placeholder spinner (inline styles can't
-            define @keyframes, so inject once at the page root). */}
-        <style>{`@keyframes cdz-qr-spin{to{transform:rotate(360deg)}}`}</style>
+            define @keyframes, so inject once at the page root).
+            cdz-rec-pulse: red dot pulse for the voice-note recorder bar. */}
+        <style>{`@keyframes cdz-qr-spin{to{transform:rotate(360deg)}}@keyframes cdz-rec-pulse{0%,100%{opacity:1}50%{opacity:0.25}}`}</style>
         <div
           style={{
             width: '100%',
