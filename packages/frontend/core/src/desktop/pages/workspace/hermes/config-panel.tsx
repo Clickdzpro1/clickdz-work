@@ -351,16 +351,23 @@ export const HermesConfigPanel = ({
                   border: `1px solid ${C.border}`,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                  }}
+                >
                   <input
-                    style={{ ...inputStyle, flex: 1 }}
+                    style={{ ...inputStyle, flex: '1 1 160px', minWidth: 0 }}
                     value={wf.title}
                     maxLength={60}
                     placeholder="Titre du flux"
                     onChange={e => updateWorkflow(i, { title: e.target.value })}
                   />
                   <button
-                    style={miniBtnStyle('danger')}
+                    style={{ ...miniBtnStyle('danger'), flexShrink: 0 }}
                     onClick={() => removeWorkflow(i)}
                     title="Supprimer le flux"
                   >
