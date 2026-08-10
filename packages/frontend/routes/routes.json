@@ -23,6 +23,7 @@
         "systemInfo": "system-info",
         "notificationSettings": "notification-settings",
         "studioConfig": "studio-config",
+        "monitoring": "monitoring",
         "about": "about",
         "notFound": "404"
       }
