@@ -243,6 +243,13 @@ export interface WamaxAiSettings {
   language: 'auto' | 'fr' | 'darija' | 'ar' | 'en';
   autoReplyDefault: boolean;
   quickReplies: string[];
+  // WAVE-G P4: AI-learned business context. `learnedContext` is produced by
+  // the /ai/analyze route (the AI reads recent conversations and distills the
+  // shop's products/prices/FAQ/processes); it is ALSO owner-editable in the
+  // settings modal. `continuousLearning` re-runs the analysis automatically
+  // as new inbound messages accumulate (throttled — see webhook hook).
+  learnedContext: string;
+  continuousLearning: boolean;
 }
 
 const WAMAX_TONES: ReadonlyArray<WamaxAiSettings['tone']> = [
@@ -262,6 +269,14 @@ const WAMAX_PERSONA_MAX = 1500;
 const WAMAX_BIZNAME_MAX = 120;
 const WAMAX_QUICKREPLY_MAX = 10;
 const WAMAX_QUICKREPLY_LEN = 300;
+// WAVE-G P4: learned-context + analyzer bounds. The analyze call reads a
+// larger corpus and produces a longer completion than the sync assist
+// buttons, so it gets its own (bigger) timeout — WAMAX_AI_TIMEOUT_MS stays
+// untouched for draft/summary/translate.
+const WAMAX_LEARNED_MAX = 2000;
+const WAMAX_ANALYZE_TIMEOUT_MS = 45_000;
+const WAMAX_ANALYZE_CORPUS_MAX = 12_000;
+const WAMAX_ANALYZE_TOP_CHATS = 25;
 
 const DEFAULT_WAMAX_AI_SETTINGS: WamaxAiSettings = {
   businessName: '',
@@ -270,6 +285,8 @@ const DEFAULT_WAMAX_AI_SETTINGS: WamaxAiSettings = {
   language: 'auto',
   autoReplyDefault: false,
   quickReplies: [],
+  learnedContext: '',
+  continuousLearning: false,
 };
 
 /** Sanitize an untrusted/partial settings blob into a full, bounded record.
@@ -308,7 +325,24 @@ function sanitizeWamaxAiSettings(raw: unknown): WamaxAiSettings {
         .filter(Boolean)
         .slice(0, WAMAX_QUICKREPLY_MAX)
     : [];
-  return { businessName, persona, tone, language, autoReplyDefault, quickReplies };
+  const learnedContext =
+    typeof r.learnedContext === 'string'
+      ? r.learnedContext.trim().slice(0, WAMAX_LEARNED_MAX)
+      : '';
+  const continuousLearning =
+    r.continuousLearning === true ||
+    r.continuousLearning === 'true' ||
+    r.continuousLearning === 1;
+  return {
+    businessName,
+    persona,
+    tone,
+    language,
+    autoReplyDefault,
+    quickReplies,
+    learnedContext,
+    continuousLearning,
+  };
 }
 
 /** French prompt fragment for the configured reply tone. */
@@ -349,6 +383,7 @@ function buildWamaxRunPersona(s: WamaxAiSettings): string | undefined {
   const configured =
     !!s.persona ||
     !!s.businessName ||
+    !!s.learnedContext ||
     s.tone !== DEFAULT_WAMAX_AI_SETTINGS.tone ||
     s.language !== DEFAULT_WAMAX_AI_SETTINGS.language;
   if (!configured) return undefined;
@@ -359,6 +394,9 @@ function buildWamaxRunPersona(s: WamaxAiSettings): string | undefined {
       : 'Tu réponds sur WhatsApp AU NOM de l’entreprise, à un client.'
   );
   if (s.persona) parts.push(`Contexte de l’entreprise : ${s.persona}`);
+  if (s.learnedContext) {
+    parts.push(`Contexte appris des conversations : ${s.learnedContext}`);
+  }
   parts.push(wamaxToneLine(s.tone));
   parts.push(wamaxLangLine(s.language));
   parts.push(
@@ -1936,6 +1974,8 @@ export class ClickDzWhatsappMaxController {
       language?: unknown;
       autoReplyDefault?: unknown;
       quickReplies?: unknown;
+      learnedContext?: unknown;
+      continuousLearning?: unknown;
     }
   ): Promise<{ ok: boolean; settings: WamaxAiSettings }> {
     this.assertEnabled();
@@ -1955,6 +1995,8 @@ export class ClickDzWhatsappMaxController {
       'language',
       'autoReplyDefault',
       'quickReplies',
+      'learnedContext',
+      'continuousLearning',
     ]) {
       if (field in src && src[field] !== undefined) patch[field] = src[field];
     }
@@ -2012,6 +2054,179 @@ export class ClickDzWhatsappMaxController {
       /* best-effort */
     }
     return { url: url ?? null };
+  }
+
+  // =========================================================================
+  // WAVE-G P4 — conversation analyzer (shared by the /ai/analyze route and
+  // the continuous-learning webhook hook).
+  //
+  // Reads the shop's recent WhatsApp activity (top chats + ONE bulk message
+  // query — the same cheap pattern as enrichChats), builds a bounded
+  // transcript corpus, and asks cdz-flash to distill a BUSINESS CONTEXT in
+  // plain French (products/prices, FAQ + good answers, tone, processes).
+  // The result is saved into settings.learnedContext, which every AI prompt
+  // (draft + auto-reply persona) already appends.
+  //
+  // Returns the new learnedContext, or null on any failure. NEVER throws.
+  // =========================================================================
+  private async runAnalyzeForConn(
+    userId: string,
+    connId: string,
+    rec: WhatsappMaxRecord
+  ): Promise<{
+    learnedContext: string;
+    analyzedChats: number;
+    analyzedMessages: number;
+  } | null> {
+    try {
+      if (!rec.active || !rec.instanceId) return null;
+      // (1) Top non-group chats by recency (rows come sorted from the gateway).
+      const chats = await gateway.listChats(rec.instanceId);
+      const topJids: string[] = [];
+      const nameByJid = new Map<string, string>();
+      for (const c of chats) {
+        if (topJids.length >= WAMAX_ANALYZE_TOP_CHATS) break;
+        const jid = typeof c?.jid === 'string' ? c.jid : '';
+        if (!jid || c?.is_group === true) continue;
+        topJids.push(jid);
+        const name =
+          typeof c?.displayName === 'string' && c.displayName
+            ? c.displayName
+            : typeof c?.name === 'string' && c.name
+              ? c.name
+              : jid.split('@')[0];
+        nameByJid.set(jid, name);
+      }
+      if (topJids.length === 0) return null;
+      const topSet = new Set(topJids);
+      // (2) ONE bulk pull of the latest 500 messages across all chats.
+      const recent = await gateway.listMessages(rec.instanceId, '', 500);
+      if (!Array.isArray(recent) || recent.length === 0) return null;
+      const byChat = new Map<string, string[]>();
+      let analyzedMessages = 0;
+      // recent is newest-first — iterate reversed so transcripts read
+      // oldest → newest.
+      for (let i = recent.length - 1; i >= 0; i--) {
+        const m = recent[i];
+        const jid =
+          typeof m?.chat_jid === 'string' && m.chat_jid
+            ? m.chat_jid
+            : typeof m?.chatJid === 'string'
+              ? m.chatJid
+              : '';
+        if (!jid || !topSet.has(jid)) continue;
+        const text =
+          typeof m?.text === 'string' && m.text.trim()
+            ? m.text.trim()
+            : typeof m?.text_body === 'string'
+              ? m.text_body.trim()
+              : '';
+        if (!text) continue;
+        const fromMe = m?.from_me === true || m?.fromMe === true;
+        let lines = byChat.get(jid);
+        if (!lines) {
+          lines = [];
+          byChat.set(jid, lines);
+        }
+        lines.push(`${fromMe ? 'Moi' : 'Client'}: ${text.slice(0, 300)}`);
+        analyzedMessages++;
+      }
+      if (analyzedMessages < 5) return null;
+      // (3) Bounded corpus.
+      const blocks: string[] = [];
+      let used = 0;
+      for (const jid of topJids) {
+        const lines = byChat.get(jid);
+        if (!lines || lines.length === 0) continue;
+        const block = `### ${nameByJid.get(jid) ?? 'Contact'}\n${lines.join('\n')}`;
+        if (used + block.length > WAMAX_ANALYZE_CORPUS_MAX) break;
+        blocks.push(block);
+        used += block.length;
+      }
+      if (blocks.length === 0) return null;
+      const corpus = blocks.join('\n\n');
+      // (4) The analyst prompt — plain-text French business context.
+      const systemPrompt =
+        'Tu analyses les conversations WhatsApp d’une entreprise algérienne (français, darija, arabe mélangés). ' +
+        'Produis un CONTEXTE MÉTIER en français, en texte brut (AUCUN Markdown, pas d’astérisques), 1500 caractères MAXIMUM, couvrant uniquement ce qui apparaît réellement dans les conversations : ' +
+        '1) produits/services proposés et prix constatés ; 2) questions fréquentes des clients et les bonnes réponses données ; ' +
+        '3) processus (commande, livraison, paiement, retours) ; 4) ton employé avec les clients et expressions darija utiles. ' +
+        'Sois factuel et dense — ce texte servira de mémoire à un assistant IA qui répond aux clients.';
+      const learned = await this.callWamaxAi(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Conversations :\n\n${corpus}` },
+        ],
+        900,
+        WAMAX_ANALYZE_TIMEOUT_MS
+      );
+      if (!learned) return null;
+      const learnedContext = learned.trim().slice(0, WAMAX_LEARNED_MAX);
+      // (5) Persist into the stored settings (sanitized merge).
+      const current = await this.loadAiSettings(userId, connId);
+      const merged = sanitizeWamaxAiSettings({ ...current, learnedContext });
+      try {
+        await this.cache.set(maxAiSettingsKey(userId, connId), merged, {
+          ttl: MAX_TTL_MS,
+        });
+      } catch {
+        /* best-effort — still return the result */
+      }
+      return { learnedContext, analyzedChats: blocks.length, analyzedMessages };
+    } catch {
+      return null;
+    }
+  }
+
+  // =========================================================================
+  // WAVE-G P4 — POST /api/v1/whatsappmax/ai/analyze  { connId? }
+  //   → { ok, learnedContext, analyzedChats, analyzedMessages } | { ok:false, error }
+  //   Owner-triggered "Analyser mes conversations". Redis-gated to once per
+  //   5 minutes per connection (the analysis is a heavy LLM call).
+  // =========================================================================
+  @Throttle('default', { limit: 10, ttl: 60_000 })
+  @Post('/api/v1/whatsappmax/ai/analyze')
+  async aiAnalyze(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: { connId?: string }
+  ): Promise<{
+    ok: boolean;
+    learnedContext?: string;
+    analyzedChats?: number;
+    analyzedMessages?: number;
+    error?: string;
+  }> {
+    try {
+      this.assertEnabled();
+      const connId =
+        typeof body?.connId === 'string' ? body.connId.trim() : '';
+      const resolved = await this.resolveRecord(user.id, connId || undefined);
+      if (!resolved || !resolved.rec.active) {
+        return { ok: false, error: 'not_connected' };
+      }
+      // Per-connection cooldown (SET NX EX 300).
+      try {
+        const gate = await (this.redis as any).set(
+          `clickdz:wamax:analyze:gate:${resolved.connId}`,
+          '1',
+          'EX',
+          300,
+          'NX'
+        );
+        if (gate === null) return { ok: false, error: 'too_soon' };
+      } catch {
+        /* gate best-effort — proceed */
+      }
+      const result = await this.runAnalyzeForConn(
+        user.id,
+        resolved.connId,
+        resolved.rec
+      );
+      if (!result) return { ok: false, error: 'no_messages' };
+      return { ok: true, ...result };
+    } catch {
+      return { ok: false, error: 'ai_unavailable' };
+    }
   }
 
   // =========================================================================
@@ -2125,6 +2340,38 @@ export class ClickDzWhatsappMaxController {
         aiEnabled = false;
       }
       await this.handleInboundText(conn.userId, chatJid, text, rec, id, aiEnabled);
+
+      // WAVE-G P4 — continuous learning: count inbound messages; after ~50
+      // new ones AND no analysis in the last 24h, re-run the analyzer in the
+      // background (fire-and-forget — the webhook must never wait on an LLM).
+      try {
+        const settings = await this.loadAiSettings(conn.userId, id);
+        if (settings.continuousLearning) {
+          const countKey = `clickdz:wamax:learn:count:${id}`;
+          const n = await (this.redis as any).incr(countKey);
+          if (n === 1) {
+            await (this.redis as any).expire(countKey, 7 * 24 * 3600);
+          }
+          if (Number(n) >= 50) {
+            // 24h claim (SET NX) — first webhook to claim runs the analysis.
+            const claimed = await (this.redis as any).set(
+              `clickdz:wamax:learn:last:${id}`,
+              '1',
+              'EX',
+              24 * 3600,
+              'NX'
+            );
+            if (claimed !== null) {
+              await (this.redis as any).del(countKey);
+              void this.runAnalyzeForConn(conn.userId, id, rec).catch(
+                () => undefined
+              );
+            }
+          }
+        }
+      } catch {
+        /* learning must never surface into the webhook */
+      }
     }
     return {};
   }
@@ -2222,7 +2469,8 @@ export class ClickDzWhatsappMaxController {
    */
   private async callWamaxAi(
     messages: Array<{ role: string; content: string }>,
-    maxTokens = 500
+    maxTokens = 500,
+    timeoutMs = WAMAX_AI_TIMEOUT_MS
   ): Promise<string | null> {
     if (!WAMAX_AI_KEY) return null;
     try {
@@ -2238,7 +2486,7 @@ export class ClickDzWhatsappMaxController {
           stream: false,
           max_tokens: Math.max(1, Math.min(4096, maxTokens || 500)),
         }),
-        signal: AbortSignal.timeout(WAMAX_AI_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) return null;
       const data = (await response.json().catch(() => null)) as any;
@@ -2322,6 +2570,11 @@ export class ClickDzWhatsappMaxController {
       ];
       if (settings.persona) {
         promptParts.push(`Contexte de l’entreprise : ${settings.persona}`);
+      }
+      if (settings.learnedContext) {
+        promptParts.push(
+          `Contexte appris des conversations : ${settings.learnedContext}`
+        );
       }
       promptParts.push(wamaxLangLine(settings.language));
       promptParts.push(wamaxToneLine(settings.tone));
