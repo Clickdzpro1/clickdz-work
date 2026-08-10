@@ -1852,7 +1852,7 @@ const AiAssist = ({
             rows={2}
             dir="auto"
             maxLength={2000}
-            placeholder="Consigne pour l’IA (optionnel) — ex. « propose une livraison demain et demande l’adresse »"
+            placeholder="Consigne pour l'IA (optionnel) — ex. « propose une livraison demain et demande l'adresse »"
             onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setInstruction(e.target.value)}
             style={{
               ...inputStyle,
@@ -1954,7 +1954,7 @@ const AiAssist = ({
             background: C.surface,
           }}
         >
-          « Rédiger » remplit votre champ de saisie — rien n’est envoyé sans votre accord.
+          « Rédiger » remplit votre champ de saisie — rien n'est envoyé sans votre accord.
         </div>
       </AnchoredPopover>
     </>
@@ -2173,7 +2173,7 @@ const Composer = ({
       onSent(optimistic);
       textareaRef.current?.focus();
     } else {
-      setErr(out?.note === 'not_connected' ? 'Liez un numéro WhatsApp d’abord.' : 'Envoi échoué.');
+      setErr(out?.note === 'not_connected' ? "Liez un numéro WhatsApp d'abord." : 'Envoi échoué.');
     }
   }, [text, busy, connected, chatJid, onDark, onSent, connId]);
 
@@ -2201,7 +2201,7 @@ const Composer = ({
     } else {
       setErr(
         (out as { note?: string })?.note === 'not_connected'
-          ? 'Liez un numéro WhatsApp d’abord.'
+          ? "Liez un numéro WhatsApp d'abord."
           : 'Envoi du média échoué.'
       );
     }
@@ -2251,7 +2251,7 @@ const Composer = ({
       } else {
         setErr(
           (out as { note?: string })?.note === 'not_connected'
-            ? 'Liez un numéro WhatsApp d’abord.'
+            ? "Liez un numéro WhatsApp d'abord."
             : 'Envoi du fichier échoué.'
         );
       }
@@ -2288,7 +2288,7 @@ const Composer = ({
         if (!out || !out.ok || (out as { note?: string }).note) {
           setVoiceErr(
             (out as { note?: string })?.note === 'not_connected'
-              ? 'Liez un numéro WhatsApp d’abord.'
+              ? "Liez un numéro WhatsApp d'abord."
               : "Envoi de la note vocale échoué."
           );
         }
@@ -3888,7 +3888,7 @@ const NewChatModal = ({ connId, onDark, onClose, onOpen }: NewChatModalProps) =>
       onOpen(r.jid || `${digits}@s.whatsapp.net`, formatPhone(digits) || `+${digits}`, digits);
       onClose();
     } else if (r) {
-      setErr('Ce numéro n’est pas sur WhatsApp.');
+      setErr("Ce numéro n'est pas sur WhatsApp.");
     } else {
       setErr('Vérification impossible — réessayez.');
     }
@@ -4043,43 +4043,217 @@ interface BroadcastModalProps {
   connId: string | null;
 }
 
+// Internal type for Pro mode delay presets.
+interface DelayPreset {
+  label: string;
+  min: number;
+  max: number;
+}
+
+const DELAY_PRESETS: DelayPreset[] = [
+  { label: 'Rapide', min: 10, max: 20 },
+  { label: 'Normal', min: 20, max: 45 },
+  { label: 'Prudent', min: 45, max: 90 },
+];
+
+// Parse a recipients textarea value into an array of phone strings.
+function parseRecipients(raw: string): string[] {
+  return raw
+    .split(/[\s,;]+/)
+    .map(x => x.replace(/[^\d]/g, ''))
+    .filter(x => x.length >= 8);
+}
+
 const BroadcastModal = ({ onDark, onClose, connId }: BroadcastModalProps) => {
-  const [to, setTo] = useState('');
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  // Mode: 'simple' | 'pro'
+  const [mode, setMode] = useState<'simple' | 'pro'>('pro');
 
-  const recipientCount = useMemo(
-    () =>
-      to
-        .split(/[\s,;]+/)
-        .map(x => x.replace(/[^\d]/g, ''))
-        .filter(x => x.length >= 8).length,
-    [to]
-  );
+  // ── Simple mode state ────────────────────────────────────────────────────
+  const [simpleTo, setSimpleTo] = useState('');
+  const [simpleText, setSimpleText] = useState('');
+  const [simpleBusy, setSimpleBusy] = useState(false);
+  const [simpleNote, setSimpleNote] = useState<string | null>(null);
 
-  const submit = useCallback(async () => {
-    const body = text.trim();
-    if (!body) { setNote('Écrivez un message.'); return; }
-    const recipients = to
-      .split(/[\s,;]+/)
-      .map(x => x.replace(/[^\d]/g, ''))
-      .filter(x => x.length >= 8);
-    if (!recipients.length) { setNote('Ajoutez au moins un numéro valide.'); return; }
-    setBusy(true);
-    setNote(null);
+  const simpleCount = useMemo(() => parseRecipients(simpleTo).length, [simpleTo]);
+
+  const submitSimple = useCallback(async () => {
+    const body = simpleText.trim();
+    if (!body) { setSimpleNote('Écrivez un message.'); return; }
+    const recipients = parseRecipients(simpleTo);
+    if (!recipients.length) { setSimpleNote('Ajoutez au moins un numéro valide.'); return; }
+    setSimpleBusy(true);
+    setSimpleNote(null);
     const out = await apiPost<{ ok: boolean; sent: number; failed: number; total: number }>(
       '/api/v1/whatsappmax/broadcast',
       { to: recipients, text: body, ...(connId ? { connId } : {}) }
     );
-    setBusy(false);
+    setSimpleBusy(false);
     if (isDark(out)) { onDark(); return; }
     if (out) {
-      setNote(`Diffusion : ${out.sent}/${out.total} envoyés${out.failed ? `, ${out.failed} échoués` : ''}.`);
+      setSimpleNote(`Diffusion : ${out.sent}/${out.total} envoyés${out.failed ? `, ${out.failed} échoués` : ''}.`);
     } else {
-      setNote('Diffusion échouée.');
+      setSimpleNote('Diffusion échouée.');
     }
-  }, [to, text, onDark, connId]);
+  }, [simpleTo, simpleText, onDark, connId]);
+
+  // ── Pro mode state ───────────────────────────────────────────────────────
+  const [proTo, setProTo] = useState('');
+  const [variants, setVariants] = useState<string[]>(['']);
+  const [personalize, setPersonalize] = useState(false);
+  const [delayPreset, setDelayPreset] = useState(1); // index into DELAY_PRESETS (Normal default)
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [proStatus, setProStatus] = useState<{
+    state: string;
+    total: number;
+    sent: number;
+    failed: number;
+    cursor: number;
+    startedAt?: number;
+    finishedAt?: number;
+  } | null>(null);
+  const [proError, setProError] = useState<string | null>(null);
+  const [proBusy, setProBusy] = useState(false);
+  // Track how long we have been polling without progress for the stall warning.
+  const lastProgressRef = useRef<number>(Date.now());
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const proCount = useMemo(() => parseRecipients(proTo).length, [proTo]);
+
+  const proCanStart = !proBusy && !jobId && proCount > 0 && variants.some(v => v.trim().length > 0);
+
+  // Poll GET /broadcast/status every 2.5s when a job is running.
+  useEffect(() => {
+    if (!jobId) return;
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+
+    const doPoll = async () => {
+      const out = await apiGet<{
+        ok: boolean;
+        state?: string;
+        total?: number;
+        sent?: number;
+        failed?: number;
+        cursor?: number;
+        startedAt?: number;
+        finishedAt?: number;
+        error?: string;
+      }>(`/api/v1/whatsappmax/broadcast/status?jobId=${encodeURIComponent(jobId)}`);
+      if (isDark(out)) { onDark(); return; }
+      if (!out || (out as { ok: boolean }).ok === false) {
+        setProError('Diffusion introuvable (not_found).');
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+        return;
+      }
+      const r = out as { ok: boolean; state?: string; total?: number; sent?: number; failed?: number; cursor?: number; startedAt?: number; finishedAt?: number };
+      const newStatus = {
+        state: r.state ?? 'running',
+        total: r.total ?? 0,
+        sent: r.sent ?? 0,
+        failed: r.failed ?? 0,
+        cursor: r.cursor ?? 0,
+        startedAt: r.startedAt,
+        finishedAt: r.finishedAt,
+      };
+      setProStatus(prev => {
+        if (!prev || prev.cursor !== newStatus.cursor || prev.sent !== newStatus.sent) {
+          lastProgressRef.current = Date.now();
+        }
+        return newStatus;
+      });
+      if (newStatus.state === 'done' || newStatus.state === 'cancelled') {
+        if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      }
+    };
+
+    void doPoll();
+    pollIntervalRef.current = setInterval(() => { void doPoll(); }, 2500);
+
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, [jobId, onDark]);
+
+  // Stall detection: no progress for 3 minutes.
+  const stallWarning = useMemo(() => {
+    if (!proStatus || proStatus.state !== 'running') return false;
+    return Date.now() - lastProgressRef.current > 3 * 60 * 1000;
+  }, [proStatus]);
+
+  const submitPro = useCallback(async () => {
+    const recipients = parseRecipients(proTo);
+    if (!recipients.length) { setProError('Ajoutez au moins un numéro valide.'); return; }
+    const cleanVariants = variants.map(v => v.trim()).filter(v => v.length > 0);
+    if (!cleanVariants.length) { setProError('Écrivez au moins une variante de message.'); return; }
+    const preset = DELAY_PRESETS[delayPreset];
+    setProBusy(true);
+    setProError(null);
+    const out = await apiPost<{ ok: boolean; jobId?: string; total?: number }>(
+      '/api/v1/whatsappmax/broadcast/start',
+      {
+        recipients,
+        variants: cleanVariants,
+        personalize,
+        minDelayS: preset.min,
+        maxDelayS: preset.max,
+        ...(connId ? { connId } : {}),
+      }
+    );
+    setProBusy(false);
+    if (isDark(out)) { onDark(); return; }
+    if (!out || !(out as { ok: boolean }).ok) {
+      setProError('Démarrage échoué. Vérifiez la connexion WhatsApp.');
+      return;
+    }
+    const r = out as { ok: boolean; jobId?: string; total?: number };
+    if (r.jobId) {
+      setJobId(r.jobId);
+      lastProgressRef.current = Date.now();
+      setProStatus({ state: 'running', total: r.total ?? recipients.length, sent: 0, failed: 0, cursor: 0 });
+    }
+  }, [proTo, variants, personalize, delayPreset, connId, onDark]);
+
+  const cancelPro = useCallback(async () => {
+    if (!jobId) return;
+    const out = await apiPost<{ ok: boolean; state?: string }>(
+      '/api/v1/whatsappmax/broadcast/cancel',
+      { jobId, ...(connId ? { connId } : {}) }
+    );
+    if (isDark(out)) { onDark(); return; }
+    if (out) {
+      setProStatus(prev => prev ? { ...prev, state: (out as { ok: boolean; state?: string }).state ?? 'cancelled' } : prev);
+    }
+  }, [jobId, connId, onDark]);
+
+  const resetPro = useCallback(() => {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    setJobId(null);
+    setProStatus(null);
+    setProError(null);
+    lastProgressRef.current = Date.now();
+  }, []);
+
+  // Variant helpers.
+  const addVariant = useCallback(() => {
+    setVariants(v => v.length < 3 ? [...v, ''] : v);
+  }, []);
+  const removeVariant = useCallback((idx: number) => {
+    setVariants(v => v.length > 1 ? v.filter((_, i) => i !== idx) : v);
+  }, []);
+  const updateVariant = useCallback((idx: number, val: string) => {
+    setVariants(v => v.map((x, i) => i === idx ? val : x));
+  }, []);
+
+  // Progress bar calculation.
+  const progressPct = proStatus && proStatus.total > 0
+    ? Math.round(((proStatus.sent + proStatus.failed) / proStatus.total) * 100)
+    : 0;
+
+  const stateLabel = (s: string) => {
+    if (s === 'running') return 'En cours…';
+    if (s === 'done') return 'Terminée';
+    if (s === 'cancelled') return 'Annulée';
+    return s;
+  };
 
   return (
     <div
@@ -4102,8 +4276,10 @@ const BroadcastModal = ({ onDark, onClose, connId }: BroadcastModalProps) => {
           border: `1px solid ${C.border}`,
           borderRadius: 16,
           padding: 20,
-          width: 420,
-          maxWidth: '94vw',
+          width: 460,
+          maxWidth: '96vw',
+          maxHeight: '90vh',
+          overflowY: 'auto',
           display: 'flex',
           flexDirection: 'column',
           gap: 12,
@@ -4112,37 +4288,279 @@ const BroadcastModal = ({ onDark, onClose, connId }: BroadcastModalProps) => {
           boxSizing: 'border-box',
         }}
       >
+        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: 15, fontWeight: 800, color: C.text }}>📢 Diffusion</span>
-          <button style={{ background: 'none', border: 'none', color: C.muted, fontSize: 17, cursor: 'pointer' }} aria-label="Fermer" onClick={onClose}>✕</button>
+          <span style={{ fontSize: 15, fontWeight: 800, color: C.text }}>{"📢 Diffusion"}</span>
+          <button
+            style={{ background: 'none', border: 'none', color: C.muted, fontSize: 17, cursor: 'pointer' }}
+            aria-label="Fermer"
+            onClick={onClose}
+          >
+            {"✕"}
+          </button>
         </div>
-        <div>
-          <textarea
-            style={{ ...inputStyle, minHeight: 54, resize: 'vertical' as const, borderRadius: 10 }}
-            value={to}
-            disabled={busy}
-            placeholder={'Numéros destinataires : 213xxx, 213yyy…\n(séparés par virgules ou retours à la ligne)'}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setTo(e.target.value)}
-          />
-          <div style={{ fontSize: 11, color: recipientCount > 0 ? C.accent : C.muted, marginTop: 4, fontWeight: 600 }}>
-            {recipientCount > 0 ? `${recipientCount} destinataire${recipientCount > 1 ? 's' : ''} détecté${recipientCount > 1 ? 's' : ''}` : 'Aucun numéro détecté'}
+
+        {/* Mode tabs */}
+        <div style={{ display: 'flex', gap: 6 }}>
+          {(['simple', 'pro'] as const).map(m => (
+            <button
+              key={m}
+              onClick={() => { setMode(m); resetPro(); setSimpleNote(null); }}
+              style={{
+                flex: 1,
+                padding: '7px 0',
+                borderRadius: 999,
+                border: `1px solid ${mode === m ? C.accent : C.border}`,
+                background: mode === m ? C.accent : 'transparent',
+                color: mode === m ? '#0b1f14' : C.text,
+                fontSize: 12.5,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              {m === 'simple' ? 'Simple' : 'Pro (anti-ban)'}
+            </button>
+          ))}
+        </div>
+
+        {/* ── SIMPLE MODE ─────────────────────────────────────────────────── */}
+        {mode === 'simple' && (
+          <>
+            <div>
+              <textarea
+                style={{ ...inputStyle, minHeight: 54, resize: 'vertical' as const, borderRadius: 10 }}
+                value={simpleTo}
+                disabled={simpleBusy}
+                placeholder={"Numéros destinataires : 213xxx, 213yyy…\n(séparés par virgules ou retours à la ligne)"}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setSimpleTo(e.target.value)}
+              />
+              <div style={{ fontSize: 11, color: simpleCount > 0 ? C.accent : C.muted, marginTop: 4, fontWeight: 600 }}>
+                {simpleCount > 0
+                  ? `${simpleCount} destinataire${simpleCount > 1 ? 's' : ''} détecté${simpleCount > 1 ? 's' : ''}`
+                  : 'Aucun numéro détecté'}
+              </div>
+            </div>
+            <textarea
+              style={{ ...inputStyle, minHeight: 96, resize: 'vertical' as const, borderRadius: 10 }}
+              value={simpleText}
+              disabled={simpleBusy}
+              dir="auto"
+              placeholder="Votre message…"
+              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setSimpleText(e.target.value)}
+            />
+            {simpleNote && (
+              <div style={{ fontSize: 12.5, color: C.text, background: C.surface, borderRadius: 8, padding: '8px 10px' }}>
+                {simpleNote}
+              </div>
+            )}
+            <button
+              style={{ ...btn('primary', simpleBusy || simpleCount === 0 || !simpleText.trim()), borderRadius: 999, padding: '10px 16px' }}
+              disabled={simpleBusy || simpleCount === 0 || !simpleText.trim()}
+              onClick={() => void submitSimple()}
+            >
+              {simpleBusy ? 'Diffusion en cours…' : `Diffuser${simpleCount > 0 ? ` à ${simpleCount}` : ''}`}
+            </button>
+            <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>
+              {"La cadence d'envoi est régulée par la passerelle (anti-spam / warm-up). Max 50 destinataires par diffusion."}
+            </div>
+          </>
+        )}
+
+        {/* ── PRO MODE ────────────────────────────────────────────────────── */}
+        {mode === 'pro' && !jobId && (
+          <>
+            {/* Recipients */}
+            <div>
+              <textarea
+                style={{ ...inputStyle, minHeight: 54, resize: 'vertical' as const, borderRadius: 10 }}
+                value={proTo}
+                disabled={proBusy}
+                placeholder={"Numéros destinataires : 213xxx, 213yyy…\n(séparés par virgules ou retours à la ligne)"}
+                onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setProTo(e.target.value)}
+              />
+              <div style={{ fontSize: 11, color: proCount > 0 ? C.accent : C.muted, marginTop: 4, fontWeight: 600 }}>
+                {proCount > 0
+                  ? `${proCount} destinataire${proCount > 1 ? 's' : ''} détecté${proCount > 1 ? 's' : ''}`
+                  : 'Aucun numéro détecté'}
+              </div>
+            </div>
+
+            {/* Variants */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>
+                {"Variantes du message"}
+              </div>
+              {variants.map((v, idx) => (
+                <div key={idx} style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                  <textarea
+                    style={{ ...inputStyle, minHeight: 80, resize: 'vertical' as const, borderRadius: 10, flex: 1 }}
+                    value={v}
+                    disabled={proBusy}
+                    dir="auto"
+                    placeholder={`Variante ${idx + 1} — utilisez {nom} pour personnaliser`}
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) => updateVariant(idx, e.target.value)}
+                  />
+                  {variants.length > 1 && (
+                    <button
+                      style={{ ...circleBtn(proBusy, 30), border: `1px solid ${C.border}`, fontSize: 14 }}
+                      disabled={proBusy}
+                      aria-label="Supprimer cette variante"
+                      onClick={() => removeVariant(idx)}
+                    >
+                      {"✕"}
+                    </button>
+                  )}
+                </div>
+              ))}
+              {variants.length < 3 && (
+                <button
+                  style={{ ...btn('ghost', proBusy), fontSize: 12, alignSelf: 'flex-start' }}
+                  disabled={proBusy}
+                  onClick={addVariant}
+                >
+                  {"+ Ajouter une variante"}
+                </button>
+              )}
+              <div style={{ fontSize: 11, color: C.muted }}>
+                {"Les variantes tournent automatiquement pour éviter les bans."}
+              </div>
+            </div>
+
+            {/* Personalization */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Switch checked={personalize} onChange={setPersonalize} disabled={proBusy} />
+              <div>
+                <div style={{ fontSize: 12.5, color: C.text, fontWeight: 600 }}>
+                  {"Personnalisation"}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted }}>
+                  {"Insérez {nom} dans vos messages — remplacé par le nom du contact."}
+                </div>
+              </div>
+            </div>
+
+            {/* Delay presets */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>
+                {"Cadence d'envoi"}
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {DELAY_PRESETS.map((p, idx) => (
+                  <button
+                    key={idx}
+                    disabled={proBusy}
+                    onClick={() => setDelayPreset(idx)}
+                    style={{
+                      flex: 1,
+                      padding: '6px 0',
+                      borderRadius: 8,
+                      border: `1px solid ${delayPreset === idx ? C.accent : C.border}`,
+                      background: delayPreset === idx ? `${C.accent}22` : 'transparent',
+                      color: delayPreset === idx ? C.accent : C.text,
+                      fontSize: 12,
+                      fontWeight: delayPreset === idx ? 700 : 400,
+                      cursor: proBusy ? 'not-allowed' : 'pointer',
+                      opacity: proBusy ? 0.6 : 1,
+                    }}
+                  >
+                    {p.label}
+                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 400 }}>
+                      {`${p.min}–${p.max}s`}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {proError && (
+              <div style={{ fontSize: 12.5, color: C.danger, background: `${C.danger}18`, borderRadius: 8, padding: '8px 10px' }}>
+                {proError}
+              </div>
+            )}
+
+            <button
+              style={{ ...btn('primary', !proCanStart), borderRadius: 999, padding: '11px 16px', fontSize: 13 }}
+              disabled={!proCanStart}
+              onClick={() => void submitPro()}
+            >
+              {proBusy
+                ? 'Démarrage…'
+                : `Lancer la diffusion${proCount > 0 ? ` (${proCount})` : ''}`}
+            </button>
+
+            <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>
+              {"Délai aléatoire entre chaque envoi pour éviter les bans WhatsApp. Max 50 destinataires."}
+            </div>
+          </>
+        )}
+
+        {/* ── PRO — PROGRESS VIEW ─────────────────────────────────────────── */}
+        {mode === 'pro' && jobId && proStatus && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {/* Progress bar */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                <span style={{ fontSize: 12.5, color: C.text, fontWeight: 700 }}>
+                  {stateLabel(proStatus.state)}
+                </span>
+                <span style={{ fontSize: 12, color: C.muted }}>
+                  {`${progressPct} %`}
+                </span>
+              </div>
+              <div style={{ background: C.surface, borderRadius: 8, height: 8, overflow: 'hidden' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${progressPct}%`,
+                    background: proStatus.state === 'cancelled' ? C.danger : C.accent,
+                    borderRadius: 8,
+                    transition: 'width 0.4s ease',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Counters */}
+            <div style={{ fontSize: 13, color: C.text, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ color: C.accent, fontWeight: 700 }}>
+                {`${proStatus.sent} envoyé${proStatus.sent > 1 ? 's' : ''}`}
+              </span>
+              {proStatus.failed > 0 && (
+                <span style={{ color: C.danger, fontWeight: 700 }}>
+                  {`${proStatus.failed} échoué${proStatus.failed > 1 ? 's' : ''}`}
+                </span>
+              )}
+              <span style={{ color: C.muted }}>
+                {`${Math.max(0, proStatus.total - proStatus.sent - proStatus.failed)} restant${proStatus.total - proStatus.sent - proStatus.failed > 1 ? 's' : ''}`}
+              </span>
+            </div>
+
+            {/* Stall warning */}
+            {stallWarning && (
+              <div style={{ fontSize: 11.5, color: C.muted, background: C.surface, borderRadius: 8, padding: '8px 10px' }}>
+                {"La diffusion semble interrompue (redéploiement ?) — relancez avec les destinataires restants."}
+              </div>
+            )}
+
+            {/* Actions */}
+            {proStatus.state === 'running' && (
+              <button
+                style={{ ...btn('danger', false), borderRadius: 999, padding: '10px 16px' }}
+                onClick={() => void cancelPro()}
+              >
+                {"Annuler la diffusion"}
+              </button>
+            )}
+            {(proStatus.state === 'done' || proStatus.state === 'cancelled') && (
+              <button
+                style={{ ...btn('secondary', false), borderRadius: 999, padding: '10px 16px' }}
+                onClick={onClose}
+              >
+                {"Fermer"}
+              </button>
+            )}
           </div>
-        </div>
-        <textarea
-          style={{ ...inputStyle, minHeight: 96, resize: 'vertical' as const, borderRadius: 10 }}
-          value={text}
-          disabled={busy}
-          dir="auto"
-          placeholder="Votre message…"
-          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setText(e.target.value)}
-        />
-        {note && <div style={{ fontSize: 12.5, color: C.text, background: C.surface, borderRadius: 8, padding: '8px 10px' }}>{note}</div>}
-        <button style={{ ...btn('primary', busy || recipientCount === 0 || !text.trim()), borderRadius: 999, padding: '10px 16px' }} disabled={busy || recipientCount === 0 || !text.trim()} onClick={() => void submit()}>
-          {busy ? 'Diffusion en cours…' : `Diffuser${recipientCount > 0 ? ` à ${recipientCount}` : ''}`}
-        </button>
-        <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5 }}>
-          La cadence d’envoi est régulée par la passerelle (anti-spam / warm-up). Max 50 destinataires par diffusion.
-        </div>
+        )}
       </div>
     </div>
   );
@@ -4391,7 +4809,7 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Réglages IA</div>
-            <div style={{ fontSize: 11, color: C.muted }}>Personnalisez l’assistant de votre boutique</div>
+            <div style={{ fontSize: 11, color: C.muted }}>Personnalisez l'assistant de votre boutique</div>
           </div>
           <button
             style={{ background: 'none', border: 'none', color: C.muted, fontSize: 17, cursor: 'pointer' }}
@@ -4408,13 +4826,13 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
             <div style={{ fontSize: 12.5, color: C.muted, textAlign: 'center', padding: 20 }}>Chargement…</div>
           ) : (
             <>
-              {sectionTitle('Profil de l’entreprise')}
+              {sectionTitle("Profil de l'entreprise")}
               <input
                 style={{ ...inputStyle, borderRadius: 10 }}
                 value={s.businessName}
                 maxLength={120}
                 dir="auto"
-                placeholder="Nom de l’entreprise — ex. « Boutique Amina »"
+                placeholder="Nom de l'entreprise — ex. « Boutique Amina »"
                 onChange={(e: ChangeEvent<HTMLInputElement>) => setS(prev => ({ ...prev, businessName: e.target.value }))}
               />
               <div>
@@ -4423,7 +4841,7 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
                   value={s.persona}
                   maxLength={1500}
                   dir="auto"
-                  placeholder={'Décrivez votre activité pour guider l’IA :\nproduits et prix, horaires, zones et délais de livraison, politique de retour, ton de la marque…'}
+                  placeholder={"Décrivez votre activité pour guider l'IA :\nproduits et prix, horaires, zones et délais de livraison, politique de retour, ton de la marque…"}
                   onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setS(prev => ({ ...prev, persona: e.target.value }))}
                 />
                 <div style={{ fontSize: 10.5, color: C.muted, textAlign: 'right', marginTop: 3 }}>
@@ -4459,7 +4877,7 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
                     IA active par défaut sur les nouvelles conversations
                   </div>
                   <div style={{ fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>
-                    L’IA répond automatiquement aux clients. Le bouton « IA auto » de chaque conversation reste prioritaire.
+                    L'IA répond automatiquement aux clients. Le bouton « IA auto » de chaque conversation reste prioritaire.
                   </div>
                 </div>
                 <Switch
@@ -4486,9 +4904,9 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
                       🧠 Analyser mes conversations
                     </div>
                     <div style={{ fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>
-                      L’IA lit vos conversations récentes et en déduit le contexte de votre
+                      L'IA lit vos conversations récentes et en déduit le contexte de votre
                       boutique (produits, prix, questions fréquentes, processus). Ce contexte
-                      s’ajoute au profil ci-dessus pour toutes les réponses IA.
+                      s'ajoute au profil ci-dessus pour toutes les réponses IA.
                     </div>
                   </div>
                   <button
@@ -4523,7 +4941,7 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
                     value={s.learnedContext}
                     maxLength={2000}
                     dir="auto"
-                    placeholder="Le contexte appris par l’IA apparaîtra ici après analyse. Vous pouvez aussi l’éditer ou le compléter à la main."
+                    placeholder="Le contexte appris par l'IA apparaîtra ici après analyse. Vous pouvez aussi l'éditer ou le compléter à la main."
                     onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
                       setS(prev => ({ ...prev, learnedContext: e.target.value }))
                     }
