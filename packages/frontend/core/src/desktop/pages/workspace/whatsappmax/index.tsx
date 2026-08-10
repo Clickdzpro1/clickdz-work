@@ -2876,6 +2876,10 @@ const Conversation = ({
   const wa = waColors(dark);
   const isPhoneView = useIsNarrow(768);
 
+  // Deep history backfill (WAVE-final)
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
+
   // In-chat search
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -3034,6 +3038,40 @@ const Conversation = ({
     });
   }, [messages, hasOlder, loadingOlder, fetchMessages]);
 
+  // WAVE-final: deep-load ALL of this chat's history via the gateway backfill,
+  // then reload so the freshly-persisted old messages become pageable.
+  const backfillAll = useCallback(async () => {
+    if (backfilling) return;
+    setBackfilling(true);
+    setBackfillMsg(null);
+    const out = await apiPost<{ ok: boolean; fetched?: number; saved?: number; error?: string }>(
+      '/api/v1/whatsappmax/backfill',
+      { chatJid, ...(connId ? { connId } : {}) }
+    );
+    setBackfilling(false);
+    if (isDark(out)) { onDark(); return; }
+    if (out && out.ok) {
+      setHasOlder(true);
+      setBackfillMsg(`Historique chargé — ${out.fetched ?? 0} messages disponibles. Faites défiler vers le haut.`);
+      atBottomRef.current = false;
+      // Pull the next older page immediately from the now-deeper DB.
+      const oldest = messages[0];
+      const ms = oldest ? tsMs(oldest.timestamp) : 0;
+      if (ms) {
+        void fetchMessages({ before: new Date(ms).toISOString(), prepend: true });
+      }
+      setTimeout(() => setBackfillMsg(null), 8000);
+    } else {
+      const code = out && !isDark(out) ? out.error : undefined;
+      setBackfillMsg(
+        code === 'too_soon'
+          ? 'Chargement déjà en cours — patientez un instant.'
+          : 'Chargement de l’historique impossible — réessayez.'
+      );
+      setTimeout(() => setBackfillMsg(null), 6000);
+    }
+  }, [backfilling, chatJid, connId, onDark, messages, fetchMessages]);
+
   const onSent = useCallback((msg: MessageRow) => {
     atBottomRef.current = true;
     setMessages(prev => [...prev, normalizeMessage(msg)]);
@@ -3144,6 +3182,34 @@ const Conversation = ({
         <button
           type="button"
           style={{
+            ...circleBtn(backfilling, 34),
+            fontSize: 15,
+            color: backfilling ? C.accent : C.muted,
+          }}
+          title="Charger tout l’historique de cette conversation"
+          aria-label="Charger tout l’historique"
+          disabled={backfilling}
+          onClick={() => void backfillAll()}
+        >
+          {backfilling ? (
+            <span
+              style={{
+                width: 15,
+                height: 15,
+                borderRadius: '50%',
+                border: `2px solid ${C.border}`,
+                borderTopColor: C.accent,
+                animation: 'cdz-qr-spin 0.7s linear infinite',
+                display: 'inline-block',
+              }}
+            />
+          ) : (
+            '🕓'
+          )}
+        </button>
+        <button
+          type="button"
+          style={{
             ...circleBtn(false, 34),
             fontSize: 15,
             color: searchOpen ? C.accent : C.muted,
@@ -3236,6 +3302,24 @@ const Conversation = ({
         {loading && messages.length === 0 && (
           <div style={{ textAlign: 'center', color: wa.dayPillText, fontSize: 12.5, padding: 20 }}>
             Chargement…
+          </div>
+        )}
+        {backfillMsg && (
+          <div style={{ textAlign: 'center', marginBottom: 10 }}>
+            <span
+              style={{
+                display: 'inline-block',
+                background: `${C.accent}1c`,
+                color: C.accent,
+                border: `1px solid ${C.accent}44`,
+                padding: '5px 14px',
+                borderRadius: 999,
+                fontSize: 11.5,
+                fontWeight: 700,
+              }}
+            >
+              {backfillMsg}
+            </span>
           </div>
         )}
         {hasOlder && messages.length > 0 && (
