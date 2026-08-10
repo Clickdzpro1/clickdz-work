@@ -503,7 +503,7 @@ export const VdzGeneratePanel = ({
               key={html}
               ref={iframeRef}
               className={styles.iframe}
-              title="Vdz video preview"
+              title="Aperçu vidéo Vdz"
               // allow-scripts ONLY: the composition runs JS but has no network,
               // no forms, no same-origin — it can only talk to us via postMessage.
               sandbox="allow-scripts"
