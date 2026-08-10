@@ -66,7 +66,7 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         <span style={{ fontSize: 20 }}>🎓</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>CoursePro</div>
-          <div style={{ fontSize: 11.5, color: C.muted }}>LMS IA · Powered by ClassroomIO + CDZ AI</div>
+          <div style={{ fontSize: 11.5, color: C.muted }}>LMS IA · Propulsé par ClassroomIO + CDZ AI</div>
         </div>
         <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
@@ -104,7 +104,7 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
             </div>
             <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🚀 Cours, leçons et exercices générés par vos modèles CDZ AI · Cohorts · Certificats</span>
-              {['AI Course Builder','Cohorts','Certificats'].map(t=><span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.accent, padding: '3px 8px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
+              {['Générateur de cours IA','Cohortes','Certificats'].map(t=><span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.accent, padding: '3px 8px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
             </div>
           </div>
         )}
