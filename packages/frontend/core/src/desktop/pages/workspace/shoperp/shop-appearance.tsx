@@ -277,7 +277,7 @@ export const ShopAppearance = ({
       if (heroLine !== storedHero) patch.heroLine = heroLine.slice(0, 200);
 
       if (Object.keys(patch).length === 0) {
-        setNotice({ tone: 'info', text: 'Nothing to save — no changes.' });
+        setNotice({ tone: 'info', text: 'Rien à enregistrer — aucune modification.' });
         return;
       }
 
@@ -294,8 +294,8 @@ export const ShopAppearance = ({
         setNotice({
           tone: 'ok',
           text: rebaseNote
-            ? 'Appearance saved on the clean template — re-publish to drop the AI layer and apply it.'
-            : 'Appearance saved. Re-publish the shop to apply it to the live storefront.',
+            ? 'Apparence enregistrée sur le gabarit propre — republiez pour supprimer la couche IA et l’appliquer.'
+            : 'Apparence enregistrée. Republiez la boutique pour l’appliquer au site en ligne.',
         });
         onMutated(); // refresh the summary so the stored settings stay in sync
       } else if (out.status === 'unavailable') {
@@ -351,22 +351,22 @@ export const ShopAppearance = ({
       setSaved(false);
       setNotice({
         tone: 'ok',
-        text: 'Re-published — the live storefront now reflects your appearance.',
+        text: 'Republié — le site en ligne reflète maintenant votre apparence.',
       });
     } else if (out.status === 'no-source') {
       setNotice({
         tone: 'info',
-        text: 'Saved. To push it live, open the shop in your Studio and re-publish (its source isn’t staged in this session).',
+        text: 'Enregistré. Pour le mettre en ligne, ouvrez la boutique dans votre Studio et republiez (sa source n’est pas chargée dans cette session).',
       });
     } else if (out.status === 'cap') {
       setNotice({
         tone: 'error',
-        text: 'You’re at the publish limit — free a slot from Manage, then re-publish.',
+        text: 'Vous avez atteint la limite de publication — libérez un emplacement depuis Gérer, puis republiez.',
       });
     } else if (out.status === 'upgrade') {
       setNotice({
         tone: 'error',
-        text: 'Re-publishing needs a Pro plan on this workspace.',
+        text: 'La republication nécessite un plan Pro sur cet espace de travail.',
       });
     } else {
       setNotice({ tone: 'error', text: out.message });
@@ -413,7 +413,7 @@ export const ShopAppearance = ({
             <>
               {' '}
               <button style={miniPublishStyle} onClick={() => void doRepublish()}>
-                Re-publish now
+                Republier maintenant
               </button>
             </>
           ) : null}
@@ -426,7 +426,7 @@ export const ShopAppearance = ({
                 rel="noopener noreferrer"
                 style={{ color: C.accent }}
               >
-                Open live ↗
+                Voir en ligne ↗
               </a>
             </>
           ) : null}
@@ -435,9 +435,10 @@ export const ShopAppearance = ({
 
       {readOnly ? (
         <Banner tone="warn">
-          Appearance changes are unavailable on this server right now — this
-          editor is <strong>read-only</strong>. You can still preview themes;
-          publish styling from the deployed shop’s admin when writes return.
+          Les modifications d’apparence sont indisponibles sur ce serveur pour
+          le moment — cet éditeur est en <strong>lecture seule</strong>. Vous
+          pouvez toujours prévisualiser les thèmes ; publiez le style depuis
+          l’admin de la boutique déployée quand les écritures reviendront.
         </Banner>
       ) : null}
 
@@ -452,7 +453,7 @@ export const ShopAppearance = ({
       >
         {/* ---- Controls ------------------------------------------------- */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Panel title="Theme">
+          <Panel title="Thème">
             <div style={optionGridStyle}>
               {THEME_OPTIONS.map(t => (
                 <SwatchCard
@@ -474,7 +475,7 @@ export const ShopAppearance = ({
             </div>
           </Panel>
 
-          <Panel title="Layout template">
+          <Panel title="Gabarit de mise en page">
             <div style={optionGridStyle}>
               {TEMPLATE_OPTIONS.map(t => (
                 <ChoiceCard
@@ -511,7 +512,7 @@ export const ShopAppearance = ({
             </div>
           </Panel>
 
-          <Panel title="Font">
+          <Panel title="Police">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={optionGridStyle}>
                 {FONT_OPTIONS.map(f => (
@@ -536,7 +537,7 @@ export const ShopAppearance = ({
                     <span style={{ fontSize: 12, fontWeight: 700 }}>
                       {f.label}
                       {f.id === DEFAULT_FONT ? (
-                        <span style={defaultTagStyle}>default</span>
+                        <span style={defaultTagStyle}>défaut</span>
                       ) : null}
                     </span>
                   </button>
@@ -545,10 +546,10 @@ export const ShopAppearance = ({
             </div>
           </Panel>
 
-          <Panel title="Accent color">
+          <Panel title="Couleur d'accent">
             <Field
               label="Accent"
-              hint="Buttons, highlights and the header use this. Hex, e.g. #0f766e."
+              hint="Utilisée pour les boutons, les mises en avant et l’en-tête. Hex, ex. #0f766e."
               error={accentErr}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -603,7 +604,7 @@ export const ShopAppearance = ({
           <Panel title="Sections">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <div style={{ ...hintStyle, marginBottom: 4 }}>
-                Toggle optional storefront sections. All are on by default.
+                Activez ou désactivez les sections facultatives de la boutique. Toutes sont activées par défaut.
               </div>
               {SECTION_OPTIONS.map(s => {
                 const on = sections.includes(s.id);
@@ -660,15 +661,15 @@ export const ShopAppearance = ({
             >
               {saving ? (
                 <>
-                  <Spinner dark /> Saving…
+                  <Spinner dark /> Enregistrement…
                 </>
               ) : (
-                'Save appearance'
+                'Enregistrer l’apparence'
               )}
             </button>
             {dirty && !saving ? (
               <button style={btnStyle('secondary')} onClick={resetDraft}>
-                Reset
+                Réinitialiser
               </button>
             ) : null}
             {saved && !dirty ? (
@@ -679,10 +680,10 @@ export const ShopAppearance = ({
               >
                 {republishing ? (
                   <>
-                    <Spinner /> Re-publishing…
+                    <Spinner /> Republication…
                   </>
                 ) : (
-                  '🚀 Re-publish shop'
+                  '🚀 Republier la boutique'
                 )}
               </button>
             ) : null}
@@ -700,22 +701,22 @@ export const ShopAppearance = ({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={labelStyle}>Preview</span>
+            <span style={labelStyle}>Aperçu</span>
             <div style={{ flex: 1 }} />
             <div style={{ display: 'inline-flex', gap: 4 }}>
               <button
                 style={segStyle(previewMode === 'mock')}
                 onClick={() => setPreviewMode('mock')}
               >
-                Draft
+                Brouillon
               </button>
               <button
                 style={segStyle(previewMode === 'live')}
                 onClick={() => setPreviewMode('live')}
                 disabled={!url}
-                title={url ? 'The currently published storefront' : 'No live URL yet'}
+                title={url ? 'La boutique actuellement publiée' : 'Pas encore d’URL en ligne'}
               >
-                Live
+                En ligne
               </button>
             </div>
           </div>
@@ -731,7 +732,7 @@ export const ShopAppearance = ({
                 }}
               >
                 <iframe
-                  title="Live storefront preview"
+                  title="Aperçu de la boutique en ligne"
                   src={url}
                   style={{
                     width: '100%',
@@ -751,13 +752,13 @@ export const ShopAppearance = ({
                     borderTop: `1px solid ${C.border}`,
                   }}
                 >
-                  This is what’s live now — re-publish after saving to update it.
+                  Voici ce qui est en ligne actuellement — republiez après avoir enregistré pour le mettre à jour.
                 </div>
               </div>
             ) : (
               <Banner tone="info">
-                No live URL yet — publish the shop first, then the live preview
-                appears here.
+                Pas encore d’URL en ligne — publiez d’abord la boutique, puis l’aperçu en direct
+                apparaîtra ici.
               </Banner>
             )
           ) : (
@@ -771,9 +772,9 @@ export const ShopAppearance = ({
             />
           )}
           <div style={{ ...hintStyle, fontSize: 11.5 }}>
-            The draft preview is an approximation. The published storefront’s
-            exact styling is applied by the shop template from your saved
-            settings.
+            L’aperçu du brouillon est une approximation. Le style exact de la
+            boutique publiée est appliqué par le gabarit de la boutique à
+            partir de vos paramètres enregistrés.
           </div>
         </div>
       </div>
@@ -1326,7 +1327,7 @@ const ChoiceCard = ({
     </span>
     <span style={{ fontSize: 12, fontWeight: 700 }}>
       {title}
-      {isDefault ? <span style={defaultTagStyle}>default</span> : null}
+      {isDefault ? <span style={defaultTagStyle}>défaut</span> : null}
     </span>
   </button>
 );
@@ -1371,7 +1372,7 @@ const SwatchCard = ({
     </span>
     <span style={{ fontSize: 12, fontWeight: 700 }}>
       {title}
-      {isDefault ? <span style={defaultTagStyle}>default</span> : null}
+      {isDefault ? <span style={defaultTagStyle}>défaut</span> : null}
     </span>
   </button>
 );
