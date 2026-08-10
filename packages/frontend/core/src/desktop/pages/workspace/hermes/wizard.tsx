@@ -390,6 +390,7 @@ export const HermesWizard = ({
                 style={{
                   display: 'flex',
                   alignItems: 'center',
+                  flexWrap: 'wrap',
                   gap: 10,
                   fontSize: 12,
                   color: C.muted,
@@ -398,7 +399,7 @@ export const HermesWizard = ({
                 <span>
                   {enabled.size} selected · {availableCount} available now
                 </span>
-                <div style={{ flex: 1 }} />
+                <div style={{ flex: 1, minWidth: 8 }} />
                 <button
                   type="button"
                   style={{ ...linkLike, color: C.accent }}
@@ -630,7 +631,16 @@ export const HermesWizard = ({
       ) : null}
 
       {/* Footer nav */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 22 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          rowGap: 10,
+          gap: 10,
+          marginTop: 22,
+        }}
+      >
         {stepIdx > 0 ? (
           <button style={btnStyle('secondary')} onClick={back}>
             ← Back
@@ -673,7 +683,9 @@ function touchedErr(value: string, err: string | null, seed: string): string | n
 const Card = ({ children }: { children: ReactNode }) => (
   <div
     style={{
+      width: '100%',
       maxWidth: 580,
+      boxSizing: 'border-box',
       margin: '0 auto',
       padding: 24,
       borderRadius: 14,
@@ -751,6 +763,7 @@ const ToolRow = ({
       alignItems: 'center',
       gap: 10,
       padding: '8px 10px',
+      minHeight: 40,
       borderRadius: 8,
       background: checked ? C.accentSoft : C.panel,
       border: `1px solid ${checked ? C.accentBorder : C.border}`,
