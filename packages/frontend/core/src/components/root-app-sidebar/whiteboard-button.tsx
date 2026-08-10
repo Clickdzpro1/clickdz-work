@@ -91,8 +91,8 @@ export function WhiteboardButton() {
           }}
         >
           <BlockCard
-            title="New whiteboard"
-            desc="Start with a blank canvas"
+            title="Nouveau whiteboard"
+            desc="Partir d'une toile vierge"
             right={<EdgelessIcon width={20} height={20} />}
             onClick={createNewWhiteboard}
             data-testid="whiteboard-create-new"
@@ -107,14 +107,14 @@ export function WhiteboardButton() {
               textTransform: 'uppercase',
             }}
           >
-            Recent whiteboards
+            Whiteboards récents
           </div>
           {recentWhiteboards.length ? (
             recentWhiteboards.map(record => (
               <BlockCard
                 key={record.id}
-                title={record.title$.value || 'Untitled whiteboard'}
-                desc="Open existing canvas"
+                title={record.title$.value || 'Whiteboard sans titre'}
+                desc="Ouvrir ce whiteboard"
                 right={<EdgelessIcon width={20} height={20} />}
                 onClick={() => openRecentWhiteboard(record.id)}
                 data-testid={`whiteboard-recent-${record.id}`}
