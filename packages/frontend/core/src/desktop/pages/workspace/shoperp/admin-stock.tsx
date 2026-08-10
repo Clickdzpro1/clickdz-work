@@ -166,7 +166,7 @@ export const StockAdmin = ({
       setNotice(null);
       await submitProduct(
         { ...p, stock, reorderAt },
-        `${productTitle(p)} saved — stock ${stock}, reorder at ${reorderAt}.`
+        `${productTitle(p)} enregistré — stock ${stock}, réappro à ${reorderAt}.`
       );
       setBusyKey(null);
     },
@@ -195,7 +195,7 @@ export const StockAdmin = ({
           imageUrl: '',
           active: true,
         },
-        `${draft.title} added to the catalogue.`
+        `${draft.title} ajouté au catalogue.`
       );
       setBusyKey(null);
       if (ok) setShowAdd(false);
@@ -215,7 +215,7 @@ export const StockAdmin = ({
       const description = composeDescription(result);
       const ok = await submitProduct(
         { ...product, description },
-        `${productTitle(product)} — description updated.`
+        `${productTitle(product)} — description mise à jour.`
       );
       setApplying(false);
       if (ok) setDescribeFor(null);
@@ -244,7 +244,7 @@ export const StockAdmin = ({
       <Banner tone="error">
         Impossible de charger les produits.{' '}
         <button style={linkBtnStyle} onClick={() => void load()}>
-          Retry
+          Réessayer
         </button>
       </Banner>
     );
@@ -256,11 +256,11 @@ export const StockAdmin = ({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ flex: 1, fontSize: 12.5, color: C.muted }}>
-          {products.length} {products.length === 1 ? 'product' : 'products'}
+          {products.length} {products.length === 1 ? 'produit' : 'produits'}
           {lowCount > 0 ? (
             <span style={{ color: '#e8a33d', fontWeight: 700 }}>
               {' '}
-              · {lowCount} low on stock
+              · {lowCount} en stock faible
             </span>
           ) : null}
         </div>
@@ -411,7 +411,7 @@ const ProductRow = ({
           <button
             style={stepBtnStyle(frozen)}
             disabled={frozen}
-            aria-label="Decrease stock"
+            aria-label="Diminuer le stock"
             onClick={() => setStock(s => String(Math.max(0, num(s) - 1)))}
           >
             −
@@ -424,12 +424,12 @@ const ProductRow = ({
             disabled={frozen}
             onChange={e => setStock(e.target.value)}
             style={numInputStyle}
-            aria-label={`Stock for ${productTitle(p)}`}
+            aria-label={`Stock de ${productTitle(p)}`}
           />
           <button
             style={stepBtnStyle(frozen)}
             disabled={frozen}
-            aria-label="Increase stock"
+            aria-label="Augmenter le stock"
             onClick={() => setStock(s => String(num(s) + 1))}
           >
             +
@@ -445,7 +445,7 @@ const ProductRow = ({
           disabled={frozen}
           onChange={e => setReorder(e.target.value)}
           style={numInputStyle}
-          aria-label={`Reorder threshold for ${productTitle(p)}`}
+          aria-label={`Seuil de réappro de ${productTitle(p)}`}
         />
       </td>
       <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
@@ -574,7 +574,7 @@ const AddProductForm = ({
           gap: 10,
         }}
       >
-        <Field label="Title" error={titleErr}>
+        <Field label="Titre" error={titleErr}>
           <input
             style={inputStyle}
             value={title}
@@ -584,7 +584,7 @@ const AddProductForm = ({
             disabled={busy}
           />
         </Field>
-        <Field label={`Price (${currency})`}>
+        <Field label={`Prix (${currency})`}>
           <input
             type="number"
             min={0}
@@ -756,7 +756,7 @@ const DescribeModal = ({
       style={overlayStyle}
       role="dialog"
       aria-modal="true"
-      aria-label="Generate product description"
+      aria-label="Générer la description du produit"
       onClick={() => {
         if (!busy) onClose();
       }}
@@ -796,7 +796,7 @@ const DescribeModal = ({
           </div>
           <button
             style={{ ...linkBtnStyle, color: C.muted, textDecoration: 'none' }}
-            aria-label="Close"
+            aria-label="Fermer"
             onClick={onClose}
             disabled={busy}
           >
@@ -852,8 +852,7 @@ const DescribeModal = ({
           </div>
 
           <div style={hintStyle}>
-            Grounded only in this product’s title, category and price — no
-            invented facts.
+            Basé uniquement sur le titre, la catégorie et le prix de ce produit — aucun fait inventé.
           </div>
 
           {/* Preview / states */}
@@ -873,7 +872,7 @@ const DescribeModal = ({
             <Banner tone="error">
               {errMsg}{' '}
               <button style={linkBtnStyle} onClick={() => void generate()}>
-                Retry
+                Réessayer
               </button>
             </Banner>
           ) : result ? (
