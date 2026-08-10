@@ -125,6 +125,25 @@ const BROADCAST_MAX = 50;
 const QR_POLL_INTERVAL_MS = 800;
 const QR_POLL_MAX_ATTEMPTS = 12;
 
+// --- WS-AI: synchronous AI assist (draft/summary/translate) -----------------
+// Same OpenAI-compatible cdz-flash brain the bridge controller's direct fast
+// path calls (clickdz-bridge.controller.ts ~L490-530), re-derived HERE from the
+// SAME env vars so this controller stays import-isolated from the bridge one
+// (no cross-controller coupling — additive, self-contained, same idiom as the
+// gateway client above). CDZ_AI_BASE_URL may or may not carry a trailing `/v1`
+// depending on deploy config; strip it once so the single canonical
+// `/v1/chat/completions` path below is appended exactly once either way.
+const WAMAX_AI_ORIGIN = (process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai')
+  .replace(/\/+$/, '')
+  .replace(/\/v1$/, '');
+const WAMAX_AI_KEY = process.env.CDZ_AI_KEY || '';
+const WAMAX_AI_MODEL = process.env.CDZ_AGENT_MODEL || 'cdz-flash';
+// Bounded timeout for the synchronous assist calls — these back a live UI
+// affordance (draft/summarize/translate button), so fail fast rather than hang.
+const WAMAX_AI_TIMEOUT_MS = 15_000;
+// Hard cap on any owner-supplied instruction/text fed to the assist routes.
+const WAMAX_AI_INPUT_MAX_CHARS = 2000;
+
 // --- Redis key helpers (dedicated WhatsappMax namespace; no overlap with the
 // agent channel's clickdz:agentchan:* / clickdz:wa:conn:*).
 // P4 W3: Per-connId record key — one record per connection (multi-account).
@@ -1714,6 +1733,274 @@ export class ClickDzWhatsappMaxController {
         ? '🤖 Je traite votre demande…'
         : 'Service momentanément indisponible, réessayez dans un instant.'
     );
+  }
+
+  // =========================================================================
+  // WS-AI — synchronous AI assist (draft / summary / translate).
+  //
+  // Direct-call the SAME OpenAI-compatible cdz-flash brain the bridge
+  // controller's fast path uses, but SYNCHRONOUSLY (request/response, no
+  // job-queue/run-engine round trip) since these back a live "help me write
+  // this reply" UI affordance rather than an autonomous agent turn. Every
+  // handler is wrapped so nothing ever throws raw to the client, message
+  // contents are never logged, and the AI key never appears in a log line.
+  // =========================================================================
+
+  /**
+   * Shared LLM caller for all three assist routes. POSTs to the cdz-flash
+   * OpenAI-compatible endpoint with a bounded timeout; returns the trimmed
+   * completion text, or null on ANY failure (missing key, non-2xx, timeout,
+   * malformed body, empty content). Callers translate a null into the
+   * uniform `{ ok: false, error: 'ai_unavailable' }` shape.
+   */
+  private async callWamaxAi(
+    messages: Array<{ role: string; content: string }>,
+    maxTokens = 500
+  ): Promise<string | null> {
+    if (!WAMAX_AI_KEY) return null;
+    try {
+      const response = await fetch(`${WAMAX_AI_ORIGIN}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${WAMAX_AI_KEY}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: WAMAX_AI_MODEL,
+          messages,
+          stream: false,
+          max_tokens: Math.max(1, Math.min(4096, maxTokens || 500)),
+        }),
+        signal: AbortSignal.timeout(WAMAX_AI_TIMEOUT_MS),
+      });
+      if (!response.ok) return null;
+      const data = (await response.json().catch(() => null)) as any;
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== 'string' || !content.trim()) return null;
+      return content.trim();
+    } catch {
+      // Network error, abort/timeout, or malformed response — never throw.
+      return null;
+    }
+  }
+
+  /** Normalise + cap an owner-supplied free-text field (instruction/text). */
+  private clampAiInput(raw: unknown): string {
+    if (typeof raw !== 'string') return '';
+    return raw.trim().slice(0, WAMAX_AI_INPUT_MAX_CHARS);
+  }
+
+  /**
+   * Render a fetched message list as a compact "Client: …" / "Moi: …"
+   * transcript for the LLM prompt. Skips rows with no usable text.
+   */
+  private renderTranscript(messages: any[]): string {
+    const lines: string[] = [];
+    for (const m of messages) {
+      const text = typeof m?.text === 'string' ? m.text.trim() : '';
+      if (!text) continue;
+      lines.push(`${m?.fromMe ? 'Moi' : 'Client'}: ${text}`);
+    }
+    return lines.join('\n');
+  }
+
+  // =========================================================================
+  // POST /api/v1/whatsappmax/ai/draft
+  //   body { connId, chatJid, instruction? }
+  //   → { ok: true, draft } | { ok: false, error }
+  //   Drafts a WhatsApp reply on behalf of the owner from the recent chat
+  //   context (+ optional free-text instruction).
+  // =========================================================================
+  @Throttle('default', { limit: 60, ttl: 60_000 })
+  @Post('/api/v1/whatsappmax/ai/draft')
+  async aiDraft(
+    @CurrentUser() user: CurrentUser,
+    @Body()
+    body: { connId?: string; chatJid?: string; instruction?: string }
+  ): Promise<{ ok: boolean; draft?: string; error?: string }> {
+    try {
+      this.assertEnabled();
+      const connId =
+        typeof body?.connId === 'string' ? body.connId.trim() : '';
+      const chatJid =
+        typeof body?.chatJid === 'string' ? body.chatJid.trim() : '';
+      const instruction = this.clampAiInput(body?.instruction);
+      if (!chatJid) return { ok: false, error: 'chatJid required' };
+
+      const resolved = await this.resolveRecord(user.id, connId || undefined);
+      if (!resolved || !resolved.rec.active) {
+        return { ok: false, error: 'not_connected' };
+      }
+
+      let transcript = '';
+      try {
+        const recent = await gateway.listMessages(
+          resolved.rec.instanceId,
+          chatJid,
+          20
+        );
+        transcript = this.renderTranscript(recent);
+      } catch {
+        transcript = '';
+      }
+
+      const systemPrompt =
+        'Tu rédiges une réponse WhatsApp AU NOM du propriétaire de l’entreprise (le compte "Moi" dans la conversation ci-dessous). ' +
+        'Réponds dans la langue de la conversation (français, darija ou arabe selon le cas). ' +
+        'Sois concis, naturel, dans le registre WhatsApp (pas de formalisme excessif). ' +
+        'N’ajoute AUCUN commentaire, guillemet ou préambule : réponds UNIQUEMENT avec le texte du message à envoyer.';
+
+      const userParts: string[] = [];
+      if (transcript) {
+        userParts.push(`Conversation récente :\n${transcript}`);
+      } else {
+        userParts.push('Aucun historique de conversation disponible.');
+      }
+      if (instruction) {
+        userParts.push(`Consigne du propriétaire : ${instruction}`);
+      }
+
+      const draft = await this.callWamaxAi([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userParts.join('\n\n') },
+      ]);
+      if (!draft) return { ok: false, error: 'ai_unavailable' };
+      return { ok: true, draft: draft.trim() };
+    } catch {
+      return { ok: false, error: 'ai_unavailable' };
+    }
+  }
+
+  // =========================================================================
+  // POST /api/v1/whatsappmax/ai/summary
+  //   body { connId, chatJid }
+  //   → { ok: true, summary } | { ok: false, error }
+  //   Summarizes the recent conversation in French for the business owner.
+  // =========================================================================
+  @Throttle('default', { limit: 60, ttl: 60_000 })
+  @Post('/api/v1/whatsappmax/ai/summary')
+  async aiSummary(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: { connId?: string; chatJid?: string }
+  ): Promise<{ ok: boolean; summary?: string; error?: string }> {
+    try {
+      this.assertEnabled();
+      const connId =
+        typeof body?.connId === 'string' ? body.connId.trim() : '';
+      const chatJid =
+        typeof body?.chatJid === 'string' ? body.chatJid.trim() : '';
+      if (!chatJid) return { ok: false, error: 'chatJid required' };
+
+      const resolved = await this.resolveRecord(user.id, connId || undefined);
+      if (!resolved || !resolved.rec.active) {
+        return { ok: false, error: 'not_connected' };
+      }
+
+      let transcript = '';
+      try {
+        const recent = await gateway.listMessages(
+          resolved.rec.instanceId,
+          chatJid,
+          60
+        );
+        transcript = this.renderTranscript(recent);
+      } catch {
+        transcript = '';
+      }
+      if (!transcript) return { ok: false, error: 'no_messages' };
+
+      const systemPrompt =
+        'Résume cette conversation WhatsApp en français, à l’attention du propriétaire de l’entreprise. ' +
+        'Utilise des puces courtes couvrant : qui est le client, ce qu’il veut, le statut de la demande, et toute action à faire. ' +
+        'Reste factuel et concis.';
+
+      const summary = await this.callWamaxAi(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Conversation :\n${transcript}` },
+        ],
+        700
+      );
+      if (!summary) return { ok: false, error: 'ai_unavailable' };
+      return { ok: true, summary: summary.trim() };
+    } catch {
+      return { ok: false, error: 'ai_unavailable' };
+    }
+  }
+
+  // =========================================================================
+  // POST /api/v1/whatsappmax/ai/translate
+  //   body { connId, chatJid, text? }
+  //   → { ok: true, translation, original } | { ok: false, error }
+  //   Translates the given text, or — when omitted — the last inbound
+  //   message, to French (or to English when already French).
+  // =========================================================================
+  @Throttle('default', { limit: 60, ttl: 60_000 })
+  @Post('/api/v1/whatsappmax/ai/translate')
+  async aiTranslate(
+    @CurrentUser() user: CurrentUser,
+    @Body()
+    body: { connId?: string; chatJid?: string; text?: string }
+  ): Promise<{
+    ok: boolean;
+    translation?: string;
+    original?: string;
+    error?: string;
+  }> {
+    try {
+      this.assertEnabled();
+      const connId =
+        typeof body?.connId === 'string' ? body.connId.trim() : '';
+      const chatJid =
+        typeof body?.chatJid === 'string' ? body.chatJid.trim() : '';
+      const explicitText = this.clampAiInput(body?.text);
+
+      let original = explicitText;
+      if (!original) {
+        if (!chatJid) return { ok: false, error: 'chatJid required' };
+        const resolved = await this.resolveRecord(
+          user.id,
+          connId || undefined
+        );
+        if (!resolved || !resolved.rec.active) {
+          return { ok: false, error: 'not_connected' };
+        }
+        try {
+          const recent = await gateway.listMessages(
+            resolved.rec.instanceId,
+            chatJid,
+            20,
+            undefined,
+            false
+          );
+          for (let i = recent.length - 1; i >= 0; i--) {
+            const text =
+              typeof recent[i]?.text === 'string' ? recent[i].text.trim() : '';
+            if (text) {
+              original = text;
+              break;
+            }
+          }
+        } catch {
+          original = '';
+        }
+        if (!original) return { ok: false, error: 'no_message' };
+        original = this.clampAiInput(original);
+      }
+
+      const systemPrompt =
+        'Traduis le texte suivant en français. S’il est déjà en français, traduis-le en anglais. ' +
+        'Ne réponds qu’avec la traduction, sans aucun commentaire ni guillemet.';
+
+      const translation = await this.callWamaxAi([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: original },
+      ]);
+      if (!translation) return { ok: false, error: 'ai_unavailable' };
+      return { ok: true, translation: translation.trim(), original };
+    } catch {
+      return { ok: false, error: 'ai_unavailable' };
+    }
   }
 }
 
