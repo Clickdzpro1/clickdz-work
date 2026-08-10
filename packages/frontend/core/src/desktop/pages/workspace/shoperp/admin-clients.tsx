@@ -19,6 +19,7 @@ import {
   orderTotal,
   Panel,
   postErpRecord,
+  Skeleton,
   Spinner,
   StatusBadge,
   tdStyle,
@@ -491,16 +492,20 @@ export const ClientsAdmin = ({
 
   if (phase === 'loading') {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '24px 4px',
-          color: C.muted,
-        }}
-      >
-        <Spinner /> Chargement des clients…
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '4px 0' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 12,
+          }}
+        >
+          <Skeleton rows={1} height={76} />
+          <Skeleton rows={1} height={76} />
+          <Skeleton rows={1} height={76} />
+          <Skeleton rows={1} height={76} />
+        </div>
+        <Skeleton rows={6} height={40} gap={6} />
       </div>
     );
   }
@@ -516,8 +521,8 @@ export const ClientsAdmin = ({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Summary cards */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Summary KPI cards */}
       <div
         style={{
           display: 'grid',
@@ -525,12 +530,20 @@ export const ClientsAdmin = ({
           gap: 12,
         }}
       >
-        <MiniStat icon="👥" label="Clients" value={String(totals.clients)} />
+        <MiniStat
+          icon="👥"
+          label="Clients"
+          value={String(totals.clients)}
+          iconBg={C.accentSoft}
+          iconColor={C.accent}
+        />
         <MiniStat
           icon="🔁"
           label="Clients fidèles"
           value={String(totals.repeat)}
           hint="Plus d'une commande"
+          iconBg="linear-gradient(135deg, #22c55e22, #22c55e44)"
+          iconColor={C.okText}
         />
         <MiniStat
           icon="💰"
@@ -538,6 +551,8 @@ export const ClientsAdmin = ({
           value={fmtDZD(totals.revenue, currency)}
           hint="Tous clients"
           color={C.okText}
+          iconBg="linear-gradient(135deg, #22c55e22, #22c55e44)"
+          iconColor={C.okText}
         />
         <MiniStat
           icon="🧾"
@@ -545,6 +560,8 @@ export const ClientsAdmin = ({
           value={fmtDZD(totalDebt, currency)}
           hint="Dettes clients non réglées"
           color={totalDebt > 0 ? '#e8a33d' : undefined}
+          iconBg={totalDebt > 0 ? C.warnBg : C.panel2}
+          iconColor={totalDebt > 0 ? '#e8a33d' : C.muted}
         />
       </div>
 
@@ -608,8 +625,8 @@ export const ClientsAdmin = ({
                 width: 200,
                 maxWidth: '38vw',
                 boxSizing: 'border-box',
-                padding: '5px 10px',
-                borderRadius: 7,
+                padding: '6px 12px',
+                borderRadius: 999,
                 fontSize: 12,
                 color: C.text,
                 background: C.bg,
@@ -639,7 +656,7 @@ export const ClientsAdmin = ({
                 fontSize: 12.5,
               }}
             >
-              <thead>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: C.panel2 }}>
                 <tr>
                   {[
                     'Client',
@@ -668,7 +685,9 @@ export const ClientsAdmin = ({
                     <tr
                       key={r.key}
                       onClick={() => setOpenKey(r.key)}
-                      style={{ cursor: 'pointer' }}
+                      style={{ cursor: 'pointer', transition: 'background 140ms ease' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                     >
                       <td style={tdStyle}>
                         <div
@@ -731,18 +750,47 @@ export const ClientsAdmin = ({
                           color: debt > 0 ? '#e8a33d' : C.muted,
                         }}
                       >
-                        {debt > 0 ? fmtDZD(debt, currency) : '—'}
+                        {debt > 0 ? (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              fontSize: 11,
+                              background: C.warnBg,
+                              border: `1px solid ${C.warnBorder}`,
+                              color: '#e8a33d',
+                              fontWeight: 700,
+                            }}
+                          >
+                            {fmtDZD(debt, currency)}
+                          </span>
+                        ) : '—'}
                       </td>
                       {hasInvoiceData ? (
                         <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                           {invCount > 0 ? invCount : '—'}
                         </td>
                       ) : null}
-                      <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                      <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: C.muted, fontSize: 11.5 }}>
                         {r.lastOrder || '—'}
                       </td>
                       <td style={{ ...tdStyle, whiteSpace: 'nowrap', textAlign: 'right' }}>
-                        <span style={{ color: C.muted, fontSize: 11 }}>Détails ›</span>
+                        <span
+                          style={{
+                            color: C.accent,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '3px 9px',
+                            borderRadius: 999,
+                            border: `1px solid ${C.border}`,
+                            background: C.accentSoft,
+                          }}
+                        >
+                          Détails ›
+                        </span>
                       </td>
                     </tr>
                   );
@@ -848,7 +896,7 @@ const ClientDrawer = ({
         position: 'fixed',
         inset: 0,
         zIndex: 40,
-        background: 'rgba(0,0,0,0.5)',
+        background: 'rgba(0,0,0,0.55)',
         display: 'flex',
         justifyContent: 'flex-end',
       }}
@@ -859,17 +907,38 @@ const ClientDrawer = ({
           width: 'min(460px, 100vw)',
           height: '100%',
           overflowY: 'auto',
-          background: C.bg,
+          background: C.panel,
           borderLeft: `1px solid ${C.border}`,
-          boxShadow: '-8px 0 30px rgba(0,0,0,0.4)',
-          padding: 18,
+          boxShadow: '-12px 0 40px rgba(0,0,0,0.45)',
+          padding: 20,
           display: 'flex',
           flexDirection: 'column',
-          gap: 14,
+          gap: 16,
         }}
       >
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          {/* Avatar circle */}
+          <div
+            aria-hidden
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: '50%',
+              background: `linear-gradient(135deg, ${C.accentSoft}, ${C.panel2})`,
+              border: `1px solid ${C.border}`,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 18,
+              fontWeight: 800,
+              color: C.accent,
+              flexShrink: 0,
+              userSelect: 'none',
+            }}
+          >
+            {client.name !== '—' ? client.name.charAt(0).toUpperCase() : '?'}
+          </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div
               style={{
@@ -1065,7 +1134,7 @@ const ClientDrawer = ({
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                  <thead>
+                  <thead style={{ position: 'sticky', top: 0, background: C.panel2 }}>
                     <tr>
                       {['Réf', 'Date', 'Total', 'Statut'].map(h => (
                         <th key={h} style={thStyle}>
@@ -1076,7 +1145,12 @@ const ClientDrawer = ({
                   </thead>
                   <tbody>
                     {client.history.map((o, i) => (
-                      <tr key={String(o.ref || o.id || i)}>
+                      <tr
+                        key={String(o.ref || o.id || i)}
+                        style={{ transition: 'background 140ms ease' }}
+                        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                      >
                         <td
                           style={{
                             ...tdStyle,
@@ -1175,7 +1249,7 @@ const DrawerStat = ({
 }) => (
   <div
     style={{
-      background: C.panel,
+      background: C.panel2,
       border: `1px solid ${C.border}`,
       borderRadius: 10,
       padding: '9px 11px',
@@ -1228,7 +1302,7 @@ const SegTags = ({ segs }: { segs: Set<SegmentId> }) => {
             gap: 3,
             fontSize: 10,
             fontWeight: 700,
-            padding: '1px 7px',
+            padding: '2px 7px',
             borderRadius: 999,
             color: C.muted,
             background: C.panel2,
@@ -1269,7 +1343,7 @@ const SegChip = ({
       gap: 6,
       fontSize: 12,
       fontWeight: 700,
-      padding: '5px 11px',
+      padding: '5px 13px',
       borderRadius: 999,
       color: active ? '#fff' : C.text,
       background: active ? C.accent : 'transparent',
@@ -1291,47 +1365,73 @@ const MiniStat = ({
   value,
   hint,
   color,
+  iconBg,
+  iconColor,
 }: {
   icon: string;
   label: string;
   value: string;
   hint?: string;
   color?: string;
+  iconBg?: string;
+  iconColor?: string;
 }) => (
   <div
     style={{
       background: C.panel,
       border: `1px solid ${C.border}`,
-      borderRadius: 12,
-      padding: '12px 14px',
+      borderRadius: 14,
+      padding: '14px 16px',
       display: 'flex',
       flexDirection: 'column',
-      gap: 4,
+      gap: 6,
       minWidth: 0,
+      boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
     }}
   >
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        fontSize: 11,
-        fontWeight: 700,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        color: C.muted,
-      }}
-    >
-      <span aria-hidden>{icon}</span> {label}
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: C.muted,
+          flex: 1,
+        }}
+      >
+        {label}
+      </div>
+      {iconBg ? (
+        <div
+          aria-hidden
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            background: iconBg,
+            border: `1px solid ${C.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 16,
+            flexShrink: 0,
+            color: iconColor,
+          }}
+        >
+          {icon}
+        </div>
+      ) : null}
     </div>
     <div
       style={{
-        fontSize: 20,
-        fontWeight: 800,
+        fontSize: 22,
+        fontWeight: 900,
         color: color ?? C.text,
         whiteSpace: 'nowrap',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
+        letterSpacing: '-0.5px',
       }}
       title={value}
     >
