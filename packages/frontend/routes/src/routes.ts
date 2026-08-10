@@ -7,6 +7,7 @@ export interface RouteParamsTypes {
     systemInfo: Record<string, never>;
     notificationSettings: Record<string, never>;
     studioConfig: Record<string, never>;
+    monitoring: Record<string, never>;
   };
 }
 // #endregion
@@ -30,6 +31,7 @@ export const ROUTES = {
     systemInfo: '/admin/system-info',
     notificationSettings: '/admin/notification-settings',
     studioConfig: '/admin/studio-config',
+    monitoring: '/admin/monitoring',
     about: '/admin/about',
     notFound: '/admin/404',
   },
@@ -55,6 +57,7 @@ export const RELATIVE_ROUTES = {
     systemInfo: 'system-info',
     notificationSettings: 'notification-settings',
     studioConfig: 'studio-config',
+    monitoring: 'monitoring',
     about: 'about',
     notFound: '404',
   },
@@ -81,6 +84,7 @@ admin.appManagement = () => '/admin/app-management';
 admin.systemInfo = () => '/admin/system-info';
 admin.notificationSettings = () => '/admin/notification-settings';
 admin.studioConfig = () => '/admin/studio-config';
+admin.monitoring = () => '/admin/monitoring';
 admin.about = () => '/admin/about';
 admin.notFound = () => '/admin/404';
 export const FACTORIES = { admin, home };
