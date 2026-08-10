@@ -13,6 +13,7 @@ import {
   useState,
 } from 'react';
 
+import { useIsNarrow } from './use-voice-responsive';
 import {
   C,
   cuesToSrt,
@@ -29,6 +30,7 @@ interface LibraryTabProps {
 }
 
 export const LibraryTab = ({ reloadKey = 0 }: LibraryTabProps) => {
+  const isPhone = useIsNarrow(480);
   const [clips, setClips] = useState<LibraryClipItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
@@ -181,10 +183,19 @@ export const LibraryTab = ({ reloadKey = 0 }: LibraryTabProps) => {
                 gap: 10,
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  flexWrap: isPhone ? 'wrap' : 'nowrap',
+                }}
+              >
                 <KindBadge kind={item.kind} />
                 <span
                   style={{
+                    flex: '1 1 auto',
+                    minWidth: 0,
                     fontSize: 13,
                     fontWeight: 600,
                     color: C.text,
@@ -195,7 +206,7 @@ export const LibraryTab = ({ reloadKey = 0 }: LibraryTabProps) => {
                 >
                   {item.name}
                 </span>
-                <span style={{ flex: 1 }} />
+                {!isPhone ? <span style={{ flex: 1 }} /> : null}
                 <span
                   style={{ fontSize: 11, color: C.muted, whiteSpace: 'nowrap' }}
                 >
@@ -278,6 +289,7 @@ const ActionButton = ({
     style={{
       appearance: 'none',
       padding: '5px 11px',
+      minHeight: 40,
       borderRadius: 7,
       border: `1px solid ${C.border}`,
       background: 'transparent',
