@@ -871,7 +871,7 @@ const Overview = ({
           icon="📈"
           label="Marge"
           value={fmtDZD(k.margin, currency)}
-          hint="Revenue − expenses"
+          hint="Revenus − dépenses"
           color={
             k.margin >= 0 ? C.okText : 'var(--affine-error-color, #eb4b4b)'
           }
@@ -1026,7 +1026,7 @@ const Overview = ({
       >
         <div style={{ flex: '1 1 400px', minWidth: 0 }}>
           <Panel
-            title={`Recent orders${summary.recentOrders.length ? ` · ${summary.recentOrders.length}` : ''}`}
+            title={`Commandes récentes${summary.recentOrders.length ? ` · ${summary.recentOrders.length}` : ''}`}
             action={
               <button
                 style={miniBtnStyle('secondary')}
@@ -1110,7 +1110,7 @@ const Overview = ({
           }}
         >
           <Panel
-            title={`Low stock${k.lowStockCount ? ` · ${k.lowStockCount}` : ''}`}
+            title={`Stock faible${k.lowStockCount ? ` · ${k.lowStockCount}` : ''}`}
             action={
               <button
                 style={miniBtnStyle('secondary')}
@@ -1158,7 +1158,7 @@ const Overview = ({
                         whiteSpace: 'nowrap',
                       }}
                     >
-                      {num(p.stock)} left · reorder at {num(p.reorderAt)}
+                      {num(p.stock)} restants · réappro à {num(p.reorderAt)}
                     </span>
                   </div>
                 ))}
@@ -1358,7 +1358,7 @@ const StatusTip = ({ active, payload, label }: TooltipProps<number, string>) => 
         <span style={{ color: C.muted }}>{status}</span>
       </div>
       <div style={{ fontWeight: 700 }}>
-        {count} {count === 1 ? 'order' : 'orders'}
+        {count} {count === 1 ? 'commande' : 'commandes'}
       </div>
     </div>
   );
