@@ -31,6 +31,7 @@ import {
   postErpWarehouse,
   type ProductStock,
   productTitle,
+  Skeleton,
   Spinner,
   tdStyle,
   thStyle,
@@ -272,16 +273,9 @@ export const Inventory = ({
 
   if (phase === 'loading') {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '24px 4px',
-          color: C.muted,
-        }}
-      >
-        <Spinner /> Chargement de l’inventaire…
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '4px 0' }}>
+        <Skeleton rows={1} height={44} />
+        <Skeleton rows={6} height={38} gap={6} />
       </div>
     );
   }
@@ -301,16 +295,40 @@ export const Inventory = ({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Summary line */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 14px',
+          borderRadius: 12,
+          background: C.panel,
+          border: `1px solid ${C.border}`,
+        }}
+      >
         <div style={{ flex: 1, fontSize: 12.5, color: C.muted }}>
-          {products.length} {products.length === 1 ? 'produit' : 'produits'}
+          <strong style={{ color: C.text, fontWeight: 700 }}>{products.length}</strong>{' '}
+          {products.length === 1 ? 'produit' : 'produits'}
           {' · '}
-          {warehouses.length}{' '}
+          <strong style={{ color: C.text, fontWeight: 700 }}>{warehouses.length}</strong>{' '}
           {warehouses.length === 1 ? 'entrepôt' : 'entrepôts'}
           {lowCount > 0 ? (
-            <span style={{ color: '#e8a33d', fontWeight: 700 }}>
-              {' '}
-              · {lowCount} en stock faible
+            <span
+              style={{
+                marginLeft: 8,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '2px 9px',
+                borderRadius: 999,
+                fontSize: 11,
+                fontWeight: 700,
+                color: '#e8a33d',
+                background: C.warnBg,
+                border: `1px solid ${C.warnBorder}`,
+              }}
+            >
+              ⚠ {lowCount} en stock faible
             </span>
           ) : null}
         </div>
@@ -432,7 +450,7 @@ export const Inventory = ({
                 fontSize: 12.5,
               }}
             >
-              <thead>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: C.panel2 }}>
                 <tr>
                   <th style={thStyle}>Produit</th>
                   {warehouses.map(w => (
@@ -458,7 +476,9 @@ export const Inventory = ({
                   return (
                     <tr
                       key={`${productKey(p)}:${p.id || ''}`}
-                      style={inactive ? { opacity: 0.55 } : undefined}
+                      style={inactive ? { opacity: 0.55, transition: 'background 140ms ease' } : { transition: 'background 140ms ease' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
                     >
                       <td style={tdStyle}>
                         <div
@@ -523,9 +543,16 @@ export const Inventory = ({
                         {inactive ? (
                           <span
                             style={{
-                              fontSize: 11.5,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              fontSize: 11,
                               fontWeight: 700,
+                              padding: '2px 9px',
+                              borderRadius: 999,
                               color: C.muted,
+                              background: C.panel2,
+                              border: `1px solid ${C.border}`,
                             }}
                           >
                             Inactif
@@ -533,9 +560,16 @@ export const Inventory = ({
                         ) : low ? (
                           <span
                             style={{
-                              fontSize: 11.5,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              fontSize: 11,
                               fontWeight: 700,
+                              padding: '2px 9px',
+                              borderRadius: 999,
                               color: '#e8a33d',
+                              background: C.warnBg,
+                              border: `1px solid ${C.warnBorder}`,
                             }}
                           >
                             ⚠ Bas
@@ -543,9 +577,16 @@ export const Inventory = ({
                         ) : (
                           <span
                             style={{
-                              fontSize: 11.5,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              fontSize: 11,
                               fontWeight: 700,
+                              padding: '2px 9px',
+                              borderRadius: 999,
                               color: C.okText,
+                              background: 'color-mix(in srgb, var(--affine-success-color, #4cae4c) 14%, transparent)',
+                              border: 'color-mix(in srgb, var(--affine-success-color, #4cae4c) 38%, transparent) 1px solid',
                             }}
                           >
                             OK
