@@ -102,39 +102,38 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
           {checking ? <Spinner /> : '↻'} Vérifier
         </button>
       </div>
-      <div style={(status === 'ready' || status === 'degraded')
-        ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
-        : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
-        {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à SlidePro…</div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: (status === 'ready' || status === 'degraded') ? 'hidden' : 'auto', background: C.bg }}>
+        {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0 40px 20px' }}><Spinner /> Connexion à SlidePro…</div>
         : status === 'error' ? (
-          <Banner tone="error">Impossible de se connecter à SlidePro pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
+          <div style={{ padding: '24px 20px' }}>
+            <Banner tone="error">Impossible de se connecter à SlidePro pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
+          </div>
         ) : (
-          /* The iframe fills the pane (flex:1, height:100%); the explainer is a
-             slim footer strip so it never eats the iframe's space. */
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+          /* Full-bleed layout: the iframe flex-fills the entire remaining
+             viewport (no fixed heights, no max-width, no rounded/bordered
+             "browser window" chrome) so the embedded app fits the studio's
+             resolution exactly. Only the degraded-mode notice, when present,
+             takes a slim auto-height strip above it. */
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
             {/* E1.1: soft notice when running in degraded (no auto-login) mode */}
             {status === 'degraded' && (
-              <Banner tone="warn">
-                La connexion automatique est temporairement indisponible — SlidePro s&apos;ouvre en mode basique.{' '}
-                <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button>
-              </Banner>
+              <div style={{ padding: '10px 16px 0' }}>
+                <Banner tone="warn">
+                  La connexion automatique est temporairement indisponible — SlidePro s&apos;ouvre en mode basique.{' '}
+                  <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button>
+                </Banner>
+              </div>
             )}
-            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
-              <iframe
-                src={iframeSrc}
-                style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
-                title="SlidePro"
-                /* Cross-origin iframes need explicit Permissions Policy
-                   delegation or clipboard/fullscreen/media silently fail with
-                   no prompt (the sandbox attr provided no such grants). */
-                allow="clipboard-read *; clipboard-write *; fullscreen *; autoplay *; camera *; microphone *; display-capture *"
-                allowFullScreen
-              />
-            </div>
-            <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-              <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🚀 Propulsé par vos modèles CDZ AI · Export PPTX / PDF · Templates pro</span>
-              {['PPTX','Templates','CDZ'].map(t=><span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.accent, padding: '3px 8px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
-            </div>
+            <iframe
+              src={iframeSrc}
+              style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', display: 'block' }}
+              title="SlidePro"
+              /* Cross-origin iframes need explicit Permissions Policy
+                 delegation or clipboard/fullscreen/media silently fail with
+                 no prompt (the sandbox attr provided no such grants). */
+              allow="clipboard-read *; clipboard-write *; fullscreen *; autoplay *; camera *; microphone *; display-capture *"
+              allowFullScreen
+            />
           </div>
         )}
       </div>
