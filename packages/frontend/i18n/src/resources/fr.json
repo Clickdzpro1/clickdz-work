@@ -794,7 +794,7 @@
   "com.affine.page.group-header.clear": "Effacer la sélection",
   "com.affine.page.group-header.favourited": "Ajouté aux favoris",
   "com.affine.page.group-header.not-favourited": "N'est pas ajouté aux favoris",
-  "com.affine.page.group-header.select-all": "Tout Sélectionnner",
+  "com.affine.page.group-header.select-all": "Tout Sélectionner",
   "com.affine.page.toolbar.selected": "<0>{{count}}</0> sélectionnés",
   "com.affine.page.toolbar.selected_one": "<0>{{count}}</0> document sélectionné",
   "com.affine.page.toolbar.selected_other": "<0>{{count}}</0> document(s) sélectionné(s)",
