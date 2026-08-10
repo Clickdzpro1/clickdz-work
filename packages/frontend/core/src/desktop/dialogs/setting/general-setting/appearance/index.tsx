@@ -198,10 +198,10 @@ export const AppearanceSettings = () => {
         {enableThemeEditor ? <ThemeEditorSetting /> : null}
       </SettingWrapper>
 
-      <SettingWrapper title="Theme">
+      <SettingWrapper title="Thème">
         <SettingRow
-          name="App theme"
-          desc="Pick a curated ClickDz palette. Applies across the whole app instantly and sets its light or dark base."
+          name="Thème de l’application"
+          desc="Choisissez une palette ClickDz. S’applique instantanément à toute l’application et définit sa base claire ou sombre."
           spreadCol={false}
         >
           <ThemePicker />
