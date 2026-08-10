@@ -93,10 +93,10 @@ export interface StudioDef {
  * are rendered after the known groups in STUDIOS array order.
  */
 export const STUDIO_GROUP_ORDER: { group: StudioGroup; label: string }[] = [
-  { group: 'create', label: 'Create' },
+  { group: 'create', label: 'Créer' },
   { group: 'commerce', label: 'Commerce' },
-  { group: 'agents', label: 'Agents' },
-  { group: 'connect', label: 'Connect' },
+  { group: 'agents', label: 'Agents IA' },
+  { group: 'connect', label: 'Connecter' },
 ];
 
 /**
