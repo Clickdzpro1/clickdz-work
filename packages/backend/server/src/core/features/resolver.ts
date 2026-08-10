@@ -207,8 +207,13 @@ export class AdminFeatureManagementResolver extends AvailableUserFeatureConfig {
     @Args('input', { type: () => RevokeUserAppInput }) input: RevokeUserAppInput
   ) {
     const normalized = input.app.toLowerCase();
+    if (!APP_ENTITLEMENT_APPS.includes(normalized as any)) {
+      throw new BadRequest(`Unknown app "${input.app}"`);
+    }
+    // remove() now upserts active=false, so a row ALWAYS exists after this.
+    // get() returns the deactivated row (non-null), satisfying the non-null
+    // return type and giving the frontend the updated entitlement.
     await this.models.userAppEntitlement.remove(input.userId, normalized);
-    // Return the deactivated row so the frontend gets the updated entitlement
     return await this.models.userAppEntitlement.get(input.userId, normalized);
   }
 
