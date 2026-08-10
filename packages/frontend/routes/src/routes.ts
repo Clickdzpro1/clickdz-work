@@ -14,6 +14,7 @@ export const ROUTES = {
     dashboard: '/admin/dashboard',
     accounts: '/admin/accounts',
     analytics: '/admin/analytics',
+    monitoring: '/admin/monitoring',
     workspaces: '/admin/workspaces',
     queue: '/admin/queue',
     ai: '/admin/ai',
@@ -34,6 +35,7 @@ export const RELATIVE_ROUTES = {
     dashboard: 'dashboard',
     accounts: 'accounts',
     analytics: 'analytics',
+    monitoring: 'monitoring',
     workspaces: 'workspaces',
     queue: 'queue',
     ai: 'ai',
@@ -52,6 +54,7 @@ admin.setup = () => '/admin/setup';
 admin.dashboard = () => '/admin/dashboard';
 admin.accounts = () => '/admin/accounts';
 admin.analytics = () => '/admin/analytics';
+admin.monitoring = () => '/admin/monitoring';
 admin.workspaces = () => '/admin/workspaces';
 admin.queue = () => '/admin/queue';
 admin.ai = () => '/admin/ai';
