@@ -137,21 +137,21 @@ function statusColor(status: HealthStatus): string {
 }
 
 function statusLabel(status: HealthStatus): string {
-  if (status === 'up') return 'Op\u00e9rationnel';
+  if (status === 'up') return 'Opérationnel';
   if (status === 'down') return 'Hors service';
-  return 'D\u00e9grad\u00e9';
+  return 'Dégradé';
 }
 
 function deployEventLabel(event: string): string {
   switch (event) {
     case 'deploy_build_started':
-      return 'Build d\u00e9marr\u00e9';
+      return 'Build démarré';
     case 'deploy_build_succeeded':
-      return 'Build r\u00e9ussi';
+      return 'Build réussi';
     case 'deploy_build_failed':
-      return 'Build \u00e9chou\u00e9';
+      return 'Build échoué';
     case 'deploy_boot':
-      return 'D\u00e9marrage serveur';
+      return 'Démarrage serveur';
     default:
       return event;
   }
@@ -177,9 +177,9 @@ function eventLogLabel(eventType: string): string {
     case 'signup':
       return 'Inscription';
     case 'entitlement_granted':
-      return 'Acc\u00e8s accord\u00e9';
+      return 'Accès accordé';
     case 'entitlement_revoked':
-      return 'Acc\u00e8s r\u00e9voqu\u00e9';
+      return 'Accès révoqué';
     default:
       return eventType;
   }
@@ -240,7 +240,7 @@ class MonitorErrorBoundary extends Component<
               className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
               onClick={this.handleRetry}
             >
-              R\u00e9essayer
+              Réessayer
             </button>
           </div>
         </div>
@@ -299,13 +299,13 @@ function SystemHealthTab() {
       <div className="flex flex-col items-center justify-center gap-3 p-8">
         <AlertTriangleIcon className="h-8 w-8 text-yellow-500" />
         <p className="text-sm text-muted-foreground">
-          Impossible de r\u00e9cup\u00e9rer l\u2019\u00e9tat du syst\u00e8me: {error}
+          Impossible de récupérer l’état du système: {error}
         </p>
         <button
           className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
           onClick={load}
         >
-          R\u00e9essayer
+          Réessayer
         </button>
       </div>
     );
@@ -332,10 +332,10 @@ function SystemHealthTab() {
         />
         <div>
           <p className="text-sm font-semibold">
-            \u00c9tat global: {statusLabel(health.overall)}
+            État global: {statusLabel(health.overall)}
           </p>
           <p className="text-xs text-muted-foreground">
-            V\u00e9rification auto toutes les 30 secondes \u2014 derni\u00e8re: {dateTimeFormatter.format(new Date(health.timestamp))}
+            Vérification auto toutes les 30 secondes — dernière: {dateTimeFormatter.format(new Date(health.timestamp))}
           </p>
         </div>
       </div>
@@ -435,7 +435,7 @@ function DeployHistoryTab() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <HistoryIcon className="h-4 w-4" aria-hidden="true" />
-              D\u00e9ploiement actuel
+              Déploiement actuel
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -447,13 +447,13 @@ function DeployHistoryTab() {
                 </p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Version des donn\u00e9es</p>
+                <p className="text-xs text-muted-foreground">Version des données</p>
                 <p className="font-mono text-sm font-medium">
                   {baseImage.dataVersion}
                 </p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">Type de d\u00e9ploiement</p>
+                <p className="text-xs text-muted-foreground">Type de déploiement</p>
                 <p className="text-sm font-medium">
                   {baseImage.deploymentType}
                 </p>
@@ -467,10 +467,10 @@ function DeployHistoryTab() {
             </div>
             <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
               <p className="text-xs text-muted-foreground">
-                Pour annuler un d\u00e9ploiement (rollback), utilisez le script
+                Pour annuler un déploiement (rollback), utilisez le script
                 <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">scripts/rollback.sh</code>
-                ou d\u00e9finissez <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">BASE_IMAGE</code>
-                sur une image ant\u00e9rieure dans Railway, puis red\u00e9ployez.
+                ou définissez <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">BASE_IMAGE</code>
+                sur une image antérieure dans Railway, puis redéployez.
               </p>
             </div>
           </CardContent>
@@ -482,10 +482,10 @@ function DeployHistoryTab() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <ActivityIcon className="h-4 w-4" aria-hidden="true" />
-            Historique des d\u00e9ploiements
+            Historique des déploiements
           </CardTitle>
           <CardDescription>
-            \u00c9v\u00e9nements de build et de d\u00e9marrage captur\u00e9s par PostHog
+            Événements de build et de démarrage capturés par PostHog
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -493,21 +493,21 @@ function DeployHistoryTab() {
             <div className="space-y-3">
               <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4">
                 <p className="text-sm text-muted-foreground">
-                  {deployEvents?.message ?? 'PostHog non configur\u00e9 pour la requ\u00eate d\u2019\u00e9v\u00e9nements.'}
+                  {deployEvents?.message ?? 'PostHog non configuré pour la requête d’événements.'}
                 </p>
               </div>
               <p className="text-sm text-muted-foreground">
-                Les \u00e9v\u00e9nements de d\u00e9ploiement
+                Les événements de déploiement
                 (<code className="rounded bg-muted px-1.5 py-0.5 text-xs">deploy_build_started</code>,
                 <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">deploy_build_succeeded</code>,
                 <code className="rounded bg-muted px-1.5 py-0.5 text-xs">deploy_build_failed</code>,
                 <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">deploy_boot</code>)
-                sont d\u00e9j\u00e0 captur\u00e9s par GitHub Actions et le serveur. Pour les
+                sont déjà capturés par GitHub Actions et le serveur. Pour les
                 afficher ici, configurez
                 <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">CDZ_POSTHOG_PERSONAL_KEY</code>
                 et
                 <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">CDZ_POSTHOG_PROJECT_ID</code>
-                comme variables d\u2019environnement Railway.
+                comme variables d’environnement Railway.
               </p>
               {deployEvents?.posthogUrl && (
                 <a
@@ -516,13 +516,13 @@ function DeployHistoryTab() {
                   rel="noopener noreferrer"
                   className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
                 >
-                  Ouvrir PostHog \u2197
+                  Ouvrir PostHog ↗
                 </a>
               )}
             </div>
           ) : deployEvents.events.length === 0 ? (
             <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-              Aucun \u00e9v\u00e9nement de d\u00e9ploiement trouv\u00e9
+              Aucun événement de déploiement trouvé
             </div>
           ) : (
             <div className="space-y-2">
@@ -559,7 +559,7 @@ function DeployHistoryTab() {
                         <span>Branche: {String(evt.properties.branch)}</span>
                       )}
                       {evt.properties.actor && (
-                        <span>D\u00e9clench\u00e9 par: {String(evt.properties.actor)}</span>
+                        <span>Déclenché par: {String(evt.properties.actor)}</span>
                       )}
                       {evt.properties.base_image && (
                         <span>Image: <span className="font-mono">{String(evt.properties.base_image)}</span></span>
@@ -614,7 +614,7 @@ function EventLogTab() {
           className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
           onClick={load}
         >
-          R\u00e9essayer
+          Réessayer
         </button>
       </div>
     );
@@ -623,7 +623,7 @@ function EventLogTab() {
   if (!eventLog || eventLog.events.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
-        Aucun \u00e9v\u00e9nement r\u00e9cent
+        Aucun événement récent
       </div>
     );
   }
@@ -632,7 +632,7 @@ function EventLogTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          {eventLog.total} \u00e9v\u00e9nements r\u00e9cents (50 max)
+          {eventLog.total} événements récents (50 max)
         </p>
         <button
           className="inline-flex h-8 items-center justify-center rounded-lg border border-border px-3 text-xs font-medium transition hover:bg-accent"
@@ -648,7 +648,7 @@ function EventLogTab() {
               <TableHead className="w-40">Horodatage</TableHead>
               <TableHead className="w-36">Type</TableHead>
               <TableHead className="w-24">Utilisateur</TableHead>
-              <TableHead>D\u00e9tails</TableHead>
+              <TableHead>Détails</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -713,25 +713,25 @@ function PostHogAnalyticsTab() {
             Tableau de bord PostHog
           </CardTitle>
           <CardDescription>
-            Analytique cross-platform \u2014 d\u00e9ploiements, \u00e9v\u00e9nements, activit\u00e9
+            Analytique cross-platform — déploiements, événements, activité
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
-              <p className="text-xs text-muted-foreground">H\u00f4te PostHog</p>
+              <p className="text-xs text-muted-foreground">Hôte PostHog</p>
               <p className="font-mono text-sm font-medium break-all">
                 {config?.host ?? 'https://us.i.posthog.com'}
               </p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Cl\u00e9 projet configur\u00e9e</p>
+              <p className="text-xs text-muted-foreground">Clé projet configurée</p>
               <p className="text-sm font-medium">
                 {config?.hasProjectKey ? 'Oui' : 'Non'}
               </p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Cl\u00e9 personnelle (API requ\u00eate)</p>
+              <p className="text-xs text-muted-foreground">Clé personnelle (API requête)</p>
               <p className="text-sm font-medium">
                 {config?.hasPersonalKey ? 'Oui' : 'Non'}
               </p>
@@ -739,7 +739,7 @@ function PostHogAnalyticsTab() {
             <div>
               <p className="text-xs text-muted-foreground">ID de projet</p>
               <p className="font-mono text-sm font-medium">
-                {config?.projectId ?? 'Non configur\u00e9'}
+                {config?.projectId ?? 'Non configuré'}
               </p>
             </div>
           </div>
@@ -752,7 +752,7 @@ function PostHogAnalyticsTab() {
                 rel="noopener noreferrer"
                 className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
               >
-                Ouvrir le tableau de bord PostHog \u2197
+                Ouvrir le tableau de bord PostHog ↗
               </a>
             )}
             {config?.embedUrl && (
@@ -762,7 +762,7 @@ function PostHogAnalyticsTab() {
                 rel="noopener noreferrer"
                 className="inline-flex h-9 items-center justify-center rounded-lg border border-border px-4 text-sm font-medium transition hover:bg-accent"
               >
-                Tableau de bord int\u00e9gr\u00e9 \u2197
+                Tableau de bord intégré ↗
               </a>
             )}
           </div>
@@ -770,13 +770,13 @@ function PostHogAnalyticsTab() {
           {!config?.hasPersonalKey && (
             <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4">
               <p className="text-sm text-muted-foreground">
-                Pour interroger les \u00e9v\u00e9nements PostHog depuis l\u2019admin, configurez
+                Pour interroger les événements PostHog depuis l’admin, configurez
                 <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">CDZ_POSTHOG_PERSONAL_KEY</code>
-                (cl\u00e9 API personnelle PostHog, diff\u00e9rente de la cl\u00e9 projet) et
+                (clé API personnelle PostHog, différente de la clé projet) et
                 <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">CDZ_POSTHOG_PROJECT_ID</code>
-                comme variables d\u2019environnement Railway. La cl\u00e9 projet
+                comme variables d’environnement Railway. La clé projet
                 (<code className="rounded bg-muted px-1.5 py-0.5 text-xs">CDZ_POSTHOG_KEY</code>)
-                ne permet que la capture d\u2019\u00e9v\u00e9nements, pas leur lecture.
+                ne permet que la capture d’événements, pas leur lecture.
               </p>
             </div>
           )}
@@ -784,7 +784,7 @@ function PostHogAnalyticsTab() {
           {/* Embedded dashboard (if configured) */}
           {config?.embedUrl && (
             <div className="mt-4">
-              <p className="mb-2 text-sm font-medium">Tableau de bord int\u00e9gr\u00e9</p>
+              <p className="mb-2 text-sm font-medium">Tableau de bord intégré</p>
               <iframe
                 src={config.embedUrl}
                 className="h-96 w-full rounded-lg border border-border/60"
@@ -801,11 +801,11 @@ function PostHogAnalyticsTab() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <ActivityIcon className="h-4 w-4" aria-hidden="true" />
-            \u00c9v\u00e9nements de d\u00e9ploiement r\u00e9cents
+            Événements de déploiement récents
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <MonitorErrorBoundary fallbackTitle="Impossible de charger les \u00e9v\u00e9nements de d\u00e9ploiement.">
+          <MonitorErrorBoundary fallbackTitle="Impossible de charger les événements de déploiement.">
             <PostHogDeployEventsInline />
           </MonitorErrorBoundary>
         </CardContent>
@@ -829,14 +829,14 @@ function PostHogDeployEventsInline() {
       <p className="text-sm text-muted-foreground">
         Configurez
         <code className="mx-1 rounded bg-muted px-1.5 py-0.5 text-xs">CDZ_POSTHOG_PERSONAL_KEY</code>
-        pour afficher les \u00e9v\u00e9nements.
+        pour afficher les événements.
       </p>
     );
   }
 
   if (events.events.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">Aucun \u00e9v\u00e9nement r\u00e9cent.</p>
+      <p className="text-sm text-muted-foreground">Aucun événement récent.</p>
     );
   }
 
@@ -877,7 +877,7 @@ function AlertConfigTab() {
             Configuration des alertes
           </CardTitle>
           <CardDescription>
-            Notifications automatiques (configuration \u2014 backend \u00e0 venir)
+            Notifications automatiques (configuration — backend à venir)
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -890,11 +890,11 @@ function AlertConfigTab() {
             />
             <div className="space-y-1">
               <Label htmlFor="alert-build-fail" className="text-sm font-medium cursor-pointer">
-                Alerte en cas d\u2019\u00e9chec de build
+                Alerte en cas d’échec de build
               </Label>
               <p className="text-xs text-muted-foreground">
-                Recevoir une notification quand un build GitHub Actions \u00e9choue
-                (\u00e9v\u00e9nement <code className="rounded bg-muted px-1 py-0.5 text-xs">deploy_build_failed</code>).
+                Recevoir une notification quand un build GitHub Actions échoue
+                (événement <code className="rounded bg-muted px-1 py-0.5 text-xs">deploy_build_failed</code>).
               </p>
             </div>
           </div>
@@ -912,7 +912,7 @@ function AlertConfigTab() {
               </Label>
               <p className="text-xs text-muted-foreground">
                 Recevoir une notification quand un compte utilisateur est
-                suspendu ou r\u00e9voqu\u00e9.
+                suspendu ou révoqué.
               </p>
             </div>
           </div>
@@ -920,7 +920,7 @@ function AlertConfigTab() {
           {/* Storage threshold alert */}
           <div className="space-y-2">
             <Label htmlFor="alert-storage" className="text-sm font-medium">
-              Alerte quand le stockage d\u00e9passe un seuil
+              Alerte quand le stockage dépasse un seuil
             </Label>
             <div className="flex items-center gap-3">
               <Input
@@ -935,8 +935,8 @@ function AlertConfigTab() {
               <span className="text-sm text-muted-foreground">%</span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Recevoir une notification quand l\u2019utilisation du stockage
-              d\u00e9passe ce pourcentage.
+              Recevoir une notification quand l’utilisation du stockage
+              dépasse ce pourcentage.
             </p>
           </div>
 
@@ -946,7 +946,7 @@ function AlertConfigTab() {
               className="inline-flex h-9 items-center justify-center rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition hover:bg-primary/90"
               onClick={() => {
                 // Stub — no backend endpoint yet. Show a toast notification.
-                toast('Configuration des alertes enregistr\u00e9e (stub \u2014 backend \u00e0 venir)');
+                toast('Configuration des alertes enregistrée (stub — backend à venir)');
               }}
             >
               Enregistrer
@@ -957,9 +957,9 @@ function AlertConfigTab() {
 
       <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-4">
         <p className="text-sm text-muted-foreground">
-          \u2139\ufffe Les alertes sont actuellement des stubs UI. L\u2019impl\u00e9mentation
-          backend n\u00e9cessitera un service de notification (PostHog notifications,
-          email, ou webhook) et une table de configuration en base de donn\u00e9es.
+          ℹ️ Les alertes sont actuellement des stubs UI. L’implémentation
+          backend nécessitera un service de notification (PostHog notifications,
+          email, ou webhook) et une table de configuration en base de données.
         </p>
       </div>
     </div>
@@ -979,15 +979,15 @@ function MonitoringPageContent() {
           <TabsList className="mb-4">
             <TabsTrigger value="health" className="gap-1.5">
               <HeartPulseIcon className="h-4 w-4" />
-              Sant\u00e9 syst\u00e8me
+              Santé système
             </TabsTrigger>
             <TabsTrigger value="deploys" className="gap-1.5">
               <HistoryIcon className="h-4 w-4" />
-              D\u00e9ploiements
+              Déploiements
             </TabsTrigger>
             <TabsTrigger value="events" className="gap-1.5">
               <ListIcon className="h-4 w-4" />
-              Journal d\u2019\u00e9v\u00e9nements
+              Journal d’événements
             </TabsTrigger>
             <TabsTrigger value="posthog" className="gap-1.5">
               <ActivityIcon className="h-4 w-4" />
@@ -1000,19 +1000,19 @@ function MonitoringPageContent() {
           </TabsList>
 
           <TabsContent value="health">
-            <MonitorErrorBoundary fallbackTitle="Impossible de charger l\u2019\u00e9tat du syst\u00e8me.">
+            <MonitorErrorBoundary fallbackTitle="Impossible de charger l’état du système.">
               <SystemHealthTab />
             </MonitorErrorBoundary>
           </TabsContent>
 
           <TabsContent value="deploys">
-            <MonitorErrorBoundary fallbackTitle="Impossible de charger l\u2019historique des d\u00e9ploiements.">
+            <MonitorErrorBoundary fallbackTitle="Impossible de charger l’historique des déploiements.">
               <DeployHistoryTab />
             </MonitorErrorBoundary>
           </TabsContent>
 
           <TabsContent value="events">
-            <MonitorErrorBoundary fallbackTitle="Impossible de charger le journal d\u2019\u00e9v\u00e9nements.">
+            <MonitorErrorBoundary fallbackTitle="Impossible de charger le journal d’événements.">
               <EventLogTab />
             </MonitorErrorBoundary>
           </TabsContent>
