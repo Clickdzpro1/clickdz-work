@@ -16,7 +16,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@affine/admin/components/ui/table;
+} from '@affine/admin/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@affine/admin/components/ui/tabs';
 import { affineFetch } from '@affine/admin/fetch-utils';
 import { ActivityIcon, AlertTriangleIcon, BellIcon, HeartPulseIcon, HistoryIcon, ListIcon } from 'lucide-react';
