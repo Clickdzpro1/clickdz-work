@@ -232,6 +232,7 @@ export function Terminal({ lines }: { lines: TerminalLine[] }) {
             fontSize: 11,
             fontWeight: 600,
             padding: '4px 10px',
+            minHeight: 34,
             borderRadius: 999,
             border: `1px solid ${K.border}`,
             background: K.headerBg,
