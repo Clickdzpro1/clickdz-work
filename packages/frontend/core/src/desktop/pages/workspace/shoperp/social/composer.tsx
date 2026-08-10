@@ -31,6 +31,14 @@ const EMOJI_QUICK = ['😊', '🔥', '🎉', '💪', '🚀', '✨', '❤', '👍
 
 const TONES = ['professional', 'casual', 'playful', 'urgent', 'informative'];
 
+const TONE_LABELS_FR: Record<string, string> = {
+  professional: 'Professionnel',
+  casual: 'Décontracté',
+  playful: 'Ludique',
+  urgent: 'Urgent',
+  informative: 'Informatif',
+};
+
 export const ComposerView = ({
   lang,
   dict,
@@ -132,14 +140,14 @@ export const ComposerView = ({
             )
           );
         }
-        setGenNote(dict.genOk ?? 'Draft generated — review before publishing.');
+        setGenNote(dict.genOk ?? 'Brouillon généré — relisez avant de publier.');
       } else if (res.error === 'not_configured') {
-        setGenNote(dict.aiNotConfigured ?? 'AI generation is not configured on this server.');
+        setGenNote(dict.aiNotConfigured ?? 'La génération IA n’est pas configurée sur ce serveur.');
       } else {
-        setGenNote(dict.genFail ?? 'Generation failed. Try again.');
+        setGenNote(dict.genFail ?? 'La génération a échoué. Réessayez.');
       }
     } catch {
-      setGenNote(dict.genFail ?? 'Generation failed. Try again.');
+      setGenNote(dict.genFail ?? 'La génération a échoué. Réessayez.');
     } finally {
       setGenerating(false);
     }
@@ -155,13 +163,13 @@ export const ComposerView = ({
       const res = await generateImage(p, imgModel);
       if (res.ok && res.url) {
         setMedia(prev => [...prev, { kind: 'image', url: res.url!, alt: p }].slice(0, 4));
-        setImgNote(dict.imgGenOk ?? 'Image generated and added.');
+        setImgNote(dict.imgGenOk ?? 'Image générée et ajoutée.');
         setImgPrompt('');
       } else {
-        setImgNote(dict.imgGenFail ?? 'Image generation failed. Try again.');
+        setImgNote(dict.imgGenFail ?? 'La génération de l’image a échoué. Réessayez.');
       }
     } catch {
-      setImgNote(dict.imgGenFail ?? 'Image generation failed.');
+      setImgNote(dict.imgGenFail ?? 'La génération de l’image a échoué.');
     } finally {
       setImgBusy(false);
     }
@@ -182,10 +190,10 @@ export const ComposerView = ({
         const kind: 'image' | 'video' = res.kind === 'video' ? 'video' : 'image';
         setMedia(prev => [...prev, { kind, url: res.url!, mime: res.mime, alt: f.name }].slice(0, 4));
       } else {
-        setImgNote(dict.imgGenFail ?? 'Upload failed. Try again.');
+        setImgNote(dict.imgGenFail ?? 'Le téléversement a échoué. Réessayez.');
       }
     } catch {
-      setImgNote(dict.imgGenFail ?? 'Upload failed.');
+      setImgNote(dict.imgGenFail ?? 'Le téléversement a échoué.');
     } finally {
       setUploading(false);
       e.target.value = '';
@@ -216,15 +224,15 @@ export const ComposerView = ({
       });
       if (res.ok && res.post) {
         setSubmitTone('ok');
-        setSubmitNote(dict.draftSaved ?? 'Draft saved.');
+        setSubmitNote(dict.draftSaved ?? 'Brouillon enregistré.');
         onSaved(res.post);
       } else {
         setSubmitTone('err');
-        setSubmitNote(res.message ?? res.error ?? dict.submitFail ?? 'Save failed. Try again.');
+        setSubmitNote(res.message ?? res.error ?? dict.submitFail ?? 'L’enregistrement a échoué. Réessayez.');
       }
     } catch {
       setSubmitTone('err');
-      setSubmitNote(dict.submitFail ?? 'Save failed.');
+      setSubmitNote(dict.submitFail ?? 'L’enregistrement a échoué.');
     } finally {
       setSubmitting(false);
     }
@@ -236,7 +244,7 @@ export const ComposerView = ({
     const epoch = new Date(scheduledAt).getTime();
     if (isNaN(epoch) || epoch <= Date.now()) {
       setSubmitTone('err');
-      setSubmitNote(dict.scheduleFuture ?? 'Scheduled time must be in the future.');
+      setSubmitNote(dict.scheduleFuture ?? 'La date planifiée doit être dans le futur.');
       return;
     }
     setSubmitting(true);
@@ -251,15 +259,15 @@ export const ComposerView = ({
       });
       if (res.ok && res.post) {
         setSubmitTone('ok');
-        setSubmitNote(dict.scheduled ?? 'Post scheduled.');
+        setSubmitNote(dict.scheduled ?? 'Publication planifiée.');
         onSaved(res.post);
       } else {
         setSubmitTone('err');
-        setSubmitNote(res.message ?? res.error ?? dict.submitFail ?? 'Scheduling failed.');
+        setSubmitNote(res.message ?? res.error ?? dict.submitFail ?? 'La planification a échoué.');
       }
     } catch {
       setSubmitTone('err');
-      setSubmitNote(dict.submitFail ?? 'Scheduling failed.');
+      setSubmitNote(dict.submitFail ?? 'La planification a échoué.');
     } finally {
       setSubmitting(false);
     }
@@ -270,7 +278,7 @@ export const ComposerView = ({
     if (!text || selectedNetworks.length === 0 || submitting) return;
     if (mediaRequiredViolations.length > 0) {
       setSubmitTone('err');
-      setSubmitNote(`${dict.mediaRequiredFor ?? 'Media required for'}: ${mediaRequiredViolations.join(', ')}`);
+      setSubmitNote(`${dict.mediaRequiredFor ?? 'Média requis pour'} : ${mediaRequiredViolations.join(', ')}`);
       return;
     }
     setSubmitting(true);
@@ -285,15 +293,15 @@ export const ComposerView = ({
       });
       if (res.ok && res.post) {
         setSubmitTone('ok');
-        setSubmitNote(dict.published ?? 'Published!');
+        setSubmitNote(dict.published ?? 'Publié !');
         onSaved(res.post);
       } else {
         setSubmitTone('err');
-        setSubmitNote(res.message ?? res.error ?? dict.submitFail ?? 'Publish failed.');
+        setSubmitNote(res.message ?? res.error ?? dict.submitFail ?? 'La publication a échoué.');
       }
     } catch {
       setSubmitTone('err');
-      setSubmitNote(dict.submitFail ?? 'Publish failed.');
+      setSubmitNote(dict.submitFail ?? 'La publication a échoué.');
     } finally {
       setSubmitting(false);
     }
@@ -313,7 +321,7 @@ export const ComposerView = ({
   if (connectedNetworks.length === 0) {
     return (
       <Banner tone="warn">
-        {dict.noNetworks ?? 'Connect at least one network in the Connections tab to compose and publish.'}
+        {dict.noNetworks ?? 'Connectez au moins un réseau dans l’onglet Connexions pour rédiger et publier.'}
       </Banner>
     );
   }
@@ -332,7 +340,7 @@ export const ComposerView = ({
       {/* Network selector */}
       <div>
         <div style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 6, direction: rtl ? 'rtl' : undefined }}>
-          {dict.publishTo ?? 'Publish to:'}
+          {dict.publishTo ?? 'Publier sur :'}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {connectedNetworks.map(slug => {
@@ -365,12 +373,12 @@ export const ComposerView = ({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div>
             <div style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 4, direction: rtl ? 'rtl' : undefined }}>
-              {dict.baseCaption ?? 'Base caption'}
+              {dict.baseCaption ?? 'Légende de base'}
             </div>
             <textarea
               value={baseText}
               onChange={e => setBaseText(e.target.value)}
-              placeholder={dict.captionPlaceholder ?? 'Write your caption here...'}
+              placeholder={dict.captionPlaceholder ?? 'Écrivez votre légende ici…'}
               rows={5}
               dir={rtl ? 'rtl' : undefined}
               style={{
@@ -386,12 +394,12 @@ export const ComposerView = ({
                 boxSizing: 'border-box',
               }}
             />
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 2, textAlign: 'right' }}>{baseText.length} chars</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 2, textAlign: 'right' }}>{baseText.length} caractères</div>
           </div>
 
           {/* Emoji quick-insert */}
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: C.muted }}>{dict.emoji ?? 'Emoji:'}</span>
+            <span style={{ fontSize: 11, color: C.muted }}>{dict.emoji ?? 'Emoji :'}</span>
             {EMOJI_QUICK.map(e => (
               <button
                 key={e}
@@ -407,7 +415,7 @@ export const ComposerView = ({
           {selectedNetworks.length > 0 && (
             <details style={{ marginTop: 4 }}>
               <summary style={{ fontSize: 12, color: C.muted, cursor: 'pointer' }}>
-                {dict.perNetworkOverrides ?? 'Per-network text overrides (optional)'}
+                {dict.perNetworkOverrides ?? 'Textes personnalisés par réseau (facultatif)'}
               </summary>
               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {selectedNetworks.map(slug => {
@@ -416,12 +424,12 @@ export const ComposerView = ({
                   return (
                     <div key={slug}>
                       <div style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 2 }}>
-                        {meta?.label ?? slug} ({meta?.charLimit ?? '?'} chars max)
+                        {meta?.label ?? slug} ({meta?.charLimit ?? '?'} caractères max)
                       </div>
                       <textarea
                         value={val}
                         onChange={e => setNetworkText(slug, e.target.value)}
-                        placeholder={dict.overridePlaceholder ?? `Override for ${meta?.label ?? slug} (leave blank to use base caption)`}
+                        placeholder={dict.overridePlaceholder ?? `Texte personnalisé pour ${meta?.label ?? slug} (laisser vide pour utiliser la légende de base)`}
                         rows={2}
                         dir={rtl ? 'rtl' : undefined}
                         style={{
@@ -450,7 +458,7 @@ export const ComposerView = ({
           {/* Scheduling */}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, direction: rtl ? 'rtl' : undefined }}>
-              {dict.scheduleAt ?? 'Schedule at:'}
+              {dict.scheduleAt ?? 'Planifier pour :'}
             </span>
             <input
               type="datetime-local"
@@ -470,7 +478,7 @@ export const ComposerView = ({
 
           {mediaRequiredViolations.length > 0 && (
             <div style={{ fontSize: 12, color: '#c8283a' }}>
-              {dict.mediaRequiredWarning ?? 'Media required for:'} {mediaRequiredViolations.map(s => getNetworkMeta(s)?.label ?? s).join(', ')}
+              {dict.mediaRequiredWarning ?? 'Média requis pour :'} {mediaRequiredViolations.map(s => getNetworkMeta(s)?.label ?? s).join(', ')}
             </div>
           )}
 
@@ -487,25 +495,25 @@ export const ComposerView = ({
               disabled={submitting || !baseText.trim() || selectedNetworks.length === 0}
               style={{ ...miniBtnStyle('secondary'), opacity: (submitting || !baseText.trim() || selectedNetworks.length === 0) ? 0.5 : 1 }}
             >
-              {submitting ? '...' : dict.saveDraft ?? 'Save draft'}
+              {submitting ? '…' : dict.saveDraft ?? 'Enregistrer le brouillon'}
             </button>
             <button
               onClick={() => void handleSchedule()}
               disabled={submitting || !baseText.trim() || selectedNetworks.length === 0 || !scheduledAt}
               style={{ ...miniBtnStyle('secondary'), opacity: (submitting || !baseText.trim() || selectedNetworks.length === 0 || !scheduledAt) ? 0.5 : 1 }}
             >
-              {submitting ? '...' : dict.schedule ?? 'Schedule'}
+              {submitting ? '…' : dict.schedule ?? 'Planifier'}
             </button>
             <button
               onClick={() => void handlePublishNow()}
               disabled={submitting || !baseText.trim() || selectedNetworks.length === 0}
               style={{ ...miniBtnStyle('primary'), opacity: (submitting || !baseText.trim() || selectedNetworks.length === 0) ? 0.5 : 1 }}
             >
-              {submitting ? <Spinner /> : dict.publishNow ?? 'Publish now'}
+              {submitting ? <Spinner /> : dict.publishNow ?? 'Publier maintenant'}
             </button>
             {onCancel && (
               <button style={miniBtnStyle('secondary')} onClick={onCancel}>
-                {dict.cancel ?? 'Cancel'}
+                {dict.cancel ?? 'Annuler'}
               </button>
             )}
           </div>
@@ -515,13 +523,13 @@ export const ComposerView = ({
       {activeTab === 'ai' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, direction: rtl ? 'rtl' : undefined }}>
-            {dict.aiCompose ?? 'AI content generation'}
+            {dict.aiCompose ?? 'Génération de contenu par IA'}
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <input
               value={brief}
               onChange={e => setBrief(e.target.value)}
-              placeholder={dict.briefPlaceholder ?? 'Describe the post (e.g. "20% promo on sneakers this weekend")...'}
+              placeholder={dict.briefPlaceholder ?? 'Décrivez la publication (ex. « Promo de 20 % sur les sneakers ce week-end »)…'}
               dir={rtl ? 'rtl' : undefined}
               style={{
                 flex: 1,
@@ -538,13 +546,13 @@ export const ComposerView = ({
             />
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11.5, color: C.muted }}>{dict.tone ?? 'Tone:'}</span>
+            <span style={{ fontSize: 11.5, color: C.muted }}>{dict.tone ?? 'Ton :'}</span>
             <select
               value={tone}
               onChange={e => setTone(e.target.value)}
               style={{ fontSize: 12, borderRadius: 8, border: `1px solid ${C.border}`, background: C.panel2, color: C.text, padding: '5px 8px' }}
             >
-              {TONES.map(t => <option key={t} value={t}>{t}</option>)}
+              {TONES.map(t => <option key={t} value={t}>{TONE_LABELS_FR[t] ?? t}</option>)}
             </select>
             <label style={{ fontSize: 11.5, color: C.muted, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={hashtags} onChange={e => setHashtags(e.target.checked)} />
@@ -556,7 +564,7 @@ export const ComposerView = ({
             </label>
             <label style={{ fontSize: 11.5, color: C.muted, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}>
               <input type="checkbox" checked={perNetwork} onChange={e => setPerNetwork(e.target.checked)} />
-              {dict.perNetwork ?? 'Per-network variants'}
+              {dict.perNetwork ?? 'Variantes par réseau'}
             </label>
           </div>
           <button
@@ -564,7 +572,7 @@ export const ComposerView = ({
             disabled={generating || !brief.trim()}
             style={{ ...miniBtnStyle('primary'), opacity: (generating || !brief.trim()) ? 0.5 : 1, alignSelf: 'flex-start' }}
           >
-            {generating ? <><Spinner /> {dict.generating ?? 'Generating...'}</> : (dict.generateContent ?? 'Generate content')}
+            {generating ? <><Spinner /> {dict.generating ?? 'Génération…'}</> : (dict.generateContent ?? 'Générer le contenu')}
           </button>
           {genNote && <div style={{ fontSize: 12, color: C.muted }}>{genNote}</div>}
         </div>
@@ -572,7 +580,7 @@ export const ComposerView = ({
 
       {activeTab === 'media' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{dict.media ?? 'Media'}</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{dict.media ?? 'Média'}</div>
 
           {/* Current media */}
           {media.length > 0 && (
@@ -603,21 +611,21 @@ export const ComposerView = ({
               onClick={() => fileRef.current?.click()}
               style={{ ...miniBtnStyle('secondary'), opacity: media.length >= 4 ? 0.5 : 1 }}
             >
-              {dict.uploadFile ?? 'Upload file'}
+              {dict.uploadFile ?? 'Téléverser un fichier'}
             </button>
-            <span style={{ fontSize: 11.5, color: C.muted }}>{dict.or ?? 'or'}</span>
-            <span style={{ fontSize: 11.5, color: C.muted }}>{dict.aiImageBelow ?? 'generate with AI below'} ({media.length}/4)</span>
+            <span style={{ fontSize: 11.5, color: C.muted }}>{dict.or ?? 'ou'}</span>
+            <span style={{ fontSize: 11.5, color: C.muted }}>{dict.aiImageBelow ?? 'générer avec l’IA ci-dessous'} ({media.length}/4)</span>
           </div>
           <input ref={fileRef} type="file" accept="image/*,video/*" style={{ display: 'none' }} onChange={handleFileUpload} />
 
           {/* CDZIM AI image generation */}
           <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>{dict.aiImage ?? 'Generate image with CDZIM AI'}</div>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>{dict.aiImage ?? 'Générer une image avec CDZIM AI'}</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input
                 value={imgPrompt}
                 onChange={e => setImgPrompt(e.target.value)}
-                placeholder={dict.imgPromptPlaceholder ?? 'Describe the image to generate...'}
+                placeholder={dict.imgPromptPlaceholder ?? 'Décrivez l’image à générer…'}
                 style={{
                   flex: 1,
                   minWidth: 180,
@@ -644,7 +652,7 @@ export const ComposerView = ({
                 disabled={imgBusy || !imgPrompt.trim() || media.length >= 4}
                 style={{ ...miniBtnStyle('primary'), opacity: (imgBusy || !imgPrompt.trim() || media.length >= 4) ? 0.5 : 1 }}
               >
-                {imgBusy ? <><Spinner /> {dict.generating ?? 'Generating...'}</> : (dict.generate ?? 'Generate')}
+                {imgBusy ? <><Spinner /> {dict.generating ?? 'Génération…'}</> : (dict.generate ?? 'Générer')}
               </button>
             </div>
             {imgNote && <div style={{ fontSize: 11.5, color: C.muted }}>{imgNote}</div>}
@@ -655,10 +663,10 @@ export const ComposerView = ({
       {activeTab === 'preview' && (
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 10 }}>
-            {dict.preview ?? 'Preview'}
+            {dict.preview ?? 'Aperçu'}
           </div>
           {selectedNetworks.length === 0 ? (
-            <div style={{ color: C.muted, fontSize: 12 }}>{dict.selectNetworksFirst ?? 'Select networks above to see previews.'}</div>
+            <div style={{ color: C.muted, fontSize: 12 }}>{dict.selectNetworksFirst ?? 'Sélectionnez des réseaux ci-dessus pour voir les aperçus.'}</div>
           ) : (
             <MultiNetworkPreview
               networks={selectedNetworks}
