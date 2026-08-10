@@ -12,6 +12,7 @@ import { GenerateTab } from './generate-tab';
 import { LibraryTab } from './library-tab';
 import { StudioTab } from './studio-tab';
 import { TranscribeTab } from './transcribe-tab';
+import { useIsNarrow } from './use-voice-responsive';
 import {
   C,
   fetchVoiceCapabilities,
@@ -46,6 +47,8 @@ const VoiceStudioPage = () => {
   const [tab, setTab] = useState<Tab>('studio');
   const [state, setState] = useState<LoadState>('loading');
   const [caps, setCaps] = useState<VoiceCapabilities | null>(null);
+  const isPhone = useIsNarrow(480);
+  const isTablet = useIsNarrow(1024);
 
   const load = useCallback(async () => {
     setState('loading');
@@ -116,11 +119,17 @@ const VoiceStudioPage = () => {
           <div
             style={{
               maxWidth: 960,
+              width: '100%',
+              boxSizing: 'border-box',
               margin: '0 auto',
-              padding: '28px 24px 48px',
+              padding: isPhone
+                ? '16px 12px 32px'
+                : isTablet
+                  ? '20px 16px 40px'
+                  : '28px 24px 48px',
               display: 'flex',
               flexDirection: 'column',
-              gap: 20,
+              gap: isPhone ? 14 : 20,
             }}
           >
             <header
@@ -263,33 +272,36 @@ const TabButton = ({
   active: boolean;
   onClick: () => void;
   children: ReactNode;
-}) => (
-  <button
-    type="button"
-    role="tab"
-    aria-selected={active}
-    onClick={onClick}
-    style={{
-      appearance: 'none',
-      /* 44 px min-height for comfortable touch target (WCAG 2.5.5). */
-      minHeight: 44,
-      padding: '7px 18px',
-      borderRadius: 7,
-      border: 'none',
-      fontSize: 13,
-      fontWeight: 600,
-      cursor: 'pointer',
-      flexShrink: 0,
-      scrollSnapAlign: 'start',
-      whiteSpace: 'nowrap',
-      color: active ? '#fff' : C.muted,
-      background: active ? C.accent : 'transparent',
-      transition: 'background 150ms ease, color 150ms ease',
-    }}
-  >
-    {children}
-  </button>
-);
+}) => {
+  const isPhone = useIsNarrow(480);
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      style={{
+        appearance: 'none',
+        /* >=44 px min-height for comfortable touch target (WCAG 2.5.5). */
+        minHeight: 44,
+        padding: isPhone ? '9px 14px' : '7px 18px',
+        borderRadius: 7,
+        border: 'none',
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: 'pointer',
+        flexShrink: 0,
+        scrollSnapAlign: 'start',
+        whiteSpace: 'nowrap',
+        color: active ? '#fff' : C.muted,
+        background: active ? C.accent : 'transparent',
+        transition: 'background 150ms ease, color 150ms ease',
+      }}
+    >
+      {children}
+    </button>
+  );
+};
 
 const PageSpinner = () => (
   <span
