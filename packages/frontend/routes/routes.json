@@ -18,6 +18,11 @@
             "module": ":module"
           }
         },
+        "featureFlags": "feature-flags",
+        "appManagement": "app-management",
+        "systemInfo": "system-info",
+        "notificationSettings": "notification-settings",
+        "studioConfig": "studio-config",
         "about": "about",
         "notFound": "404"
       }
