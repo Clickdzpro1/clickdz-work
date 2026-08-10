@@ -373,6 +373,27 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
             {recState === 'starting' ? <><Spinner /> Démarrage…</> : '⏺ Enregistrer'}
           </button>
         )}
+        {/* WAVE-G P5: capture-picker guidance — the #1 reason recordings come
+            out silent is the unchecked "share tab audio" box in Chrome's
+            picker. Shown only while the picker is open (recState 'starting'). */}
+        {status === 'ready' && recordingSupported && recState === 'starting' && (
+          <div
+            style={{
+              flexBasis: '100%',
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: C.text,
+              background: 'rgba(37, 211, 102, 0.10)',
+              border: '1px solid rgba(37, 211, 102, 0.35)',
+              borderRadius: 8,
+              padding: '8px 12px',
+            }}
+          >
+            💡 Dans la fenêtre de partage : choisissez l’onglet de la réunion, cochez
+            {' '}<strong>« Partager l’audio de l’onglet »</strong>, puis validez. Votre micro est
+            ajouté automatiquement s’il est autorisé.
+          </div>
+        )}
         {status === 'ready' && recordingSupported && recState === 'recording' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span
