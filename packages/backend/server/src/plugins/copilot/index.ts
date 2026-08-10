@@ -37,6 +37,7 @@ import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
 import { ClickDzVpicController } from './clickdz-vpic.controller';
 import { ClickDzVoiceAiController } from './clickdz-voice-ai.controller';
 import { ClickDzAudioLibraryController } from './clickdz-audio-library.controller';
+import { ClickDzAdminMonitorController } from './clickdz-admin-monitor.controller';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import { McpCredentialService } from './mcp/credential';
@@ -152,7 +153,11 @@ export class CopilotApiModule {}
     // clips). Additive + session-authed; the clip bytes reuse the existing
     // @Public copilot blob GET route for <audio> playback.
     ClickDzAudioLibraryController,
+    // CDZ admin monitoring + PostHog analytics — health checks, deploy events,
+    // event log, PostHog dashboard config. Admin-guarded via @Admin() decorator.
+    ClickDzAdminMonitorController,
     WorkspaceMcpController,
   ],
 })
 export class CopilotModule {}
+
