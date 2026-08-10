@@ -236,48 +236,139 @@ export function AppAccessGate({ app, children }: AppAccessGateProps) {
         style={{
           height: '100%',
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          gap: 16,
           padding: '40px 24px',
-          background:
-            'var(--affine-background-primary-color, #141414)',
-          color: 'var(--affine-text-primary-color, #ececec)',
-          textAlign: 'center',
+          background: 'var(--affine-background-primary-color, #141414)',
         }}
       >
-        <div style={{ fontSize: 48, lineHeight: 1 }}>
-          {`\u{1F512}`}
-        </div>
-        <div style={{ fontSize: 22, fontWeight: 700 }}>{label}</div>
         <div
           style={{
-            fontSize: 14,
-            maxWidth: 380,
-            lineHeight: 1.6,
-            color: 'var(--affine-text-secondary-color, #9aa0a6)',
-          }}
-        >
-          {`Cette application nécessite un accès premium. Contactez l\u{2019}administrateur pour l\u{2019}activer.`}
-        </div>
-        <button
-          onClick={() => window.history.back()}
-          style={{
-            marginTop: 8,
-            padding: '8px 20px',
-            fontSize: 14,
-            fontWeight: 600,
-            borderRadius: 8,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 20,
+            width: '100%',
+            maxWidth: 420,
+            padding: '44px 36px',
+            borderRadius: 20,
+            textAlign: 'center',
+            background: 'var(--affine-background-overlay-panel-color, var(--affine-background-secondary-color, #1c1c1e))',
             border: '1px solid var(--affine-border-color, #2a2a2c)',
-            background:
-              'var(--affine-background-secondary-color, #1c1c1e)',
-            color: 'var(--affine-text-primary-color, #ececec)',
-            cursor: 'pointer',
+            boxShadow: 'var(--affine-shadow-2, 0 12px 40px rgba(0, 0, 0, 0.24))',
           }}
         >
-          {`Retour`}
-        </button>
+          {/* CSS-only lock badge — a soft circular halo behind a padlock
+              glyph, built entirely from vanilla CSS (no external image
+              assets), so it renders instantly and themes with the app's
+              CSS variables. */}
+          <div
+            style={{
+              position: 'relative',
+              width: 72,
+              height: 72,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '50%',
+              background:
+                'radial-gradient(circle at 50% 40%, var(--affine-primary-color, #1e96eb) 0%, transparent 72%)',
+              opacity: 0.16,
+            }}
+          />
+          <div
+            style={{
+              position: 'relative',
+              marginTop: -72,
+              width: 72,
+              height: 72,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '50%',
+              border: '1px solid var(--affine-border-color, #2a2a2c)',
+              background: 'var(--affine-background-primary-color, #141414)',
+              fontSize: 28,
+            }}
+          >
+            {`\u{1F512}`}
+          </div>
+          <div
+            style={{
+              fontSize: 11.5,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: 'var(--affine-text-secondary-color, #9aa0a6)',
+            }}
+          >
+            {`Accès restreint`}
+          </div>
+          <div
+            style={{
+              fontSize: 20,
+              fontWeight: 700,
+              color: 'var(--affine-text-primary-color, #ececec)',
+            }}
+          >
+            {label}
+          </div>
+          <div
+            style={{
+              fontSize: 14,
+              lineHeight: 1.6,
+              color: 'var(--affine-text-secondary-color, #9aa0a6)',
+            }}
+          >
+            {`Cette application n\u{2019}est pas incluse dans votre offre actuelle. Contactez l\u{2019}administrateur pour l\u{2019}activer sur votre espace.`}
+          </div>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              width: '100%',
+              marginTop: 8,
+            }}
+          >
+            <a
+              href={`mailto:support@clickdz.ai?subject=${encodeURIComponent(
+                `Demande d\u{2019}accès — ${label}`
+              )}`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '10px 20px',
+                fontSize: 14,
+                fontWeight: 600,
+                borderRadius: 10,
+                border: 'none',
+                background: 'var(--affine-primary-color, #1e96eb)',
+                color: 'var(--affine-white, #ffffff)',
+                textDecoration: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              {`Contacter l\u{2019}administrateur`}
+            </a>
+            <button
+              onClick={() => window.history.back()}
+              style={{
+                padding: '10px 20px',
+                fontSize: 14,
+                fontWeight: 600,
+                borderRadius: 10,
+                border: '1px solid var(--affine-border-color, #2a2a2c)',
+                background: 'transparent',
+                color: 'var(--affine-text-primary-color, #ececec)',
+                cursor: 'pointer',
+              }}
+            >
+              {`Retour`}
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
