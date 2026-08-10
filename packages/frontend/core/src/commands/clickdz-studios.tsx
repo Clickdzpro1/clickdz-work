@@ -26,7 +26,7 @@ export function registerClickDzStudioCommands({
         id: `clickdz:goto-${studio.id}`,
         category: 'affine:navigation',
         icon: studio.icon(),
-        label: `Open ${studio.label}`,
+        label: `Ouvrir ${studio.label}`,
         run() {
           workbench.open(studio.route);
         },
