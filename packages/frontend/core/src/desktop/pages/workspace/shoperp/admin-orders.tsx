@@ -131,7 +131,7 @@ export const OrdersAdmin = ({
       );
       const out = await postOrderStatus(slug, ref, to);
       if (out.status === 'ok') {
-        setNotice({ tone: 'ok', text: `Order ${ref} → ${to}` });
+        setNotice({ tone: 'ok', text: `Commande ${ref} → ${to}` });
         await load(true); // the replaced record has a fresh id/createdAt
         onMutated(); // parent refreshes the KPI summary
       } else {
@@ -182,7 +182,7 @@ export const OrdersAdmin = ({
       <Banner tone="error">
         Impossible de charger les commandes.{' '}
         <button style={linkBtnStyle} onClick={() => void load()}>
-          Retry
+          Réessayer
         </button>
       </Banner>
     );
@@ -193,7 +193,7 @@ export const OrdersAdmin = ({
       {/* Status filter chips */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         <button style={chipStyle(filter === 'all')} onClick={() => setFilter('all')}>
-          All
+          Tous
           <span style={{ opacity: 0.7 }}>{orders.length}</span>
         </button>
         {ORDER_STATUSES.map(s => (
@@ -214,7 +214,7 @@ export const OrdersAdmin = ({
         </Banner>
       ) : null}
 
-      <Panel title={`Orders · ${visible.length}`}>
+      <Panel title={`Commandes · ${visible.length}`}>
         {/* Paginated order list (pageSize 10, column mode). The `key={filter}`
             remounts PagedList whenever the active status filter changes, which
             resets it to page 1 (a filtered view always starts at the top).
@@ -370,7 +370,7 @@ const OrderRow = ({
                 style={miniBtnStyle('primary', anyBusy)}
                 disabled={anyBusy}
                 onClick={() => void onAdvance(o, next)}
-                title={`Advance to ${next}`}
+                title={`Passer à ${next}`}
               >
                 → {next}
               </button>
