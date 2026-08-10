@@ -8,7 +8,10 @@ import { type Dispatch, type SetStateAction, useEffect, useState } from 'react';
 
 import { SharedDataTable } from '../../../components/shared/data-table';
 import type { UserType } from '../schema';
-import { DataTableToolbar } from './data-table-toolbar';
+import {
+  DataTableToolbar,
+  type SuspendedFilter,
+} from './data-table-toolbar';
 
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
@@ -20,6 +23,12 @@ interface DataTableProps<TData, TValue> {
   onKeywordChange: Dispatch<SetStateAction<string>>;
   selectedFeatures: FeatureType[];
   onFeaturesChange: Dispatch<SetStateAction<FeatureType[]>>;
+  suspendedFilter: SuspendedFilter;
+  onSuspendedFilterChange: Dispatch<SetStateAction<SuspendedFilter>>;
+  dateAfter: string;
+  onDateAfterChange: Dispatch<SetStateAction<string>>;
+  dateBefore: string;
+  onDateBeforeChange: Dispatch<SetStateAction<string>>;
   onPaginationChange: Dispatch<
     SetStateAction<{
       pageIndex: number;
@@ -38,13 +47,19 @@ export function DataTable<TData extends { id: string }, TValue>({
   onKeywordChange,
   selectedFeatures,
   onFeaturesChange,
+  suspendedFilter,
+  onSuspendedFilterChange,
+  dateAfter,
+  onDateAfterChange,
+  dateBefore,
+  onDateBeforeChange,
   onPaginationChange,
 }: DataTableProps<TData, TValue>) {
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
 
   useEffect(() => {
     setRowSelection({});
-  }, [keyword, selectedFeatures]);
+  }, [keyword, selectedFeatures, suspendedFilter, dateAfter, dateBefore]);
 
   useEffect(() => {
     const selection: Record<string, boolean> = {};
@@ -63,7 +78,13 @@ export function DataTable<TData extends { id: string }, TValue>({
       onPaginationChange={onPaginationChange}
       rowSelection={rowSelection}
       onRowSelectionChange={setRowSelection}
-      resetFiltersDeps={[keyword, selectedFeatures]}
+      resetFiltersDeps={[
+        keyword,
+        selectedFeatures,
+        suspendedFilter,
+        dateAfter,
+        dateBefore,
+      ]}
       renderToolbar={table => (
         <DataTableToolbar
           table={table}
@@ -72,6 +93,12 @@ export function DataTable<TData extends { id: string }, TValue>({
           onKeywordChange={onKeywordChange}
           selectedFeatures={selectedFeatures}
           onFeaturesChange={onFeaturesChange}
+          suspendedFilter={suspendedFilter}
+          onSuspendedFilterChange={onSuspendedFilterChange}
+          dateAfter={dateAfter}
+          onDateAfterChange={onDateAfterChange}
+          dateBefore={dateBefore}
+          onDateBeforeChange={onDateBeforeChange}
         />
       )}
     />
