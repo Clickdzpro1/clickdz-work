@@ -27,6 +27,7 @@ import {
   orderTotal,
   Panel,
   productTitle,
+  Skeleton,
   Spinner,
   STATUS_COLORS,
 } from './shoperp-shared';
@@ -502,7 +503,7 @@ export const ReportsPanel = ({
   // Render.
   // -------------------------------------------------------------------------
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Période picker + actions */}
       <div
         style={{
@@ -510,6 +511,10 @@ export const ReportsPanel = ({
           alignItems: 'center',
           gap: 10,
           flexWrap: 'wrap',
+          padding: '14px 16px',
+          borderRadius: 14,
+          background: C.panel,
+          border: `1px solid ${C.border}`,
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 220 }}>
@@ -529,36 +534,31 @@ export const ReportsPanel = ({
             {resolved.from} → {resolved.to}
           </span>
         </div>
-        <button
-          style={miniBtnStyle('secondary', refreshing)}
-          disabled={refreshing || phase === 'loading'}
-          onClick={() => {
-            void load(true);
-            void loadCaisse();
-          }}
-        >
-          {refreshing ? <Spinner /> : <span aria-hidden>↻</span>} Actualiser
-        </button>
-        <button
-          style={btnStyle('primary', phase !== 'ready')}
-          disabled={phase !== 'ready'}
-          onClick={() => void copyReport()}
-        >
-          {copied ? '✓ Copié' : '📋 Copier le rapport'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            style={miniBtnStyle('secondary', refreshing)}
+            disabled={refreshing || phase === 'loading'}
+            onClick={() => {
+              void load(true);
+              void loadCaisse();
+            }}
+          >
+            {refreshing ? <Spinner /> : <span aria-hidden>↻</span>} Actualiser
+          </button>
+          <button
+            style={btnStyle('primary', phase !== 'ready')}
+            disabled={phase !== 'ready'}
+            onClick={() => void copyReport()}
+          >
+            {copied ? '✓ Copié' : '📋 Copier le rapport'}
+          </button>
+        </div>
       </div>
 
       {phase === 'loading' ? (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '28px 4px',
-            color: C.muted,
-          }}
-        >
-          <Spinner /> Chargement des données…
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Skeleton rows={2} height={80} gap={12} />
+          <Skeleton rows={4} height={36} gap={8} />
         </div>
       ) : phase === 'error' ? (
         <Banner tone="error">
@@ -584,18 +584,24 @@ export const ReportsPanel = ({
               value={fmtDZD(revenue, currency)}
               hint="Commandes livrées"
               color={C.okText}
+              iconBg="linear-gradient(135deg, #22c55e22, #22c55e44)"
+              iconColor={C.okText}
             />
             <Kpi
               icon="🧾"
               label="Commandes"
               value={String(ordersCount)}
               hint={`${delivered.length} livrées`}
+              iconBg={C.accentSoft}
+              iconColor={C.accent}
             />
             <Kpi
               icon="🧺"
               label="Panier moyen"
               value={fmtDZD(avgBasket, currency)}
               hint="Par commande livrée"
+              iconBg="linear-gradient(135deg, #8b5cf622, #8b5cf644)"
+              iconColor="#8b5cf6"
             />
           </div>
 
@@ -693,7 +699,7 @@ export const ReportsPanel = ({
             {!hasCourierData ? (
               <Empty>
                 Aucun livreur configuré — ajoutez vos transporteurs dans
-                l’onglet Livraison pour suivre leur performance ici.
+                l'onglet Livraison pour suivre leur performance ici.
               </Empty>
             ) : courierPerf.length === 0 ? (
               <Empty>
@@ -709,12 +715,12 @@ export const ReportsPanel = ({
           <Panel title={`Caisse — mois ${fmtMonth(resolved.monthKey)}`}>
             {caisseState === 'pending' ? (
               <Empty>
-                Caisse en attente d’activation — les mouvements apparaîtront ici
+                Caisse en attente d'activation — les mouvements apparaîtront ici
                 une fois la caisse en service.
               </Empty>
             ) : caisseState === 'error' ? (
               <Banner tone="warn">
-                Impossible de charger la caisse pour l’instant.{' '}
+                Impossible de charger la caisse pour l'instant.{' '}
                 <button style={linkRetryStyle} onClick={() => void loadCaisse()}>
                   Réessayer
                 </button>
@@ -733,12 +739,16 @@ export const ReportsPanel = ({
                   value={fmtDZD(caisse.inTotal, currency)}
                   hint={`${caisse.entryCount} mouvement(s)`}
                   color={C.okText}
+                  iconBg="linear-gradient(135deg, #22c55e22, #22c55e44)"
+                  iconColor={C.okText}
                 />
                 <Kpi
                   icon="⬇️"
                   label="Sorties"
                   value={fmtDZD(caisse.outTotal, currency)}
                   color="#e8a33d"
+                  iconBg="linear-gradient(135deg, #e8a33d22, #e8a33d44)"
+                  iconColor="#e8a33d"
                 />
                 <Kpi
                   icon="⚖️"
@@ -747,6 +757,8 @@ export const ReportsPanel = ({
                   color={
                     caisse.net >= 0 ? C.okText : 'var(--affine-error-color, #eb4b4b)'
                   }
+                  iconBg={C.accentSoft}
+                  iconColor={C.accent}
                 />
                 {caisse.pendingCodTotal > 0 ? (
                   <Kpi
@@ -754,6 +766,8 @@ export const ReportsPanel = ({
                     label="COD en attente"
                     value={fmtDZD(caisse.pendingCodTotal, currency)}
                     hint="Livraisons à encaisser"
+                    iconBg={C.warnBg}
+                    iconColor="#e8a33d"
                   />
                 ) : null}
               </div>
@@ -784,22 +798,28 @@ export const ReportsPanel = ({
                         ? C.okText
                         : 'var(--affine-error-color, #eb4b4b)'
                     }
+                    iconBg="linear-gradient(135deg, #22c55e22, #22c55e44)"
+                    iconColor={C.okText}
                   />
                   <Kpi
                     icon="🧮"
                     label="Coût des ventes"
                     value={fmtDZD(margin.cogs, currency)}
                     hint={`${margin.matchedUnits} unité(s)`}
+                    iconBg={C.accentSoft}
+                    iconColor={C.accent}
                   />
                   <Kpi
                     icon="💰"
                     label="CA suivi"
                     value={fmtDZD(margin.matchedRevenue, currency)}
                     hint={`${margin.costedCount} produit(s) avec coût`}
+                    iconBg="linear-gradient(135deg, #8b5cf622, #8b5cf644)"
+                    iconColor="#8b5cf6"
                   />
                 </div>
                 <div style={{ ...hintStyle, marginTop: 10 }}>
-                  Estimation basée sur les produits qui portent un prix d’achat.
+                  Estimation basée sur les produits qui portent un prix d'achat.
                   Les articles sans coût renseigné ne sont pas comptés.
                 </div>
               </Panel>
@@ -1068,7 +1088,7 @@ const FunnelStat = ({
       flex: '1 1 130px',
       minWidth: 0,
       padding: '8px 10px',
-      borderRadius: 8,
+      borderRadius: 10,
       background: flag ? C.errBg : C.panel2,
       border: `1px solid ${flag ? C.errBorder : C.border}`,
     }}
@@ -1098,9 +1118,9 @@ const TopProducts = ({
   }
   const max = Math.max(1, ...data.map(d => d.revenue));
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {data.map((t, i) => (
-        <div key={`${t.title}-${i}`} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div key={`${t.title}-${i}`} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span
               style={{
@@ -1144,7 +1164,7 @@ const TopProducts = ({
           <div
             style={{
               height: 8,
-              borderRadius: 5,
+              borderRadius: 999,
               background: C.panel2,
               overflow: 'hidden',
               marginLeft: 26,
@@ -1154,8 +1174,9 @@ const TopProducts = ({
               style={{
                 width: `${Math.max(3, (t.revenue / max) * 100)}%`,
                 height: '100%',
-                borderRadius: 5,
+                borderRadius: 999,
                 background: C.accent,
+                transition: 'width 300ms ease',
               }}
             />
           </div>
@@ -1191,9 +1212,13 @@ const CourierTable = ({
             display: 'flex',
             alignItems: 'center',
             gap: 10,
-            padding: '9px 0',
+            padding: '10px 12px',
+            borderRadius: 8,
             ...(i > 0 ? { borderTop: `1px solid ${C.border}` } : {}),
+            transition: 'background 140ms ease',
           }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
         >
           <span
             style={{
@@ -1249,14 +1274,29 @@ const SectionTitle = ({ icon, title }: { icon: string; title: string }) => (
     style={{
       display: 'flex',
       alignItems: 'center',
-      gap: 8,
+      gap: 10,
       fontSize: 14,
       fontWeight: 800,
       color: C.text,
-      marginTop: 4,
+      marginTop: 6,
     }}
   >
-    <span aria-hidden>{icon}</span>
+    <div
+      style={{
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        background: `linear-gradient(135deg, ${C.accentSoft}, ${C.panel2})`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 16,
+        flexShrink: 0,
+        border: `1px solid ${C.border}`,
+      }}
+    >
+      <span aria-hidden>{icon}</span>
+    </div>
     {title}
   </div>
 );
@@ -1267,50 +1307,76 @@ const Kpi = ({
   value,
   hint,
   color,
+  iconBg,
+  iconColor,
 }: {
   icon: string;
   label: string;
   value: string;
   hint?: string;
   color?: string;
+  iconBg?: string;
+  iconColor?: string;
 }) => (
   <div
     style={{
       background: C.panel,
       border: `1px solid ${C.border}`,
-      borderRadius: 12,
-      padding: '12px 14px',
+      borderRadius: 14,
+      padding: '14px 16px',
       display: 'flex',
       flexDirection: 'column',
-      gap: 4,
+      gap: 6,
       minWidth: 0,
+      boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
     }}
   >
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        fontSize: 11,
-        fontWeight: 700,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        color: C.muted,
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-      }}
-    >
-      <span aria-hidden>{icon}</span> {label}
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: C.muted,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          flex: 1,
+        }}
+      >
+        {label}
+      </div>
+      {iconBg ? (
+        <div
+          aria-hidden
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            background: iconBg,
+            border: `1px solid ${C.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 16,
+            flexShrink: 0,
+            color: iconColor,
+          }}
+        >
+          {icon}
+        </div>
+      ) : null}
     </div>
     <div
       style={{
-        fontSize: 20,
-        fontWeight: 800,
+        fontSize: 22,
+        fontWeight: 900,
         color: color ?? C.text,
         whiteSpace: 'nowrap',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
+        letterSpacing: '-0.5px',
       }}
       title={value}
     >
@@ -1323,7 +1389,7 @@ const Kpi = ({
 const Empty = ({ children }: { children: ReactNode }) => (
   <div
     style={{
-      padding: '18px 8px',
+      padding: '20px 8px',
       textAlign: 'center',
       fontSize: 12.5,
       color: C.muted,
@@ -1347,9 +1413,13 @@ const ItemList = ({
           display: 'flex',
           alignItems: 'center',
           gap: 10,
-          padding: '7px 0',
+          padding: '8px 6px',
+          borderRadius: 6,
           ...(i > 0 ? { borderTop: `1px solid ${C.border}` } : {}),
+          transition: 'background 140ms ease',
         }}
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
       >
         <span
           style={{
@@ -1396,12 +1466,12 @@ function segStyle(active: boolean): CSSProperties {
   return {
     appearance: 'none',
     cursor: 'pointer',
-    borderRadius: 7,
-    padding: '6px 12px',
+    borderRadius: 999,
+    padding: '6px 14px',
     fontSize: 12.5,
     fontWeight: 700,
-    color: active ? C.text : C.muted,
-    background: active ? C.accentSoft : 'transparent',
+    color: active ? '#fff' : C.muted,
+    background: active ? C.accent : 'transparent',
     border: `1px solid ${active ? C.accent : C.border}`,
     transition: 'color 160ms ease, border-color 160ms ease, background 160ms ease',
   };
