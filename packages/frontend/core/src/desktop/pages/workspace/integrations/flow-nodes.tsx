@@ -411,8 +411,10 @@ export function NodePalette({ catalog, readOnly, onAdd }: NodePaletteProps) {
 
   return (
     <div
+      data-cdz-panel=""
       style={{
         width: 220,
+        maxWidth: '100%',
         flex: '0 0 220px',
         boxSizing: 'border-box',
         padding: 12,
@@ -676,8 +678,10 @@ export function NodeInspector({
 
   return (
     <div
+      data-cdz-panel=""
       style={{
         width: 260,
+        maxWidth: '100%',
         flex: '0 0 260px',
         boxSizing: 'border-box',
         padding: 14,
@@ -714,6 +718,10 @@ export function NodeInspector({
           style={{
             appearance: 'none',
             display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: 32,
+            minHeight: 32,
             padding: 4,
             borderRadius: 6,
             cursor: 'pointer',
