@@ -163,6 +163,19 @@ const maxAiKey = (userId: string, connId: string, chatJidHash: string) =>
 // P4 W3: scoped by connId so read state doesn't bleed across accounts.
 const maxReadKey = (userId: string, connId: string, chatJidHash: string) =>
   `clickdz:wamax:read:${userId}:${connId}:${chatJidHash}`;
+// WS-MAXP: per-connection AI settings (persona/tone/language/auto-reply default
+// + quick replies). One JSON record per (userId, connId), sanitized on
+// read AND write by sanitizeWamaxAiSettings.
+const maxAiSettingsKey = (userId: string, connId: string) =>
+  `clickdz:wamax:aiset:${userId}:${connId}`;
+// WS-MAXP: profile-photo URL cache — per (connId, jidHash). A photo lookup is a
+// LIVE gateway call (Baileys profilePicture), so hits keep the chat list cheap.
+// Successful URLs cache 12h; a null (hidden/unavailable/session-down) caches 1h
+// so a temporary gateway hiccup can't pin "no photo" for half a day.
+const maxAvatarKey = (connId: string, jidHash: string) =>
+  `clickdz:wamax:av:${connId}:${jidHash}`;
+const AVATAR_TTL_MS = 12 * 60 * 60 * 1000;
+const AVATAR_NULL_TTL_MS = 60 * 60 * 1000;
 
 // TTL (Cache API takes MILLISECONDS). 180d, re-armed on activity.
 const MAX_TTL_MS = 180 * 24 * 60 * 60 * 1000;
@@ -213,6 +226,145 @@ export interface WhatsappMaxRecord {
 /** connId → owner pointer (webhook reverse map). */
 export interface WhatsappMaxConnRecord {
   userId: string;
+}
+
+// ---------------------------------------------------------------------------
+// WS-MAXP — per-connection AI settings. Configures HOW the WhatsappMax AI
+// behaves for this shop: the business persona/context fed to every assist
+// prompt AND to the inbound auto-reply run (via createAgentRun's persona
+// threading), the reply tone, the reply language, whether NEW chats default to
+// AI auto-reply (the per-chat toggle still overrides), and the owner's
+// quick-reply templates surfaced in the composer.
+// ---------------------------------------------------------------------------
+export interface WamaxAiSettings {
+  businessName: string;
+  persona: string;
+  tone: 'pro' | 'amical' | 'vendeur' | 'neutre';
+  language: 'auto' | 'fr' | 'darija' | 'ar' | 'en';
+  autoReplyDefault: boolean;
+  quickReplies: string[];
+}
+
+const WAMAX_TONES: ReadonlyArray<WamaxAiSettings['tone']> = [
+  'pro',
+  'amical',
+  'vendeur',
+  'neutre',
+];
+const WAMAX_LANGS: ReadonlyArray<WamaxAiSettings['language']> = [
+  'auto',
+  'fr',
+  'darija',
+  'ar',
+  'en',
+];
+const WAMAX_PERSONA_MAX = 1500;
+const WAMAX_BIZNAME_MAX = 120;
+const WAMAX_QUICKREPLY_MAX = 10;
+const WAMAX_QUICKREPLY_LEN = 300;
+
+const DEFAULT_WAMAX_AI_SETTINGS: WamaxAiSettings = {
+  businessName: '',
+  persona: '',
+  tone: 'pro',
+  language: 'auto',
+  autoReplyDefault: false,
+  quickReplies: [],
+};
+
+/** Sanitize an untrusted/partial settings blob into a full, bounded record.
+ * Unknown fields are DROPPED, strings trimmed + clamped, enums validated.
+ * NEVER throws — any garbage collapses to the defaults. */
+function sanitizeWamaxAiSettings(raw: unknown): WamaxAiSettings {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  const businessName =
+    typeof r.businessName === 'string'
+      ? r.businessName.trim().slice(0, WAMAX_BIZNAME_MAX)
+      : '';
+  const persona =
+    typeof r.persona === 'string'
+      ? r.persona.trim().slice(0, WAMAX_PERSONA_MAX)
+      : '';
+  const tone = WAMAX_TONES.includes(r.tone as WamaxAiSettings['tone'])
+    ? (r.tone as WamaxAiSettings['tone'])
+    : DEFAULT_WAMAX_AI_SETTINGS.tone;
+  const language = WAMAX_LANGS.includes(
+    r.language as WamaxAiSettings['language']
+  )
+    ? (r.language as WamaxAiSettings['language'])
+    : DEFAULT_WAMAX_AI_SETTINGS.language;
+  const autoReplyDefault =
+    r.autoReplyDefault === true ||
+    r.autoReplyDefault === 'true' ||
+    r.autoReplyDefault === 1;
+  const quickReplies = Array.isArray(r.quickReplies)
+    ? (r.quickReplies as unknown[])
+        .map(q =>
+          typeof q === 'string' ? q.trim().slice(0, WAMAX_QUICKREPLY_LEN) : ''
+        )
+        .filter(Boolean)
+        .slice(0, WAMAX_QUICKREPLY_MAX)
+    : [];
+  return { businessName, persona, tone, language, autoReplyDefault, quickReplies };
+}
+
+/** French prompt fragment for the configured reply tone. */
+function wamaxToneLine(tone: WamaxAiSettings['tone']): string {
+  switch (tone) {
+    case 'amical':
+      return 'Adopte un ton chaleureux et amical.';
+    case 'vendeur':
+      return 'Adopte un ton commercial et persuasif, orienté vente.';
+    case 'neutre':
+      return 'Adopte un ton neutre et factuel.';
+    default:
+      return 'Adopte un ton professionnel et courtois.';
+  }
+}
+
+/** French prompt fragment for the configured reply language. */
+function wamaxLangLine(language: WamaxAiSettings['language']): string {
+  switch (language) {
+    case 'fr':
+      return 'Réponds toujours en français.';
+    case 'darija':
+      return 'Réponds toujours en darija algérienne, comme un commerçant algérien.';
+    case 'ar':
+      return 'Réponds toujours en arabe.';
+    case 'en':
+      return 'Always reply in English.';
+    default:
+      return 'Réponds dans la langue de la conversation (français, darija ou arabe selon le cas).';
+  }
+}
+
+/** Build the persona string threaded to createAgentRun for inbound auto-reply
+ * runs. Returns undefined when the settings are entirely default (no persona,
+ * no business name, default tone+language) so legacy behavior stays
+ * byte-identical for unconfigured shops. */
+function buildWamaxRunPersona(s: WamaxAiSettings): string | undefined {
+  const configured =
+    !!s.persona ||
+    !!s.businessName ||
+    s.tone !== DEFAULT_WAMAX_AI_SETTINGS.tone ||
+    s.language !== DEFAULT_WAMAX_AI_SETTINGS.language;
+  if (!configured) return undefined;
+  const parts: string[] = [];
+  parts.push(
+    s.businessName
+      ? `Tu réponds sur WhatsApp AU NOM de l’entreprise « ${s.businessName} », à un client.`
+      : 'Tu réponds sur WhatsApp AU NOM de l’entreprise, à un client.'
+  );
+  if (s.persona) parts.push(`Contexte de l’entreprise : ${s.persona}`);
+  parts.push(wamaxToneLine(s.tone));
+  parts.push(wamaxLangLine(s.language));
+  parts.push(
+    'Réponds de façon brève et directement envoyable sur WhatsApp — pas de préambule, pas de signature.'
+  );
+  return parts.join(' ');
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +600,26 @@ class WhatsappMaxGatewayClient {
   }
 
   /**
+   * WS-MAXP — Live profile-photo URL for a contact/group JID.
+   * GET /instances/:id/contacts/:jid/photo → { jid, url }
+   * The URL is a WhatsApp CDN link (pps.whatsapp.net) directly renderable in
+   * an <img>. null when hidden/unavailable or the session is down. NEVER throws.
+   */
+  async getProfilePicture(
+    instanceId: string,
+    jid: string
+  ): Promise<string | null> {
+    if (!instanceId || !jid) return null;
+    const r = await this.call(
+      `/instances/${instanceId}/contacts/${encodeURIComponent(jid)}/photo`,
+      { method: 'GET' }
+    );
+    if (!r || r.status !== 200) return null;
+    const b = r.body || {};
+    return typeof b.url === 'string' && b.url ? b.url : null;
+  }
+
+  /**
    * P4 E1.2 — Check whether numbers are on WhatsApp.
    * POST /instances/:id/check { numbers: string[] }
    * Returns { results: [{ input, jid, exists }] } or null on failure.
@@ -513,15 +685,19 @@ class WhatsappMaxGatewayClient {
     instanceId: string,
     chatJid: string,
     limit: number,
-    before?: number,
+    before?: string,
     fromMe?: boolean
   ): Promise<any[]> {
     if (!instanceId) return [];
     const params = new URLSearchParams();
     if (chatJid) params.set('chatJid', chatJid);
     params.set('limit', String(Math.max(1, Math.min(500, limit || 50))));
-    if (before !== undefined && Number.isFinite(before)) {
-      params.set('before', String(before));
+    // WS-MAXP fix: the gateway parses `before` with `new Date(q.before)`, which
+    // rejects a milliseconds-since-epoch STRING ("17232…" → Invalid Date → SQL
+    // error → empty page). Always pass an ISO-8601 string — the /messages route
+    // normalizes both ms and ISO inputs to ISO before calling here.
+    if (before) {
+      params.set('before', before);
     }
     if (fromMe !== undefined) {
       params.set('fromMe', fromMe ? 'true' : 'false');
@@ -786,6 +962,22 @@ export class ClickDzWhatsappMaxController {
       return { rec: records[0], connId: records[0].connId };
     }
     return null;
+  }
+
+  /** WS-MAXP — Load the per-connection AI settings (defaults on any miss/error).
+   * Always returns a FULL sanitized record — callers never see partials. */
+  private async loadAiSettings(
+    userId: string,
+    connId: string
+  ): Promise<WamaxAiSettings> {
+    try {
+      const raw = await this.cache.get<Partial<WamaxAiSettings>>(
+        maxAiSettingsKey(userId, connId)
+      );
+      return sanitizeWamaxAiSettings(raw);
+    } catch {
+      return { ...DEFAULT_WAMAX_AI_SETTINGS };
+    }
   }
 
   // --- P4 W3: Index helpers (raw Redis SET ops via this.redis) ---
@@ -1270,7 +1462,16 @@ export class ClickDzWhatsappMaxController {
     const resolved = await this.resolveRecord(user.id, connId || undefined);
     if (!resolved || !resolved.rec.active) return { chats: [] };
     const chats = await gateway.listChats(resolved.rec.instanceId);
-    if (chats.length > 0) return { chats };
+    if (chats.length > 0) {
+      return {
+        chats: await this.enrichChats(
+          user.id,
+          resolved.connId,
+          resolved.rec,
+          chats
+        ),
+      };
+    }
 
     // Self-heal: a CONNECTED instance with an empty chat list usually means
     // the gateway's one-shot on-ready history sync failed or was interrupted
@@ -1287,11 +1488,119 @@ export class ClickDzWhatsappMaxController {
         for (let i = 0; i < 2; i++) {
           await new Promise(res => setTimeout(res, 4000));
           const retry = await gateway.listChats(resolved.rec.instanceId);
-          if (retry.length > 0) return { chats: retry };
+          if (retry.length > 0) {
+            return {
+              chats: await this.enrichChats(
+                user.id,
+                resolved.connId,
+                resolved.rec,
+                retry
+              ),
+            };
+          }
         }
       }
     }
     return { chats };
+  }
+
+  /**
+   * WS-MAXP — Enrich raw gateway chat rows with a last-message preview
+   * (`last_text` / `last_type` / `last_from_me`) and a REAL `unread` count.
+   *
+   * ONE extra gateway call: the latest 300 messages across ALL chats (the
+   * gateway's queryMessages without a chatJid filter, ts DESC). Grouped by
+   * chat_jid, the first row per chat is its last message; inbound rows newer
+   * than the chat's read watermark (maxReadKey, set by POST /read on open —
+   * falling back to the record's connectedAt for never-opened chats) count as
+   * unread. A chat whose last message fell outside the 300-row window simply
+   * stays un-enriched — the FE renders it exactly like before.
+   *
+   * Fail-soft: ANY error returns the original rows untouched.
+   */
+  private async enrichChats(
+    userId: string,
+    connId: string,
+    rec: WhatsappMaxRecord,
+    chats: any[]
+  ): Promise<any[]> {
+    try {
+      if (!Array.isArray(chats) || chats.length === 0) return chats;
+      const recent = await gateway.listMessages(rec.instanceId, '', 300);
+      if (!Array.isArray(recent) || recent.length === 0) return chats;
+      interface ChatAgg {
+        lastText: string | null;
+        lastType: string | null;
+        lastFromMe: boolean;
+        inbound: number[];
+      }
+      const byChat = new Map<string, ChatAgg>();
+      // `recent` is newest-first — the first row seen per chat IS its last message.
+      for (const m of recent) {
+        const jid =
+          typeof m?.chat_jid === 'string' && m.chat_jid
+            ? m.chat_jid
+            : typeof m?.chatJid === 'string'
+              ? m.chatJid
+              : '';
+        if (!jid) continue;
+        const fromMe = m?.from_me === true || m?.fromMe === true;
+        let agg = byChat.get(jid);
+        if (!agg) {
+          agg = {
+            lastText:
+              typeof m?.text === 'string'
+                ? m.text
+                : typeof m?.text_body === 'string'
+                  ? m.text_body
+                  : null,
+            lastType: typeof m?.type === 'string' ? m.type : null,
+            lastFromMe: fromMe,
+            inbound: [],
+          };
+          byChat.set(jid, agg);
+        }
+        if (!fromMe) {
+          const rawTs = m?.ts ?? m?.timestamp;
+          const tsMs = rawTs ? new Date(rawTs).getTime() : NaN;
+          if (Number.isFinite(tsMs)) agg.inbound.push(tsMs);
+        }
+      }
+      const fallbackMark = Number(rec.connectedAt) || 0;
+      const out: any[] = [];
+      for (const c of chats) {
+        const jid = typeof c?.jid === 'string' ? c.jid : '';
+        const agg = jid ? byChat.get(jid) : undefined;
+        if (!agg) {
+          out.push(c);
+          continue;
+        }
+        let mark = fallbackMark;
+        try {
+          const v = await (this.redis as any).get(
+            maxReadKey(userId, connId, hashJid(jid))
+          );
+          const n = Number(v);
+          if (Number.isFinite(n) && n > 0) mark = n;
+        } catch {
+          /* fallbackMark */
+        }
+        const unread = agg.inbound.reduce(
+          (acc, t) => (t > mark ? acc + 1 : acc),
+          0
+        );
+        out.push({
+          ...c,
+          last_text: agg.lastText,
+          last_type: agg.lastType,
+          last_from_me: agg.lastFromMe,
+          unread,
+        });
+      }
+      return out;
+    } catch {
+      return chats;
+    }
   }
 
   // =========================================================================
@@ -1313,10 +1622,17 @@ export class ClickDzWhatsappMaxController {
     this.assertEnabled();
     const chatJid = typeof chatJidRaw === 'string' ? chatJidRaw.trim() : '';
     const limit = Number(limitRaw) || 50;
-    const before =
-      beforeRaw !== undefined && beforeRaw !== ''
-        ? Number(beforeRaw) || undefined
-        : undefined;
+    // WS-MAXP fix: accept `before` as EITHER ms-since-epoch or an ISO string
+    // and normalize to ISO — the gateway parses it with `new Date(value)`,
+    // which rejects a ms STRING (the old pass-through silently broke the
+    // "load older messages" cursor end-to-end).
+    const before = (() => {
+      const raw = typeof beforeRaw === 'string' ? beforeRaw.trim() : '';
+      if (!raw) return undefined;
+      const ms = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
+      if (!Number.isFinite(ms) || ms <= 0) return undefined;
+      return new Date(ms).toISOString();
+    })();
     const fromMe =
       fromMeRaw === 'true' ? true : fromMeRaw === 'false' ? false : undefined;
     const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
@@ -1462,22 +1778,28 @@ export class ClickDzWhatsappMaxController {
     @CurrentUser() user: CurrentUser,
     @Query('chatJid') chatJidRaw: string,
     @Query('connId') connIdRaw: string
-  ): Promise<{ enabled: boolean }> {
+  ): Promise<{ enabled: boolean; source: 'chat' | 'default' }> {
     this.assertEnabled();
     const chatJid = typeof chatJidRaw === 'string' ? chatJidRaw.trim() : '';
     if (!chatJid) throw new BadRequest('chatJid required');
     // P4 W3: per-connId record.
     const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
     const resolved = await this.resolveRecord(user.id, connId || undefined);
-    if (!resolved) return { enabled: false };
+    if (!resolved) return { enabled: false, source: 'default' };
+    // WS-MAXP: report the EFFECTIVE state — an explicit per-chat value wins;
+    // otherwise the connection-level autoReplyDefault applies (the same
+    // resolution the inbound webhook uses, so the pill never lies).
     try {
       const val = await (this.redis as any).get(
         maxAiKey(user.id, resolved.connId, hashJid(chatJid))
       );
-      return { enabled: val === '1' };
+      if (val === '1') return { enabled: true, source: 'chat' };
+      if (val === '0') return { enabled: false, source: 'chat' };
     } catch {
-      return { enabled: false };
+      /* fall through to the default below */
     }
+    const settings = await this.loadAiSettings(user.id, resolved.connId);
+    return { enabled: settings.autoReplyDefault === true, source: 'default' };
   }
 
   // =========================================================================
@@ -1567,6 +1889,127 @@ export class ClickDzWhatsappMaxController {
       });
     }
     return { accounts };
+  }
+
+  // =========================================================================
+  // WS-MAXP — GET /api/v1/whatsappmax/settings?connId=
+  //   → { ok, settings, connId? }
+  //   Per-connection AI settings (persona/tone/language/auto-reply default +
+  //   quick replies). Defaults when nothing stored — the FE always gets a
+  //   full record.
+  // =========================================================================
+  @Throttle('default', { limit: 120, ttl: 60_000 })
+  @Get('/api/v1/whatsappmax/settings')
+  async getSettings(
+    @CurrentUser() user: CurrentUser,
+    @Query('connId') connIdRaw: string
+  ): Promise<{ ok: boolean; settings: WamaxAiSettings; connId?: string }> {
+    this.assertEnabled();
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved) {
+      return { ok: true, settings: { ...DEFAULT_WAMAX_AI_SETTINGS } };
+    }
+    const settings = await this.loadAiSettings(user.id, resolved.connId);
+    return { ok: true, settings, connId: resolved.connId };
+  }
+
+  // =========================================================================
+  // WS-MAXP — POST /api/v1/whatsappmax/settings
+  //   { connId?, businessName?, persona?, tone?, language?,
+  //     autoReplyDefault?, quickReplies? } → { ok, settings }
+  //   Partial merge over the stored record; every field sanitized/clamped by
+  //   sanitizeWamaxAiSettings (unknown fields dropped, enums validated).
+  // =========================================================================
+  @Throttle('strict')
+  @Post('/api/v1/whatsappmax/settings')
+  async setSettings(
+    @CurrentUser() user: CurrentUser,
+    @Body()
+    body: {
+      connId?: unknown;
+      businessName?: unknown;
+      persona?: unknown;
+      tone?: unknown;
+      language?: unknown;
+      autoReplyDefault?: unknown;
+      quickReplies?: unknown;
+    }
+  ): Promise<{ ok: boolean; settings: WamaxAiSettings }> {
+    this.assertEnabled();
+    const connId =
+      typeof body?.connId === 'string' ? body.connId.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved) throw new BadRequest('not_connected');
+    const current = await this.loadAiSettings(user.id, resolved.connId);
+    // Only merge the fields present in the body — an omitted field keeps its
+    // stored value (partial update semantics for the FE form).
+    const patch: Record<string, unknown> = {};
+    const src = (body ?? {}) as Record<string, unknown>;
+    for (const field of [
+      'businessName',
+      'persona',
+      'tone',
+      'language',
+      'autoReplyDefault',
+      'quickReplies',
+    ]) {
+      if (field in src && src[field] !== undefined) patch[field] = src[field];
+    }
+    const merged = sanitizeWamaxAiSettings({ ...current, ...patch });
+    try {
+      await this.cache.set(
+        maxAiSettingsKey(user.id, resolved.connId),
+        merged,
+        { ttl: MAX_TTL_MS }
+      );
+    } catch {
+      /* best-effort — the sanitized record is still returned */
+    }
+    return { ok: true, settings: merged };
+  }
+
+  // =========================================================================
+  // WS-MAXP — GET /api/v1/whatsappmax/avatar?jid=&connId=
+  //   → { url: string | null }
+  //   Profile-photo URL for a chat/contact JID (WhatsApp CDN link, directly
+  //   renderable in an <img>). Redis-cached (12h hit / 1h null) because the
+  //   gateway lookup is a LIVE session call. null = hidden/unavailable — the
+  //   FE falls back to initials.
+  // =========================================================================
+  @Throttle('default', { limit: 300, ttl: 60_000 })
+  @Get('/api/v1/whatsappmax/avatar')
+  async avatar(
+    @CurrentUser() user: CurrentUser,
+    @Query('jid') jidRaw: string,
+    @Query('connId') connIdRaw: string
+  ): Promise<{ url: string | null }> {
+    this.assertEnabled();
+    const jid = typeof jidRaw === 'string' ? jidRaw.trim() : '';
+    if (!jid) return { url: null };
+    const connId = typeof connIdRaw === 'string' ? connIdRaw.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) return { url: null };
+    const cacheKey = maxAvatarKey(resolved.connId, hashJid(jid));
+    try {
+      const cached = await this.cache.get<{ url: string | null }>(cacheKey);
+      if (cached && typeof cached === 'object' && 'url' in cached) {
+        return { url: cached.url ?? null };
+      }
+    } catch {
+      /* cache miss path below */
+    }
+    const url = await gateway.getProfilePicture(resolved.rec.instanceId, jid);
+    try {
+      await this.cache.set(
+        cacheKey,
+        { url: url ?? null },
+        { ttl: url ? AVATAR_TTL_MS : AVATAR_NULL_TTL_MS }
+      );
+    } catch {
+      /* best-effort */
+    }
+    return { url: url ?? null };
   }
 
   // =========================================================================
@@ -1661,12 +2104,21 @@ export class ClickDzWhatsappMaxController {
     if (text) {
       // P4 E1.3: check per-chat AI toggle before enqueueing a run.
       // P4 W3: per-connId scoped AI key.
+      // WS-MAXP: an explicit per-chat value ('1'/'0') wins; when the chat has
+      // never been toggled, the connection-level autoReplyDefault applies.
       let aiEnabled = false;
       try {
         const aiVal = await (this.redis as any).get(
           maxAiKey(conn.userId, id, hashJid(chatJid))
         );
-        aiEnabled = aiVal === '1';
+        if (aiVal === '1') {
+          aiEnabled = true;
+        } else if (aiVal === '0') {
+          aiEnabled = false;
+        } else {
+          const settings = await this.loadAiSettings(conn.userId, id);
+          aiEnabled = settings.autoReplyDefault === true;
+        }
       } catch {
         aiEnabled = false;
       }
@@ -1711,6 +2163,18 @@ export class ClickDzWhatsappMaxController {
       // P4 E1.3: thread the 'wamax:{connId}' sentinel in threadId so the
       // registerWhatsappMaxRunDone hook can recover the connId and route the
       // final answer back over the WhatsappMax instance (the AI E2E fix).
+      // WS-MAXP: thread the shop's configured AI persona (business context +
+      // tone + language) into the run — createAgentRun prepends `persona` to
+      // the loop's system prompt. undefined for unconfigured shops ⇒ the run
+      // stays byte-identical to the legacy behavior.
+      let runPersona: string | undefined;
+      try {
+        runPersona = buildWamaxRunPersona(
+          await this.loadAiSettings(userId, connId)
+        );
+      } catch {
+        runPersona = undefined;
+      }
       const run = await createAgentRun(this.redis as any, {
         userId,
         agentId: WHATSAPPMAX_AGENT,
@@ -1718,6 +2182,7 @@ export class ClickDzWhatsappMaxController {
         prompt: text,
         channel: 'whatsapp',
         threadId: `wamax:${connId}`,
+        persona: runPersona,
       });
       if (run) {
         await enqueueAgentRun(this.jobs, run);
@@ -1844,11 +2309,25 @@ export class ClickDzWhatsappMaxController {
         transcript = '';
       }
 
-      const systemPrompt =
-        'Tu rédiges une réponse WhatsApp AU NOM du propriétaire de l’entreprise (le compte "Moi" dans la conversation ci-dessous). ' +
-        'Réponds dans la langue de la conversation (français, darija ou arabe selon le cas). ' +
+      // WS-MAXP: the draft speaks with the shop's configured voice — business
+      // name + persona/context + tone + language from the per-connection AI
+      // settings. Defaults reproduce the original fixed prompt.
+      const settings = await this.loadAiSettings(user.id, resolved.connId);
+      const promptParts: string[] = [
+        settings.businessName
+          ? `Tu rédiges une réponse WhatsApp AU NOM de l’entreprise « ${settings.businessName} » (le compte "Moi" dans la conversation ci-dessous).`
+          : 'Tu rédiges une réponse WhatsApp AU NOM du propriétaire de l’entreprise (le compte "Moi" dans la conversation ci-dessous).',
+      ];
+      if (settings.persona) {
+        promptParts.push(`Contexte de l’entreprise : ${settings.persona}`);
+      }
+      promptParts.push(wamaxLangLine(settings.language));
+      promptParts.push(wamaxToneLine(settings.tone));
+      promptParts.push(
         'Sois concis, naturel, dans le registre WhatsApp (pas de formalisme excessif). ' +
-        'N’ajoute AUCUN commentaire, guillemet ou préambule : réponds UNIQUEMENT avec le texte du message à envoyer.';
+          'N’ajoute AUCUN commentaire, guillemet ou préambule : réponds UNIQUEMENT avec le texte du message à envoyer.'
+      );
+      const systemPrompt = promptParts.join(' ');
 
       const userParts: string[] = [];
       if (transcript) {
