@@ -26,13 +26,21 @@ function slideProInstanceUrl(): string {
 export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void }) => {
   const [status, setStatus] = useState<'loading' | 'ready' | 'degraded' | 'error'>('loading');
   const [iframeSrc, setIframeSrc] = useState('');
+  // "↻ Vérifier" feedback: a manual re-check should never look like a no-op.
+  // checking=true drives the button's spinner/disabled state; checkNote is a
+  // short-lived French message reporting the outcome, shown even when the
+  // status doesn't change (e.g. still ready, still preparing).
+  const [checking, setChecking] = useState(false);
+  const [checkNote, setCheckNote] = useState('');
 
   // Robust flow: provision the app, then iframe the shim loginUrl (preferred) or
   // the bridge-code URL. The iframe load IS the health check — no CORS probe.
   // E1.1: on provision failure, fall back to the bare shim URL (degraded mode)
   // so the user sees the app (with its own login flow) instead of a hard red
   // banner. Only show the error state if there is no URL at all to iframe.
-  const load = useCallback(async () => {
+  // Returns the resolved status so callers (like the manual "Vérifier" check
+  // below) can report an accurate result without racing React's state batching.
+  const load = useCallback(async (): Promise<'ready' | 'degraded' | 'error'> => {
     setStatus('loading');
     const p = await provisionApp('slidepro');
     if (!p) {
@@ -41,19 +49,37 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
       if (fallback) {
         setIframeSrc(fallback);
         setStatus('degraded');
-      } else {
-        setStatus('error');
+        return 'degraded';
       }
-      return;
+      setStatus('error');
+      return 'error';
     }
     setIframeSrc(p.loginUrl || withBridgeCode(slideProInstanceUrl(), p.code));
     setStatus('ready');
+    return 'ready';
   }, []);
 
   useEffect(() => {
     ensureShoperpResponsiveCss();
     void load();
   }, [slug, load]);
+
+  // Manual "↻ Vérifier" click: re-run the same health check as load(), but
+  // report a clear result afterwards instead of silently swapping the iframe.
+  const handleVerify = useCallback(async () => {
+    setChecking(true);
+    setCheckNote('');
+    try {
+      const result = await load();
+      setCheckNote(
+        result === 'error'
+          ? 'Toujours en préparation…'
+          : 'Toujours opérationnel ✓'
+      );
+    } finally {
+      setChecking(false);
+    }
+  }, [load]);
 
   return (
     <div data-cdz-surface="" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -65,7 +91,16 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
         </div>
         {/* No external "open in new tab" link: SlidePro is iframe-only inside
             ClickDz Work (users must use it in-app, never via an external URL). */}
-        <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
+        {checkNote && !checking && (
+          <span style={{ fontSize: 11.5, color: C.muted }}>{checkNote}</span>
+        )}
+        <button
+          style={miniBtnStyle('secondary', checking)}
+          disabled={checking}
+          onClick={() => void handleVerify()}
+        >
+          {checking ? <Spinner /> : '↻'} Vérifier
+        </button>
       </div>
       <div style={(status === 'ready' || status === 'degraded')
         ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
