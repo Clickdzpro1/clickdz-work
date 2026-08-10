@@ -20,7 +20,7 @@ interface GroupedSessions {
 type HistorySessionWithMessages = BlockSuitePresets.AIRecentSession &
   Partial<Pick<CopilotChatHistoryFragment, 'messages'>>;
 
-const DEFAULT_SESSION_TITLE = 'New chat';
+const DEFAULT_SESSION_TITLE = 'Nouvelle discussion';
 const TITLE_MAX_LENGTH = 28;
 
 function truncateSessionTitle(text: string) {
