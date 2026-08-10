@@ -613,6 +613,19 @@ export const toolbar = style({
   alignItems: 'center',
   gap: 8,
   flexWrap: 'wrap',
+  // ---- Narrow viewports: prefer a horizontally-scrolling single row over
+  // unbounded wrapping (wrapping can push the toolbar's height tall enough to
+  // crowd out the lanes below it). A thin, unobtrusive scrollbar.
+  '@media': {
+    '(max-width: 600px)': {
+      flexWrap: 'nowrap',
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      WebkitOverflowScrolling: 'touch',
+      scrollbarWidth: 'thin',
+      paddingBottom: 4,
+    },
+  },
 });
 
 export const toolButton = style({
@@ -637,6 +650,14 @@ export const toolButton = style({
       cursor: 'default',
       borderColor: border,
       background: bg,
+    },
+  },
+  // ---- Touch targets: grow the tap area on touch-scale viewports without
+  // changing the visual density on desktop.
+  '@media': {
+    '(max-width: 1024px)': {
+      minHeight: 40,
+      boxSizing: 'border-box',
     },
   },
 });
@@ -1254,10 +1275,18 @@ export const sidePanelSlot = style({
   minWidth: 0,
   minHeight: 0,
   height: '100%',
-  // ---- Mobile: override the inline width; let the slot fill the column ----
+  // ---- Tablet (≤1024px): the inline width (up to 520px) can still eat most
+  // of a tablet's viewport once two or three side panels are open at once.
+  // Cap it so at least the preview/timeline stays usable; the panel's own
+  // content still scrolls internally.
   '@media': {
+    '(max-width: 1024px)': {
+      maxWidth: '46vw',
+    },
+    // ---- Mobile: override the inline width; let the slot fill the column ----
     '(max-width: 600px)': {
       width: '100% !important' as '100%',
+      maxWidth: '100%',
       height: 'auto',
       minHeight: 200,
     },
