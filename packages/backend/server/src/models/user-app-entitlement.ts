@@ -128,17 +128,25 @@ export class UserAppEntitlementModel extends BaseModel {
     return entitlement;
   }
 
-  /** Deactivates (soft-revoke) the entitlement; returns rows affected. */
+  /**
+   * Deactivates (soft-revoke) the entitlement.
+   *
+   * Uses upsert so that revoking a never-granted app still creates a row
+   * with active=false. Without this, the gate's fail-open logic would
+   * allow access because no row exists in the DB — the admin toggles OFF,
+   * but updateMany affects 0 rows (nothing to update), so the user keeps
+   * access. With upsert, a row is always written, and the AppAccessGate
+   * finds active=false and shows the "Upgrade" screen.
+   */
   async remove(userId: string, app: string) {
-    const { count } = await this.entitlement.updateMany({
-      where: { userId, app },
-      data: { active: false },
+    await this.entitlement.upsert({
+      where: { userId_app: { userId, app } },
+      create: { userId, app, plan: 'manual', active: false, reason: 'admin revoked' },
+      update: { active: false, reason: 'admin revoked' },
     });
 
-    if (count > 0) {
-      this.logger.verbose(`App ${app} revoked for user ${userId}`);
-    }
+    this.logger.verbose(`App ${app} revoked for user ${userId}`);
 
-    return count;
+    return 1; // backward-compat count-like value
   }
 }
