@@ -27,9 +27,6 @@ export const Accounts = lazy(
 export const Analytics = lazy(
   () => import(/* webpackChunkName: "analytics" */ './modules/analytics')
 );
-export const Monitoring = lazy(
-  () => import(/* webpackChunkName: "monitoring" */ './modules/monitoring')
-);
 export const Dashboard = lazy(
   () => import(/* webpackChunkName: "dashboard" */ './modules/dashboard')
 );
@@ -47,6 +44,21 @@ export const About = lazy(
 );
 export const Settings = lazy(
   () => import(/* webpackChunkName: "settings" */ './modules/settings')
+);
+export const FeatureFlags = lazy(
+  () => import(/* webpackChunkName: "admin-config-feature-flags" */ './modules/admin-config/feature-flags')
+);
+export const AppManagement = lazy(
+  () => import(/* webpackChunkName: "admin-config-app-management" */ './modules/admin-config/app-management')
+);
+export const SystemInfo = lazy(
+  () => import(/* webpackChunkName: "admin-config-system-info" */ './modules/admin-config/system-info')
+);
+export const NotificationSettings = lazy(
+  () => import(/* webpackChunkName: "admin-config-notifications" */ './modules/admin-config/notification-settings')
+);
+export const StudioConfig = lazy(
+  () => import(/* webpackChunkName: "admin-config-studio-config" */ './modules/admin-config/studio-config')
 );
 export const Auth = lazy(
   () => import(/* webpackChunkName: "auth" */ './modules/auth')
@@ -131,10 +143,6 @@ export const App = () => {
                     element={<Analytics />}
                   />
                   <Route
-                    path={ROUTES.admin.monitoring}
-                    element={<Monitoring />}
-                  />
-                  <Route
                     path={ROUTES.admin.workspaces}
                     element={
                       environment.isSelfHosted ? (
@@ -151,6 +159,26 @@ export const App = () => {
                     path={ROUTES.admin.settings.index}
                     element={<Settings />}
                   />
+                  <Route
+                    path={ROUTES.admin.featureFlags}
+                    element={<FeatureFlags />}
+                  />
+                  <Route
+                    path={ROUTES.admin.appManagement}
+                    element={<AppManagement />}
+                  />
+                  <Route
+                    path={ROUTES.admin.systemInfo}
+                    element={<SystemInfo />}
+                  />
+                  <Route
+                    path={ROUTES.admin.notificationSettings}
+                    element={<NotificationSettings />}
+                  />
+                  <Route
+                    path={ROUTES.admin.studioConfig}
+                    element={<StudioConfig />}
+                  />
                 </Route>
               </Route>
             </Routes>
@@ -161,3 +189,4 @@ export const App = () => {
     </ThemeProvider>
   );
 };
+
