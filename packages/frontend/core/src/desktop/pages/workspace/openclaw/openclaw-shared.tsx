@@ -266,6 +266,10 @@ export function btnStyle(
     appearance: 'none',
     borderRadius: AgentPalette.radius.md,
     padding: '9px 16px',
+    // Touch target: the shared button used across the wizard/dashboard —
+    // min-height nudges it to a comfortable size without changing the
+    // visual padding/size on desktop pointer input.
+    minHeight: 40,
     fontSize: 13,
     fontWeight: 700,
     display: 'inline-flex',
