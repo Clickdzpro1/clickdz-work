@@ -46,6 +46,9 @@ const btnStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 600,
   padding: '4px 10px',
+  // Touch target: the chip stays compact but the hit area grows toward a
+  // comfortable 34px (trivial min-height, no restructuring).
+  minHeight: 34,
   borderRadius: 6,
   border: '1px solid #30363d',
   background: '#21262d',
@@ -89,12 +92,16 @@ export function PreviewPanel({
         background: C.panel,
       }}
     >
-      {/* Toolbar */}
+      {/* Toolbar — wraps onto a second row on very narrow screens rather than
+          clipping the Open-in-new-tab link or squashing the URL field to
+          nothing. */}
       <div
         style={{
           flexShrink: 0,
           display: 'flex',
           alignItems: 'center',
+          flexWrap: 'wrap',
+          rowGap: 6,
           gap: 8,
           padding: '8px 10px',
           background: C.toolbarBg,
@@ -118,7 +125,7 @@ export function PreviewPanel({
         {/* Read-only URL field */}
         <div
           style={{
-            flex: 1,
+            flex: '1 1 160px',
             minWidth: 0,
             display: 'flex',
             alignItems: 'center',
