@@ -194,7 +194,7 @@ export function sessionToTab(session: CopilotChatHistoryFragment): AIChatTab {
     kind: 'session',
     id: session.sessionId,
     sessionId: session.sessionId,
-    title: session.title || 'New chat',
+    title: session.title || 'Nouvelle discussion',
     docId: session.docId ?? null,
     pinned: !!session.pinned,
     hasMessages: !!session.messages?.length,
@@ -205,7 +205,7 @@ export function createDraftTab(scope: AIChatScope): AIChatTab {
   return {
     kind: 'draft',
     id: `draft:${scope.kind}:${'docId' in scope ? (scope.docId ?? '') : ''}`,
-    title: 'New chat',
+    title: 'Nouvelle discussion',
     scope,
     hasMessages: false,
   };
