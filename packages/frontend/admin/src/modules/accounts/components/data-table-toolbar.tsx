@@ -1,4 +1,14 @@
 import { Button } from '@affine/admin/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@affine/admin/components/ui/dropdown-menu';
 import { Input } from '@affine/admin/components/ui/input';
 import type { FeatureType } from '@affine/graphql';
 import { ExportIcon, ImportIcon, PlusIcon } from '@blocksuite/icons/rc';
@@ -22,6 +32,8 @@ import { ExportUsersDialog } from './export-users-dialog';
 import { ImportUsersDialog } from './import-users';
 import { CreateUserForm } from './user-form';
 
+export type SuspendedFilter = 'all' | 'active' | 'suspended';
+
 interface DataTableToolbarProps<TData> {
   selectedUsers: UserType[];
   table?: Table<TData>;
@@ -29,6 +41,12 @@ interface DataTableToolbarProps<TData> {
   onKeywordChange: Dispatch<SetStateAction<string>>;
   selectedFeatures: FeatureType[];
   onFeaturesChange: Dispatch<SetStateAction<FeatureType[]>>;
+  suspendedFilter: SuspendedFilter;
+  onSuspendedFilterChange: Dispatch<SetStateAction<SuspendedFilter>>;
+  dateAfter: string;
+  onDateAfterChange: Dispatch<SetStateAction<string>>;
+  dateBefore: string;
+  onDateBeforeChange: Dispatch<SetStateAction<string>>;
 }
 
 export function DataTableToolbar<TData>({
@@ -38,6 +56,12 @@ export function DataTableToolbar<TData>({
   onKeywordChange,
   selectedFeatures,
   onFeaturesChange,
+  suspendedFilter,
+  onSuspendedFilterChange,
+  dateAfter,
+  onDateAfterChange,
+  dateBefore,
+  onDateBeforeChange,
 }: DataTableToolbarProps<TData>) {
   const [value, setValue] = useState(keyword);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -170,6 +194,55 @@ export function DataTableToolbar<TData>({
           availableFeatures={availableFeatures}
           onChange={handleFeatureToggle}
           align="end"
+        />
+        {/* Suspended status filter */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-8 gap-2">
+              <span className="text-xs">
+                {suspendedFilter === 'all'
+                  ? 'Tous les statuts'
+                  : suspendedFilter === 'suspended'
+                  ? 'Suspendus'
+                  : 'Actifs'}
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>Statut du compte</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuRadioGroup
+              value={suspendedFilter}
+              onValueChange={val =>
+                onSuspendedFilterChange(val as SuspendedFilter)
+              }
+            >
+              <DropdownMenuRadioItem value="all">
+                Tous les statuts
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="active">
+                Actifs
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="suspended">
+                Suspendus
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {/* Date range filters */}
+        <Input
+          type="date"
+          value={dateAfter}
+          onChange={e => onDateAfterChange(e.target.value)}
+          className="h-8 w-[130px] text-xs"
+          aria-label="Inscrit après le"
+        />
+        <Input
+          type="date"
+          value={dateBefore}
+          onChange={e => onDateBeforeChange(e.target.value)}
+          className="h-8 w-[130px] text-xs"
+          aria-label="Inscrit avant le"
         />
         <div className="flex">
           <Input
