@@ -1,4 +1,8 @@
 import en from './en.json' with { type: 'json' };
+// ClickDz is a French-first deployment: 'fr' is bundled statically (like
+// 'en') so it is available synchronously as the default/fallback language,
+// with no async-loading flash on a fresh session with no saved preference.
+import fr from './fr.json' with { type: 'json' };
 
 export type Language =
   | 'en'
@@ -37,6 +41,10 @@ export const SUPPORTED_LANGUAGES: Record<
     rtl?: boolean;
     resource:
       | LanguageResource
+      // 'fr' is bundled statically (see below) but, like the dynamically
+      // imported languages, is not guaranteed to have 100% key coverage
+      // against 'en', so it is typed as Partial here too.
+      | Partial<LanguageResource>
       | (() => Promise<{ default: Partial<LanguageResource> }>);
   }
 > = {
@@ -74,7 +82,7 @@ export const SUPPORTED_LANGUAGES: Record<
     name: 'French',
     originalName: 'français',
     flagEmoji: '🇫🇷',
-    resource: () => import('./fr.json'),
+    resource: fr,
   },
   es: {
     name: 'Spanish',
