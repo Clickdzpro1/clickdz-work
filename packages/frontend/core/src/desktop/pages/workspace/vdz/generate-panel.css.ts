@@ -42,6 +42,13 @@ export const root = style([
     color: TEXT,
     fontFamily:
       'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+    // ---- Phones: less breathing room so the prompt/stage keep more height.
+    '@media': {
+      '(max-width: 480px)': {
+        padding: 12,
+        gap: 12,
+      },
+    },
   },
 ]);
 
@@ -69,6 +76,13 @@ export const modeSwitch = style({
   display: 'flex',
   gap: 10,
   width: '100%',
+  // ---- Phones: stack the two mode cards instead of squeezing them side by
+  // side (each carries a title + hint line that wraps badly under ~160px).
+  '@media': {
+    '(max-width: 480px)': {
+      flexDirection: 'column',
+    },
+  },
 });
 
 export const modeOption = style({
@@ -138,6 +152,13 @@ export const actionsRow = style({
   display: 'flex',
   alignItems: 'center',
   gap: 12,
+  // ---- Phones: wrap rather than clip when both buttons + spinner don't fit.
+  '@media': {
+    '(max-width: 480px)': {
+      flexWrap: 'wrap',
+      rowGap: 8,
+    },
+  },
 });
 
 export const primaryButton = style({
@@ -254,6 +275,14 @@ export const controlBar = style({
   borderRadius: 12,
   border: `1px solid ${BORDER}`,
   background: RAISED,
+  // ---- Phones: let the timecode drop to its own line rather than pushing
+  // the scrubber to an unusable sliver.
+  '@media': {
+    '(max-width: 480px)': {
+      flexWrap: 'wrap',
+      rowGap: 6,
+    },
+  },
 });
 
 export const transportButton = style({
@@ -296,10 +325,18 @@ export const refineRow = style({
   display: 'flex',
   alignItems: 'center',
   gap: 10,
+  // ---- Phones: stack the refine input above its submit button.
+  '@media': {
+    '(max-width: 480px)': {
+      flexWrap: 'wrap',
+      rowGap: 8,
+    },
+  },
 });
 
 export const refineInput = style({
   flex: 1,
+  minWidth: '60%',
   height: 40,
   padding: '0 14px',
   boxSizing: 'border-box',
