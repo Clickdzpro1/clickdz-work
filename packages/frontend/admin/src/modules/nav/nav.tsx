@@ -4,9 +4,13 @@ import { AccountIcon, SelfhostIcon } from '@blocksuite/icons/rc';
 import {
   BarChart3Icon,
   ChartPieIcon,
-  HeartPulseIcon,
+  FlagIcon,
   LayoutDashboardIcon,
   ListChecksIcon,
+  AppWindowIcon,
+  ServerIcon,
+  BellIcon,
+  LayoutGridIcon,
 } from 'lucide-react';
 
 import { NavItem } from './nav-item';
@@ -52,12 +56,6 @@ export function Nav({ isCollapsed = false }: NavProps) {
           label="Analytique"
           isCollapsed={isCollapsed}
         />
-        <NavItem
-          to={ROUTES.admin.monitoring}
-          icon={<HeartPulseIcon size={18} />}
-          label="Surveillance"
-          isCollapsed={isCollapsed}
-        />
         {environment.isSelfHosted ? null : (
           <NavItem
             to={ROUTES.admin.workspaces}
@@ -70,6 +68,37 @@ export function Nav({ isCollapsed = false }: NavProps) {
           to={ROUTES.admin.queue}
           icon={<ListChecksIcon size={18} />}
           label="Queue"
+          isCollapsed={isCollapsed}
+        />
+        {/* ClickDz admin configuration pages */}
+        <NavItem
+          to={ROUTES.admin.featureFlags}
+          icon={<FlagIcon size={18} />}
+          label="Feature Flags"
+          isCollapsed={isCollapsed}
+        />
+        <NavItem
+          to={ROUTES.admin.appManagement}
+          icon={<AppWindowIcon size={18} />}
+          label="Applications"
+          isCollapsed={isCollapsed}
+        />
+        <NavItem
+          to={ROUTES.admin.studioConfig}
+          icon={<LayoutGridIcon size={18} />}
+          label="Studios"
+          isCollapsed={isCollapsed}
+        />
+        <NavItem
+          to={ROUTES.admin.systemInfo}
+          icon={<ServerIcon size={18} />}
+          label="Système"
+          isCollapsed={isCollapsed}
+        />
+        <NavItem
+          to={ROUTES.admin.notificationSettings}
+          icon={<BellIcon size={18} />}
+          label="Notifications"
           isCollapsed={isCollapsed}
         />
         {/* <NavItem
@@ -98,3 +127,4 @@ export function Nav({ isCollapsed = false }: NavProps) {
     </div>
   );
 }
+
