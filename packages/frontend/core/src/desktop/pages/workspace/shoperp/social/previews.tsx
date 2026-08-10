@@ -76,7 +76,7 @@ export const NetworkPreview = ({ network, text, media }: PreviewProps) => {
         <div style={avatarStyle}>{icon}</div>
         <div>
           <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>{label}</div>
-          <div style={{ fontSize: 10.5, color: C.muted }}>Preview</div>
+          <div style={{ fontSize: 10.5, color: C.muted }}>Aperçu</div>
         </div>
       </div>
       {media.length > 0 && (
@@ -85,7 +85,7 @@ export const NetworkPreview = ({ network, text, media }: PreviewProps) => {
         </div>
       )}
       <div style={{ fontSize: 12.5, color: over ? '#c8283a' : C.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 140, overflow: 'hidden' }}>
-        {preview || <span style={{ color: C.muted, fontStyle: 'italic' }}>No text yet...</span>}
+        {preview || <span style={{ color: C.muted, fontStyle: 'italic' }}>Pas encore de texte…</span>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
         <span style={{ fontSize: 10.5, color: over ? '#c8283a' : C.muted }}>
