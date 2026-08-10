@@ -238,7 +238,7 @@ const ReviewRow = ({ label, value, swatch, onEdit }: { label: string; value: str
     <span style={{ fontSize: 12, color: C.muted, width: 108, flexShrink: 0 }}>{label}</span>
     {swatch ? <span aria-hidden style={{ width: 16, height: 16, borderRadius: 4, background: swatch, border: '1px solid ' + C.border }} /> : null}
     <span style={{ flex: 1, fontSize: 13.5, fontWeight: 600, color: C.text, wordBreak: 'break-word' }}>{value || '—'}</span>
-    <button style={{ appearance: 'none', background: 'none', border: 'none', cursor: 'pointer', color: C.accent, fontSize: 12, fontWeight: 600, padding: 0 }} onClick={onEdit}>Edit</button>
+    <button style={{ appearance: 'none', background: 'none', border: 'none', cursor: 'pointer', color: C.accent, fontSize: 12, fontWeight: 600, padding: 0 }} onClick={onEdit}>Modifier</button>
   </div>
 );
 
