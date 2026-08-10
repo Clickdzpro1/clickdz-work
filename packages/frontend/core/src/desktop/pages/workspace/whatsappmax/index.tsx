@@ -17,6 +17,44 @@ import {
   useState,
 } from 'react';
 
+// ── Responsive helper ───────────────────────────────────────────────────────
+// Local, SSR-safe hook to detect narrow viewports at an exact breakpoint.
+// Not reusing the existing clickdz/mobile/useMobileDetect hook because it
+// hard-codes different breakpoints (600/900) than what this page needs
+// (480 / 768 / 1024).
+function useIsNarrow(maxWidth: number): boolean {
+  const query = `(max-width: ${maxWidth}px)`;
+  const [isNarrow, setIsNarrow] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia(query).matches;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mql = window.matchMedia(query);
+    const update = () => setIsNarrow(mql.matches);
+    update();
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', update);
+    } else {
+      // Safari <14 fallback
+      mql.addListener(update);
+    }
+    window.addEventListener('resize', update);
+    return () => {
+      if (typeof mql.removeEventListener === 'function') {
+        mql.removeEventListener('change', update);
+      } else {
+        mql.removeListener(update);
+      }
+      window.removeEventListener('resize', update);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
+
+  return isNarrow;
+}
+
 // ---------------------------------------------------------------------------
 // WS14 — WhatsappMax Studio (E2 — full chat UI).
 //
@@ -953,10 +991,13 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
           style={{
             ...btn('ghost', disabled),
             padding: '8px',
+            minWidth: 40,
+            minHeight: 40,
             fontSize: 18,
             lineHeight: 1,
             border: `1px solid ${C.border}`,
             borderRadius: 8,
+            flexShrink: 0,
           }}
           title="Joindre un média"
           disabled={disabled}
@@ -984,7 +1025,10 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
           style={{
             ...btn('primary', !text.trim() || disabled),
             padding: '9px 16px',
+            minWidth: 40,
+            minHeight: 40,
             fontSize: 14,
+            flexShrink: 0,
           }}
           disabled={!text.trim() || disabled}
           onClick={() => void sendText()}
@@ -1006,6 +1050,7 @@ interface ConversationProps {
   onDark: () => void;
   onClose: () => void;
   connId: string | null;
+  showBack?: boolean;
 }
 
 const Conversation = ({
@@ -1016,6 +1061,7 @@ const Conversation = ({
   onDark,
   onClose,
   connId,
+  showBack = false,
 }: ConversationProps) => {
   const [messages, setMessages] = useState<ReturnType<typeof normalizeMessage>[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1157,16 +1203,23 @@ const Conversation = ({
             background: 'transparent',
             border: 'none',
             color: C.muted,
-            fontSize: 18,
+            fontSize: 20,
             cursor: 'pointer',
-            padding: '2px 6px',
+            padding: '8px',
+            minWidth: 40,
+            minHeight: 40,
             borderRadius: 6,
-            display: 'none',
+            display: showBack ? 'flex' : 'none',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
           }}
+          type="button"
+          aria-label="Retour à la liste des conversations"
           title="Retour"
           onClick={onClose}
         >
-          ←
+          ← <span style={{ marginLeft: 4, fontSize: 13 }}>Retour</span>
         </button>
         <Initials name={chatName} size={34} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1812,11 +1865,44 @@ const ChatApp = ({ status, onDark, connId }: ChatAppProps) => {
   const [showBroadcast, setShowBroadcast] = useState(false);
   const connected = status?.connected === true;
 
+  // Below 768px: never show list + conversation side by side — show one or
+  // the other, with a back control to return to the list. Between 768 and
+  // 1024px (tablet), keep both panes but shrink the list pane so nothing
+  // overflows horizontally.
+  const isPhone = useIsNarrow(768);
+  const isTablet = useIsNarrow(1024);
+
   const selectChat = useCallback((jid: string, name: string, isGroup: boolean) => {
     setActiveJid(jid);
     setActiveName(name);
     setActiveIsGroup(isGroup);
   }, []);
+
+  const closeChat = useCallback(() => setActiveJid(null), []);
+
+  // On phones, show only one pane at a time.
+  const showListPane = !isPhone || !activeJid;
+  const showConversationPane = !isPhone || !!activeJid;
+
+  const listPaneStyle: CSSProperties = isPhone
+    ? {
+        width: '100%',
+        maxWidth: '100%',
+        minWidth: 0,
+        flexShrink: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      }
+    : {
+        width: isTablet ? '38%' : 300,
+        minWidth: isTablet ? 180 : 220,
+        maxWidth: isTablet ? 260 : 320,
+        flexShrink: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+      };
 
   return (
     <div
@@ -1827,85 +1913,93 @@ const ChatApp = ({ status, onDark, connId }: ChatAppProps) => {
         border: `1px solid ${C.border}`,
         borderRadius: 12,
         background: C.bg,
+        maxWidth: '100%',
+        minWidth: 0,
       }}
     >
       {/* Left pane — chat list */}
-      <div
-        style={{
-          width: 300,
-          minWidth: 220,
-          maxWidth: 320,
-          flexShrink: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-        }}
-      >
-        <ChatList active={activeJid} onSelect={selectChat} onDark={onDark} connId={connId} />
-        {/* Broadcast CTA */}
-        <div
-          style={{
-            padding: '8px 10px',
-            borderTop: `1px solid ${C.border}`,
-            background: C.panel,
-            flexShrink: 0,
-          }}
-        >
-          <button
-            style={{ ...btn('secondary', false), width: '100%', fontSize: 11.5 }}
-            onClick={() => setShowBroadcast(true)}
-          >
-            📢 Diffusion
-          </button>
-        </div>
-      </div>
-
-      {/* Right pane — conversation */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {activeJid ? (
-          <Conversation
-            chatJid={activeJid}
-            chatName={activeName}
-            isGroup={activeIsGroup}
-            connected={connected}
-            onDark={onDark}
-            onClose={() => setActiveJid(null)}
-            connId={connId}
-          />
-        ) : (
+      {showListPane && (
+        <div style={listPaneStyle}>
+          <ChatList active={activeJid} onSelect={selectChat} onDark={onDark} connId={connId} />
+          {/* Broadcast CTA */}
           <div
             style={{
-              flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 12,
-              color: C.muted,
+              padding: '8px 10px',
+              borderTop: `1px solid ${C.border}`,
+              background: C.panel,
+              flexShrink: 0,
             }}
           >
-            <div style={{ fontSize: 40 }}>💬</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>WhatsappMax</div>
-            <div style={{ fontSize: 12.5, color: C.muted, textAlign: 'center', maxWidth: 260 }}>
-              Sélectionnez une conversation dans la liste pour afficher les messages.
-            </div>
-            {!connected && (
-              <div
-                style={{
-                  fontSize: 12,
-                  color: C.danger,
-                  background: `${C.danger}18`,
-                  border: `1px solid ${C.danger}44`,
-                  borderRadius: 8,
-                  padding: '6px 12px',
-                }}
-              >
-                Liez un numéro WhatsApp pour envoyer des messages.
-              </div>
-            )}
+            <button
+              style={{ ...btn('secondary', false), width: '100%', fontSize: 11.5, minHeight: 40 }}
+              onClick={() => setShowBroadcast(true)}
+            >
+              📢 Diffusion
+            </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Right pane — conversation */}
+      {showConversationPane && (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            minWidth: 0,
+            maxWidth: '100%',
+          }}
+        >
+          {activeJid ? (
+            <Conversation
+              chatJid={activeJid}
+              chatName={activeName}
+              isGroup={activeIsGroup}
+              connected={connected}
+              onDark={onDark}
+              onClose={closeChat}
+              connId={connId}
+              showBack={isPhone}
+            />
+          ) : (
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 12,
+                color: C.muted,
+                padding: 16,
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{ fontSize: 40 }}>💬</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>WhatsappMax</div>
+              <div style={{ fontSize: 12.5, color: C.muted, textAlign: 'center', maxWidth: 260 }}>
+                Sélectionnez une conversation dans la liste pour afficher les messages.
+              </div>
+              {!connected && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: C.danger,
+                    background: `${C.danger}18`,
+                    border: `1px solid ${C.danger}44`,
+                    borderRadius: 8,
+                    padding: '6px 12px',
+                  }}
+                >
+                  Liez un numéro WhatsApp pour envoyer des messages.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {showBroadcast && (
         <BroadcastModal onDark={onDark} onClose={() => setShowBroadcast(false)} connId={connId} />
@@ -2038,18 +2132,31 @@ const WhatsappMaxPage = () => {
             alignItems: 'center',
             gap: 12,
             width: '100%',
+            maxWidth: '100%',
             height: '100%',
             padding: '0 14px',
             boxSizing: 'border-box',
+            overflowX: 'auto',
+            overflowY: 'hidden',
+            scrollbarWidth: 'none' as CSSProperties['scrollbarWidth'],
           }}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25 }}>
-            <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>WhatsappMax</span>
-            <span style={{ fontSize: 11, color: C.muted }}>
+          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.25, minWidth: 0, flexShrink: 0 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: C.text, whiteSpace: 'nowrap' }}>WhatsappMax</span>
+            <span
+              style={{
+                fontSize: 11,
+                color: C.muted,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: 220,
+              }}
+            >
               WhatsApp pour vos ventes — QR, messages, médias, IA
             </span>
           </div>
-          <span style={{ flex: 1 }} />
+          <span style={{ flex: 1, minWidth: 8 }} />
           {/* Account switcher — visible when accounts are loaded */}
           {accounts.length > 0 && !showAddMode && (
             <AccountSwitcher
@@ -2069,6 +2176,8 @@ const WhatsappMaxPage = () => {
                 borderRadius: 999,
                 padding: '2px 10px',
                 fontWeight: 600,
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
               }}
             >
               ● Connecté{status.phoneNumber ? ` · +${status.phoneNumber}` : ''}
