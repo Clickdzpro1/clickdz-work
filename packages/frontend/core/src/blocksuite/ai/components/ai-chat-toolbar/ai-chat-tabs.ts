@@ -10,7 +10,7 @@ import { repeat } from 'lit/directives/repeat.js';
 import { stripCdzDirectivesToText } from '../../_common/cdz-directives';
 import type { AIChatRuntime, AIChatSnapshot } from '../../runtime/chat';
 
-const DEFAULT_TAB_TITLE = 'New chat';
+const DEFAULT_TAB_TITLE = 'Nouvelle discussion';
 const TITLE_MAX_LENGTH = 28;
 
 type RenderTabItem =
