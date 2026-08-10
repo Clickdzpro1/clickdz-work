@@ -58,6 +58,14 @@ export const getOrCreateI18n = (): i18n => {
             fallbacks.unshift(langPart);
           }
 
+          // Last resort: English is the only locale with the complete key
+          // set. A key missing from fr (or any other locale) must render its
+          // English string — never the raw i18n key. Without this, switching
+          // defaultLng to 'fr' silently dropped 'en' from the chain and the
+          // ~200 keys absent from fr.json rendered as "com.affine.…" tokens.
+          if (!fallbacks.includes('en')) {
+            fallbacks.push('en');
+          }
           return fallbacks;
         },
         supportedLngs: Object.keys(SUPPORTED_LANGUAGES),
