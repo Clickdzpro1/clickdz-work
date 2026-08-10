@@ -74,20 +74,20 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
     try {
       const res = await retryPost(id);
       if (res.ok) {
-        setNote({ id, text: dict.retryStarted ?? 'Retry started.', tone: 'ok' });
+        setNote({ id, text: dict.retryStarted ?? 'Nouvelle tentative lancée.', tone: 'ok' });
         await load();
       } else {
-        setNote({ id, text: res.error ?? dict.retryFail ?? 'Retry failed.', tone: 'err' });
+        setNote({ id, text: res.error ?? dict.retryFail ?? 'La nouvelle tentative a échoué.', tone: 'err' });
       }
     } catch {
-      setNote({ id, text: dict.retryFail ?? 'Retry failed.', tone: 'err' });
+      setNote({ id, text: dict.retryFail ?? 'La nouvelle tentative a échoué.', tone: 'err' });
     } finally {
       setBusy(b => { const n = { ...b }; delete n[id]; return n; });
     }
   }, [dict, load]);
 
   const handleDelete = useCallback(async (id: string) => {
-    if (!window.confirm(dict.confirmDelete ?? 'Delete this post?')) return;
+    if (!window.confirm(dict.confirmDelete ?? 'Supprimer cette publication ?')) return;
     setBusy(b => ({ ...b, [id]: 'delete' }));
     setNote(null);
     try {
@@ -95,10 +95,10 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
       if (ok) {
         await load();
       } else {
-        setNote({ id, text: dict.deleteFail ?? 'Delete failed.', tone: 'err' });
+        setNote({ id, text: dict.deleteFail ?? 'La suppression a échoué.', tone: 'err' });
       }
     } catch {
-      setNote({ id, text: dict.deleteFail ?? 'Delete failed.', tone: 'err' });
+      setNote({ id, text: dict.deleteFail ?? 'La suppression a échoué.', tone: 'err' });
     } finally {
       setBusy(b => { const n = { ...b }; delete n[id]; return n; });
     }
@@ -131,17 +131,17 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
           </button>
         ))}
         <button style={{ ...miniBtnStyle('secondary'), marginLeft: 'auto' }} onClick={() => void load()}>
-          {dict.refresh ?? 'Refresh'}
+          {dict.refresh ?? 'Actualiser'}
         </button>
       </div>
 
       {loading ? (
         <div style={{ display: 'flex', gap: 8, color: C.muted, padding: '20px 0' }}>
-          <Spinner /> {dict.loading ?? 'Loading...'}
+          <Spinner /> {dict.loading ?? 'Chargement…'}
         </div>
       ) : posts.length === 0 ? (
         <div style={{ color: C.muted, fontSize: 13, padding: '20px 0' }}>
-          {dict.noPostsFilter ?? 'No posts matching this filter.'}
+          {dict.noPostsFilter ?? 'Aucune publication ne correspond à ce filtre.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -191,13 +191,13 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
                     );
                   })}
                   {p.scheduledAt && (
-                    <span>{dict.scheduledAt ?? 'Scheduled:'} {fmtTime(p.scheduledAt)}</span>
+                    <span>{dict.scheduledAt ?? 'Planifié :'} {fmtTime(p.scheduledAt)}</span>
                   )}
                   {p.publishedAt && (
-                    <span>{dict.publishedAt ?? 'Published:'} {fmtTime(p.publishedAt)}</span>
+                    <span>{dict.publishedAt ?? 'Publié :'} {fmtTime(p.publishedAt)}</span>
                   )}
                   {p.hasMedia && (
-                    <span>{dict.hasMedia ?? 'Has media'}</span>
+                    <span>{dict.hasMedia ?? 'Contient un média'}</span>
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -207,7 +207,7 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
                       onClick={() => void handleEdit(p.id)}
                       style={{ ...miniBtnStyle('secondary'), opacity: isBusy ? 0.5 : 1 }}
                     >
-                      {dict.edit ?? 'Edit'}
+                      {dict.edit ?? 'Modifier'}
                     </button>
                   )}
                   {canRetry && (
@@ -216,7 +216,7 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
                       onClick={() => void handleRetry(p.id)}
                       style={{ ...miniBtnStyle('secondary'), opacity: isBusy ? 0.5 : 1 }}
                     >
-                      {busy[p.id] === 'retry' ? (dict.retrying ?? 'Retrying...') : (dict.retry ?? 'Retry')}
+                      {busy[p.id] === 'retry' ? (dict.retrying ?? 'Nouvelle tentative…') : (dict.retry ?? 'Réessayer')}
                     </button>
                   )}
                   <button
@@ -234,7 +234,7 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
                       opacity: isBusy ? 0.5 : 1,
                     }}
                   >
-                    {busy[p.id] === 'delete' ? '...' : (dict.delete ?? 'Delete')}
+                    {busy[p.id] === 'delete' ? '…' : (dict.delete ?? 'Supprimer')}
                   </button>
                 </div>
                 {myNote && (
