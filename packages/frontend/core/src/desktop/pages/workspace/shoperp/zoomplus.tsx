@@ -26,11 +26,245 @@ function zoomPlusInstanceUrl(): string {
   return ZOOMPLUS_INSTANCE_URL;
 }
 
+// Recording support is only usable in a secure context with the MediaRecorder
+// + getDisplayMedia APIs (e.g. plain http:// dev hosts or very old browsers
+// don't have them) — checked once so we can show a French inline message
+// instead of letting the button throw.
+function isRecordingSupported(): boolean {
+  try {
+    return (
+      typeof window !== 'undefined' &&
+      !!navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getDisplayMedia === 'function' &&
+      typeof window.MediaRecorder !== 'undefined'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function pickRecorderMimeType(): string | undefined {
+  const candidates = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ];
+  for (const type of candidates) {
+    try {
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(type)) {
+        return type;
+      }
+    } catch {
+      /* isTypeSupported can throw in odd embeds — fall through */
+    }
+  }
+  return undefined;
+}
+
+function formatElapsed(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+  const s = Math.floor(totalSeconds % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
+function recordingFilename(): string {
+  const d = new Date();
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}h${pad(d.getMinutes())}`;
+  return `clickdz-reunion-${date}-${time}.webm`;
+}
+
 export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'no-login' | 'slow'>('loading');
   const [iframeSrc, setIframeSrc] = useState('');
+
+  // --- Local meeting recording state -------------------------------------
+  // Idle → recording → back to idle. Everything captured stays on-device:
+  // we never upload the blob, we only trigger a browser download.
+  const [recState, setRecState] = useState<'idle' | 'starting' | 'recording'>('idle');
+  const [recElapsed, setRecElapsed] = useState(0);
+  const [recNote, setRecNote] = useState<string | null>(null); // "saved" confirmation
+  const [micDenied, setMicDenied] = useState(false);
+
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const displayStreamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const mixedStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const recordingSupported = isRecordingSupported();
+
+  const stopAllRecordingTracks = useCallback(() => {
+    try { displayStreamRef.current?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
+    try { micStreamRef.current?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
+    try { mixedStreamRef.current?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
+    displayStreamRef.current = null;
+    micStreamRef.current = null;
+    mixedStreamRef.current = null;
+    try {
+      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+        void audioCtxRef.current.close();
+      }
+    } catch { /* noop */ }
+    audioCtxRef.current = null;
+    if (recTimerRef.current) {
+      clearInterval(recTimerRef.current);
+      recTimerRef.current = null;
+    }
+  }, []);
+
+  const finalizeAndDownload = useCallback(() => {
+    try {
+      const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+      chunksRef.current = [];
+      if (blob.size > 0) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = recordingFilename();
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        setRecNote('Enregistrement sauvegardé sur votre appareil (dossier Téléchargements).');
+        if (recNoteTimerRef.current) clearTimeout(recNoteTimerRef.current);
+        recNoteTimerRef.current = setTimeout(() => setRecNote(null), 8000);
+      }
+    } catch {
+      /* best-effort — the tracks are stopped regardless below */
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    try {
+      if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+        // onstop finalizes + downloads once the last chunk lands.
+        recorderRef.current.stop();
+      } else {
+        finalizeAndDownload();
+      }
+    } catch {
+      finalizeAndDownload();
+    } finally {
+      stopAllRecordingTracks();
+      recorderRef.current = null;
+      setRecState('idle');
+    }
+  }, [finalizeAndDownload, stopAllRecordingTracks]);
+
+  const startRecording = useCallback(async () => {
+    if (!recordingSupported || recState !== 'idle') return;
+    setMicDenied(false);
+    setRecState('starting');
+    let display: MediaStream | null = null;
+    try {
+      display = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: true,
+      });
+    } catch {
+      // User cancelled the picker (or denied it) — return to idle silently.
+      setRecState('idle');
+      return;
+    }
+
+    try {
+      displayStreamRef.current = display;
+
+      // Best-effort microphone capture so the user's own voice is recorded
+      // too. If denied/unavailable, continue with display audio only.
+      let mic: MediaStream | null = null;
+      try {
+        mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStreamRef.current = mic;
+      } catch {
+        setMicDenied(true);
+      }
+
+      const displayAudioTracks = display.getAudioTracks();
+      let finalAudioTrack: MediaStreamTrack | null = null;
+
+      if (mic || displayAudioTracks.length > 0) {
+        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          audioCtxRef.current = ctx;
+          const dest = ctx.createMediaStreamDestination();
+          if (displayAudioTracks.length > 0) {
+            try {
+              const displayAudioOnly = new MediaStream(displayAudioTracks);
+              ctx.createMediaStreamSource(displayAudioOnly).connect(dest);
+            } catch { /* some browsers refuse a source with no live tracks */ }
+          }
+          if (mic) {
+            try {
+              ctx.createMediaStreamSource(mic).connect(dest);
+            } catch { /* noop */ }
+          }
+          finalAudioTrack = dest.stream.getAudioTracks()[0] ?? null;
+        } else if (displayAudioTracks.length > 0) {
+          finalAudioTrack = displayAudioTracks[0];
+        } else if (mic) {
+          finalAudioTrack = mic.getAudioTracks()[0] ?? null;
+        }
+      }
+
+      const videoTrack = display.getVideoTracks()[0];
+      const combinedTracks: MediaStreamTrack[] = [];
+      if (videoTrack) combinedTracks.push(videoTrack);
+      if (finalAudioTrack) combinedTracks.push(finalAudioTrack);
+      const combined = new MediaStream(combinedTracks);
+      mixedStreamRef.current = combined;
+
+      // Native "Stop sharing" from the browser's own UI ends the display
+      // track — treat that exactly like clicking "Arrêter".
+      if (videoTrack) {
+        videoTrack.addEventListener('ended', () => stopRecording());
+      }
+
+      const mimeType = pickRecorderMimeType();
+      const recorder = mimeType ? new MediaRecorder(combined, { mimeType }) : new MediaRecorder(combined);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        finalizeAndDownload();
+      };
+      recorderRef.current = recorder;
+      recorder.start(1000);
+
+      setRecElapsed(0);
+      if (recTimerRef.current) clearInterval(recTimerRef.current);
+      recTimerRef.current = setInterval(() => setRecElapsed(e => e + 1), 1000);
+      setRecState('recording');
+    } catch {
+      // Anything unexpected while wiring up the mix/recorder — clean up and
+      // go back to idle rather than leaving a half-open stream.
+      stopAllRecordingTracks();
+      recorderRef.current = null;
+      setRecState('idle');
+    }
+  }, [recordingSupported, recState, finalizeAndDownload, stopAllRecordingTracks, stopRecording]);
+
+  // Clean up any live capture/recording on unmount.
+  useEffect(() => {
+    return () => {
+      try {
+        if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+          recorderRef.current.stop();
+        }
+      } catch { /* noop */ }
+      stopAllRecordingTracks();
+      if (recNoteTimerRef.current) clearTimeout(recNoteTimerRef.current);
+    };
+  }, [stopAllRecordingTracks]);
 
   // C4: Track the current load attempt so stale provision results (from a
   // previous load() that resolved after the user cancelled or retried) don't
@@ -121,8 +355,61 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>ZOOM+</div>
           <div style={{ fontSize: 11.5, color: C.muted }}>Visioconférence · Powered by La Suite Meet + LiveKit</div>
         </div>
+        {status === 'ready' && recordingSupported && recState === 'idle' && (
+          <span
+            style={{ fontSize: 11, color: C.muted, display: 'none' }}
+            className="cdz-zoomplus-rec-hint"
+          >
+            Enregistrement local — la vidéo reste sur votre appareil.
+          </span>
+        )}
+        {status === 'ready' && recordingSupported && recState !== 'recording' && (
+          <button
+            style={miniBtnStyle('secondary', recState === 'starting')}
+            disabled={recState === 'starting'}
+            title="Enregistrement local — la vidéo reste sur votre appareil."
+            onClick={() => void startRecording()}
+          >
+            {recState === 'starting' ? <><Spinner /> Démarrage…</> : '⏺ Enregistrer'}
+          </button>
+        )}
+        {status === 'ready' && recordingSupported && recState === 'recording' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              aria-hidden="true"
+              style={{
+                display: 'inline-block',
+                width: 9,
+                height: 9,
+                borderRadius: '50%',
+                background: 'var(--affine-error-color, #eb4b4b)',
+                animation: 'cdz-zoomplus-pulse 1.1s ease-in-out infinite',
+              }}
+            />
+            <span style={{ fontSize: 12, color: C.text, fontVariantNumeric: 'tabular-nums' }}>
+              {formatElapsed(recElapsed)}
+            </span>
+            <button style={miniBtnStyle('danger')} onClick={stopRecording}>⏹ Arrêter</button>
+          </div>
+        )}
+        {status === 'ready' && !recordingSupported && (
+          <span style={{ fontSize: 11, color: C.muted }}>
+            Enregistrement local indisponible sur ce navigateur.
+          </span>
+        )}
         <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
+      <style>{'@keyframes cdz-zoomplus-pulse{0%,100%{opacity:1}50%{opacity:.25}}@media (min-width: 900px){.cdz-zoomplus-rec-hint{display:inline !important}}'}</style>
+      {micDenied && recState === 'recording' && (
+        <div style={{ padding: '4px 16px', fontSize: 11.5, color: C.muted, background: C.panel2, borderBottom: `1px solid ${C.border}` }}>
+          Microphone indisponible — seul le son de l’onglet partagé est enregistré.
+        </div>
+      )}
+      {recNote && (
+        <div style={{ padding: '6px 16px', fontSize: 12, color: C.okText, background: C.panel2, borderBottom: `1px solid ${C.border}` }}>
+          {recNote}
+        </div>
+      )}
       <div aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: status === 'ready' ? 'hidden' : 'auto', background: C.bg }}>
         {status === 'loading' ? <div aria-busy="true" style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0 40px 20px' }}><Spinner /> Connexion à ZOOM+…</div>
         : status === 'slow' ? (
