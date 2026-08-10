@@ -209,7 +209,9 @@ export function AppAccessGate({ app, children }: AppAccessGateProps) {
       return;
     }
     const entitlements = await fetchEntitlements(userId);
-    const row = entitlements.find(e => e.app === app);
+    // Case-insensitive match: the backend stores lowercase app keys
+    // (e.g. 'slide_pro'), the gate receives uppercase (e.g. 'SLIDE_PRO').
+    const row = entitlements.find(e => e.app.toLowerCase() === app.toLowerCase());
     if (row && row.active === false) {
       setState('gated');
     } else {
