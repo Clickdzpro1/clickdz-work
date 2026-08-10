@@ -22,6 +22,10 @@ export const root = style({
   selectors: {
     '&[data-hidden="true"]': {
       transform: 'translateY(200%)',
+      // The card stays mounted (only translated below the viewport) so the
+      // slide-in/out transition can play. Without this it keeps intercepting
+      // clicks in its old fixed-position hit box while "dismissed".
+      pointerEvents: 'none',
     },
   },
 });
