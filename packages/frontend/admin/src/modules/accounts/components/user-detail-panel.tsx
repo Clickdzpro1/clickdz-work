@@ -3,9 +3,9 @@ import { Separator } from '@affine/admin/components/ui/separator';
 import { FeatureType } from '@affine/graphql';
 import {
   AccountBanIcon,
+  ArrowRightSmallIcon,
   DeleteIcon,
   LockIcon,
-  ChevronRightIcon,
 } from '@blocksuite/icons/rc';
 import { useCallback } from 'react';
 
@@ -203,7 +203,7 @@ export function UserDetailPanel({
               disabled={suspending}
             >
               <span>{`Activer l\u{2019}utilisateur`}</span>
-              <ChevronRightIcon size={16} className="text-muted-foreground" />
+              <ArrowRightSmallIcon size={16} className="text-muted-foreground" />
             </Button>
           ) : (
             <Button
@@ -226,7 +226,7 @@ export function UserDetailPanel({
               disabled={revokingAdmin}
             >
               <span>{`Révoquer l\u{2019}administrateur`}</span>
-              <ChevronRightIcon size={16} />
+              <ArrowRightSmallIcon size={16} />
             </Button>
           ) : (
             <Button
@@ -236,7 +236,7 @@ export function UserDetailPanel({
               disabled={grantingAdmin}
             >
               <span>{`Accorder l\u{2019}administrateur`}</span>
-              <ChevronRightIcon size={16} className="text-muted-foreground" />
+              <ArrowRightSmallIcon size={16} className="text-muted-foreground" />
             </Button>
           )}
 
@@ -266,3 +266,4 @@ export function UserDetailPanel({
     </div>
   );
 }
+
