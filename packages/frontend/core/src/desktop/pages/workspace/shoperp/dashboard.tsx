@@ -134,10 +134,13 @@ const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
 
 const tabStyle = (active: boolean): CSSProperties => ({
   appearance: 'none',
-  background: 'none',
+  background: active
+    ? 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 10%, transparent)'
+    : 'none',
   border: 'none',
   borderBottom: active ? `2px solid ${C.accent}` : '2px solid transparent',
-  padding: '8px 12px',
+  borderRadius: active ? '8px 8px 0 0' : undefined,
+  padding: '9px 14px',
   fontSize: 13,
   fontWeight: 700,
   cursor: 'pointer',
@@ -145,7 +148,7 @@ const tabStyle = (active: boolean): CSSProperties => ({
   alignItems: 'center',
   gap: 6,
   color: active ? C.text : C.muted,
-  transition: 'color 160ms ease, border-color 160ms ease',
+  transition: 'color 160ms ease, border-color 160ms ease, background 160ms ease',
 });
 
 export const ErpDashboard = ({
@@ -273,14 +276,28 @@ export const ErpDashboard = ({
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 8,
-              fontSize: 18,
+              gap: 10,
+              fontSize: 19,
               fontWeight: 800,
               color: C.text,
               minWidth: 0,
             }}
           >
-            <span aria-hidden>📊</span>
+            <span
+              aria-hidden
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+                display: 'grid',
+                placeItems: 'center',
+                fontSize: 17,
+                flexShrink: 0,
+              }}
+            >
+              📊
+            </span>
             <span
               style={{
                 overflow: 'hidden',
@@ -292,7 +309,7 @@ export const ErpDashboard = ({
             </span>
             <span style={codeStyle}>{slug}</span>
           </div>
-          <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+          <div style={{ fontSize: 12, color: C.muted, marginTop: 4, paddingLeft: 44 }}>
             {tagline ? `${tagline} · ` : ''}
             {summary
               ? `${summary.kpis.ordersTotal} ${summary.kpis.ordersTotal === 1 ? 'commande' : 'commandes'} au total`
@@ -387,18 +404,18 @@ export const ErpDashboard = ({
         // jump when the data lands, and the wait reads as shorter at identical
         // latency. The text line stays for screen readers and for the case
         // where the load is genuinely slow.
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))',
-              gap: 12,
+              gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))',
+              gap: 14,
             }}
           >
-            <Skeleton rows={1} height={78} />
-            <Skeleton rows={1} height={78} />
-            <Skeleton rows={1} height={78} />
-            <Skeleton rows={1} height={78} />
+            <Skeleton rows={1} height={82} />
+            <Skeleton rows={1} height={82} />
+            <Skeleton rows={1} height={82} />
+            <Skeleton rows={1} height={82} />
           </div>
           <Skeleton rows={1} height={190} />
           <div
@@ -659,37 +676,53 @@ const FiveSteps = ({
   return (
     <div
       style={{
-        borderRadius: 14,
+        borderRadius: 16,
         border: `1px solid ${C.border}`,
         background: C.panel,
         overflow: 'hidden',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.18)',
       }}
     >
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
-          padding: '11px 14px',
+          gap: 12,
+          padding: '12px 16px',
           background: C.panel2,
           borderBottom: `1px solid ${C.border}`,
           flexWrap: 'wrap',
         }}
       >
+        <span
+          aria-hidden
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 10,
+            background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 16,
+            flexShrink: 0,
+          }}
+        >
+          🚀
+        </span>
         <div style={{ flex: 1, minWidth: 120 }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>
+          <div style={{ fontSize: 13.5, fontWeight: 800, color: C.text }}>
             Votre ERP en 5 étapes
           </div>
-          <div style={{ fontSize: 11.5, color: C.muted }}>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>
             {doneCount}/5 — plus que {5 - doneCount} !
           </div>
         </div>
         <div
           aria-hidden
           style={{
-            width: 90,
+            width: 100,
             height: 6,
-            borderRadius: 3,
+            borderRadius: 999,
             background: C.border,
             overflow: 'hidden',
           }}
@@ -698,8 +731,9 @@ const FiveSteps = ({
             style={{
               width: `${(doneCount / 5) * 100}%`,
               height: '100%',
-              background: C.accent,
+              background: 'linear-gradient(90deg, #1e96eb, #0e6bbf)',
               transition: 'width 300ms ease',
+              borderRadius: 999,
             }}
           />
         </div>
@@ -715,6 +749,7 @@ const FiveSteps = ({
             fontSize: 12,
             fontWeight: 700,
             textDecoration: 'underline',
+            padding: 0,
           }}
         >
           Masquer
@@ -733,19 +768,19 @@ const FiveSteps = ({
             alignItems: 'center',
             gap: 12,
             width: '100%',
-            padding: '11px 14px',
+            padding: '12px 16px',
             background: 'transparent',
             border: 'none',
             color: C.text,
             ...(i > 0 ? { borderTop: `1px solid ${C.border}` } : {}),
-            ...(it.done ? { opacity: 0.6 } : {}),
+            ...(it.done ? { opacity: 0.55 } : {}),
           }}
         >
           <span
             aria-hidden
             style={{
-              width: 20,
-              height: 20,
+              width: 22,
+              height: 22,
               flexShrink: 0,
               borderRadius: '50%',
               display: 'grid',
@@ -770,7 +805,7 @@ const FiveSteps = ({
             >
               {it.label}
             </span>
-            <span style={{ display: 'block', fontSize: 11.5, color: C.muted }}>
+            <span style={{ display: 'block', fontSize: 11.5, color: C.muted, marginTop: 1 }}>
               {it.hint}
             </span>
           </span>
@@ -829,7 +864,7 @@ const Overview = ({
   const hasRevenuePoints = revenueData.some(d => d.revenue > 0);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* First-run checklist — self-hides once complete or dismissed. */}
       <FiveSteps slug={slug} summary={summary} onGoTo={onGoTo} />
 
@@ -837,8 +872,8 @@ const Overview = ({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(158px, 1fr))',
-          gap: 12,
+          gridTemplateColumns: 'repeat(auto-fit, minmax(168px, 1fr))',
+          gap: 14,
         }}
       >
         <KpiCard
@@ -890,7 +925,7 @@ const Overview = ({
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-          gap: 12,
+          gap: 14,
         }}
       >
         <Panel title="CA livré — 14 derniers jours">
@@ -1020,7 +1055,7 @@ const Overview = ({
         style={{
           display: 'flex',
           flexWrap: 'wrap',
-          gap: 12,
+          gap: 14,
           alignItems: 'flex-start',
         }}
       >
@@ -1106,7 +1141,7 @@ const Overview = ({
             minWidth: 0,
             display: 'flex',
             flexDirection: 'column',
-            gap: 12,
+            gap: 14,
           }}
         >
           <Panel
@@ -1133,7 +1168,7 @@ const Overview = ({
                       display: 'flex',
                       alignItems: 'center',
                       gap: 10,
-                      padding: '7px 0',
+                      padding: '9px 0',
                       ...(i > 0 ? { borderTop: `1px solid ${C.border}` } : {}),
                     }}
                   >
@@ -1156,6 +1191,9 @@ const Overview = ({
                         fontWeight: 700,
                         color: '#e8a33d',
                         whiteSpace: 'nowrap',
+                        background: 'color-mix(in srgb, #e8a33d 14%, transparent)',
+                        padding: '2px 8px',
+                        borderRadius: 999,
                       }}
                     >
                       {num(p.stock)} restants · réappro à {num(p.reorderAt)}
@@ -1178,7 +1216,7 @@ const Overview = ({
                       display: 'flex',
                       alignItems: 'center',
                       gap: 10,
-                      padding: '7px 0',
+                      padding: '9px 0',
                       ...(i > 0 ? { borderTop: `1px solid ${C.border}` } : {}),
                     }}
                   >
@@ -1257,46 +1295,70 @@ const KpiCard = ({
     style={{
       background: C.panel,
       border: `1px solid ${C.border}`,
-      borderRadius: 12,
-      padding: '12px 14px',
+      borderRadius: 14,
+      padding: '14px 16px',
       display: 'flex',
       flexDirection: 'column',
-      gap: 4,
+      gap: 6,
       minWidth: 0,
+      boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
     }}
   >
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
-        fontSize: 11,
-        fontWeight: 700,
-        letterSpacing: '0.04em',
-        textTransform: 'uppercase',
-        color: C.muted,
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
+        gap: 8,
       }}
     >
-      <span aria-hidden>{icon}</span> {label}
+      <span
+        aria-hidden
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 9,
+          background: color
+            ? `color-mix(in srgb, ${color} 18%, transparent)`
+            : C.accentSoft,
+          display: 'grid',
+          placeItems: 'center',
+          fontSize: 15,
+          flexShrink: 0,
+        }}
+      >
+        {icon}
+      </span>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          color: C.muted,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </div>
     </div>
     <div
       style={{
-        fontSize: 20,
+        fontSize: 22,
         fontWeight: 800,
         color: color ?? C.text,
         whiteSpace: 'nowrap',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
+        letterSpacing: '-0.02em',
       }}
       title={value}
     >
       {value}
     </div>
     {hint ? (
-      <div style={{ fontSize: 11.5, color: C.muted }}>{hint}</div>
+      <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.4 }}>{hint}</div>
     ) : null}
   </div>
 );
@@ -1304,11 +1366,11 @@ const KpiCard = ({
 const tipBoxStyle: CSSProperties = {
   background: C.panel2,
   border: `1px solid ${C.border}`,
-  borderRadius: 8,
-  padding: '7px 10px',
-  fontSize: 12,
+  borderRadius: 10,
+  padding: '8px 12px',
+  fontSize: 12.5,
   color: C.text,
-  boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+  boxShadow: '0 6px 20px rgba(0,0,0,0.4)',
 };
 
 const RevenueTip = ({
