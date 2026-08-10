@@ -208,7 +208,7 @@ export class AIChatComposer extends SignalWatcher(
       <div class="chat-panel-footer">
         <ai-chat-composer-tip
           .tips=${[
-            html`<span>AI outputs can be misleading or wrong</span>`,
+            html`<span>L’IA peut se tromper — vérifiez les informations importantes.</span>`,
           ].filter(Boolean)}
           .loop=${false}
         ></ai-chat-composer-tip>
