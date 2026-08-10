@@ -38,6 +38,7 @@ import { ClickDzVpicController } from './clickdz-vpic.controller';
 import { ClickDzVoiceAiController } from './clickdz-voice-ai.controller';
 import { ClickDzAudioLibraryController } from './clickdz-audio-library.controller';
 import { ClickDzAdminConfigResolver } from './clickdz-admin-config.resolver';
+import { ClickDzAdminEntitlementsResolver } from './clickdz-admin-entitlements.resolver';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import { McpCredentialService } from './mcp/credential';
@@ -113,7 +114,14 @@ export class CopilotApiModule {}
     StorageModule,
   ],
   // upstream 0.27.3 added the MCP credential providers
-  providers: [McpCredentialService, McpCredentialResolver, ClickDzAdminConfigResolver],
+  providers: [
+    McpCredentialService,
+    McpCredentialResolver,
+    ClickDzAdminConfigResolver,
+    // CDZ: admin analytics — adminUserAppEntitlements query (dashboard
+    // entitlements card + CSV export). Read-only, @Admin()-guarded.
+    ClickDzAdminEntitlementsResolver,
+  ],
   controllers: [
     CopilotController,
     ClickDzBridgeController,
