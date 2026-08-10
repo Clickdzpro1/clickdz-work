@@ -220,7 +220,7 @@ export class AIPanelInput extends SignalWatcher(WithDisposable(LitElement)) {
       <div class="star">${AIStarIcon}</div>
       <div class="textarea-container">
         <textarea
-          placeholder="What are your thoughts?"
+          placeholder="Comment puis-je vous aider ?"
           rows="1"
           @keydown=${this._onKeyDown}
           @input=${this._onInput}
