@@ -153,8 +153,8 @@ const SentenceBlock = memo(function SentenceBlock({
       <button
         type="button"
         className={tcs.cutBtn}
-        title="Delete this sentence and cut the clip"
-        aria-label="Delete this sentence and cut the clip"
+        title="Supprimer cette phrase et couper le clip"
+        aria-label="Supprimer cette phrase et couper le clip"
         onClick={() => onCut(sentence)}
       >
         ✕
@@ -280,10 +280,10 @@ export function TranscriptEdit({
     if (!first || !last) return null;
     const count = pick.to - pick.from;
     const dur = Math.max(0, last.t1 - first.t0);
-    return `${count} word${count === 1 ? '' : 's'} · ${dur.toFixed(1)}s`;
+    return `${count} mot${count === 1 ? '' : 's'} · ${dur.toFixed(1)}s`;
   }, [words, pick]);
 
-  const clipMeta = `${clip.type === 'video' ? 'Video' : 'Audio'} · ${formatTimecode(
+  const clipMeta = `${clip.type === 'video' ? 'Vidéo' : 'Audio'} · ${formatTimecode(
     clip.duration
   )}`;
 
@@ -328,15 +328,14 @@ export function TranscriptEdit({
 
       {clip.type === 'audio' ? (
         <div className={tcs.clipTitleMeta} style={{ padding: '0 4px 8px' }}>
-          Note: audio clips have no source in-point, so a mid-clip cut may shift
-          the remaining audio. Cuts on video clips stay perfectly in sync.
+          Remarque : les clips audio n’ont pas de point d’entrée source, donc une coupe en plein milieu du clip peut décaler l’audio restant. Les coupes sur les clips vidéo restent parfaitement synchronisées.
         </div>
       ) : null}
 
       {loading ? (
         <div className={tcs.centerState}>
           <span className={tcs.spinner} aria-hidden="true" />
-          Loading transcript…
+          Chargement de la transcription…
         </div>
       ) : words && words.length > 0 ? (
         <>
