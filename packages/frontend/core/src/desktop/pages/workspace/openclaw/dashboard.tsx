@@ -199,7 +199,7 @@ export const OpenClawDashboard = ({
           content: '',
           language: known?.language,
           loading: false,
-          error: 'Could not read this file from the sandbox.',
+          error: 'Impossible de lire ce fichier depuis le sandbox.',
         });
       }
     },
