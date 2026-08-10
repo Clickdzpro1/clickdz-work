@@ -471,6 +471,18 @@ class WhatsappMaxGatewayClient {
     return [];
   }
 
+  /** POST /instances/:id/sync — kick the gateway's chat-history re-sync
+   * (the gateway's on-ready sync is one-shot fire-and-forget; if it fails or
+   * is interrupted by a redeploy, nothing retries it — this endpoint is the
+   * designed escape hatch). true when the gateway accepted the request. */
+  async triggerSync(instanceId: string): Promise<boolean> {
+    if (!instanceId) return false;
+    const r = await this.call(`/instances/${instanceId}/sync`, {
+      method: 'POST',
+    });
+    return !!r && r.status >= 200 && r.status < 300;
+  }
+
   /**
    * Proxy GET /instances/:id/messages?chatJid&limit&before&fromMe → stored inbox.
    * P4 E1.2: extended with `before` (cursor ts) and `fromMe` (filter flag).
@@ -1239,6 +1251,27 @@ export class ClickDzWhatsappMaxController {
     const resolved = await this.resolveRecord(user.id, connId || undefined);
     if (!resolved || !resolved.rec.active) return { chats: [] };
     const chats = await gateway.listChats(resolved.rec.instanceId);
+    if (chats.length > 0) return { chats };
+
+    // Self-heal: a CONNECTED instance with an empty chat list usually means
+    // the gateway's one-shot on-ready history sync failed or was interrupted
+    // (e.g. gateway redeploy mid-sync) — the user then sees "no chat system"
+    // forever. Kick the gateway's POST /instances/:id/sync (at most once per
+    // 5 min per instance) and give the re-sync a short window to land within
+    // this same request so a simple refresh brings the conversations in.
+    const kickKey = `clickdz:wamax:sync-kick:${resolved.rec.instanceId}`;
+    const alreadyKicked = await this.cache.get<boolean>(kickKey);
+    if (!alreadyKicked) {
+      await this.cache.set(kickKey, true, { ttl: 5 * 60 * 1000 });
+      const kicked = await gateway.triggerSync(resolved.rec.instanceId);
+      if (kicked) {
+        for (let i = 0; i < 2; i++) {
+          await new Promise(res => setTimeout(res, 4000));
+          const retry = await gateway.listChats(resolved.rec.instanceId);
+          if (retry.length > 0) return { chats: retry };
+        }
+      }
+    }
     return { chats };
   }
 
