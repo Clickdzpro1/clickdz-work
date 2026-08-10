@@ -475,7 +475,7 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
       <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px', background: C.bg }}>
         {readOnly && (
           <Banner tone="warn">
-            {'Read-only mode — writes are blocked.'}
+            {'Mode lecture seule — les modifications sont bloquées.'}
           </Banner>
         )}
 
