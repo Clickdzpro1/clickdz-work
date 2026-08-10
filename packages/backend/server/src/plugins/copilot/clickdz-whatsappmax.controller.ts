@@ -114,6 +114,9 @@ const WHATSAPPMAX_AGENT = 'hermes' as const;
 
 // Bounded timeout for a gateway call — quick control-plane + short reads.
 const WA_TIMEOUT_MS = 10_000;
+// A deep per-chat history backfill fetches + persists up to thousands of
+// messages, so it needs a much longer ceiling than a normal control call.
+const WAMAX_BACKFILL_TIMEOUT_MS = 150_000;
 // WhatsApp text cap (the gateway accepts far more; we trim to a sane cap).
 const WA_MAX_TEXT = 4000;
 // Broadcast fan-out cap per call (respect the gateway's rate-limit/warm-up — a
@@ -469,7 +472,8 @@ class WhatsappMaxGatewayClient {
    * absent. NEVER log `init.headers` (they carry the tenant token). */
   private async call(
     path: string,
-    init: RequestInit
+    init: RequestInit,
+    timeoutMs: number = WA_TIMEOUT_MS
   ): Promise<{ status: number; body: any } | null> {
     if (!this.configured) return null;
     try {
@@ -478,7 +482,7 @@ class WhatsappMaxGatewayClient {
         headers: this.headers(
           (init.headers as Record<string, string>) || undefined
         ),
-        signal: AbortSignal.timeout(WA_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       const body = (await res.json().catch(() => ({}))) as any;
       return { status: res.status, body };
@@ -739,6 +743,36 @@ class WhatsappMaxGatewayClient {
       method: 'POST',
     });
     return !!r && r.status >= 200 && r.status < 300;
+  }
+
+  /** WAVE-final: deep-backfill ONE chat's history via the gateway
+   * (POST /instances/:id/messages/backfill). The gateway pulls up to `limit`
+   * messages and persists them; a big timeout because a deep pull can take
+   * a while. Returns { ok, fetched, saved }. NEVER throws. */
+  async backfillChat(
+    instanceId: string,
+    chatJid: string,
+    limit = 1500
+  ): Promise<{ ok: boolean; fetched: number; saved: number }> {
+    if (!instanceId || !chatJid) return { ok: false, fetched: 0, saved: 0 };
+    const r = await this.call(
+      `/instances/${instanceId}/messages/backfill`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chatJid, limit }),
+      },
+      WAMAX_BACKFILL_TIMEOUT_MS
+    );
+    if (!r || (r.status !== 200 && r.status !== 201)) {
+      return { ok: false, fetched: 0, saved: 0 };
+    }
+    const b = r.body || {};
+    return {
+      ok: b.ok !== false,
+      fetched: Number(b.fetched) || 0,
+      saved: Number(b.saved) || 0,
+    };
   }
 
   /**
@@ -2202,6 +2236,64 @@ export class ClickDzWhatsappMaxController {
       return { learnedContext, analyzedChats: blocks.length, analyzedMessages };
     } catch {
       return null;
+    }
+  }
+
+  // =========================================================================
+  // WAVE-final — POST /api/v1/whatsappmax/backfill  { connId?, chatJid, limit? }
+  //   → { ok, fetched, saved } | { ok:false, error }
+  //   Deep-loads ALL available history for one chat (owner-triggered
+  //   "charger tout l'historique"). Redis-gated to once per 60s per chat so a
+  //   double-click can't fan out heavy gateway pulls.
+  // =========================================================================
+  @Throttle('default', { limit: 20, ttl: 60_000 })
+  @Post('/api/v1/whatsappmax/backfill')
+  async backfill(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: { connId?: string; chatJid?: string; limit?: number }
+  ): Promise<{
+    ok: boolean;
+    fetched?: number;
+    saved?: number;
+    error?: string;
+  }> {
+    try {
+      this.assertEnabled();
+      const connId =
+        typeof body?.connId === 'string' ? body.connId.trim() : '';
+      const chatJid =
+        typeof body?.chatJid === 'string' ? body.chatJid.trim() : '';
+      if (!chatJid) return { ok: false, error: 'chatJid required' };
+      const limit =
+        typeof body?.limit === 'number' && Number.isFinite(body.limit)
+          ? Math.max(1, Math.min(5000, Math.floor(body.limit)))
+          : 1500;
+      const resolved = await this.resolveRecord(user.id, connId || undefined);
+      if (!resolved || !resolved.rec.active) {
+        return { ok: false, error: 'not_connected' };
+      }
+      // Per-chat cooldown (SET NX EX 60) — a heavy pull shouldn't fan out.
+      try {
+        const gate = await (this.redis as any).set(
+          `clickdz:wamax:backfill:gate:${resolved.connId}:${hashJid(chatJid)}`,
+          '1',
+          'EX',
+          60,
+          'NX'
+        );
+        if (gate === null) return { ok: false, error: 'too_soon' };
+      } catch {
+        /* gate best-effort — proceed */
+      }
+      const result = await gateway.backfillChat(
+        resolved.rec.instanceId,
+        chatJid,
+        limit
+      );
+      if (!result.ok) return { ok: false, error: 'backfill_failed' };
+      return { ok: true, fetched: result.fetched, saved: result.saved };
+    } catch {
+      return { ok: false, error: 'backfill_failed' };
     }
   }
 
