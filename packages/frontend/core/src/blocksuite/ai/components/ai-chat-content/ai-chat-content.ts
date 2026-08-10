@@ -393,10 +393,6 @@ export class AIChatContent extends SignalWatcher(
         .docDisplayService=${this.docDisplayConfig}
         .peekViewService=${this.peekViewService}
         .onOpenDoc=${this.onOpenDoc}
-        .cdzStudio=${this.cdzStudio}
-        .cdzNiche=${this.cdzNiche}
-        .cdzLang=${this.cdzLang}
-        .cdzRecentTitles=${this.cdzRecentTitles}
       ></ai-chat-messages>
       <ai-chat-composer
         style=${styleMap({
