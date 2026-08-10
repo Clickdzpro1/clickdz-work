@@ -442,9 +442,10 @@ export const ratioGrid = style({
   display: 'grid',
   gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
   gap: 6,
-  // ---- Mobile: collapse to 2 columns so cards don't overflow narrow panels -
+  // ---- Tablet/mobile: collapse to 2 columns so cards don't overflow a
+  // narrowed panel (the side-panel slot itself caps at 46vw ≤1024px).
   '@media': {
-    '(max-width: 600px)': {
+    '(max-width: 1024px)': {
       gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
     },
   },
