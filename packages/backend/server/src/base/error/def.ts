@@ -888,6 +888,12 @@ export const USER_FRIENDLY_ERRORS = {
   },
 
   // Account errors
+  user_suspended: {
+    type: 'action_forbidden',
+    args: { email: 'string' },
+    message: ({ email }) =>
+      `Votre compte a été suspendu. Contactez l\u{2019}administrateur à ${email} pour plus d\u{2019}informations.`,
+  },
   cannot_delete_own_account: {
     type: 'action_forbidden',
     message: 'Cannot delete own account.',
