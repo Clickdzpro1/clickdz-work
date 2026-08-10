@@ -62,6 +62,7 @@ import {
 } from './openclaw-shared';
 import { PreviewPanel } from './preview-panel';
 import { Terminal } from './terminal';
+import { useIsNarrow } from './use-openclaw-responsive';
 import { OpenClawWizard } from './wizard';
 
 // ---------------------------------------------------------------------------
@@ -820,6 +821,18 @@ const OpenClawConsole = ({
 
   const hasThread = !!activeId;
 
+  // ---- responsive breakpoints (layout-only; no behavior change) ----------
+  // ≤1024px (tablet): the fixed rails (thread sidebar + copilot rail) no
+  // longer deserve their desktop widths — cap them so the hero (Files/
+  // Terminal/Preview) keeps most of the frame.
+  // ≤480px (phone): the multi-pane IDE layout can't fit side by side at all.
+  // The FileTree becomes a toggleable overlay-ish pane above the code viewer
+  // (a simple show/hide, not a rewrite of the tree/viewer components) so the
+  // code viewer — the primary surface once a file is open — stays usable.
+  const isTablet = useIsNarrow(1024);
+  const isPhone = useIsNarrow(480);
+  const [showFileTreeMobile, setShowFileTreeMobile] = useState(false);
+
   return (
     <div data-cdz-surface="" data-cdz-shell="" style={rootStyle}>
       {/* =====================================================================
@@ -845,7 +858,14 @@ const OpenClawConsole = ({
           </button>
         </div>
       ) : (
-        <div data-cdz-rail="" style={sidebarWrapStyle}>
+        <div
+          data-cdz-rail=""
+          style={
+            isTablet
+              ? { ...sidebarWrapStyle, ...sidebarWrapStyleTablet }
+              : sidebarWrapStyle
+          }
+        >
           <div style={railHeadStyle}>
             <span style={railHeadLabelStyle}>Projets</span>
             <button
@@ -897,6 +917,26 @@ const OpenClawConsole = ({
             </span>
           ) : null}
           <span style={{ flex: 1 }} />
+          {isPhone && tab === 'files' ? (
+            <button
+              type="button"
+              style={heroRailBtnStyle}
+              onClick={() => setShowFileTreeMobile(v => !v)}
+              title={
+                showFileTreeMobile
+                  ? 'Masquer les fichiers'
+                  : 'Afficher les fichiers'
+              }
+              aria-label={
+                showFileTreeMobile
+                  ? 'Masquer les fichiers'
+                  : 'Afficher les fichiers'
+              }
+              aria-pressed={showFileTreeMobile}
+            >
+              📁 {showFileTreeMobile ? 'Fermer' : 'Fichiers'}
+            </button>
+          ) : null}
           {railCollapsed ? (
             <button
               type="button"
@@ -932,14 +972,37 @@ const OpenClawConsole = ({
               />
             </div>
           ) : tab === 'files' ? (
-            <div data-cdz-shell="" style={filesLayoutStyle}>
-              <div data-cdz-panel="" style={fileTreeWrapStyle}>
-                <FileTree
-                  files={files}
-                  activePath={openFile?.path}
-                  onOpen={path => void openPath(path)}
-                />
-              </div>
+            <div
+              data-cdz-shell=""
+              style={isPhone ? filesLayoutStylePhone : filesLayoutStyle}
+            >
+              {/* ≤480px: the tree is a toggleable pane (via the "Fichiers"
+                  button in the hero header above) instead of a permanent
+                  side-by-side column — the code viewer is the primary
+                  surface once a file is open. ≤1024px: same tree, just a
+                  narrower fixed column so the code viewer keeps most of the
+                  width. */}
+              {!isPhone || showFileTreeMobile ? (
+                <div
+                  data-cdz-panel=""
+                  style={
+                    isPhone
+                      ? fileTreeWrapStylePhone
+                      : isTablet
+                        ? fileTreeWrapStyleTablet
+                        : fileTreeWrapStyle
+                  }
+                >
+                  <FileTree
+                    files={files}
+                    activePath={openFile?.path}
+                    onOpen={path => {
+                      void openPath(path);
+                      if (isPhone) setShowFileTreeMobile(false);
+                    }}
+                  />
+                </div>
+              ) : null}
               <div data-cdz-main="" style={codeViewerWrapStyle}>
                 {openFile ? (
                   openFile.loading ? (
@@ -992,7 +1055,12 @@ const OpenClawConsole = ({
           </button>
         </div>
       ) : (
-        <div data-cdz-panel="" style={copilotColStyle}>
+        <div
+          data-cdz-panel=""
+          style={
+            isTablet ? { ...copilotColStyle, ...copilotColStyleTablet } : copilotColStyle
+          }
+        >
           <div style={railHeadStyle}>
             <button
               type="button"
@@ -1417,6 +1485,17 @@ const sidebarWrapStyle: CSSProperties = {
   minHeight: 0,
 };
 
+// ≤1024px (tablet): the sidebar is not the star — cap it well below its
+// desktop width so the hero (Files/Terminal/Preview) keeps most of the frame.
+// Spread onto `sidebarWrapStyle` (not a replacement) so the border/background/
+// flex-direction rules stay identical; only the widths shrink.
+const sidebarWrapStyleTablet: CSSProperties = {
+  flex: '0 0 168px',
+  width: 168,
+  minWidth: 140,
+  maxWidth: 190,
+};
+
 // Collapsed-sidebar strip — a thin rail with the expand button.
 const sidebarStripStyle: CSSProperties = {
   flex: '0 0 40px',
@@ -1487,6 +1566,7 @@ const heroRailBtnStyle: CSSProperties = {
   appearance: 'none',
   cursor: 'pointer',
   padding: '3px 12px',
+  minHeight: 30,
   borderRadius: AgentPalette.radius.md,
   fontSize: 11.5,
   fontWeight: 600,
@@ -1514,6 +1594,16 @@ const copilotColStyle: CSSProperties = {
   overflow: 'hidden',
 };
 
+// ≤1024px (tablet): the copilot rail is peripheral — cap it to a narrower
+// column so the hero keeps most of the width instead of the two rails
+// eating ~610px of a ~1024px frame between them.
+const copilotColStyleTablet: CSSProperties = {
+  flex: '0 0 280px',
+  width: 280,
+  minWidth: 240,
+  maxWidth: 300,
+};
+
 // Collapsed-rail strip — a thin rail with the expand button.
 const railStripStyle: CSSProperties = {
   flex: '0 0 40px',
@@ -1528,13 +1618,15 @@ const railStripStyle: CSSProperties = {
 };
 
 // A small header row shared by the two side rails (label + collapse toggle).
+// Height bumped slightly (30 → 34) so the toggle button below can grow toward
+// a comfortable touch target without visually overflowing the row.
 const railHeadStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 8,
   flexShrink: 0,
-  height: 30,
-  padding: '0 6px 0 10px',
+  height: 34,
+  padding: '0 4px 0 10px',
 };
 const railHeadLabelStyle: CSSProperties = {
   flex: 1,
@@ -1545,11 +1637,15 @@ const railHeadLabelStyle: CSSProperties = {
   textTransform: 'uppercase',
   color: C.muted,
 };
+// Touch target: the visible glyph stays a small 22px box, but min-width/
+// min-height + padding grow the actual hit area to ~34px — a trivial tweak
+// (no visual restructuring) that helps thumb accuracy on tablet/phone.
 const railToggleBtnStyle: CSSProperties = {
   appearance: 'none',
   cursor: 'pointer',
-  width: 22,
-  height: 22,
+  minWidth: 34,
+  minHeight: 34,
+  padding: 4,
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -1561,12 +1657,14 @@ const railToggleBtnStyle: CSSProperties = {
   flexShrink: 0,
 };
 
-// The thin-strip expand button (used by both collapsed rails).
+// The thin-strip expand button (used by both collapsed rails). Bumped toward
+// a full 40px touch target (padding-based, not a layout rewrite).
 const stripBtnStyle: CSSProperties = {
   appearance: 'none',
   cursor: 'pointer',
-  width: 28,
-  height: 28,
+  minWidth: 40,
+  minHeight: 40,
+  padding: 6,
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -1607,6 +1705,8 @@ const shipHeadStyle: CSSProperties = {
   color: C.text,
 };
 
+// Horizontally scrollable (thin, near-invisible scrollbar) so the three tabs
+// never wrap onto a second row on a narrow phone — they just slide.
 const tabsBarStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -1615,7 +1715,9 @@ const tabsBarStyle: CSSProperties = {
   padding: '0 8px',
   borderBottom: `1px solid ${C.border}`,
   background: C.panel,
-};
+  overflowX: 'auto',
+  scrollbarWidth: 'thin',
+} as CSSProperties;
 
 const workspaceBodyStyle: CSSProperties = {
   flex: 1,
@@ -1642,11 +1744,46 @@ const filesLayoutStyle: CSSProperties = {
   alignItems: 'stretch',
 };
 
+// ≤480px: the tree pane is shown/hidden via the "Fichiers" toggle rather than
+// sitting permanently beside the code viewer — so when it IS visible it
+// should stack above the viewer, each getting real height, instead of the two
+// squeezing side by side into ~390px.
+const filesLayoutStylePhone: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'stretch',
+};
+
 const fileTreeWrapStyle: CSSProperties = {
   flex: '0 0 200px',
   width: 200,
   minWidth: 160,
   borderRight: `1px solid ${C.border}`,
+  overflow: 'auto',
+  minHeight: 0,
+};
+
+// ≤1024px (tablet): still side-by-side with the code viewer, just narrower so
+// the viewer (the primary surface) keeps most of the width.
+const fileTreeWrapStyleTablet: CSSProperties = {
+  flex: '0 0 150px',
+  width: 150,
+  minWidth: 130,
+  borderRight: `1px solid ${C.border}`,
+  overflow: 'auto',
+  minHeight: 0,
+};
+
+// ≤480px: stacked above the code viewer (toggled via the header button), a
+// bounded height so the viewer below still gets real room.
+const fileTreeWrapStylePhone: CSSProperties = {
+  flex: '0 0 auto',
+  width: '100%',
+  maxHeight: '40vh',
+  borderRight: 'none',
+  borderBottom: `1px solid ${C.border}`,
   overflow: 'auto',
   minHeight: 0,
 };
