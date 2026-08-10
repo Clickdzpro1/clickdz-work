@@ -3973,11 +3973,11 @@ export class AIChatInput extends SignalWatcher(
         rows="1"
         placeholder=${this.appMode
           ? this.appResult?.html
-            ? 'Describe a change — CDZ will edit this app…'
-            : 'Describe the app to build — CDZ ships it live…'
+            ? 'Décrivez une modification — CDZ éditera cette app…'
+            : 'Décrivez l’app à créer — CDZ la met en ligne…'
           : this.imageMode
-            ? 'Describe the image ClickDz 1.0 should create…'
-            : 'What are your thoughts?'}
+            ? 'Décrivez l’image que ClickDz 1.0 doit créer…'
+            : 'Comment puis-je vous aider ?'}
         @input=${this._handleInput}
         @keydown=${this._handleKeyDown}
         @focus=${() => {
