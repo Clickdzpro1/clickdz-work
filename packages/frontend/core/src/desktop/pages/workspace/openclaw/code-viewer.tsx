@@ -77,6 +77,9 @@ const copyBtnStyle: CSSProperties = {
   fontSize: 11,
   fontWeight: 600,
   padding: '3px 10px',
+  // Touch target: visible chip stays compact, but the hit area grows toward
+  // 40px via min-height (trivial, no layout restructuring).
+  minHeight: 30,
   borderRadius: 6,
   border: `1px solid ${K.btnBorder}`,
   background: K.btnBg,
