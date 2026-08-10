@@ -229,6 +229,33 @@ export interface WhatsappMaxConnRecord {
 }
 
 // ---------------------------------------------------------------------------
+// DIFFUSION PRO — background broadcast job record (Diffusion Pro anti-ban).
+// Stored in cache under `clickdz:wamax:bcast:{jobId}` (24h TTL).
+// ---------------------------------------------------------------------------
+export interface BroadcastJob {
+  jobId: string;
+  userId: string;
+  connId: string;
+  state: 'running' | 'done' | 'cancelled';
+  recipients: string[];
+  variants: string[];
+  personalize: boolean;
+  names: Record<string, string>;
+  minDelayS: number;
+  maxDelayS: number;
+  cursor: number;
+  sent: number;
+  failed: number;
+  startedAt: number;
+  finishedAt?: number;
+}
+
+// TTL for a broadcast job record: 24 hours in milliseconds.
+const BCAST_JOB_TTL_MS = 24 * 60 * 60 * 1000;
+// Redis cache key for a broadcast job.
+const bcastJobKey = (jobId: string) => `clickdz:wamax:bcast:${jobId}`;
+
+// ---------------------------------------------------------------------------
 // WS-MAXP — per-connection AI settings. Configures HOW the WhatsappMax AI
 // behaves for this shop: the business persona/context fed to every assist
 // prompt AND to the inbound auto-reply run (via createAgentRun's persona
@@ -2734,6 +2761,298 @@ export class ClickDzWhatsappMaxController {
       return { ok: true, translation: translation.trim(), original };
     } catch {
       return { ok: false, error: 'ai_unavailable' };
+    }
+  }
+
+  // =========================================================================
+  // DIFFUSION PRO — POST /api/v1/whatsappmax/broadcast/start
+  //   body { connId?, recipients?, variants?, minDelayS?, maxDelayS?, personalize? }
+  //   → { ok: true, jobId, total }
+  //   Creates a background broadcast job with anti-ban delays + message rotation.
+  // =========================================================================
+  @Throttle('strict')
+  @Post('/api/v1/whatsappmax/broadcast/start')
+  async broadcastStart(
+    @CurrentUser() user: CurrentUser,
+    @Body()
+    body: {
+      connId?: unknown;
+      recipients?: unknown;
+      variants?: unknown;
+      minDelayS?: unknown;
+      maxDelayS?: unknown;
+      personalize?: unknown;
+    }
+  ): Promise<{ ok: boolean; jobId: string; total: number }> {
+    this.assertEnabled();
+
+    const connId =
+      typeof body?.connId === 'string' ? body.connId.trim() : '';
+    const resolved = await this.resolveRecord(user.id, connId || undefined);
+    if (!resolved || !resolved.rec.active) {
+      throw new BadRequest('not_connected');
+    }
+
+    // Normalize + dedupe + cap recipients (same logic as legacy /broadcast).
+    const rawTo = Array.isArray(body?.recipients) ? (body.recipients as unknown[]) : [];
+    const seen = new Set<string>();
+    const recipients: string[] = [];
+    for (const raw of rawTo) {
+      const s = typeof raw === 'string' ? raw.trim() : '';
+      const n = s.includes('@') ? s : normalizeMsisdn(s);
+      if (n && !seen.has(n)) {
+        seen.add(n);
+        recipients.push(n);
+        if (recipients.length >= BROADCAST_MAX) break;
+      }
+    }
+    if (!recipients.length) {
+      throw new BadRequest('to must be a non-empty list of phone numbers');
+    }
+
+    // Validate variants: 1-3 non-empty trimmed strings ≤ 4000 chars each.
+    const rawVariants = Array.isArray(body?.variants) ? (body.variants as unknown[]) : [];
+    const variants: string[] = rawVariants
+      .map(v => (typeof v === 'string' ? v.trim() : ''))
+      .filter(v => v.length > 0)
+      .slice(0, 3);
+    for (const v of variants) {
+      if (v.length > WA_MAX_TEXT) {
+        throw new BadRequest('variant too long');
+      }
+    }
+    if (!variants.length) {
+      throw new BadRequest('at least one variant is required');
+    }
+
+    // Delay clamping: minDelayS in [5, 300], maxDelayS in [minDelayS, 300].
+    const rawMin = Number(body?.minDelayS);
+    const rawMax = Number(body?.maxDelayS);
+    const minDelayS = Math.max(5, Math.min(300, Number.isFinite(rawMin) && rawMin > 0 ? rawMin : 20));
+    const maxDelayS = Math.max(minDelayS, Math.min(300, Number.isFinite(rawMax) && rawMax > 0 ? rawMax : 45));
+
+    const personalize = body?.personalize === true || body?.personalize === 'true';
+
+    // Build names map from contacts (when personalization is on).
+    let names: Record<string, string> = {};
+    if (personalize) {
+      try {
+        const contacts = await gateway.listContacts(resolved.rec.instanceId, 500);
+        for (const c of contacts) {
+          const name: string =
+            (typeof c?.name === 'string' && c.name.trim()) ||
+            (typeof c?.pushName === 'string' && c.pushName.trim()) ||
+            (typeof c?.notify === 'string' && c.notify.trim()) ||
+            '';
+          if (!name) continue;
+          const jid: string = typeof c?.jid === 'string' ? c.jid.trim() : '';
+          const phone: string = typeof c?.phone === 'string' ? c.phone.replace(/[^\d]/g, '') : '';
+          if (jid) names[jid] = name;
+          if (phone) names[phone] = name;
+        }
+      } catch {
+        names = {};
+      }
+    }
+
+    // Mint jobId (16 hex chars via lazy require, same as mintConnId).
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { randomBytes } = require('node:crypto');
+    const jobId: string = randomBytes(8).toString('hex');
+
+    const job: BroadcastJob = {
+      jobId,
+      userId: user.id,
+      connId: resolved.connId,
+      state: 'running',
+      recipients,
+      variants,
+      personalize,
+      names,
+      minDelayS,
+      maxDelayS,
+      cursor: 0,
+      sent: 0,
+      failed: 0,
+      startedAt: Date.now(),
+    };
+
+    await this.cache.set(bcastJobKey(jobId), job, { ttl: BCAST_JOB_TTL_MS });
+
+    // Fire the processor detached — never propagate failures.
+    void this.processBroadcastJob(jobId).catch(() => undefined);
+
+    return { ok: true, jobId, total: recipients.length };
+  }
+
+  // =========================================================================
+  // DIFFUSION PRO — GET /api/v1/whatsappmax/broadcast/status?jobId=
+  //   → { ok, state, total, sent, failed, cursor, startedAt, finishedAt? }
+  // =========================================================================
+  @Throttle('default', { limit: 300, ttl: 60_000 })
+  @Get('/api/v1/whatsappmax/broadcast/status')
+  async broadcastStatus(
+    @CurrentUser() user: CurrentUser,
+    @Query('jobId') jobIdRaw: string
+  ): Promise<{
+    ok: boolean;
+    state?: string;
+    total?: number;
+    sent?: number;
+    failed?: number;
+    cursor?: number;
+    startedAt?: number;
+    finishedAt?: number;
+    error?: string;
+  }> {
+    this.assertEnabled();
+    const jobId = typeof jobIdRaw === 'string' ? jobIdRaw.trim() : '';
+    const job = await this.cache.get<BroadcastJob>(bcastJobKey(jobId));
+    if (!job || job.userId !== user.id) {
+      return { ok: false, error: 'not_found' };
+    }
+    return {
+      ok: true,
+      state: job.state,
+      total: job.recipients.length,
+      sent: job.sent,
+      failed: job.failed,
+      cursor: job.cursor,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+    };
+  }
+
+  // =========================================================================
+  // DIFFUSION PRO — POST /api/v1/whatsappmax/broadcast/cancel
+  //   body { jobId } → { ok: true, state }
+  // =========================================================================
+  @Throttle('strict')
+  @Post('/api/v1/whatsappmax/broadcast/cancel')
+  async broadcastCancel(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: { jobId?: unknown }
+  ): Promise<{ ok: boolean; state: string }> {
+    this.assertEnabled();
+    const jobId = typeof body?.jobId === 'string' ? body.jobId.trim() : '';
+    const job = await this.cache.get<BroadcastJob>(bcastJobKey(jobId));
+    if (!job || job.userId !== user.id) {
+      return { ok: false, state: 'not_found' };
+    }
+    if (job.state === 'running') {
+      const updated: BroadcastJob = {
+        ...job,
+        state: 'cancelled',
+        finishedAt: Date.now(),
+      };
+      await this.cache.set(bcastJobKey(jobId), updated, { ttl: BCAST_JOB_TTL_MS });
+      return { ok: true, state: 'cancelled' };
+    }
+    return { ok: true, state: job.state };
+  }
+
+  /** Detached background processor for a broadcast job. Never throws. */
+  private async processBroadcastJob(jobId: string): Promise<void> {
+    try {
+      // Resolve the instance ONCE before the loop.
+      const seedJob = await this.cache.get<BroadcastJob>(bcastJobKey(jobId));
+      if (!seedJob || seedJob.state !== 'running') return;
+
+      const rec = await this.cache.get<WhatsappMaxRecord>(
+        maxKey(seedJob.userId, seedJob.connId)
+      );
+      if (!rec || !rec.instanceId) {
+        // Record gone — mark done and stop.
+        try {
+          const j = await this.cache.get<BroadcastJob>(bcastJobKey(jobId));
+          if (j) {
+            await this.cache.set(
+              bcastJobKey(jobId),
+              { ...j, state: 'done', finishedAt: Date.now() },
+              { ttl: BCAST_JOB_TTL_MS }
+            );
+          }
+        } catch {
+          /* best-effort */
+        }
+        return;
+      }
+
+      const instanceId = rec.instanceId;
+
+      for (let i = seedJob.cursor; i < seedJob.recipients.length; i++) {
+        // Re-read job on every iteration to detect cancellation.
+        let job: BroadcastJob | null = null;
+        try {
+          job = await this.cache.get<BroadcastJob>(bcastJobKey(jobId));
+        } catch {
+          job = null;
+        }
+        if (!job || job.state !== 'running') return;
+
+        const to = job.recipients[i];
+        const variant = job.variants[i % job.variants.length];
+
+        // Build personalized text.
+        let text = variant;
+        if (job.personalize) {
+          const bareDigits = to.replace(/[^\d]/g, '');
+          const name =
+            (to in job.names ? job.names[to] : '') ||
+            (bareDigits in job.names ? job.names[bareDigits] : '');
+          if (name) {
+            text = text.replace(/\{nom\}|\{name\}/g, name);
+          } else {
+            text = text.replace(/\{nom\}|\{name\}/g, '').replace(/  +/g, ' ').trim();
+          }
+        }
+
+        let sendOk = false;
+        try {
+          sendOk = await gateway.sendText(instanceId, to, text);
+        } catch {
+          sendOk = false;
+        }
+
+        // Update job counters after every send.
+        try {
+          const current = await this.cache.get<BroadcastJob>(bcastJobKey(jobId));
+          if (current) {
+            const updated: BroadcastJob = {
+              ...current,
+              cursor: i + 1,
+              sent: current.sent + (sendOk ? 1 : 0),
+              failed: current.failed + (sendOk ? 0 : 1),
+            };
+            await this.cache.set(bcastJobKey(jobId), updated, { ttl: BCAST_JOB_TTL_MS });
+          }
+        } catch {
+          /* best-effort */
+        }
+
+        // Random delay between sends (not after the last one).
+        if (i < job.recipients.length - 1) {
+          const delayMs =
+            (job.minDelayS + Math.random() * (job.maxDelayS - job.minDelayS)) * 1000;
+          await sleep(delayMs);
+        }
+      }
+
+      // Mark done.
+      try {
+        const final = await this.cache.get<BroadcastJob>(bcastJobKey(jobId));
+        if (final && final.state === 'running') {
+          await this.cache.set(
+            bcastJobKey(jobId),
+            { ...final, state: 'done', finishedAt: Date.now() },
+            { ttl: BCAST_JOB_TTL_MS }
+          );
+        }
+      } catch {
+        /* best-effort */
+      }
+    } catch {
+      // Absolute last-resort swallow — nothing must escape the detached promise.
     }
   }
 }
