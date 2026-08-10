@@ -272,7 +272,7 @@ const AppRow = ({
           <button
             style={btnStyle('secondary')}
             onClick={() => setConfirming(true)}
-            aria-label={`Delete ${app.slug}`}
+            aria-label={`Supprimer ${app.slug}`}
             title="Supprimer"
           >
             🗑
@@ -283,8 +283,7 @@ const AppRow = ({
       {confirming ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <Banner tone="error">
-            Permanently unpublish <strong>{app.slug}</strong>? The live URL will
-            stop working. This can’t be undone.
+            Dépublier définitivement <strong>{app.slug}</strong> ? L’URL en ligne ne fonctionnera plus. Cette action est irréversible.
           </Banner>
           <div style={{ display: 'flex', gap: 10 }}>
             <button
