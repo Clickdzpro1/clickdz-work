@@ -9,7 +9,6 @@ import {
   EmailAlreadyUsed,
   EventBus,
   UserNotFound,
-  UserSuspended,
   WrongSignInCredentials,
   WrongSignInMethod,
 } from '../base';
@@ -141,16 +140,10 @@ export class UserModel extends BaseModel {
   }
 
   async signIn(email: string, password: string): Promise<User> {
-    // Fetch the user even if disabled, so we can give a proper
-    // "suspended" error instead of a generic "wrong credentials".
-    const user = await this.getUserByEmail(email, { withDisabled: true });
+    const user = await this.getUserByEmail(email);
 
     if (!user) {
       throw new WrongSignInCredentials({ email });
-    }
-
-    if (user.disabled) {
-      throw new UserSuspended({ email });
     }
 
     if (!user.password) {
@@ -342,46 +335,17 @@ export class UserModel extends BaseModel {
     });
   }
 
-  /**
-   * Suspend a user without deleting their data.
-   *
-   * Unlike {@link ban} which deletes the user and recreates them with
-   * `disabled = true` (triggering all cleanups), this method simply flips
-   * the `disabled` flag. The user cannot sign in (the sign-in guard throws
-   * `UserSuspended`), but all workspaces, documents, and app entitlements
-   * are preserved so the account can be reactivated at any time.
-   */
-  async suspend(id: string) {
-    const user = await this.db.user.update({
-      where: { id },
-      data: { disabled: true },
-    });
-
-    this.event.emitDetached('user.updated', user);
-    return user;
-  }
-
   private buildListWhere(options: {
     keyword?: string | null;
     features?: UserFeatureName[] | null;
     after?: Date;
-    before?: Date;
-    disabled?: boolean | null;
   }): Prisma.UserWhereInput {
     const where: Prisma.UserWhereInput = {};
 
-    if (options.after || options.before) {
-      where.createdAt = {};
-      if (options.after) {
-        where.createdAt.gt = options.after;
-      }
-      if (options.before) {
-        where.createdAt.lt = options.before;
-      }
-    }
-
-    if (options.disabled !== null && options.disabled !== undefined) {
-      where.disabled = options.disabled;
+    if (options.after) {
+      where.createdAt = {
+        gt: options.after,
+      };
     }
 
     const keyword = options.keyword?.trim();
@@ -421,8 +385,6 @@ export class UserModel extends BaseModel {
     keyword?: string | null;
     features?: UserFeatureName[] | null;
     after?: Date;
-    before?: Date;
-    disabled?: boolean | null;
   }) {
     const where = this.buildListWhere(options);
 
@@ -441,8 +403,6 @@ export class UserModel extends BaseModel {
       keyword?: string | null;
       features?: UserFeatureName[] | null;
       after?: Date;
-      before?: Date;
-      disabled?: boolean | null;
     } = {}
   ) {
     const where = this.buildListWhere(options);
@@ -476,6 +436,18 @@ export class UserModel extends BaseModel {
       date: row.date,
       count: Number(row.count),
     }));
+  }
+
+  /**
+   * Total count of all docs (workspace pages) across the instance.
+   * Used by the admin analytics dashboard. The Prisma model `workspaceDoc`
+   * maps to the `workspace_pages` table.
+   */
+  async countAllDocs(): Promise<number> {
+    const [row] = await this.db.$queryRaw<{ count: bigint | number }[]>`
+      SELECT COUNT(*) AS count FROM "workspace_pages"
+    `;
+    return Number(row?.count ?? 0);
   }
 
   // #region ConnectedAccount
