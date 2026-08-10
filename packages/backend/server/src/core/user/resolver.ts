@@ -229,6 +229,15 @@ class ListUserInput {
 
   @Field(() => [Feature], { nullable: true })
   features?: Feature[];
+
+  @Field(() => Boolean, { nullable: true })
+  disabled?: boolean;
+
+  @Field(() => Date, { nullable: true })
+  after?: Date;
+
+  @Field(() => Date, { nullable: true })
+  before?: Date;
 }
 
 @InputType()
@@ -284,6 +293,9 @@ export class UserManagementResolver {
     return this.models.user.count({
       keyword: input?.keyword ?? null,
       features: (input?.features as UserFeatureName[]) ?? null,
+      disabled: input?.disabled ?? null,
+      after: input?.after,
+      before: input?.before,
     });
   }
 
@@ -298,6 +310,9 @@ export class UserManagementResolver {
       take: input.first,
       keyword: input.keyword,
       features: input.features as UserFeatureName[],
+      disabled: input.disabled ?? null,
+      after: input.after,
+      before: input.before,
     });
 
     return users.map(sessionUser);
@@ -426,5 +441,32 @@ export class UserManagementResolver {
   })
   async enableUser(@Args('id') id: string): Promise<UserType> {
     return sessionUser(await this.models.user.enable(id));
+  }
+
+  @Mutation(() => UserType, {
+    description: 'Suspend a user — blocks sign-in without deleting data',
+  })
+  async suspendUser(@Args('id') id: string): Promise<UserType> {
+    return sessionUser(await this.models.user.suspend(id));
+  }
+
+  @Mutation(() => Boolean, {
+    description: 'Bulk suspend multiple users',
+  })
+  async bulkSuspendUsers(
+    @Args({ name: 'ids', type: () => [String] }) ids: string[]
+  ): Promise<boolean> {
+    await Promise.all(ids.map(id => this.models.user.suspend(id)));
+    return true;
+  }
+
+  @Mutation(() => Boolean, {
+    description: 'Bulk enable multiple users',
+  })
+  async bulkEnableUsers(
+    @Args({ name: 'ids', type: () => [String] }) ids: string[]
+  ): Promise<boolean> {
+    await Promise.all(ids.map(id => this.models.user.enable(id)));
+    return true;
   }
 }
