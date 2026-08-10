@@ -371,6 +371,8 @@ interface WamaxAiSettings {
   language: string;
   autoReplyDefault: boolean;
   quickReplies: string[];
+  learnedContext: string;
+  continuousLearning: boolean;
 }
 
 const DEFAULT_AI_SETTINGS: WamaxAiSettings = {
@@ -380,6 +382,8 @@ const DEFAULT_AI_SETTINGS: WamaxAiSettings = {
   language: 'auto',
   autoReplyDefault: false,
   quickReplies: [],
+  learnedContext: '',
+  continuousLearning: false,
 };
 
 // ── Field normalization (E1 snake_case + camelCase aliases) ────────────────
@@ -4211,6 +4215,42 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
   const [saved, setSaved] = useState(false);
   const [s, setS] = useState<WamaxAiSettings>({ ...DEFAULT_AI_SETTINGS });
   const [qrInput, setQrInput] = useState('');
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeMsg, setAnalyzeMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null);
+
+  // WAVE-G P4 — "Analyser mes conversations" : the AI reads recent chats and
+  // distills the shop's business context into learnedContext (server-side).
+  const analyze = useCallback(async () => {
+    setAnalyzing(true);
+    setAnalyzeMsg(null);
+    const out = await apiPost<{
+      ok: boolean;
+      learnedContext?: string;
+      analyzedChats?: number;
+      analyzedMessages?: number;
+      error?: string;
+    }>('/api/v1/whatsappmax/ai/analyze', connId ? { connId } : {});
+    setAnalyzing(false);
+    if (isDark(out)) { onDark(); return; }
+    if (out && out.ok && typeof out.learnedContext === 'string') {
+      setS(prev => ({ ...prev, learnedContext: out.learnedContext ?? '' }));
+      setAnalyzeMsg({
+        tone: 'ok',
+        text: `Analyse terminée — ${out.analyzedChats ?? 0} conversations et ${out.analyzedMessages ?? 0} messages lus. Le contexte est déjà enregistré.`,
+      });
+    } else {
+      const code = out && !isDark(out) ? out.error : undefined;
+      setAnalyzeMsg({
+        tone: 'err',
+        text:
+          code === 'too_soon'
+            ? 'Analyse déjà lancée récemment — réessayez dans quelques minutes.'
+            : code === 'no_messages'
+              ? 'Pas assez de conversations à analyser pour le moment.'
+              : 'Analyse impossible — réessayez.',
+      });
+    }
+  }, [connId, onDark]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4426,6 +4466,87 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
                   checked={s.autoReplyDefault}
                   onChange={v => setS(prev => ({ ...prev, autoReplyDefault: v }))}
                 />
+              </div>
+
+              {sectionTitle('Intelligence')}
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  padding: '12px 13px',
+                  background: C.surface,
+                  borderRadius: 12,
+                  border: `1px solid ${C.border}`,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>
+                      🧠 Analyser mes conversations
+                    </div>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>
+                      L’IA lit vos conversations récentes et en déduit le contexte de votre
+                      boutique (produits, prix, questions fréquentes, processus). Ce contexte
+                      s’ajoute au profil ci-dessus pour toutes les réponses IA.
+                    </div>
+                  </div>
+                  <button
+                    style={{
+                      ...btn('primary', analyzing || loading),
+                      borderRadius: 999,
+                      padding: '8px 16px',
+                      flexShrink: 0,
+                      fontSize: 12,
+                    }}
+                    disabled={analyzing || loading}
+                    onClick={() => void analyze()}
+                  >
+                    {analyzing ? 'Analyse en cours…' : 'Analyser'}
+                  </button>
+                </div>
+                {analyzeMsg ? (
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: analyzeMsg.tone === 'ok' ? C.accent : C.danger,
+                      fontWeight: 600,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    {analyzeMsg.text}
+                  </div>
+                ) : null}
+                <div>
+                  <textarea
+                    style={{ ...inputStyle, minHeight: 88, resize: 'vertical' as const, borderRadius: 10, lineHeight: 1.55, background: C.bg }}
+                    value={s.learnedContext}
+                    maxLength={2000}
+                    dir="auto"
+                    placeholder="Le contexte appris par l’IA apparaîtra ici après analyse. Vous pouvez aussi l’éditer ou le compléter à la main."
+                    onChange={(e: ChangeEvent<HTMLTextAreaElement>) =>
+                      setS(prev => ({ ...prev, learnedContext: e.target.value }))
+                    }
+                  />
+                  <div style={{ fontSize: 10.5, color: C.muted, textAlign: 'right', marginTop: 3 }}>
+                    {s.learnedContext.length}/2000
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>
+                      Apprentissage continu
+                    </div>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>
+                      Ré-analyse automatiquement après ~50 nouveaux messages reçus
+                      (au maximum une fois par 24h).
+                    </div>
+                  </div>
+                  <Switch
+                    checked={s.continuousLearning}
+                    onChange={v => setS(prev => ({ ...prev, continuousLearning: v }))}
+                  />
+                </div>
               </div>
 
               {sectionTitle('Réponses rapides')}
