@@ -80,22 +80,22 @@ export const LogView = ({ lang, dict, refresh }: Props) => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.border}`, paddingBottom: 8 }}>
         <button style={tabStyle('log')} onClick={() => setTab('log')}>
-          {dict.publishedLog ?? 'Published log'}
+          {dict.publishedLog ?? 'Journal des publications'}
         </button>
         <button style={tabStyle('analytics')} onClick={() => setTab('analytics')}>
-          {dict.analytics ?? 'Analytics'}
+          {dict.analytics ?? 'Statistiques'}
         </button>
         <button style={{ ...miniBtnStyle('secondary'), marginLeft: 'auto' }} onClick={() => tab === 'log' ? void loadLog() : void loadAnalytics(analyticsNet)}>
-          {dict.refresh ?? 'Refresh'}
+          {dict.refresh ?? 'Actualiser'}
         </button>
       </div>
 
       {tab === 'log' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {loadingLog ? (
-            <div style={{ display: 'flex', gap: 8, color: C.muted }}><Spinner /> {dict.loading ?? 'Loading...'}</div>
+            <div style={{ display: 'flex', gap: 8, color: C.muted }}><Spinner /> {dict.loading ?? 'Chargement…'}</div>
           ) : log.length === 0 ? (
-            <div style={{ color: C.muted, fontSize: 13 }}>{dict.noLog ?? 'No published posts yet.'}</div>
+            <div style={{ color: C.muted, fontSize: 13 }}>{dict.noLog ?? 'Aucune publication pour le moment.'}</div>
           ) : (
             log.map(entry => (
               <div
@@ -112,7 +112,7 @@ export const LogView = ({ lang, dict, refresh }: Props) => {
               >
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 11.5, color: C.accent, fontWeight: 700 }}>{fmtTime(entry.publishedAt)}</span>
-                  <span style={{ fontSize: 11, color: C.muted }}>{dict.postId ?? 'Post ID:'} {entry.postId.slice(0, 8)}...</span>
+                  <span style={{ fontSize: 11, color: C.muted }}>{dict.postId ?? 'ID de publication :'} {entry.postId.slice(0, 8)}…</span>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {entry.results.map(r => {
@@ -158,7 +158,7 @@ export const LogView = ({ lang, dict, refresh }: Props) => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: 11.5, color: C.muted, direction: rtl ? 'rtl' : undefined }}>
-              {dict.selectNetwork ?? 'Network:'}
+              {dict.selectNetwork ?? 'Réseau :'}
             </span>
             <select
               value={analyticsNet}
@@ -172,11 +172,11 @@ export const LogView = ({ lang, dict, refresh }: Props) => {
           </div>
 
           {loadingAnalytics ? (
-            <div style={{ display: 'flex', gap: 8, color: C.muted }}><Spinner /> {dict.loading ?? 'Loading...'}</div>
+            <div style={{ display: 'flex', gap: 8, color: C.muted }}><Spinner /> {dict.loading ?? 'Chargement…'}</div>
           ) : analytics && analytics.available ? (
             <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '14px 16px' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8 }}>
-                {getNetworkMeta(analytics.network)?.label ?? analytics.network} {dict.analyticsData ?? 'Analytics'}
+                {getNetworkMeta(analytics.network)?.label ?? analytics.network} {dict.analyticsData ?? 'Statistiques'}
               </div>
               <pre style={{ fontSize: 11, color: C.text, background: C.panel2, borderRadius: 8, padding: 10, overflow: 'auto', maxHeight: 300 }}>
                 {JSON.stringify(analytics.data, null, 2)}
@@ -194,10 +194,10 @@ export const LogView = ({ lang, dict, refresh }: Props) => {
             }}>
               <div style={{ fontSize: 28, marginBottom: 8 }}>📊</div>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                {dict.analyticsUnavailable ?? 'Analytics not available for this network'}
+                {dict.analyticsUnavailable ?? 'Statistiques non disponibles pour ce réseau'}
               </div>
               <div style={{ fontSize: 11.5 }}>
-                {dict.analyticsUnavailableHint ?? 'Composio does not expose an insights action for this network yet.'}
+                {dict.analyticsUnavailableHint ?? 'Composio ne propose pas encore d’action de statistiques pour ce réseau.'}
               </div>
             </div>
           )}
