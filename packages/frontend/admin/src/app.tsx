@@ -60,6 +60,9 @@ export const NotificationSettings = lazy(
 export const StudioConfig = lazy(
   () => import(/* webpackChunkName: "admin-config-studio-config" */ './modules/admin-config/studio-config')
 );
+export const Monitoring = lazy(
+  () => import(/* webpackChunkName: "monitoring" */ './modules/monitoring')
+);
 export const Auth = lazy(
   () => import(/* webpackChunkName: "auth" */ './modules/auth')
 );
@@ -178,6 +181,10 @@ export const App = () => {
                   <Route
                     path={ROUTES.admin.studioConfig}
                     element={<StudioConfig />}
+                  />
+                  <Route
+                    path={ROUTES.admin.monitoring}
+                    element={<Monitoring />}
                   />
                 </Route>
               </Route>
