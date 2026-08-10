@@ -5095,12 +5095,13 @@ export function validatePin(v: string): string | null {
 
 export const codeStyle: CSSProperties = {
   fontFamily: 'var(--affine-font-code-family, monospace)',
-  fontSize: 12,
-  padding: '1px 5px',
-  borderRadius: 4,
+  fontSize: 11.5,
+  padding: '2px 7px',
+  borderRadius: 6,
   background:
-    'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 14%, transparent)',
+    'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 16%, transparent)',
   color: 'var(--affine-text-primary-color, #ececec)',
+  border: '1px solid color-mix(in srgb, var(--affine-primary-color, #1e96eb) 28%, transparent)',
   // Prevent the slug badge from wrapping its own text onto a second line on
   // narrow viewports — the outer title row already handles overflow via
   // textOverflow on the shop-name span.
@@ -5126,8 +5127,8 @@ export function btnStyle(
 ): CSSProperties {
   const base: CSSProperties = {
     appearance: 'none',
-    borderRadius: 8,
-    padding: '9px 16px',
+    borderRadius: 999,
+    padding: '9px 18px',
     fontSize: 13,
     fontWeight: 700,
     display: 'inline-flex',
@@ -5164,9 +5165,9 @@ export function miniBtnStyle(
 ): CSSProperties {
   return {
     ...btnStyle(variant, disabled),
-    padding: '5px 11px',
+    padding: '5px 13px',
     fontSize: 12,
-    borderRadius: 7,
+    borderRadius: 999,
     gap: 6,
   };
 }
@@ -5174,8 +5175,8 @@ export function miniBtnStyle(
 export const inputStyle: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
-  padding: '10px 12px',
-  borderRadius: 8,
+  padding: '9px 12px',
+  borderRadius: 10,
   fontSize: 14,
   fontFamily: 'inherit',
   lineHeight: 1.5,
@@ -5204,18 +5205,19 @@ export const thStyle: CSSProperties = {
   textAlign: 'left',
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.04em',
+  letterSpacing: '0.05em',
   textTransform: 'uppercase',
   color: C.muted,
-  padding: '6px 10px',
+  padding: '8px 12px',
   whiteSpace: 'nowrap',
 };
 
 export const tdStyle: CSSProperties = {
-  padding: '8px 10px',
+  padding: '10px 12px',
   borderTop: `1px solid ${C.border}`,
   color: C.text,
   verticalAlign: 'middle',
+  fontSize: 12.5,
 };
 
 export const Banner = ({
@@ -5231,9 +5233,10 @@ export const Banner = ({
   return (
     <div
       style={{
-        padding: '12px 14px',
-        borderRadius: 10,
+        padding: '12px 16px',
+        borderRadius: 12,
         fontSize: 13,
+        lineHeight: 1.55,
         background: map.bg,
         border: `1px solid ${map.border}`,
         color: map.color,
@@ -5312,15 +5315,16 @@ export const KindBadge = ({ kind }: { kind?: AppKind }) => {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 5,
-        fontSize: 10,
+        fontSize: 10.5,
         fontWeight: 700,
-        letterSpacing: '0.05em',
+        letterSpacing: '0.06em',
         textTransform: 'uppercase',
-        padding: '2px 8px',
+        padding: '3px 9px',
         borderRadius: 999,
         color: kind ? '#fff' : C.muted,
         background: kind === 'shop' ? '#0f766e' : kind === 'erp' ? '#2f6bff' : C.panel2,
         border: `1px solid ${kind ? 'transparent' : C.border}`,
+        boxShadow: kind ? '0 1px 4px rgba(0,0,0,0.25)' : 'none',
       }}
     >
       <span aria-hidden>{emoji}</span>
@@ -5341,12 +5345,12 @@ export const StatusBadge = ({ status }: { status?: string }) => {
         gap: 5,
         fontSize: 11,
         fontWeight: 700,
-        padding: '2px 9px',
+        padding: '3px 10px',
         borderRadius: 999,
         whiteSpace: 'nowrap',
         color,
-        background: `color-mix(in srgb, ${color} 15%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
+        background: `color-mix(in srgb, ${color} 16%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${color} 38%, transparent)`,
       }}
     >
       {status || '—'}
@@ -5364,9 +5368,10 @@ export const Panel = ({
     style={{
       background: C.panel,
       border: `1px solid ${C.border}`,
-      borderRadius: 12,
+      borderRadius: 14,
       overflow: 'hidden',
       minWidth: 0,
+      boxShadow: '0 1px 3px rgba(0,0,0,0.18)',
     }}
   >
     <div
@@ -5374,7 +5379,7 @@ export const Panel = ({
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        padding: '9px 14px',
+        padding: '10px 16px',
         borderBottom: `1px solid ${C.border}`,
         background: C.panel2,
       }}
@@ -5385,7 +5390,7 @@ export const Panel = ({
           minWidth: 0,
           fontSize: 11,
           fontWeight: 700,
-          letterSpacing: '0.04em',
+          letterSpacing: '0.05em',
           textTransform: 'uppercase',
           color: C.muted,
           whiteSpace: 'nowrap',
@@ -5397,7 +5402,7 @@ export const Panel = ({
       </div>
       {action}
     </div>
-    <div style={{ padding: 14 }}>{children}</div>
+    <div style={{ padding: 16 }}>{children}</div>
   </div>
 );
 
@@ -5405,11 +5410,11 @@ export const Panel = ({
 export const EmptyNote = ({ children }: PropsWithChildren) => (
   <div
     style={{
-      padding: '18px 8px',
+      padding: '22px 10px',
       textAlign: 'center',
       fontSize: 12.5,
       color: C.muted,
-      lineHeight: 1.6,
+      lineHeight: 1.7,
     }}
   >
     {children}
@@ -5657,10 +5662,11 @@ export const OfflineBanner = ({ cachedAt }: { cachedAt: number }) => {
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 8,
-        padding: '8px 14px',
-        borderRadius: 8,
+        gap: 10,
+        padding: '10px 16px',
+        borderRadius: 12,
         fontSize: 12.5,
+        lineHeight: 1.55,
         background: C.warnBg,
         border: `1px solid ${C.warnBorder}`,
         color: C.text,
