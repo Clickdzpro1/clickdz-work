@@ -123,51 +123,49 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         </div>
         <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
-      <div aria-live="polite" style={status === 'ready'
-        ? { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', padding: '16px 20px', background: C.bg }
-        : { flex: 1, overflow: 'auto', padding: '24px 20px', background: C.bg }}>
-        {status === 'loading' ? <div aria-busy="true" style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0' }}><Spinner /> Connexion à ZOOM+…</div>
+      <div aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: status === 'ready' ? 'hidden' : 'auto', background: C.bg }}>
+        {status === 'loading' ? <div aria-busy="true" style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0 40px 20px' }}><Spinner /> Connexion à ZOOM+…</div>
         : status === 'slow' ? (
           // C4: The connection has been loading for >15s. The Meet backend cold
           // start can take up to 50s — instead of leaving the user staring at a
           // spinner, surface a message with retry/cancel actions.
-          <Banner tone="warn">La connexion prend plus de temps que prévu.
-            <br /><br />
-            <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button>
-            {' · '}
-            <button style={linkBtnStyle} onClick={cancelLoad}>Annuler</button>
-          </Banner>
+          <div style={{ padding: '24px 20px' }}>
+            <Banner tone="warn">La connexion prend plus de temps que prévu.
+              <br /><br />
+              <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button>
+              {' · '}
+              <button style={linkBtnStyle} onClick={cancelLoad}>Annuler</button>
+            </Banner>
+          </div>
         ) : status === 'error' ? (
-          <Banner tone="error">Impossible de se connecter à ZOOM+ pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
+          <div style={{ padding: '24px 20px' }}>
+            <Banner tone="error">Impossible de se connecter à ZOOM+ pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
+          </div>
         ) : status === 'no-login' ? (
           // WS17: provisioning succeeded but no IdP loginUrl — the Meet backend /
           // IdP bridge isn't ready (cold start or CDZ_ZOOM_IDP_URL misconfigured).
           // Show a retry banner instead of the dead bridge_code iframe fallback.
-          <Banner tone="warn">Le service de connexion ZOOM+ n'est pas encore prêt. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
-        ) : (
-          /* The iframe fills the pane (flex:1, height:100%); the explainer is a
-             slim footer strip so it never eats the iframe's space. */
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
-            <div style={{ borderRadius: 14, overflow: 'hidden', border: `1px solid ${C.border}`, background: '#fff', flex: 1, minHeight: 0 }}>
-              <iframe
-                src={iframeSrc}
-                style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
-                title="ZOOM+"
-                /* Permissions Policy delegation — REQUIRED for a cross-origin
-                   iframe: without `allow`, getUserMedia / getDisplayMedia /
-                   navigator.clipboard are blocked silently (no permission
-                   prompt ever shows). NOTE: allow-camera/allow-microphone are
-                   NOT sandbox tokens — the old sandbox attr silently blocked
-                   mic, camera, screen share AND the copy-link clipboard. */
-                allow="camera *; microphone *; display-capture *; clipboard-read *; clipboard-write *; fullscreen *; autoplay *; speaker-selection *; screen-wake-lock *"
-                allowFullScreen
-              />
-            </div>
-            <div style={{ borderRadius: 10, border: `1px solid ${C.border}`, background: C.panel, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-              <span style={{ fontSize: 12, color: C.muted, flex: 1 }}>🎥 Visioconférence HD dans votre navigateur · Transcription IA par CDZ · 100% open-source</span>
-              {['100+ participants','Partage écran','Transcription IA'].map(t=><span key={t} style={{ fontSize: 10.5, fontWeight: 600, color: C.accent, padding: '3px 8px', borderRadius: 999, background: `${C.accentSoft}`, border: `1px solid ${C.accent}30` }}>{t}</span>)}
-            </div>
+          <div style={{ padding: '24px 20px' }}>
+            <Banner tone="warn">Le service de connexion ZOOM+ n'est pas encore prêt. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
           </div>
+        ) : (
+          /* Full-bleed layout: the iframe flex-fills the entire remaining
+             viewport (no fixed heights, no max-width, no rounded/bordered
+             "browser window" chrome) so the embedded app fits the studio's
+             resolution exactly. */
+          <iframe
+            src={iframeSrc}
+            style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', display: 'block' }}
+            title="ZOOM+"
+            /* Permissions Policy delegation — REQUIRED for a cross-origin
+               iframe: without `allow`, getUserMedia / getDisplayMedia /
+               navigator.clipboard are blocked silently (no permission
+               prompt ever shows). NOTE: allow-camera/allow-microphone are
+               NOT sandbox tokens — the old sandbox attr silently blocked
+               mic, camera, screen share AND the copy-link clipboard. */
+            allow="camera *; microphone *; display-capture *; clipboard-read *; clipboard-write *; fullscreen *; autoplay *; speaker-selection *; screen-wake-lock *"
+            allowFullScreen
+          />
         )}
       </div>
     </div>
