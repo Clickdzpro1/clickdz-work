@@ -180,6 +180,8 @@ const btnBaseStyle: CSSProperties = {
   fontSize: 11.5,
   fontWeight: 600,
   padding: '4px 12px',
+  // Touch target: keep the chip compact but grow the hit area toward 36px.
+  minHeight: 36,
   borderRadius: 6,
   cursor: 'pointer',
   flexShrink: 0,
