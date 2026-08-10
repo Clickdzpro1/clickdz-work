@@ -30,6 +30,7 @@ import {
 
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 
+import { useIsNarrow } from './use-voice-responsive';
 import {
   C,
   concatBlobs,
@@ -761,7 +762,7 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
               key={concatUrl}
               src={concatUrl}
               controls
-              style={{ flex: '1 1 260px', height: 40 }}
+              style={{ flex: '1 1 260px', maxWidth: '100%', height: 40 }}
             />
             <button
               type="button"
@@ -1101,7 +1102,7 @@ const SegmentCard = ({
               src={seg.audioUrl}
               controls
               autoPlay
-              style={{ flex: '1 1 220px', height: 38 }}
+              style={{ flex: '1 1 220px', maxWidth: '100%', height: 38 }}
             />
             <button
               type="button"
@@ -1304,6 +1305,7 @@ const addSegmentBtn: CSSProperties = {
   justifyContent: 'center',
   gap: 8,
   padding: '11px 16px',
+  minHeight: 44,
   borderRadius: 10,
   border: `1px dashed ${C.border}`,
   background: 'transparent',
@@ -1319,8 +1321,10 @@ function primaryBtn(enabled: boolean): CSSProperties {
     appearance: 'none',
     display: 'inline-flex',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
     padding: '10px 20px',
+    minHeight: 40,
     borderRadius: 9,
     border: 'none',
     fontSize: 13.5,
@@ -1339,6 +1343,7 @@ function secondaryBtn(enabled: boolean): CSSProperties {
   return {
     appearance: 'none',
     padding: '8px 15px',
+    minHeight: 40,
     borderRadius: 8,
     border: `1px solid ${C.border}`,
     background: C.panel2,
@@ -1353,6 +1358,7 @@ function secondaryBtn(enabled: boolean): CSSProperties {
 const ghostBtn: CSSProperties = {
   appearance: 'none',
   padding: '8px 15px',
+  minHeight: 40,
   borderRadius: 8,
   border: `1px solid ${C.border}`,
   background: C.panel2,
@@ -1455,32 +1461,40 @@ const IconBtn = ({
   disabled?: boolean;
   onClick: () => void;
   children: ReactNode;
-}) => (
-  <button
-    type="button"
-    title={title}
-    aria-label={title}
-    disabled={disabled}
-    onClick={onClick}
-    style={{
-      appearance: 'none',
-      width: 28,
-      height: 28,
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderRadius: 7,
-      border: `1px solid ${C.border}`,
-      background: 'transparent',
-      color: disabled ? C.muted : C.text,
-      cursor: disabled ? 'not-allowed' : 'pointer',
-      opacity: disabled ? 0.4 : 1,
-      padding: 0,
-    }}
-  >
-    {children}
-  </button>
-);
+}) => {
+  // Bumped to a full 40px touch target on phones (was a fixed 28px, which is
+  // under the ~40px comfortable-tap threshold); desktop keeps the compact 28px
+  // so the segment header row stays dense.
+  const isPhone = useIsNarrow(480);
+  const size = isPhone ? 40 : 28;
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        appearance: 'none',
+        width: size,
+        height: size,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 7,
+        border: `1px solid ${C.border}`,
+        background: 'transparent',
+        color: disabled ? C.muted : C.text,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.4 : 1,
+        padding: 0,
+        flexShrink: 0,
+      }}
+    >
+      {children}
+    </button>
+  );
+};
 
 const GenSpinner = () => (
   <span
