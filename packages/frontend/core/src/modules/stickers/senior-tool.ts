@@ -275,12 +275,23 @@ export class EdgelessCdzStickerButton extends WithDisposable(LitElement) {
   }
 
   private _onKey(e: KeyboardEvent) {
+    // CRITICAL: swallow EVERY key while typing in this input. The edgeless
+    // canvas binds single-letter hotkeys (t = text, v = select, p = pen…) on
+    // the host; without stopPropagation those handlers see the keystroke,
+    // preventDefault it, and the character never lands in the input — the
+    // prompt box looks focused but typing does nothing.
+    e.stopPropagation();
     if (e.key === 'Enter') {
       e.preventDefault();
       void this._generate();
     } else if (e.key === 'Escape') {
       this._close();
     }
+  }
+
+  /** Seal bubbling keyboard/pointer events inside the panel (see _onKey). */
+  private _seal(e: Event) {
+    e.stopPropagation();
   }
 
   override render(): TemplateResult {
@@ -307,7 +318,17 @@ export class EdgelessCdzStickerButton extends WithDisposable(LitElement) {
         </div>
       </edgeless-toolbar-button>
 
-      <div class="cdz-panel" ?hidden=${!this._open}>
+      <div
+        class="cdz-panel"
+        ?hidden=${!this._open}
+        @keydown=${this._seal}
+        @keyup=${this._seal}
+        @keypress=${this._seal}
+        @pointerdown=${this._seal}
+        @cut=${this._seal}
+        @copy=${this._seal}
+        @paste=${this._seal}
+      >
         <div class="cdz-panel-title">${SmileIcon()} Générer un sticker IA</div>
 
         <div class="cdz-row">
