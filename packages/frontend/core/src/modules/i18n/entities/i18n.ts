@@ -60,7 +60,10 @@ export class I18n extends Entity {
   }
 
   init() {
-    const language = this.currentLanguageKey$.value ?? 'en';
+    // ClickDz is a French-first deployment: default to 'fr' when the user has
+    // no explicitly-saved language preference in cache (localStorage
+    // 'i18n_lng'). An existing saved preference always takes precedence.
+    const language = this.currentLanguageKey$.value ?? 'fr';
     this.applyDocumentLanguage(language);
     this.changeLanguage(language);
   }
