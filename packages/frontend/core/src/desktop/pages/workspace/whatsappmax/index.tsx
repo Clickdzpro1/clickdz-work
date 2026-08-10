@@ -7,6 +7,7 @@ import {
 import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import { useTheme } from 'next-themes';
+import { createPortal } from 'react-dom';
 import {
   type CSSProperties,
   type ChangeEvent,
@@ -619,6 +620,18 @@ function Avatar({
 // panes (the "narrow sliver" AI popover bug). This renders at the viewport
 // level: backdrop + panel + caret, anchored to a button rect, clamped to the
 // viewport, ESC to close, repositioned on resize/scroll.
+//
+// WAVE-G P0: rendered through a PORTAL to document.body. A fixed-position
+// element inside the workbench HEADER subtree was trapped by an ancestor
+// stacking context and painted UNDER the page body (the invisible account
+// switcher menu — "+ Lier un autre numéro" was unreachable). A body portal
+// escapes any ancestor stacking context / containing block for good.
+
+/** Render children at document.body (escapes every stacking context). */
+function BodyPortal({ children }: { children: ReactNode }): ReactElement | null {
+  if (typeof document === 'undefined') return null;
+  return createPortal(children, document.body);
+}
 
 interface AnchoredPopoverProps {
   anchorRef: RefObject<HTMLElement | null> | MutableRefObject<HTMLElement | null>;
@@ -699,7 +712,7 @@ const AnchoredPopover = ({
   if (!open || !pos) return null;
 
   return (
-    <>
+    <BodyPortal>
       <div
         style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
         onClick={onClose}
@@ -745,7 +758,7 @@ const AnchoredPopover = ({
           zIndex: 9999,
         }}
       />
-    </>
+    </BodyPortal>
   );
 };
 
@@ -2996,14 +3009,25 @@ const Conversation = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatJid, connId]);
 
-  const loadOlder = useCallback(() => {
+  const loadOlder = useCallback(async () => {
     const oldest = messages[0];
     if (!oldest || !hasOlder || loadingOlder) return;
     // MAXP fix: the gateway's `before` cursor needs an ISO date — a raw ms
     // string parses to Invalid Date server-side (the old broken path).
     const ms = tsMs(oldest.timestamp);
     if (!ms) return;
-    void fetchMessages({ before: new Date(ms).toISOString(), prepend: true });
+    // WAVE-G P3: preserve the reading position across the prepend — without
+    // this the view jumps to the very top of the newly loaded batch.
+    const el = scrollerRef.current;
+    const prevHeight = el ? el.scrollHeight : 0;
+    const prevTop = el ? el.scrollTop : 0;
+    await fetchMessages({ before: new Date(ms).toISOString(), prepend: true });
+    requestAnimationFrame(() => {
+      const node = scrollerRef.current;
+      if (node && node.scrollHeight > prevHeight) {
+        node.scrollTop = node.scrollHeight - prevHeight + prevTop;
+      }
+    });
   }, [messages, hasOlder, loadingOlder, fetchMessages]);
 
   const onSent = useCallback((msg: MessageRow) => {
@@ -3011,13 +3035,22 @@ const Conversation = ({
     setMessages(prev => [...prev, normalizeMessage(msg)]);
   }, []);
 
+  const lastScrollTopRef = useRef(0);
   const onScrollerScroll = useCallback(() => {
     const el = scrollerRef.current;
     if (!el) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
     atBottomRef.current = dist < 90;
     setShowJump(dist > 480);
-  }, []);
+    // WAVE-G P3: infinite scroll — auto-load older messages when the user
+    // scrolls UP near the top. The direction check keeps the initial
+    // smooth-scroll-to-bottom (top → down) from triggering a spurious load.
+    const goingUp = el.scrollTop < lastScrollTopRef.current;
+    lastScrollTopRef.current = el.scrollTop;
+    if (goingUp && el.scrollTop < 150 && hasOlder && !loadingOlder && messages.length > 0) {
+      void loadOlder();
+    }
+  }, [hasOlder, loadingOlder, loadOlder, messages.length]);
 
   const jumpToBottom = useCallback(() => {
     atBottomRef.current = true;
@@ -4490,6 +4523,266 @@ const AiSettingsModal = ({ connId, onDark, onClose, onSaved }: AiSettingsModalPr
   );
 };
 
+// ── Manage accounts modal (WAVE-G P1) ──────────────────────────────────────
+// First-class account management: list every linked WhatsApp number with its
+// live status, switch, link a new one (unlimited), and disconnect with an
+// inline confirmation. Opened from the account switcher's "Gérer les comptes".
+
+const accountDotColor = (status: string): string =>
+  status === 'connected' ? C.accent : status === 'qr' || status === 'connecting' ? C.orange : C.muted;
+
+interface ManageAccountsModalProps {
+  accounts: AccountMeta[];
+  selectedConnId: string | null;
+  onSelect: (connId: string) => void;
+  onAdd: () => void;
+  onDisconnect: (connId: string) => void;
+  onClose: () => void;
+}
+
+const ManageAccountsModal = ({
+  accounts,
+  selectedConnId,
+  onSelect,
+  onAdd,
+  onDisconnect,
+  onClose,
+}: ManageAccountsModalProps) => {
+  const [pendingDisconnect, setPendingDisconnect] = useState<string | null>(null);
+
+  const linkedDate = (ts: number): string => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return `lié le ${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}`;
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.65)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+        padding: 14,
+        boxSizing: 'border-box',
+      }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        style={{
+          background: C.panel,
+          border: `1px solid ${C.border}`,
+          borderRadius: 16,
+          width: 440,
+          maxWidth: '94vw',
+          maxHeight: '84vh',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+          animation: 'cdz-pop-in 0.16s ease',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '15px 18px 12px', borderBottom: `1px solid ${C.border}` }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 11,
+              background: `linear-gradient(135deg, ${C.accent}, ${C.accentDark})`,
+              display: 'grid',
+              placeItems: 'center',
+              fontSize: 17,
+              flexShrink: 0,
+            }}
+          >
+            📱
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>Comptes WhatsApp</div>
+            <div style={{ fontSize: 11, color: C.muted }}>
+              {accounts.length} numéro{accounts.length > 1 ? 's' : ''} lié{accounts.length > 1 ? 's' : ''} — illimité
+            </div>
+          </div>
+          <button
+            style={{ background: 'none', border: 'none', color: C.muted, fontSize: 17, cursor: 'pointer' }}
+            aria-label="Fermer"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {accounts.length === 0 ? (
+            <div style={{ padding: 18, fontSize: 12.5, color: C.muted, textAlign: 'center' }}>
+              Aucun compte lié pour le moment.
+            </div>
+          ) : (
+            accounts.map(a => {
+              const isSelected = a.connId === selectedConnId;
+              if (pendingDisconnect === a.connId) {
+                return (
+                  <div
+                    key={a.connId}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '12px 14px',
+                      borderRadius: 12,
+                      background: `${C.danger}12`,
+                      border: `1px solid ${C.danger}44`,
+                    }}
+                  >
+                    <span style={{ flex: 1, fontSize: 12.5, color: C.text, fontWeight: 600, lineHeight: 1.5 }}>
+                      Déconnecter {formatPhone(a.phoneNumber) || `+${a.phoneNumber}`} ?
+                      <span style={{ display: 'block', fontSize: 11, color: C.muted, fontWeight: 400 }}>
+                        La liaison WhatsApp sera supprimée. Vous pourrez relier ce numéro plus tard via QR.
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      style={{ ...btn('danger', false), fontSize: 11.5, padding: '6px 14px', borderRadius: 999, flexShrink: 0 }}
+                      onClick={() => {
+                        setPendingDisconnect(null);
+                        onDisconnect(a.connId);
+                      }}
+                    >
+                      Déconnecter
+                    </button>
+                    <button
+                      type="button"
+                      style={{ ...btn('ghost', false), fontSize: 11.5, padding: '6px 12px', borderRadius: 999, flexShrink: 0 }}
+                      onClick={() => setPendingDisconnect(null)}
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={a.connId}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '10px 12px',
+                    borderRadius: 12,
+                    border: `1px solid ${isSelected ? `${C.accent}66` : C.border}`,
+                    background: isSelected ? `${C.accent}0f` : 'transparent',
+                  }}
+                >
+                  <button
+                    type="button"
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      flex: 1,
+                      minWidth: 0,
+                      background: 'transparent',
+                      border: 'none',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      padding: 0,
+                    }}
+                    title={isSelected ? 'Compte actif' : 'Basculer sur ce compte'}
+                    onClick={() => {
+                      onSelect(a.connId);
+                      onClose();
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: '50%',
+                        background: `linear-gradient(135deg, ${C.accent}33, ${C.accentDark}33)`,
+                        border: `1px solid ${accountDotColor(a.status)}66`,
+                        display: 'grid',
+                        placeItems: 'center',
+                        fontSize: 16,
+                        flexShrink: 0,
+                        position: 'relative',
+                      }}
+                    >
+                      📞
+                      <span
+                        style={{
+                          position: 'absolute',
+                          bottom: 0,
+                          right: 0,
+                          width: 11,
+                          height: 11,
+                          borderRadius: '50%',
+                          background: accountDotColor(a.status),
+                          border: `2px solid ${C.panel}`,
+                        }}
+                      />
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: 'block', fontSize: 13.5, fontWeight: 700, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {formatPhone(a.phoneNumber) || `+${a.phoneNumber}`}
+                      </span>
+                      <span style={{ display: 'block', fontSize: 11, color: C.muted, marginTop: 1 }}>
+                        {a.status === 'connected' ? 'Connecté' : a.status === 'qr' || a.status === 'connecting' ? 'Liaison en cours…' : 'Hors ligne'}
+                        {a.connectedAt ? ` · ${linkedDate(a.connectedAt)}` : ''}
+                      </span>
+                    </span>
+                    {isSelected ? (
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          fontWeight: 800,
+                          color: C.accent,
+                          background: `${C.accent}1c`,
+                          border: `1px solid ${C.accent}55`,
+                          borderRadius: 999,
+                          padding: '3px 10px',
+                          flexShrink: 0,
+                        }}
+                      >
+                        Actif
+                      </span>
+                    ) : null}
+                  </button>
+                  <button
+                    type="button"
+                    style={{ ...circleBtn(false, 32), fontSize: 14, color: C.muted }}
+                    title="Déconnecter ce numéro"
+                    aria-label="Déconnecter ce numéro"
+                    onClick={() => setPendingDisconnect(a.connId)}
+                  >
+                    ⏻
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div style={{ padding: '12px 16px', borderTop: `1px solid ${C.border}`, background: C.surface }}>
+          <button
+            style={{ ...btn('primary', false), width: '100%', borderRadius: 999, padding: '11px 16px', fontSize: 13 }}
+            onClick={() => {
+              onClose();
+              onAdd();
+            }}
+          >
+            ＋ Lier un nouveau numéro (QR)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── Account switcher ───────────────────────────────────────────────────────
 
 interface AccountSwitcherProps {
@@ -4498,6 +4791,7 @@ interface AccountSwitcherProps {
   onSelect: (connId: string) => void;
   onAdd: () => void;
   onDisconnect: (connId: string) => void;
+  onManage: () => void;
 }
 
 const AccountSwitcher = ({
@@ -4506,6 +4800,7 @@ const AccountSwitcher = ({
   onSelect,
   onAdd,
   onDisconnect,
+  onManage,
 }: AccountSwitcherProps) => {
   const [open, setOpen] = useState(false);
   const [pendingDisconnect, setPendingDisconnect] = useState<string | null>(null);
@@ -4674,6 +4969,24 @@ const AccountSwitcher = ({
           onClick={() => { onAdd(); setOpen(false); }}
         >
           ＋ Lier un autre numéro
+        </button>
+        <button
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '4px 16px 10px',
+            border: 'none',
+            background: 'transparent',
+            color: C.muted,
+            fontSize: 12,
+            cursor: 'pointer',
+            textAlign: 'left',
+            fontWeight: 600,
+          }}
+          onClick={() => { onManage(); setOpen(false); }}
+        >
+          ⚙️ Gérer les comptes
         </button>
       </AnchoredPopover>
     </>
@@ -4898,6 +5211,7 @@ const WhatsappMaxPage = () => {
   const [selectedConnId, setSelectedConnId] = useState<string | null>(null);
   const [showAddMode, setShowAddMode] = useState(false);
   const [showAiSettings, setShowAiSettings] = useState(false);
+  const [showManageAccounts, setShowManageAccounts] = useState(false);
   const [aiSettings, setAiSettings] = useState<WamaxAiSettings | null>(null);
 
   useEffect(() => {
@@ -5155,6 +5469,7 @@ const WhatsappMaxPage = () => {
               onSelect={handleSelectAccount}
               onAdd={handleAdd}
               onDisconnect={handleDisconnect}
+              onManage={() => setShowManageAccounts(true)}
             />
           )}
           {status?.connected && !showAddMode && (
@@ -5256,6 +5571,16 @@ const WhatsappMaxPage = () => {
             onDark={() => setDark(true)}
             onClose={() => setShowAiSettings(false)}
             onSaved={s => setAiSettings({ ...DEFAULT_AI_SETTINGS, ...s })}
+          />
+        )}
+        {showManageAccounts && (
+          <ManageAccountsModal
+            accounts={accounts}
+            selectedConnId={selectedConnId}
+            onSelect={handleSelectAccount}
+            onAdd={handleAdd}
+            onDisconnect={handleDisconnect}
+            onClose={() => setShowManageAccounts(false)}
           />
         )}
         </AppAccessGate>
