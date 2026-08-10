@@ -1866,7 +1866,7 @@ const FlowEditor = ({
           value={flow.name}
           onChange={e => onRename(e.target.value)}
           placeholder="Nom du flux"
-          aria-label="Flow name"
+          aria-label="Nom du flux"
           style={{
             flex: 1,
             minWidth: 160,
