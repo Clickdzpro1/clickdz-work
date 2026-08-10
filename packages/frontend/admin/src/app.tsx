@@ -27,6 +27,9 @@ export const Accounts = lazy(
 export const Analytics = lazy(
   () => import(/* webpackChunkName: "analytics" */ './modules/analytics')
 );
+export const Monitoring = lazy(
+  () => import(/* webpackChunkName: "monitoring" */ './modules/monitoring')
+);
 export const Dashboard = lazy(
   () => import(/* webpackChunkName: "dashboard" */ './modules/dashboard')
 );
@@ -126,6 +129,10 @@ export const App = () => {
                   <Route
                     path={ROUTES.admin.analytics}
                     element={<Analytics />}
+                  />
+                  <Route
+                    path={ROUTES.admin.monitoring}
+                    element={<Monitoring />}
                   />
                   <Route
                     path={ROUTES.admin.workspaces}
