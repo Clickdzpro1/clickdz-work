@@ -219,6 +219,11 @@ export const CodeBlock = ({
               fontFamily: monoFamily,
               fontSize: 11,
               color: K.muted,
+              // minWidth:0 + flex lets the filename actually shrink/ellipsize
+              // instead of forcing the header (and the page) wider on a
+              // narrow phone viewport.
+              flex: '0 1 auto',
+              minWidth: 0,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -254,6 +259,8 @@ export const CodeBlock = ({
             fontSize: 11,
             fontWeight: 600,
             padding: '3px 10px',
+            // Touch target: keep the chip compact but grow the hit area.
+            minHeight: 30,
             borderRadius: 6,
             border: '1px solid #30363d',
             background: '#21262d',
