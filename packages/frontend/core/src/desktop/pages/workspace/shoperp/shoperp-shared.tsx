@@ -4,6 +4,7 @@ import {
   type CSSProperties,
   type PropsWithChildren,
   type ReactNode,
+  useEffect,
   useState,
 } from 'react';
 
@@ -255,7 +256,7 @@ export async function deployApp(body: {
       body: JSON.stringify(body),
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors de la publication.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors de la publication.') };
   }
   const data = (await res.json().catch(() => null)) as
     | {
@@ -512,7 +513,7 @@ export function isLowStock(p: ErpProduct): boolean {
 }
 
 export type ErpSummaryOutcome =
-  | { status: 'ok'; summary: ErpSummary }
+  | { status: 'ok'; summary: ErpSummary; offline?: boolean; cachedAt?: number }
   | { status: 'error'; message: string };
 
 /** GET the authed per-shop ERP summary (KPIs, charts, recent orders…). */
@@ -524,9 +525,21 @@ export async function fetchErpSummary(slug: string): Promise<ErpSummaryOutcome> 
       { method: 'GET', headers: { Accept: 'application/json' } }
     );
   } catch {
+    // Offline / network failure: serve the last cached summary if we have
+    // one, rather than blanking the dashboard.
+    const cached = readErpCache<ErpSummary>(slug, 'summary');
+    if (cached) {
+      setOfflineHit({ slug, cachedAt: cached.cachedAt });
+      return {
+        status: 'ok',
+        summary: cached.data,
+        offline: true,
+        cachedAt: cached.cachedAt,
+      };
+    }
     return {
       status: 'error',
-      message: 'Erreur réseau lors du chargement du tableau de bord.',
+      message: netErrorMessage('Erreur réseau lors du chargement du tableau de bord.'),
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -546,34 +559,37 @@ export async function fetchErpSummary(slug: string): Promise<ErpSummaryOutcome> 
     return { status: 'error', message };
   }
   const kpis = (data?.kpis ?? {}) as Partial<ErpKpis>;
+  const summary: ErpSummary = {
+    settings: (data?.settings && typeof data.settings === 'object'
+      ? data.settings
+      : {}) as ErpSettings,
+    currency:
+      typeof data?.currency === 'string' && data.currency
+        ? data.currency
+        : 'DZD',
+    kpis: {
+      revenueMonth: num(kpis.revenueMonth),
+      pendingCount: num(kpis.pendingCount),
+      avgBasket: num(kpis.avgBasket),
+      expensesMonth: num(kpis.expensesMonth),
+      margin: num(kpis.margin),
+      lowStockCount: num(kpis.lowStockCount),
+      ordersTotal: num(kpis.ordersTotal),
+    },
+    ordersByStatus: (data?.ordersByStatus &&
+    typeof data.ordersByStatus === 'object'
+      ? data.ordersByStatus
+      : {}) as Record<string, number>,
+    revenueByDay: Array.isArray(data?.revenueByDay) ? data.revenueByDay : [],
+    lowStock: Array.isArray(data?.lowStock) ? data.lowStock : [],
+    recentOrders: Array.isArray(data?.recentOrders) ? data.recentOrders : [],
+    topProducts: Array.isArray(data?.topProducts) ? data.topProducts : [],
+  };
+  cacheErpGet(slug, 'summary', summary);
+  clearOfflineHit();
   return {
     status: 'ok',
-    summary: {
-      settings: (data?.settings && typeof data.settings === 'object'
-        ? data.settings
-        : {}) as ErpSettings,
-      currency:
-        typeof data?.currency === 'string' && data.currency
-          ? data.currency
-          : 'DZD',
-      kpis: {
-        revenueMonth: num(kpis.revenueMonth),
-        pendingCount: num(kpis.pendingCount),
-        avgBasket: num(kpis.avgBasket),
-        expensesMonth: num(kpis.expensesMonth),
-        margin: num(kpis.margin),
-        lowStockCount: num(kpis.lowStockCount),
-        ordersTotal: num(kpis.ordersTotal),
-      },
-      ordersByStatus: (data?.ordersByStatus &&
-      typeof data.ordersByStatus === 'object'
-        ? data.ordersByStatus
-        : {}) as Record<string, number>,
-      revenueByDay: Array.isArray(data?.revenueByDay) ? data.revenueByDay : [],
-      lowStock: Array.isArray(data?.lowStock) ? data.lowStock : [],
-      recentOrders: Array.isArray(data?.recentOrders) ? data.recentOrders : [],
-      topProducts: Array.isArray(data?.topProducts) ? data.topProducts : [],
-    },
+    summary,
   };
 }
 
@@ -598,26 +614,47 @@ export async function fetchErpCollection<T = Record<string, unknown>>(
   storeSlug: string,
   collection: string
 ): Promise<T[]> {
-  const res = await fetch(
-    cdzApiUrl(
-      `/api/v1/apps/${encodeURIComponent(storeSlug)}/erp/collections/${encodeURIComponent(collection)}`
-    ),
-    {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
+  const cacheResource = `collections/${collection}`;
+  try {
+    const res = await fetch(
+      cdzApiUrl(
+        `/api/v1/apps/${encodeURIComponent(storeSlug)}/erp/collections/${encodeURIComponent(collection)}`
+      ),
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        credentials: 'include',
+      }
+    );
+    if (!res.ok) {
+      throw new Error(`Impossible de charger ${collection} (${res.status})`);
     }
-  );
-  if (!res.ok) {
-    throw new Error(`Impossible de charger ${collection} (${res.status})`);
+    const data = (await res.json().catch(() => null)) as unknown;
+    // The bridge wraps its payload as { ok, records } (the house shape for
+    // owner-gated ERP routes); the old data-API route returned a bare array. Accept
+    // both so this helper stays correct whichever route it is pointed at.
+    let rows: T[];
+    if (Array.isArray(data)) {
+      rows = data as T[];
+    } else {
+      const records = (data as { records?: unknown } | null)?.records;
+      rows = Array.isArray(records) ? (records as T[]) : [];
+    }
+    cacheErpGet(storeSlug, cacheResource, rows);
+    clearOfflineHit();
+    return rows;
+  } catch (err) {
+    // Network failure (offline) — fall back to the last cached copy of this
+    // collection rather than throwing and blanking the panel. A non-network
+    // error (e.g. the explicit `!res.ok` throw above) still surfaces as-is
+    // when no cache exists.
+    const cached = readErpCache<T[]>(storeSlug, cacheResource);
+    if (cached) {
+      setOfflineHit({ slug: storeSlug, cachedAt: cached.cachedAt });
+      return cached.data;
+    }
+    throw err;
   }
-  const data = (await res.json().catch(() => null)) as unknown;
-  // The bridge wraps its payload as { ok, records } (the house shape for
-  // owner-gated ERP routes); the old data-API route returned a bare array. Accept
-  // both so this helper stays correct whichever route it is pointed at.
-  if (Array.isArray(data)) return data as T[];
-  const records = (data as { records?: unknown } | null)?.records;
-  return Array.isArray(records) ? (records as T[]) : [];
 }
 
 // Admin mutations return a discriminated outcome; 'unavailable' means the
@@ -644,7 +681,7 @@ async function erpMutate<T>(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -972,7 +1009,7 @@ export async function fetchInvoices(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement des factures.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement des factures.') };
   }
   if (res.status === 404) {
     return { status: 'not-found' };
@@ -1025,7 +1062,7 @@ export async function fetchInvoice(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement de la facture.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement de la facture.') };
   }
   if (res.status === 404) {
     return { status: 'not-found' };
@@ -1083,7 +1120,7 @@ async function invoiceMutate(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   if (res.status === 404) {
     // Route missing (flag off) OR the target invoice/order was not found. Both
@@ -1329,7 +1366,7 @@ export async function fetchSuppliers(slug: string): Promise<SuppliersOutcome> {
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement des fournisseurs.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement des fournisseurs.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { suppliers?: unknown; error?: unknown; message?: unknown }
@@ -1385,7 +1422,7 @@ export async function saveSupplier(
       body: JSON.stringify({ supplier }),
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — aucune modification enregistrée.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — aucune modification enregistrée.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { ok?: boolean; supplier?: unknown; error?: unknown; message?: unknown }
@@ -1423,7 +1460,7 @@ export async function fetchPurchaseOrders(slug: string): Promise<PurchaseOrdersO
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement des bons de commande.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement des bons de commande.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { purchaseOrders?: unknown; error?: unknown; message?: unknown }
@@ -1465,7 +1502,7 @@ export async function fetchPurchaseOrder(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement du bon.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement du bon.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { purchaseOrder?: unknown; error?: unknown; message?: unknown }
@@ -1514,7 +1551,7 @@ export async function createPurchaseOrder(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — le bon n’a pas été créé.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — le bon n’a pas été créé.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { ok?: boolean; purchaseOrder?: unknown; error?: unknown; message?: unknown }
@@ -1578,7 +1615,7 @@ export async function receivePurchaseOrder(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — la réception n’a pas été enregistrée.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — la réception n’a pas été enregistrée.') };
   }
   const data = (await res.json().catch(() => null)) as
     | {
@@ -1630,7 +1667,7 @@ export async function cancelPurchaseOrder(
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — le bon n’a pas été annulé.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — le bon n’a pas été annulé.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { ok?: boolean; purchaseOrder?: unknown; error?: unknown; message?: unknown }
@@ -1746,7 +1783,7 @@ export async function fetchWilayas(slug: string): Promise<WilayasOutcome> {
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement des wilayas.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement des wilayas.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { wilayas?: unknown; message?: unknown }
@@ -1783,7 +1820,7 @@ export async function fetchCouriers(slug: string): Promise<CouriersOutcome> {
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement des transporteurs.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement des transporteurs.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { couriers?: unknown; message?: unknown }
@@ -1834,7 +1871,7 @@ export async function fetchShippingRates(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement des tarifs.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement des tarifs.') };
   }
   const data = (await res.json().catch(() => null)) as
     | { courierId?: unknown; matrix?: unknown; message?: unknown }
@@ -1887,7 +1924,7 @@ async function shipMutate<T>(
       body: JSON.stringify(body),
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -1928,7 +1965,7 @@ async function shipMutatePut<T>(
       body: JSON.stringify(body),
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -2348,7 +2385,7 @@ export async function fetchCourierStatus(
       credentials: 'include',
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — impossible de vérifier le transporteur.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — impossible de vérifier le transporteur.') };
   }
   if (res.status === 404) {
     // Feature dark (flag off) — treated as "not available yet", not an error.
@@ -2388,7 +2425,7 @@ export async function connectCourier(
       body: JSON.stringify({ apiId, apiToken }),
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été enregistré.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été enregistré.') };
   }
   if (res.status === 404) {
     return { status: 'dark' };
@@ -2420,7 +2457,7 @@ export async function disconnectCourier(
       credentials: 'include',
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   if (res.status === 404) {
     return { status: 'dark' };
@@ -2462,7 +2499,7 @@ export async function courierShip(
       body: JSON.stringify(body),
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — la commande n’a pas été expédiée.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — la commande n’a pas été expédiée.') };
   }
   if (res.status === 404) {
     return { status: 'dark' };
@@ -2511,7 +2548,7 @@ export async function courierSync(
       body: JSON.stringify(orderId ? { orderId } : {}),
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — le suivi n’a pas été actualisé.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — le suivi n’a pas été actualisé.') };
   }
   if (res.status === 404) {
     return { status: 'dark' };
@@ -2578,7 +2615,7 @@ export async function courierRefresh(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — le suivi n’a pas été actualisé.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — le suivi n’a pas été actualisé.') };
   }
   if (res.status === 404) {
     return { status: 'dark' };
@@ -2626,7 +2663,7 @@ export async function courierFees(
       credentials: 'include',
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — impossible de récupérer le tarif.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — impossible de récupérer le tarif.') };
   }
   if (res.status === 404) {
     return { status: 'dark' };
@@ -2663,7 +2700,7 @@ export async function fetchCourierReference(
       credentials: 'include',
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — impossible de charger la liste.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — impossible de charger la liste.') };
   }
   if (res.status === 404) {
     return { status: 'dark' };
@@ -2848,7 +2885,7 @@ export async function fetchCaisse(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement du journal.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement du journal.') };
   }
   if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
   const data = (await res.json().catch(() => null)) as
@@ -2898,7 +2935,7 @@ export async function postCaisseEntry(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été enregistré.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été enregistré.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown; field?: unknown })
@@ -2954,7 +2991,7 @@ export async function putCaisseEntry(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -2999,7 +3036,7 @@ export async function fetchReconcile(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du rapprochement.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du rapprochement.') };
   }
   if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
   const data = (await res.json().catch(() => null)) as
@@ -3057,7 +3094,7 @@ export async function fetchDayClose(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors de la clôture.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors de la clôture.') };
   }
   if (res.status === 404 || res.status === 501) return { status: 'unavailable' };
   const data = (await res.json().catch(() => null)) as
@@ -3246,7 +3283,7 @@ export async function postErpRecord<T = Record<string, unknown>>(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été enregistré.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été enregistré.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -3312,7 +3349,7 @@ export async function deleteErpRecord(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -3403,7 +3440,7 @@ export async function fetchErpCaisseMonth(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement de la caisse.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement de la caisse.') };
   }
   const data = (await res.json().catch(() => null)) as
     | {
@@ -3565,7 +3602,7 @@ export async function fetchStaff(slug: string): Promise<StaffListOutcome> {
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — impossible de charger l’équipe.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — impossible de charger l’équipe.') };
   }
   // 404 = CDZ_ERP_STAFF_AUTH off (route absent) → quiet "activation en attente".
   if (res.status === 404) {
@@ -3608,7 +3645,7 @@ async function staffMutate<T>(
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   // 404 = flag off (route absent) → 'disabled'. NOTE: the update/revoke routes
   // also 404 on a genuinely missing staff id, but that path only runs when the
@@ -3713,7 +3750,7 @@ export async function fetchShopSource(slug: string): Promise<ShopSourceOutcome> 
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement de la boutique.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement de la boutique.') };
   }
   if (res.status === 404) {
     return { status: 'unavailable' };
@@ -3773,7 +3810,7 @@ export async function aiEditShop(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — aucune modification effectuée.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — aucune modification effectuée.') };
   }
   if (res.status === 404) {
     return { status: 'unavailable' };
@@ -3871,7 +3908,7 @@ export async function fetchShopState(slug: string): Promise<ShopStateOutcome> {
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement de l’historique.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement de l’historique.') };
   }
   if (res.status === 404) {
     return { status: 'unavailable' };
@@ -3949,7 +3986,7 @@ export async function fetchShopStateVersion(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement de la version.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement de la version.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Partial<{ html: string; bytes: number }> & { message?: unknown })
@@ -4003,7 +4040,7 @@ export async function rollbackShopState(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — aucune restauration effectuée.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — aucune restauration effectuée.') };
   }
   if (res.status === 404) {
     return { status: 'not-found' };
@@ -4056,7 +4093,7 @@ export async function fetchStaleness(slug: string): Promise<StalenessOutcome> {
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau.') };
   }
   if (res.status === 404) {
     return { status: 'unavailable' };
@@ -4116,7 +4153,7 @@ export async function customizeApp(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Partial<{
@@ -4193,7 +4230,7 @@ export async function fetchAppFeatures(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau lors du chargement des fonctionnalités.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau lors du chargement des fonctionnalités.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Partial<AppFeaturesState> & { error?: unknown; message?: unknown })
@@ -4613,7 +4650,7 @@ export async function fetchErpInventory(
   } catch {
     return {
       status: 'error',
-      message: 'Erreur réseau lors du chargement du stock.',
+      message: netErrorMessage('Erreur réseau lors du chargement du stock.'),
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -4694,7 +4731,7 @@ export async function postErpMovement(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -4738,7 +4775,7 @@ export async function postErpWarehouse(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -4781,7 +4818,7 @@ export async function deleteErpWarehouse(
       }
     );
   } catch {
-    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
+    return { status: 'error', message: netErrorMessage('Erreur réseau — rien n’a été modifié.') };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -4842,7 +4879,7 @@ export async function postErpDescribe(
   } catch {
     return {
       status: 'error',
-      message: 'Erreur réseau lors de la génération de la description.',
+      message: netErrorMessage('Erreur réseau lors de la génération de la description.'),
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -4928,7 +4965,7 @@ export async function fetchChargilyStatus(
   } catch {
     return {
       status: 'error',
-      message: 'Erreur réseau lors du chargement des paramètres de paiement.',
+      message: netErrorMessage('Erreur réseau lors du chargement des paramètres de paiement.'),
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -4984,7 +5021,7 @@ export async function putChargily(
   } catch {
     return {
       status: 'error',
-      message: 'Erreur réseau — les paramètres de paiement n’ont pas été enregistrés.',
+      message: netErrorMessage('Erreur réseau — les paramètres de paiement n’ont pas été enregistrés.'),
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -5510,4 +5547,144 @@ export function ensureShoperpResponsiveCss(): void {
   el.id = RESPONSIVE_STYLE_ID;
   el.textContent = SHOPERP_RESPONSIVE_CSS;
   document.head.appendChild(el);
+}
+
+// ---------------------------------------------------------------------------
+// Offline read cache — DzOS/ERP must keep showing last-known data (and stay
+// usable for reading) when the connection drops. Every successful ERP GET
+// this module makes is mirrored into localStorage under a namespaced key; on
+// network failure the cached copy is served back instead of an error, with an
+// `offline: true` marker so pages/components can render a banner. Writes are
+// NOT queued — a lost write is safer than a silently-replayed one on a money
+// path — but their existing French error copy gets an offline-specific hint.
+// ---------------------------------------------------------------------------
+
+const ERP_CACHE_PREFIX = 'cdz:erp-cache:';
+const ERP_CACHE_MAX_BYTES = 500_000; // ~500KB guard against localStorage quota
+
+interface ErpCacheEntry<T> {
+  data: T;
+  cachedAt: number; // epoch ms
+}
+
+/** True once any ERP read has fallen back to a cached copy this session. */
+let lastOfflineHit: { slug: string; cachedAt: number } | null = null;
+type OfflineListener = (hit: { slug: string; cachedAt: number } | null) => void;
+const offlineListeners = new Set<OfflineListener>();
+
+function setOfflineHit(hit: { slug: string; cachedAt: number } | null): void {
+  lastOfflineHit = hit;
+  for (const listener of offlineListeners) listener(hit);
+}
+
+/** Subscribe to offline/back-online transitions detected by the ERP cache. */
+export function onErpOfflineChange(listener: OfflineListener): () => void {
+  offlineListeners.add(listener);
+  return () => offlineListeners.delete(listener);
+}
+
+/** Current cached-fallback state, if any ERP read is presently serving stale data. */
+export function getErpOfflineHit(): { slug: string; cachedAt: number } | null {
+  return lastOfflineHit;
+}
+
+/** Clear the offline marker (e.g. once a fresh read succeeds again). */
+function clearOfflineHit(): void {
+  if (lastOfflineHit) setOfflineHit(null);
+}
+
+function erpCacheKey(slug: string, resource: string): string {
+  return `${ERP_CACHE_PREFIX}${slug}:${resource}`;
+}
+
+/** Best-effort cache write. Guarded against quota errors and oversized payloads. */
+function cacheErpGet<T>(slug: string, resource: string, data: T): void {
+  try {
+    const entry: ErpCacheEntry<T> = { data, cachedAt: Date.now() };
+    const serialized = JSON.stringify(entry);
+    if (serialized.length > ERP_CACHE_MAX_BYTES) return;
+    window.localStorage.setItem(erpCacheKey(slug, resource), serialized);
+  } catch {
+    // Quota exceeded, storage disabled, or non-browser context — skip silently.
+  }
+}
+
+/** Best-effort cache read. Returns null when absent, corrupt, or unavailable. */
+function readErpCache<T>(
+  slug: string,
+  resource: string
+): ErpCacheEntry<T> | null {
+  try {
+    const raw = window.localStorage.getItem(erpCacheKey(slug, resource));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ErpCacheEntry<T>;
+    if (!parsed || typeof parsed.cachedAt !== 'number') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Append an offline-specific hint to the existing French network-error copy
+ * when the browser reports it has no connection. Behaviour (and message) is
+ * unchanged while online — this only adds context when `navigator.onLine`
+ * is false, per the owner’s “ERP must work offline” requirement.
+ */
+function netErrorMessage(fallback: string): string {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return 'Vous êtes hors ligne — cette action nécessite une connexion.';
+  }
+  return fallback;
+}
+
+/**
+ * Slim amber banner shown when a page is displaying a cached (stale) ERP
+ * read served while offline. `cachedAt` is the epoch ms of the cached copy.
+ */
+export const OfflineBanner = ({ cachedAt }: { cachedAt: number }) => {
+  let when: string;
+  try {
+    when = new Date(cachedAt).toLocaleString('fr-DZ', {
+      dateStyle: 'short',
+      timeStyle: 'short',
+    });
+  } catch {
+    when = new Date(cachedAt).toISOString();
+  }
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '8px 14px',
+        borderRadius: 8,
+        fontSize: 12.5,
+        background: C.warnBg,
+        border: `1px solid ${C.warnBorder}`,
+        color: C.text,
+      }}
+      role="status"
+    >
+      <span aria-hidden>📴</span>
+      <span>
+        Mode hors ligne — données du {when}. Les modifications seront
+        possibles au retour de la connexion.
+      </span>
+    </div>
+  );
+};
+
+/**
+ * Convenience hook: mounts a listener on {@link onErpOfflineChange} and
+ * returns the current offline hit (or null), re-rendering the caller when it
+ * changes. Kept tiny and dependency-free so any shoperp page can opt in.
+ */
+export function useErpOfflineHit(): { slug: string; cachedAt: number } | null {
+  const [hit, setHit] = useState(getErpOfflineHit());
+  useEffect(() => {
+    return onErpOfflineChange(setHit);
+  }, []);
+  return hit;
 }
