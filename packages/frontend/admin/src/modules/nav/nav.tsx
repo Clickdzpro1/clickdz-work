@@ -5,6 +5,7 @@ import {
   BarChart3Icon,
   ChartPieIcon,
   FlagIcon,
+  HeartPulseIcon,
   LayoutDashboardIcon,
   ListChecksIcon,
   AppWindowIcon,
@@ -54,6 +55,12 @@ export function Nav({ isCollapsed = false }: NavProps) {
           to={ROUTES.admin.analytics}
           icon={<ChartPieIcon size={18} />}
           label="Analytique"
+          isCollapsed={isCollapsed}
+        />
+        <NavItem
+          to={ROUTES.admin.monitoring}
+          icon={<HeartPulseIcon size={18} />}
+          label="Surveillance"
           isCollapsed={isCollapsed}
         />
         {environment.isSelfHosted ? null : (
