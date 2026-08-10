@@ -35,6 +35,7 @@ import {
   postCaisseEntry,
   postErpBackends,
   putCaisseEntry,
+  Skeleton,
   Spinner,
   tdStyle,
   thStyle,
@@ -124,6 +125,7 @@ export const CaissePanel = ({
           gap: 4,
           flexWrap: 'wrap',
           borderBottom: `1px solid ${C.border}`,
+          paddingBottom: 0,
         }}
       >
         {TABS.map(t => (
@@ -390,9 +392,7 @@ const Journal = ({
         }
       >
         {phase === 'loading' ? (
-          <EmptyNote>
-            <Spinner /> Chargement du journal…
-          </EmptyNote>
+          <Skeleton rows={5} height={38} gap={6} />
         ) : phase === 'error' ? (
           <Banner tone="error">
             {errMsg}{' '}
@@ -408,7 +408,7 @@ const Journal = ({
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 620 }}>
-              <thead>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: C.panel2 }}>
                 <tr>
                   <th style={thStyle}>Date</th>
                   <th style={thStyle}>Sens</th>
@@ -510,7 +510,11 @@ const EntryRow = ({
 }) => {
   const pending = entry.pending === true;
   return (
-    <tr style={pending ? { background: C.warnBg } : undefined}>
+    <tr
+      style={pending ? { background: C.warnBg, transition: 'background 140ms ease' } : { transition: 'background 140ms ease' }}
+      onMouseEnter={e => { if (!pending) (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+      onMouseLeave={e => { if (!pending) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+    >
       <td style={tdStyle}>
         <span style={{ whiteSpace: 'nowrap' }}>{entry.date || '—'}</span>
       </td>
@@ -1207,21 +1211,22 @@ const BigStat = ({
 }) => (
   <div
     style={{
-      padding: '12px 14px',
-      borderRadius: 10,
-      background: C.bg,
+      padding: '14px 16px',
+      borderRadius: 14,
+      background: C.panel,
       border: `1px solid ${C.border}`,
+      boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
     }}
   >
-    <div style={labelStyle}>{label}</div>
+    <div style={{ ...labelStyle, marginBottom: 6 }}>{label}</div>
     <div
       style={{
-        marginTop: 6,
-        fontSize: 24,
+        fontSize: 26,
         fontWeight: 900,
         lineHeight: 1.1,
         color: color || C.text,
         wordBreak: 'break-word',
+        letterSpacing: '-0.5px',
       }}
     >
       {value}
@@ -1289,9 +1294,7 @@ const DayClose = ({ slug }: { slug: string }) => {
       }
     >
       {phase === 'loading' ? (
-        <EmptyNote>
-          <Spinner /> Calcul de la clôture…
-        </EmptyNote>
+        <Skeleton rows={3} height={70} gap={10} />
       ) : phase === 'error' ? (
         <Banner tone="error">
           {errMsg}{' '}
@@ -1478,10 +1481,11 @@ function buildDayCloseText(s: CaisseDayClose, date: string): string {
 function subTabStyle(active: boolean): CSSProperties {
   return {
     appearance: 'none',
-    background: 'none',
-    border: 'none',
-    borderBottom: active ? `2px solid ${C.accent}` : '2px solid transparent',
-    padding: '8px 12px',
+    background: active ? C.accentSoft : 'none',
+    border: active ? `1px solid ${C.accent}` : '1px solid transparent',
+    borderRadius: 8,
+    marginBottom: 6,
+    padding: '7px 14px',
     fontSize: 13,
     fontWeight: 700,
     cursor: 'pointer',
@@ -1489,7 +1493,7 @@ function subTabStyle(active: boolean): CSSProperties {
     alignItems: 'center',
     gap: 6,
     color: active ? C.text : C.muted,
-    transition: 'color 160ms ease, border-color 160ms ease',
+    transition: 'color 160ms ease, background 160ms ease, border-color 160ms ease',
   };
 }
 
