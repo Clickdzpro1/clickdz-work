@@ -55,7 +55,7 @@ const SyncingWorkspaceStatus = ({ progress }: { progress?: number }) => {
   return (
     <>
       <Loading progress={progress} speed={0} />
-      Syncing...
+      Synchronisation…
     </>
   );
 };
