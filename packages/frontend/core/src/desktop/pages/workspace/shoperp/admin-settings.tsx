@@ -191,7 +191,7 @@ export const SettingsAdmin = ({
             </Field>
             <Field
               label="WhatsApp"
-              hint="Digits only, 8–15, no “+” (e.g. 213600000000)."
+              hint="Chiffres uniquement, 8–15 chiffres, sans “+” (ex. : 213600000000)."
               error={errors.whatsapp}
             >
               <input
@@ -521,14 +521,13 @@ const PaymentsSection = ({
           </div>
         ) : phase === 'unavailable' ? (
           <EmptyNote>
-            Online payments aren’t available on this server — your shop keeps
-            taking <strong>cash on delivery</strong> as usual.
+            Les paiements en ligne ne sont pas disponibles sur ce serveur — votre boutique continue à accepter le <strong>paiement à la livraison</strong> comme d’habitude.
           </EmptyNote>
         ) : phase === 'error' ? (
           <Banner tone="error">
             {errMsg}{' '}
             <button style={linkBtnStyle} onClick={() => void load()}>
-              Retry
+              Réessayer
             </button>
           </Banner>
         ) : (
@@ -574,9 +573,9 @@ const PaymentsSection = ({
               </div>
             ) : (
               <Banner tone="info">
-                Connect your Chargily account to accept card / Edahabia / CIB
-                payments. Paste your API secret below — it’s stored securely and
-                never shown again in full.
+                Connectez votre compte Chargily pour accepter les paiements par carte / Edahabia / CIB.
+                Collez votre clé secrète API ci-dessous — elle est stockée de façon sécurisée et
+                ne sera plus jamais affichée en intégralité.
               </Banner>
             )}
 
@@ -588,8 +587,8 @@ const PaymentsSection = ({
               }
               hint={
                 chargily?.configured
-                  ? 'Leave blank to keep the stored key; enter a new one to replace it.'
-                  : 'From your Chargily dashboard → Developers → API keys.'
+                  ? 'Laissez vide pour conserver la clé enregistrée ; saisissez-en une nouvelle pour la remplacer.'
+                  : 'Depuis votre tableau de bord Chargily → Développeurs → Clés API.'
               }
             >
               <input
@@ -616,7 +615,7 @@ const PaymentsSection = ({
                 alignItems: 'end',
               }}
             >
-              <Field label="Mode" hint="Use test until you’re ready to go live.">
+              <Field label="Mode" hint="Utilisez le mode test jusqu’à ce que vous soyez prêt à passer en production.">
                 <select
                   style={selectStyle}
                   value={mode}
@@ -624,7 +623,7 @@ const PaymentsSection = ({
                   onChange={e => setMode(e.target.value as ChargilyMode)}
                 >
                   <option value="test">Test</option>
-                  <option value="live">Live</option>
+                  <option value="live">Production</option>
                 </select>
               </Field>
               <div
@@ -701,12 +700,12 @@ const PaymentsSection = ({
                   {payToggling ? <Spinner /> : null}
                 </div>
                 <div style={{ ...hintStyle, marginTop: 2 }}>
-                  Shows a « Payer en ligne » button at checkout on your live shop.
+                  Affiche un bouton « Payer en ligne » à la caisse sur votre boutique en ligne.
                   {!chargily?.configured || !chargily?.enabled ? (
                     <>
                       {' '}
-                      Configure and enable Chargily above first, or shoppers will
-                      fall back to cash on delivery.
+                      Configurez et activez Chargily ci-dessus en premier, sinon les acheteurs
+                      seront redirigés vers le paiement à la livraison.
                     </>
                   ) : null}
                 </div>
