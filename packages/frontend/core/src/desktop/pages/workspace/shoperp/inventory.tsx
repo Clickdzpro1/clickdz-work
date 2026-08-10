@@ -183,7 +183,7 @@ export const Inventory = ({
       });
       setBusy(false);
       if (out.status === 'ok') {
-        setNotice({ tone: 'ok', text: `Warehouse « ${draft.name} » added.` });
+        setNotice({ tone: 'ok', text: `Entrepôt « ${draft.name} » ajouté.` });
         setShowAddWh(false);
         await load(true);
         onMutated();
@@ -203,7 +203,7 @@ export const Inventory = ({
     async (w: Warehouse) => {
       if (readOnly || busy) return;
       const ok = window.confirm(
-        `Remove warehouse « ${w.name} »? Its recorded movements stay in the ledger, but it disappears from the stock table.`
+        `Supprimer l’entrepôt « ${w.name} » ? Ses mouvements enregistrés restent dans le registre, mais il disparaît du tableau de stock.`
       );
       if (!ok) return;
       setBusy(true);
@@ -211,7 +211,7 @@ export const Inventory = ({
       const out = await deleteErpWarehouse(slug, w.id);
       setBusy(false);
       if (out.status === 'ok') {
-        setNotice({ tone: 'ok', text: `Warehouse « ${w.name} » removed.` });
+        setNotice({ tone: 'ok', text: `Entrepôt « ${w.name} » supprimé.` });
         await load(true);
         onMutated();
       } else if (out.status === 'unavailable') {
@@ -245,7 +245,7 @@ export const Inventory = ({
       if (out.status === 'ok') {
         setNotice({
           tone: 'ok',
-          text: `${productTitle(draft.product)}: ${draft.delta > 0 ? '+' : ''}${draft.delta} recorded.`,
+          text: `${productTitle(draft.product)} : ${draft.delta > 0 ? '+' : ''}${draft.delta} enregistré.`,
         });
         setMovementFor(null);
         await load(true);
@@ -290,7 +290,7 @@ export const Inventory = ({
       <Banner tone="error">
         {errMsg}{' '}
         <button style={linkBtnStyle} onClick={() => void load()}>
-          Retry
+          Réessayer
         </button>
       </Banner>
     );
@@ -303,14 +303,14 @@ export const Inventory = ({
       {/* Summary line */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ flex: 1, fontSize: 12.5, color: C.muted }}>
-          {products.length} {products.length === 1 ? 'product' : 'products'}
+          {products.length} {products.length === 1 ? 'produit' : 'produits'}
           {' · '}
           {warehouses.length}{' '}
-          {warehouses.length === 1 ? 'warehouse' : 'warehouses'}
+          {warehouses.length === 1 ? 'entrepôt' : 'entrepôts'}
           {lowCount > 0 ? (
             <span style={{ color: '#e8a33d', fontWeight: 700 }}>
               {' '}
-              · {lowCount} low on stock
+              · {lowCount} en stock faible
             </span>
           ) : null}
         </div>
@@ -340,7 +340,7 @@ export const Inventory = ({
       {/* Warehouses manager — hidden entirely in fallback mode (no route). */}
       {!fallback ? (
         <Panel
-          title={`Warehouses · ${warehouses.length}`}
+          title={`Entrepôts · ${warehouses.length}`}
           action={
             !showAddWh ? (
               <button
@@ -361,9 +361,7 @@ export const Inventory = ({
             />
           ) : noWarehouses ? (
             <EmptyNote>
-              No warehouses yet — add your first one (e.g. « Dépôt principal ») to
-              start tracking stock per location. Until then the table shows each
-              product’s total stock.
+              Aucun entrepôt pour l’instant — ajoutez le premier (ex. « Dépôt principal ») pour commencer à suivre le stock par emplacement. En attendant, le tableau affiche le stock total de chaque produit.
             </EmptyNote>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -405,7 +403,7 @@ export const Inventory = ({
                       cursor: readOnly || busy ? 'default' : 'pointer',
                     }}
                     disabled={readOnly || busy}
-                    aria-label={`Remove ${w.name}`}
+                    aria-label={`Supprimer ${w.name}`}
                     title="Supprimer le dépôt"
                     onClick={() => void removeWarehouse(w)}
                   >
@@ -419,7 +417,7 @@ export const Inventory = ({
       ) : null}
 
       {/* Per-product per-warehouse stock table */}
-      <Panel title={`Stock by product · ${products.length}`}>
+      <Panel title={`Stock par produit · ${products.length}`}>
         {products.length === 0 ? (
           <EmptyNote>
             Aucun produit pour le moment — ajoutez des produits dans l'onglet
@@ -509,7 +507,7 @@ export const Inventory = ({
                         }}
                         title={
                           p.price != null
-                            ? `Unit price ${fmtDZD(num(p.price), currency)}`
+                            ? `Prix unitaire ${fmtDZD(num(p.price), currency)}`
                             : undefined
                         }
                       >
@@ -783,7 +781,7 @@ const MovementModal = ({
       style={overlayStyle}
       role="dialog"
       aria-modal="true"
-      aria-label="Record stock movement"
+      aria-label="Enregistrer un mouvement de stock"
       onClick={() => {
         if (!busy) onClose();
       }}
@@ -825,7 +823,7 @@ const MovementModal = ({
           </div>
           <button
             style={{ ...linkBtnStyle, color: C.muted, textDecoration: 'none' }}
-            aria-label="Close"
+            aria-label="Fermer"
             onClick={onClose}
             disabled={busy}
           >
@@ -945,7 +943,7 @@ const MovementModal = ({
               border: `1px solid ${C.border}`,
             }}
           >
-            Effect:{' '}
+            Effet :{' '}
             <strong
               style={{
                 color:
@@ -959,7 +957,7 @@ const MovementModal = ({
               {delta > 0 ? '+' : ''}
               {delta}
             </strong>{' '}
-            on{' '}
+            sur{' '}
             <strong style={{ color: C.text }}>
               {warehouses.find(w => w.id === warehouseId)?.name || '—'}
             </strong>
