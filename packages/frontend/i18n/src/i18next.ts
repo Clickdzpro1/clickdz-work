@@ -9,7 +9,10 @@ import { SUPPORTED_LANGUAGES } from './resources';
 
 const logger = new DebugLogger('i18n');
 
-const defaultLng: Language = 'en';
+// ClickDz is a French-first deployment: default/fallback language is 'fr'.
+// An explicitly saved user preference (see packages/frontend/core/src/modules/i18n)
+// is passed in via changeLanguage() and always takes precedence over this default.
+const defaultLng: Language = 'fr';
 
 let _instance: i18n | null = null;
 export const getOrCreateI18n = (): i18n => {
@@ -40,7 +43,7 @@ export const getOrCreateI18n = (): i18n => {
       .init({
         lng: defaultLng,
         fallbackLng: code => {
-          // always fallback to english
+          // always fallback to the default language (French for this fork)
           const fallbacks: string[] = [defaultLng];
           const langPart = code.split('-')[0];
 
