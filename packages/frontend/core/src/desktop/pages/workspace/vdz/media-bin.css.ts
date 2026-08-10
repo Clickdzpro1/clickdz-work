@@ -456,6 +456,14 @@ export const iconButton = style({
     background: raised,
     borderColor: accent,
   },
+  // ---- Touch targets: widen the tap area on touch-scale viewports; the
+  // visual glyph box stays the same size (padding grows the hit area).
+  '@media': {
+    '(max-width: 1024px)': {
+      width: 40,
+      height: 40,
+    },
+  },
 });
 
 export const removeButton = style([
