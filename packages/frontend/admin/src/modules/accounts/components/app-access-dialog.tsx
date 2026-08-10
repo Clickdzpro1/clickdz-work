@@ -27,16 +27,17 @@ const AppAccessContent = ({ user }: { user: UserType }) => {
   const { grant, revoke, mutating } = useUserAppMutations(user.id);
   const isAdmin = user.features.includes(FeatureType.Admin);
 
-  // Build a lookup of active entitlements by app key.
+  // Build a lookup of active entitlements by app key (case-insensitive —
+  // the backend stores lowercase app keys, the frontend uses uppercase).
   const activeMap = new Map<string, boolean>();
   for (const e of entitlements) {
-    activeMap.set(e.app, e.active);
+    activeMap.set(e.app.toLowerCase(), e.active);
   }
 
   return (
     <div className="flex flex-col gap-3 mt-2">
       {USER_APPS.map(({ key, label }) => {
-        const active = isAdmin || activeMap.get(key) === true;
+        const active = isAdmin || activeMap.get(key.toLowerCase()) === true;
         return (
           <div
             key={key}
