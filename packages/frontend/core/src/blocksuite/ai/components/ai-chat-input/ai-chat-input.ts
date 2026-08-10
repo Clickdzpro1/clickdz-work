@@ -1811,6 +1811,33 @@ export class AIChatInput extends SignalWatcher(
       }
     }
 
+    /* Narrow screens (e.g. 390px phones): the secondary action strip (Image,
+       Builder, Workers, Artifacts, Chat/Council, Plan, preferences, send) has
+       too many wide, text-labelled buttons to wrap cleanly — wrapping just
+       turns it into several still-cramped rows and pushes the textarea down.
+       Let it scroll horizontally instead: one line, no layout shift, nothing
+       clipped. Desktop is untouched (rule is gated by the media query). */
+    @media (max-width: 480px) {
+      .chat-panel-input-actions {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+      }
+      .chat-panel-input-actions::-webkit-scrollbar {
+        display: none;
+      }
+      .chat-panel-input-actions > * {
+        flex-shrink: 0;
+      }
+      /* Extra specificity on purpose: the base .chat-input-footer-spacer
+         { flex: 1 } rule is declared LATER in this stylesheet and would
+         otherwise win the cascade over this media-query override. */
+      .chat-panel-input-actions .chat-input-footer-spacer {
+        flex: 0 0 8px;
+      }
+    }
+
     .chat-panel-input {
       textarea {
         width: 100%;
