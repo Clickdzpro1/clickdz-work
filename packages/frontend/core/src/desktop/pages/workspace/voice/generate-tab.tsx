@@ -16,6 +16,7 @@ import {
   useState,
 } from 'react';
 
+import { useIsNarrow } from './use-voice-responsive';
 import {
   C,
   type GenerationHistoryItem,
@@ -36,6 +37,7 @@ interface GenerateTabProps {
 }
 
 export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) => {
+  const isPhone = useIsNarrow(480);
   const [text, setText] = useState('');
   const [provider, setProvider] = useState<TtsProviderId>(defaultProvider);
   const [voice, setVoice] = useState<string>('');
@@ -421,14 +423,17 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
             appearance: 'none',
             display: 'inline-flex',
             alignItems: 'center',
+            justifyContent: 'center',
             gap: 8,
             padding: '10px 20px',
+            minHeight: 40,
             borderRadius: 9,
             border: 'none',
             fontSize: 13.5,
             fontWeight: 700,
             color: '#fff',
             cursor: canGenerate ? 'pointer' : 'not-allowed',
+            width: isPhone ? '100%' : undefined,
             background: canGenerate
               ? C.accent
               : 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 45%, #555)',
@@ -476,7 +481,7 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
             src={audioUrl}
             controls
             autoPlay
-            style={{ flex: '1 1 260px', height: 40 }}
+            style={{ flex: '1 1 260px', maxWidth: '100%', height: 40 }}
           />
           <button
             type="button"
@@ -486,6 +491,7 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
             style={{
               appearance: 'none',
               padding: '8px 15px',
+              minHeight: 40,
               borderRadius: 8,
               border: `1px solid ${C.border}`,
               background: C.panel2,
@@ -493,6 +499,7 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
               fontSize: 12.5,
               fontWeight: 600,
               cursor: 'pointer',
+              width: isPhone ? '100%' : undefined,
             }}
           >
             Download .mp3
@@ -533,6 +540,7 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
             style={{
               appearance: 'none',
               padding: '9px 16px',
+              minHeight: 40,
               borderRadius: 8,
               border: 'none',
               fontSize: 13,
@@ -547,6 +555,7 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
                   ? 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 45%, #555)'
                   : C.accent,
               opacity: bulking ? 0.7 : 1,
+              width: isPhone ? '100%' : undefined,
             }}
           >
             {bulking ? <GenSpinner /> : null}
@@ -656,6 +665,7 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
                     style={{
                       appearance: 'none',
                       padding: '6px 12px',
+                      minHeight: 40,
                       borderRadius: 7,
                       border: `1px solid ${C.border}`,
                       background: 'transparent',
@@ -664,6 +674,7 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
                       fontWeight: 600,
                       cursor: generating ? 'not-allowed' : 'pointer',
                       whiteSpace: 'nowrap',
+                      flexShrink: 0,
                     }}
                   >
                     Regenerate
