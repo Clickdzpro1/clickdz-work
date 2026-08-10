@@ -157,8 +157,8 @@ export const useColumns = ({
                   </span>
                 )}
                 {row.original.disabled && (
-                  <span className="ml-2 inline-flex h-5 items-center rounded-md border border-border/60 bg-chip-white px-2 py-0.5 text-xxs font-medium">
-                    Disabled
+                  <span className="ml-2 inline-flex h-5 items-center rounded-md border border-border/60 bg-destructive/10 px-2 py-0.5 text-xxs font-medium text-destructive">
+                    Suspendu
                   </span>
                 )}
               </div>
