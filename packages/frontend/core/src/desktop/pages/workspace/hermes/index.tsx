@@ -473,7 +473,7 @@ const HermesConsole = ({
               <EmptyState
                 icon={<ChatWithAiIcon style={{ fontSize: 26 }} />}
                 title="Hermes — votre agent opérationnel"
-                subtitle="Donnez un objectif à Hermes. Il planifie les étapes, appelle les bons outils across vos boutiques et applications connectées, et vous fait un retour — en diffusant chaque étape en direct. Choisissez un flux de travail pour commencer, ou tapez le vôtre ci-dessous."
+                subtitle="Donnez un objectif à Hermes. Il planifie les étapes, appelle les bons outils à travers vos boutiques et applications connectées, et vous fait un retour — en diffusant chaque étape en direct. Choisissez un flux de travail pour commencer, ou tapez le vôtre ci-dessous."
                 examples={EXAMPLE_GOALS}
                 onPickExample={handlePick}
               >
