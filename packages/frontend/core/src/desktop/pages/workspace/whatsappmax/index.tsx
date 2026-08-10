@@ -1611,6 +1611,15 @@ function formatElapsed(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
+/** Light cleanup of LLM markdown for plain-text surfaces (the AI overlay):
+ * strips bold markers and turns leading "*"/"-" bullets into "•". */
+function stripMd(s: string): string {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/^\s*[*-]\s+/gm, '• ');
+}
+
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2286,7 +2295,8 @@ const Composer = ({
 
   const handleAiOverlay = useCallback((title: string, body: string) => {
     setAiCopied(false);
-    setAiOverlay({ title, body });
+    // Sanitize once here — Copier / Insérer then reuse the cleaned text.
+    setAiOverlay({ title, body: stripMd(body) });
   }, []);
 
   const handleQuickReply = useCallback((t: string) => {
@@ -2913,7 +2923,28 @@ const Conversation = ({
           // Merge new messages (polling)
           const existingIds = new Set(prev.map(m => m.id));
           const newOnes = normalized.filter(m => !existingIds.has(m.id));
-          return newOnes.length > 0 ? [...prev, ...newOnes.reverse()] : prev;
+          if (newOnes.length === 0) return prev;
+          // Reconcile optimistic sends: when the REAL copy of a just-sent
+          // message lands from the gateway (different id), drop the matching
+          // optimistic bubble instead of rendering the same text twice.
+          let base = prev;
+          for (const real of newOnes) {
+            if (!real.fromMe) continue;
+            const realText = (real.text || '').trim();
+            if (!realText) continue;
+            const optIdx = base.findIndex(
+              p =>
+                typeof p.id === 'string' &&
+                p.id.startsWith('opt_') &&
+                p.fromMe &&
+                (p.text || '').trim() === realText &&
+                Math.abs(tsMs(real.timestamp) - tsMs(p.timestamp)) < 3 * 60_000
+            );
+            if (optIdx >= 0) {
+              base = [...base.slice(0, optIdx), ...base.slice(optIdx + 1)];
+            }
+          }
+          return [...base, ...newOnes.reverse()];
         });
         setHasOlder(prev => prev && normalized.length >= 50);
       }
