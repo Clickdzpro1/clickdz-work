@@ -60,11 +60,9 @@ export const NotificationSettings = lazy(
 export const StudioConfig = lazy(
   () => import(/* webpackChunkName: "admin-config-studio-config" */ './modules/admin-config/studio-config')
 );
-// Monitoring: temporarily disabled — module has a build error that needs debugging.
-// The backend controller is deployed; the frontend page needs fixing.
-// export const Monitoring = lazy(
-//   () => import(/* webpackChunkName: "monitoring" */ './modules/monitoring')
-// );
+export const Monitoring = lazy(
+  () => import(/* webpackChunkName: "monitoring" */ './modules/monitoring')
+);
 export const Auth = lazy(
   () => import(/* webpackChunkName: "auth" */ './modules/auth')
 );
@@ -184,7 +182,10 @@ export const App = () => {
                     path={ROUTES.admin.studioConfig}
                     element={<StudioConfig />}
                   />
-                  {/* Monitoring route — temporarily disabled (build error in module) */}
+                  <Route
+                    path={ROUTES.admin.monitoring}
+                    element={<Monitoring />}
+                  />
                 </Route>
               </Route>
             </Routes>
