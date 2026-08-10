@@ -648,7 +648,9 @@ class WhatsappMaxGatewayClient {
     // (10-30s). Retry up to 3x with 2s backoff so a recently-connected instance
     // doesn't show "Aucune conversation" forever while the sync is in flight.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const r = await this.call(`/instances/${instanceId}/chats`, {
+      // WAVE-G P3: ask for the gateway's MAXIMUM (it clamps at 2000) — the
+      // default was 500, which silently hid older conversations.
+      const r = await this.call(`/instances/${instanceId}/chats?limit=2000`, {
         method: 'GET',
       });
       if (r && r.status === 200) {
