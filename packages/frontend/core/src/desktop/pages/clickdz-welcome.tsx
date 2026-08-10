@@ -228,6 +228,7 @@ const T = {
     oneLinerPh: 'Ex. : Je vends des vêtements en ligne avec livraison COD',
     skip: 'Passer cette étape',
     next: 'Suivant →',
+    profileErr: 'Une erreur est survenue, mais vous pouvez continuer.',
   },
   en: {
     badge: 'Your workspace — by clickdz.ai',
@@ -253,6 +254,7 @@ const T = {
     oneLinerPh: 'e.g. I sell clothes online with COD delivery',
     skip: 'Skip this step',
     next: 'Next →',
+    profileErr: 'Something went wrong, but you can still continue.',
   },
   ar: {
     badge: 'مساحة عملك — من clickdz.ai',
@@ -278,6 +280,7 @@ const T = {
     oneLinerPh: 'مثال: أبيع ملابس عبر الإنترنت مع توصيل COD',
     skip: 'تخطّ هذه الخطوة',
     next: 'التالي ←',
+    profileErr: 'حدث خطأ، لكن يمكنك الاستمرار.',
   },
 };
 
@@ -322,6 +325,10 @@ export const Component = () => {
   const [selectedNiches, setSelectedNiches] = useState<string[]>([]);
   const [selectedGoals, setSelectedGoals] = useState<string[]>([]);
   const [bizOneLiner, setBizOneLiner] = useState('');
+  // Visible fallback: the profile step must NEVER trap the user. This surfaces
+  // a French hint if anything unexpected happens while advancing/skipping, but
+  // the step transition itself always proceeds regardless (fail-open).
+  const [profileError, setProfileError] = useState(false);
   const t = T[lang];
   const nameOk = workspaceName.trim().length > 0 && workspaceName.trim().length <= 60;
 
@@ -384,9 +391,31 @@ export const Component = () => {
     if (nameOk) { setStep('profile'); setTouched(false); }
   };
 
+  // Profile step is always skippable/advanceable: no selection is required and
+  // no network call gates this transition. Wrapped in try/catch so that even
+  // an unforeseen synchronous throw (e.g. a future change to a dependency)
+  // cannot leave the click looking like a no-op — the step still advances in
+  // the finally branch, and a French hint appears instead of silence.
   const nextFromProfile = () => {
-    // Profile step is always skippable; proceed to features regardless
-    setStep('features');
+    try {
+      setStep('features');
+      setProfileError(false);
+    } catch {
+      setProfileError(true);
+      setStep('features');
+    }
+  };
+
+  const skipProfile = () => {
+    // Unconditional: "Passer cette étape" must always move the user onward,
+    // regardless of selections, in-flight requests, or errors.
+    try {
+      setStep('features');
+      setProfileError(false);
+    } catch {
+      setProfileError(true);
+      setStep('features');
+    }
   };
 
   const isRtl = lang === 'ar';
@@ -395,7 +424,16 @@ export const Component = () => {
   // caps are not resolved this early in onboarding, so pass none: visibleStudios
   // then returns the legacy always-visible roster (drops the two flag-gated
   // studios — agents/vpic — exactly as the sidebar would with flags off).
-  const studios = visibleStudios();
+  // Defensive: never let a registry-side failure take down the whole wizard
+  // and strand the user on whatever step they just clicked into. Falls back
+  // to an empty roster (the features step still renders its header + finish
+  // button) rather than throwing during render.
+  let studios: StudioDef[] = [];
+  try {
+    studios = visibleStudios();
+  } catch {
+    studios = [];
+  }
   const grouped: { group: StudioGroup; items: StudioDef[] }[] = GROUP_ORDER
     .map(group => ({ group, items: studios.filter(s => s.group === group) }))
     .filter(g => g.items.length > 0);
@@ -529,13 +567,17 @@ export const Component = () => {
               />
             </div>
 
+            {profileError ? (
+              <div style={{ color: C.danger, fontSize: 12.5, marginBottom: 10 }}>{t.profileErr}</div>
+            ) : null}
+
             <div className="cdz-welcome-actionbar" style={{ marginTop: 4 }}>
               <button type="button" onClick={nextFromProfile} className="cdz-welcome-cta" style={{
                 width: '100%', background: 'linear-gradient(135deg, ' + C.primary + ', #1D4ED8)',
                 color: '#fff', border: 'none', borderRadius: 999, padding: '15px 30px', fontSize: 16, fontWeight: 700,
                 cursor: 'pointer', boxShadow: '0 6px 18px rgba(43,127,255,.28)',
               }}>{t.next}</button>
-              <button type="button" onClick={nextFromProfile} style={{
+              <button type="button" onClick={skipProfile} style={{
                 width: '100%', marginTop: 10, background: 'none', border: 'none', color: C.muted,
                 fontSize: 13.5, cursor: 'pointer', padding: '8px', textDecoration: 'underline',
               }}>{t.skip}</button>
