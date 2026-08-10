@@ -236,7 +236,7 @@ function ResetButton({
       type="button"
       className={ics.resetBtn}
       disabled={atDefault}
-      title={atDefault ? 'Already at default' : title}
+      title={atDefault ? 'Déjà à la valeur par défaut' : title}
       aria-label={title}
       onClick={() => {
         if (!atDefault) onReset();
@@ -476,7 +476,7 @@ function RangeField({
         {hasDefault ? (
           <ResetButton
             atDefault={atDefault}
-            title={`Reset to ${format(defaultValue)}`}
+            title={`Réinitialiser à ${format(defaultValue)}`}
             onReset={() => onChange(defaultValue)}
           />
         ) : null}
@@ -509,7 +509,7 @@ function RenameRow({
       className={ics.renameInput}
       value={draft}
       placeholder={clip.type}
-      aria-label="Clip name"
+      aria-label="Nom du clip"
       onChange={e => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={e => {
@@ -666,14 +666,14 @@ function ColorRow({
             style={{ background: swatch }}
             data-active={current === swatch}
             title={swatch}
-            aria-label={`Set color ${swatch}`}
+            aria-label={`Définir la couleur ${swatch}`}
             onClick={() => onColor(swatch)}
           />
         ))}
         <input
           type="color"
           className={styles.inspColor}
-          aria-label="Custom color"
+          aria-label="Couleur personnalisée"
           value={current}
           onChange={e => onColor(e.target.value)}
         />
@@ -954,7 +954,7 @@ function CaptionTools({
         title="Transcrire ce clip et ajouter un clip texte de sous-titre par phrase"
       >
         {captions.busy
-          ? '⏳ Transcribing…'
+          ? '⏳ Transcription en cours…'
           : !captions.ready
             ? 'Chargement de l’audio…'
             : '💬 Générer les sous-titres'}
@@ -1347,8 +1347,7 @@ export function Inspector({
     if (selectedCount > 1) {
       return (
         <div className={styles.inspectorHint}>
-          {selectedCount} clips selected. Delete / ripple-delete act on the whole
-          selection; click a single clip to inspect and edit its properties.
+          {selectedCount} clips sélectionnés. Supprimer / suppression en cascade agit sur toute la sélection ; cliquez sur un seul clip pour inspecter et modifier ses propriétés.
         </div>
       );
     }
@@ -1455,7 +1454,7 @@ export function Inspector({
                 />
               </Field>
               <RangeField
-                label={`Size ${((clip.fontSize ?? DEFAULT_FONT_SIZE) * 100).toFixed(0)}%`}
+                label={`Taille ${((clip.fontSize ?? DEFAULT_FONT_SIZE) * 100).toFixed(0)}%`}
                 value={clip.fontSize ?? DEFAULT_FONT_SIZE}
                 min={0.02}
                 max={0.3}
@@ -1552,7 +1551,7 @@ export function Inspector({
                   step={0.01}
                   defaultValue={1}
                   format={v => `${(v * 100).toFixed(0)}%`}
-                  ariaLabel="Width"
+                  ariaLabel="Largeur"
                   onChange={v => patch({ w: v })}
                 />
                 <RangeField
