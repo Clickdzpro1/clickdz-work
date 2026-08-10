@@ -50,6 +50,7 @@ import {
 // prop signatures (won't resolve in an isolated single-file esbuild — expected).
 import { CodeViewer } from './code-viewer';
 import { FileTree } from './file-tree';
+import { useIsNarrow } from './use-openclaw-responsive';
 import {
   Banner,
   btnStyle,
@@ -117,6 +118,9 @@ export const OpenClawDashboard = ({
   onReconfigure: () => void;
 }) => {
   const { t } = useAgentLang();
+  // ≤480px: the last-project files/preview strip below stacks the file tree
+  // above the code viewer instead of squeezing both side by side.
+  const isPhone = useIsNarrow(480);
   // ---- recent threads ----------------------------------------------------
   const [threadsState, setThreadsState] = useState<
     'loading' | 'ready' | 'error'
@@ -511,7 +515,7 @@ export const OpenClawDashboard = ({
         <Panel
           title={`Dernier projet — ${threads[0]?.title ?? ''}`}
           action={
-            <div style={{ display: 'flex', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', rowGap: 4 }}>
               <MiniTab
                 on={wsTab === 'files'}
                 onClick={() => setWsTab('files')}
@@ -531,10 +535,27 @@ export const OpenClawDashboard = ({
             </div>
           }
         >
-          <div style={{ height: 340, display: 'flex', minHeight: 0 }}>
+          <div
+            style={{
+              height: isPhone ? 460 : 340,
+              display: 'flex',
+              minHeight: 0,
+            }}
+          >
             {wsTab === 'files' ? (
-              <div style={{ display: 'flex', width: '100%', minHeight: 0 }}>
-                <div style={fileTreeWrap}>
+              <div
+                style={
+                  isPhone
+                    ? {
+                        display: 'flex',
+                        flexDirection: 'column',
+                        width: '100%',
+                        minHeight: 0,
+                      }
+                    : { display: 'flex', width: '100%', minHeight: 0 }
+                }
+              >
+                <div style={isPhone ? fileTreeWrapPhone : fileTreeWrap}>
                   <FileTree
                     files={lastFiles}
                     activePath={openFile?.path}
@@ -1271,6 +1292,7 @@ const MiniTab = ({
       appearance: 'none',
       cursor: 'pointer',
       padding: '4px 10px',
+      minHeight: 32,
       fontSize: 12,
       fontWeight: 600,
       borderRadius: 7,
@@ -1298,6 +1320,18 @@ const fileTreeWrap: CSSProperties = {
   width: 190,
   minWidth: 150,
   borderRight: `1px solid ${C.border}`,
+  overflow: 'auto',
+  minHeight: 0,
+};
+
+// ≤480px: stacked above the code viewer (see `isPhone` in the component)
+// instead of a narrow side column that squeezes the viewer to nothing.
+const fileTreeWrapPhone: CSSProperties = {
+  flex: '0 0 160px',
+  width: '100%',
+  maxHeight: 160,
+  borderRight: 'none',
+  borderBottom: `1px solid ${C.border}`,
   overflow: 'auto',
   minHeight: 0,
 };
