@@ -40,6 +40,7 @@ import {
   Spinner as SharedSpinner,
 } from './hermes-shared';
 import { HermesWorkflowsPanel } from './hermes-workflows';
+import { useIsNarrow } from './use-hermes-responsive';
 import { HermesWizard } from './wizard';
 
 // ---------------------------------------------------------------------------
@@ -194,6 +195,13 @@ const HermesConsole = ({
   const reloadedForFinalRef = useRef<string | null>(null);
   // Guards a one-shot open of the initial thread when entering from dashboard.
   const openedInitialRef = useRef(false);
+
+  // Phones (<=600px) already get a full rail/main stack from the shared
+  // [data-cdz-shell]/[data-cdz-rail] stylesheet (clickdz/responsive.ts). That
+  // stylesheet does not cover the tablet band (601-1024px), where a fixed
+  // 264px rail still eats a large share of a narrow tablet viewport — so we
+  // shrink (not stack) the rail there.
+  const isTablet = useIsNarrow(1024);
 
   // ---- live stream (send / stop / approve + in-progress assistant turn) ---
   // `onEvent` is a PARAM here (not a return value): we watch minted-thread and
@@ -354,7 +362,11 @@ const HermesConsole = ({
       {/* Phone layout for the rail/main split — see clickdz/responsive.ts */}
       <CdzResponsive />
 
-      {/* ---- Left: thread rail -------------------------------------- */}
+      {/* ---- Left: thread rail --------------------------------------
+          Below 1024px (tablet) the rail shrinks so the conversation column
+          keeps a usable width; below 600px the shared [data-cdz-rail]
+          stylesheet takes over and stacks it full-width above the main
+          column instead. */}
       <ThreadSidebar
         threads={threads}
         activeId={activeId}
@@ -364,7 +376,7 @@ const HermesConsole = ({
         onDelete={handleDelete}
         loading={loadingThreads}
         title="Conversations"
-        width={264}
+        width={isTablet ? 200 : 264}
       />
 
       {/* ---- Right: conversation + composer ------------------------- */}
@@ -398,6 +410,7 @@ const HermesConsole = ({
                 alignItems: 'center',
                 gap: 6,
                 padding: '5px 11px',
+                minHeight: 36,
                 borderRadius: 7,
                 fontSize: 12,
                 fontWeight: 600,
@@ -585,6 +598,7 @@ const ModeToggle = ({
             border: 'none',
             borderRadius: 6,
             padding: '4px 10px',
+            minHeight: 32,
             fontSize: 12,
             fontWeight: 600,
             fontFamily: 'inherit',
