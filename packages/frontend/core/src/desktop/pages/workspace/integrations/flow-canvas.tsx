@@ -394,9 +394,11 @@ export function FlowCanvas({
 
   return (
     <div
+      data-cdz-shell=""
       style={{
         display: 'flex',
         width: '100%',
+        maxWidth: '100%',
         height: '100%',
         minHeight: 480,
         background: C.bg,
@@ -406,10 +408,15 @@ export function FlowCanvas({
         overflow: 'hidden',
       }}
     >
-      {/* Palette (hidden in readOnly) */}
+      {/* Palette (hidden in readOnly). `data-cdz-panel` lets the shared CDZ
+          responsive stylesheet (see clickdz/responsive.ts) collapse this
+          fixed-width rail to full-width/stacked on phones — same convention
+          Vdz/Hermes use, so no bespoke breakpoint logic needed here. */}
       <NodePalette catalog={catalog} readOnly={readOnly} onAdd={addNode} />
 
-      {/* Scrollable canvas surface */}
+      {/* Scrollable canvas surface. minWidth:0 lets this flex item shrink
+          below its content's intrinsic width instead of forcing the whole
+          shell (and thus the page) wider than the viewport on phones. */}
       <div
         ref={contentRef}
         onPointerMove={onContentPointerMove}
@@ -419,6 +426,7 @@ export function FlowCanvas({
         style={{
           position: 'relative',
           flex: 1,
+          minWidth: 0,
           overflow: 'auto',
           background: C.canvas,
           // Grid background (optional, subtle). CSS gradient — zero-dep.
