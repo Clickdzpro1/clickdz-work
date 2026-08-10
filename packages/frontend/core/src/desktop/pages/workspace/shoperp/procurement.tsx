@@ -1634,7 +1634,7 @@ const PurchaseOrderDetail = ({
                 <Banner tone="info">
                   Aucun entrepôt configuré — le stock reçu sera enregistré sur
                   l’entrepôt par défaut du bon. Ajoutez des entrepôts dans
-                  l’onglet <strong>Inventory</strong> pour choisir la destination.
+                  l’onglet <strong>Inventaire</strong> pour choisir la destination.
                 </Banner>
               ) : null}
             </>
@@ -1658,7 +1658,7 @@ const PurchaseOrderDetail = ({
                   <button
                     style={btnStyle('primary', disabled || !hasWarehouse)}
                     disabled={disabled || !hasWarehouse}
-                    title={hasWarehouse ? 'Réceptionner du stock' : 'Ajoutez d’abord un entrepôt (onglet Inventory)'}
+                    title={hasWarehouse ? 'Réceptionner du stock' : 'Ajoutez d’abord un entrepôt (onglet Inventaire)'}
                     onClick={startReceive}
                   >
                     📥 Réceptionner
