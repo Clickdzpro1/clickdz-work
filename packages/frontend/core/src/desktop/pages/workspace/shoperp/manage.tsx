@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 
+import { LocalBackupPanel } from './local-backup';
 import {
   Banner,
   btnStyle,
@@ -74,68 +75,13 @@ export const ManageView = ({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {[...paired.entries()].map(([storeSlug, group]) => (
-          <div
+          <StoreGroup
             key={storeSlug}
-            style={{
-              borderRadius: 12,
-              background: C.panel,
-              border: `1px solid ${C.border}`,
-              overflow: 'hidden',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '9px 14px',
-                borderBottom: `1px solid ${C.border}`,
-                background: C.panel2,
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: '0.04em',
-                textTransform: 'uppercase',
-                color: C.muted,
-              }}
-            >
-              <span aria-hidden>🔗</span>
-              Store · {storeSlug}
-              {/* Reset the header's uppercase/tracking for the action cluster */}
-              <div
-                style={{
-                  marginLeft: 'auto',
-                  display: 'flex',
-                  gap: 6,
-                  textTransform: 'none',
-                  letterSpacing: 'normal',
-                  fontWeight: 400,
-                  flexShrink: 0,
-                }}
-              >
-                <button
-                  style={miniBtnStyle('primary')}
-                  onClick={() =>
-                    onOpenDashboard(storeSlug, 'overview', pickShopUrl(group))
-                  }
-                  title="Ouvrir le tableau de bord ERP intégré"
-                >
-                  📊 Tableau de bord
-                </button>
-                <button
-                  style={miniBtnStyle('secondary')}
-                  onClick={() =>
-                    onOpenDashboard(storeSlug, 'orders', pickShopUrl(group))
-                  }
-                  title="Gérer commandes, stock et réglages ici"
-                >
-                  Gérer
-                </button>
-              </div>
-            </div>
-            {group.map(app => (
-              <AppRow key={app.slug} app={app} onChanged={onChanged} grouped />
-            ))}
-          </div>
+            storeSlug={storeSlug}
+            group={group}
+            onChanged={onChanged}
+            onOpenDashboard={onOpenDashboard}
+          />
         ))}
 
         {loose.length > 0 ? (
@@ -168,6 +114,104 @@ export const ManageView = ({
           </div>
         ) : null}
       </div>
+    </div>
+  );
+};
+
+// One paired store group (its shop + ERP apps under a single header). Split
+// out from ManageView so it can hold its own "Sauvegarde locale" toggle
+// state without re-rendering every other store group.
+const StoreGroup = ({
+  storeSlug,
+  group,
+  onChanged,
+  onOpenDashboard,
+}: {
+  storeSlug: string;
+  group: MineApp[];
+  onChanged: () => void;
+  onOpenDashboard: (
+    slug: string,
+    section?: 'overview' | 'orders',
+    url?: string
+  ) => void;
+}) => {
+  const [showBackup, setShowBackup] = useState(false);
+
+  return (
+    <div
+      style={{
+        borderRadius: 12,
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '9px 14px',
+          borderBottom: `1px solid ${C.border}`,
+          background: C.panel2,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: C.muted,
+        }}
+      >
+        <span aria-hidden>🔗</span>
+        Store · {storeSlug}
+        {/* Reset the header's uppercase/tracking for the action cluster */}
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            gap: 6,
+            textTransform: 'none',
+            letterSpacing: 'normal',
+            fontWeight: 400,
+            flexShrink: 0,
+          }}
+        >
+          <button
+            style={miniBtnStyle('primary')}
+            onClick={() =>
+              onOpenDashboard(storeSlug, 'overview', pickShopUrl(group))
+            }
+            title="Ouvrir le tableau de bord ERP intégré"
+          >
+            📊 Tableau de bord
+          </button>
+          <button
+            style={miniBtnStyle('secondary')}
+            onClick={() =>
+              onOpenDashboard(storeSlug, 'orders', pickShopUrl(group))
+            }
+            title="Gérer commandes, stock et réglages ici"
+          >
+            Gérer
+          </button>
+          <button
+            style={miniBtnStyle('secondary')}
+            onClick={() => setShowBackup(v => !v)}
+            title="Exporter une sauvegarde locale des données ERP"
+            aria-expanded={showBackup}
+          >
+            💾 Sauvegarde
+          </button>
+        </div>
+      </div>
+      {group.map(app => (
+        <AppRow key={app.slug} app={app} onChanged={onChanged} grouped />
+      ))}
+      {showBackup ? (
+        <div style={{ padding: 14, borderTop: `1px solid ${C.border}` }}>
+          <LocalBackupPanel slug={storeSlug} />
+        </div>
+      ) : null}
     </div>
   );
 };
