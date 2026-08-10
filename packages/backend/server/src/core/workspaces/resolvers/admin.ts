@@ -24,6 +24,7 @@ import {
 import { SafeIntResolver } from 'graphql-scalars';
 
 import { PaginationInput, URLHelper } from '../../../base';
+import { CacheRedis } from '../../../base/redis';
 import { PageInfo } from '../../../base/graphql/pagination';
 import { Models, WorkspaceMemberStatus } from '../../../models';
 import { Admin } from '../../common';
@@ -241,6 +242,24 @@ class AdminSharedLinkTopItem {
 }
 
 @ObjectType()
+class AdminPlatformHealth {
+  @Field(() => Boolean)
+  databaseConnected!: boolean;
+
+  @Field(() => Boolean)
+  redisConnected!: boolean;
+
+  @Field(() => Boolean)
+  posthogEnabled!: boolean;
+
+  @Field(() => String, { nullable: true })
+  serverVersion?: string | null;
+
+  @Field(() => String, { nullable: true })
+  baseImage?: string | null;
+}
+
+@ObjectType()
 class AdminDashboard {
   @Field(() => Int)
   syncActiveUsers!: number;
@@ -280,6 +299,18 @@ class AdminDashboard {
 
   @Field(() => [AdminDashboardSignupPoint])
   signupsTimeline!: AdminDashboardSignupPoint[];
+
+  @Field(() => Int)
+  totalWorkspaces!: number;
+
+  @Field(() => Int)
+  totalDocs!: number;
+
+  @Field(() => SafeIntResolver)
+  totalStorageUsed!: number;
+
+  @Field(() => AdminPlatformHealth, { nullable: true })
+  platformHealth?: AdminPlatformHealth | null;
 
   @Field(() => Date)
   generatedAt!: Date;
@@ -449,7 +480,8 @@ class AdminUpdateWorkspaceInput extends PartialType(
 export class AdminWorkspaceResolver {
   constructor(
     private readonly models: Models,
-    private readonly url: URLHelper
+    private readonly url: URLHelper,
+    private readonly cacheRedis: CacheRedis
   ) {}
 
   private assertCloudOnly() {
@@ -560,6 +592,50 @@ export class AdminWorkspaceResolver {
       ? await this.models.user.signupsTimeline(30)
       : [];
 
+    // ClickDz: compute additional aggregate metrics for the expanded analytics
+    // dashboard. Each query is independent; failures are caught so a transient
+    // DB issue doesn't prevent the dashboard from rendering.
+    let totalWorkspaces = 0;
+    let totalDocs = 0;
+    let platformHealth: AdminPlatformHealth | null = null;
+
+    try {
+      totalWorkspaces = await this.models.workspace.adminCountWorkspaces({
+        keyword: null,
+        flags: {},
+      });
+    } catch {
+      totalWorkspaces = 0;
+    }
+
+    try {
+      totalDocs = await this.models.user.countAllDocs();
+    } catch {
+      totalDocs = 0;
+    }
+
+    try {
+      const dbConnected = await this.checkDatabaseConnection();
+      const redisConnected = await this.checkRedisConnection();
+      const posthogEnabled = Boolean(process.env.CDZ_POSTHOG_KEY);
+      const serverVersion = process.env.CDZ_SERVER_VERSION || null;
+      const baseImage = process.env.BASE_IMAGE || null;
+
+      platformHealth = {
+        databaseConnected: dbConnected,
+        redisConnected,
+        posthogEnabled,
+        serverVersion,
+        baseImage,
+      };
+    } catch {
+      platformHealth = null;
+    }
+
+    const totalStorageUsed =
+      (dashboard.workspaceStorageBytes ?? 0) +
+      (dashboard.blobStorageBytes ?? 0);
+
     return {
       ...dashboard,
       topSharedLinks: includeTopSharedLinks
@@ -571,6 +647,10 @@ export class AdminWorkspaceResolver {
           }))
         : [],
       signupsTimeline,
+      totalWorkspaces,
+      totalDocs,
+      totalStorageUsed,
+      platformHealth,
     };
   }
 
@@ -686,6 +766,27 @@ export class AdminWorkspaceResolver {
       case AdminWorkspaceSort.CreatedAt:
       default:
         return 'createdAt';
+    }
+  }
+
+  // ClickDz: platform health helpers for the expanded admin analytics dashboard.
+  // Each performs a lightweight check and returns a boolean; failures default
+  // to false rather than throwing so the dashboard still renders.
+  private async checkDatabaseConnection(): Promise<boolean> {
+    try {
+      await this.models.user.signupsTimeline(0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async checkRedisConnection(): Promise<boolean> {
+    try {
+      const pong = await this.cacheRedis.ping();
+      return pong === 'PONG';
+    } catch {
+      return false;
     }
   }
 }
