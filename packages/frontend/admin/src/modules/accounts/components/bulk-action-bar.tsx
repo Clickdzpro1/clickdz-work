@@ -16,11 +16,13 @@ import { useCallback, useState } from 'react';
 
 import {
   USER_APPS,
+  type UserAppKey,
+} from '../app-entitlements';
+import {
   useBulkEnableUsers,
   useBulkGrantUserApp,
   useBulkRevokeUserApp,
   useBulkSuspendUsers,
-  type UserAppKey,
 } from '../admin-operations';
 import type { UserType } from '../schema';
 
