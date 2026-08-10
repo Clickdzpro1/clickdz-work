@@ -2391,7 +2391,7 @@ export class ClickDzWhatsappMaxController {
       const systemPrompt =
         'Résume cette conversation WhatsApp en français, à l’attention du propriétaire de l’entreprise. ' +
         'Utilise des puces courtes couvrant : qui est le client, ce qu’il veut, le statut de la demande, et toute action à faire. ' +
-        'Reste factuel et concis.';
+        'Reste factuel et concis. Réponds en texte brut, sans mise en forme Markdown (pas d’astérisques ni de gras).';
 
       const summary = await this.callWamaxAi(
         [
