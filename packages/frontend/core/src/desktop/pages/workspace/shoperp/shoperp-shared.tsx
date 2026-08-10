@@ -95,7 +95,7 @@ export async function fetchMyApps(): Promise<MineApp[]> {
     headers: { Accept: 'application/json' },
   });
   if (!res.ok) {
-    throw new Error(`Could not load your apps (${res.status})`);
+    throw new Error(`Impossible de charger vos applications (${res.status})`);
   }
   const data = (await res.json().catch(() => ({}))) as { apps?: MineApp[] };
   const apps = Array.isArray(data.apps) ? data.apps : [];
@@ -211,19 +211,19 @@ export async function fetchTemplate(body: {
     | null;
   if (!res.ok) {
     if (res.status === 401) {
-      throw new Error('Please sign in to create a shop.');
+      throw new Error('Veuillez vous connecter pour créer une boutique.');
     }
     if (data?.error === 'invalid_settings') {
       throw new Error(
-        `That ${data.field || 'value'} isn't valid — please check it and try again.`
+        `Le champ ${data.field || 'valeur'} n’est pas valide — veuillez le vérifier et réessayer.`
       );
     }
-    throw new Error(`Creation failed (${res.status}).`);
+    throw new Error(`Création échouée (${res.status}).`);
   }
   const slug = typeof data?.slug === 'string' ? data.slug : '';
   const html = typeof data?.html === 'string' ? data.html : '';
   if (!slug || !html) {
-    throw new Error('The template response was incomplete. Please try again.');
+    throw new Error('La réponse du gabarit était incomplète. Veuillez réessayer.');
   }
   return {
     slug,
@@ -255,7 +255,7 @@ export async function deployApp(body: {
       body: JSON.stringify(body),
     });
   } catch {
-    return { status: 'error', message: 'Network error while publishing.' };
+    return { status: 'error', message: 'Erreur réseau lors de la publication.' };
   }
   const data = (await res.json().catch(() => null)) as
     | {
@@ -283,7 +283,7 @@ export async function deployApp(body: {
     const msg =
       typeof data?.error === 'object' && data.error?.message
         ? data.error.message
-        : `Publish failed (${res.status}).`;
+        : `Publication échouée (${res.status}).`;
     return { status: 'error', message: msg };
   }
   const url = String(data?.url || data?.deploymentUrl || '');
@@ -526,7 +526,7 @@ export async function fetchErpSummary(slug: string): Promise<ErpSummaryOutcome> 
   } catch {
     return {
       status: 'error',
-      message: 'Network error while loading the dashboard.',
+      message: 'Erreur réseau lors du chargement du tableau de bord.',
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -535,14 +535,14 @@ export async function fetchErpSummary(slug: string): Promise<ErpSummaryOutcome> 
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in to view this dashboard.'
+        ? 'Veuillez vous connecter pour voir ce tableau de bord.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : res.status === 404
-            ? 'This shop was not found — it may have been deleted.'
+            ? 'Cette boutique est introuvable — elle a peut-être été supprimée.'
             : typeof data?.message === 'string'
               ? data.message
-              : `Could not load the dashboard (${res.status}).`;
+              : `Impossible de charger le tableau de bord (${res.status}).`;
     return { status: 'error', message };
   }
   const kpis = (data?.kpis ?? {}) as Partial<ErpKpis>;
@@ -609,7 +609,7 @@ export async function fetchErpCollection<T = Record<string, unknown>>(
     }
   );
   if (!res.ok) {
-    throw new Error(`Could not load ${collection} (${res.status})`);
+    throw new Error(`Impossible de charger ${collection} (${res.status})`);
   }
   const data = (await res.json().catch(() => null)) as unknown;
   // The bridge wraps its payload as { ok, records } (the house shape for
@@ -644,7 +644,7 @@ async function erpMutate<T>(
       }
     );
   } catch {
-    return { status: 'error', message: 'Network error — nothing was changed.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -655,14 +655,14 @@ async function erpMutate<T>(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in again.'
+        ? 'Veuillez vous reconnecter.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : res.status === 404
-            ? 'Not found — it may have been changed elsewhere. Refresh and retry.'
+            ? 'Introuvable — cela a peut-être été modifié ailleurs. Actualisez et réessayez.'
             : typeof data?.message === 'string'
               ? (data.message as string)
-              : `The change failed (${res.status}).`;
+              : `La modification a échoué (${res.status}).`;
     return { status: 'error', message };
   }
   return { status: 'ok', data: data as T };
@@ -1729,9 +1729,9 @@ export type ShippingRatesOutcome =
 
 function shipReadMessage(status: number, fallback: string): string {
   return status === 401
-    ? 'Please sign in again.'
+    ? 'Veuillez vous reconnecter.'
     : status === 403
-      ? 'This shop belongs to another account.'
+      ? 'Cette boutique appartient à un autre compte.'
       : status === 404
         ? 'This shop was not found — it may have been deleted.'
         : fallback;
@@ -1746,7 +1746,7 @@ export async function fetchWilayas(slug: string): Promise<WilayasOutcome> {
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Network error while loading wilayas.' };
+    return { status: 'error', message: 'Erreur réseau lors du chargement des wilayas.' };
   }
   const data = (await res.json().catch(() => null)) as
     | { wilayas?: unknown; message?: unknown }
@@ -1758,7 +1758,7 @@ export async function fetchWilayas(slug: string): Promise<WilayasOutcome> {
         res.status,
         typeof data?.message === 'string'
           ? data.message
-          : `Could not load wilayas (${res.status}).`
+          : `Impossible de charger les wilayas (${res.status}).`
       ),
     };
   }
@@ -1783,7 +1783,7 @@ export async function fetchCouriers(slug: string): Promise<CouriersOutcome> {
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Network error while loading couriers.' };
+    return { status: 'error', message: 'Erreur réseau lors du chargement des transporteurs.' };
   }
   const data = (await res.json().catch(() => null)) as
     | { couriers?: unknown; message?: unknown }
@@ -1795,7 +1795,7 @@ export async function fetchCouriers(slug: string): Promise<CouriersOutcome> {
         res.status,
         typeof data?.message === 'string'
           ? data.message
-          : `Could not load couriers (${res.status}).`
+          : `Impossible de charger les transporteurs (${res.status}).`
       ),
     };
   }
@@ -1834,7 +1834,7 @@ export async function fetchShippingRates(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Network error while loading rates.' };
+    return { status: 'error', message: 'Erreur réseau lors du chargement des tarifs.' };
   }
   const data = (await res.json().catch(() => null)) as
     | { courierId?: unknown; matrix?: unknown; message?: unknown }
@@ -1846,7 +1846,7 @@ export async function fetchShippingRates(
         res.status,
         typeof data?.message === 'string'
           ? data.message
-          : `Could not load rates (${res.status}).`
+          : `Impossible de charger les tarifs (${res.status}).`
       ),
     };
   }
@@ -1887,7 +1887,7 @@ async function shipMutate<T>(
       body: JSON.stringify(body),
     });
   } catch {
-    return { status: 'error', message: 'Network error — nothing was changed.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -1898,18 +1898,18 @@ async function shipMutate<T>(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in again.'
+        ? 'Veuillez vous reconnecter.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : res.status === 404
-            ? 'Not found — it may have been changed elsewhere. Refresh and retry.'
+            ? 'Introuvable — cela a peut-être été modifié ailleurs. Actualisez et réessayez.'
             : res.status === 409
-              ? 'A courier with this name already exists.'
+              ? 'Un transporteur portant ce nom existe déjà.'
               : typeof data?.message === 'string'
                 ? (data.message as string)
                 : typeof data?.error === 'string'
-                  ? `The change failed (${data.error}).`
-                  : `The change failed (${res.status}).`;
+                  ? `La modification a échoué (${data.error}).`
+                  : `La modification a échoué (${res.status}).`;
     return { status: 'error', message };
   }
   return { status: 'ok', data: data as T };
@@ -1928,7 +1928,7 @@ async function shipMutatePut<T>(
       body: JSON.stringify(body),
     });
   } catch {
-    return { status: 'error', message: 'Network error — nothing was changed.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -1939,14 +1939,14 @@ async function shipMutatePut<T>(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in again.'
+        ? 'Veuillez vous reconnecter.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : res.status === 404
-            ? 'Not found — refresh and retry.'
+            ? 'Introuvable — actualisez et réessayez.'
             : typeof data?.message === 'string'
               ? (data.message as string)
-              : `The change failed (${res.status}).`;
+              : `La modification a échoué (${res.status}).`;
     return { status: 'error', message };
   }
   return { status: 'ok', data: data as T };
@@ -3246,7 +3246,7 @@ export async function postErpRecord<T = Record<string, unknown>>(
       }
     );
   } catch {
-    return { status: 'error', message: 'Network error — nothing was saved.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été enregistré.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -3312,7 +3312,7 @@ export async function deleteErpRecord(
       }
     );
   } catch {
-    return { status: 'error', message: 'Network error — nothing was changed.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -3403,7 +3403,7 @@ export async function fetchErpCaisseMonth(
       }
     );
   } catch {
-    return { status: 'error', message: 'Network error while loading caisse.' };
+    return { status: 'error', message: 'Erreur réseau lors du chargement de la caisse.' };
   }
   const data = (await res.json().catch(() => null)) as
     | {
@@ -3424,12 +3424,12 @@ export async function fetchErpCaisseMonth(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in to view caisse.'
+        ? 'Veuillez vous connecter pour voir la caisse.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : typeof data?.message === 'string'
             ? (data.message as string)
-            : `Could not load caisse (${res.status}).`;
+            : `Impossible de charger la caisse (${res.status}).`;
     return { status: 'error', message };
   }
   const entries = Array.isArray(data?.entries)
@@ -4116,7 +4116,7 @@ export async function customizeApp(
       }
     );
   } catch {
-    return { status: 'error', message: 'Network error — nothing was changed.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Partial<{
@@ -4147,12 +4147,12 @@ export async function customizeApp(
       typeof data?.error === 'object' && data.error?.message
         ? (data.error.message as string)
         : res.status === 401
-          ? 'Please sign in again.'
+          ? 'Veuillez vous reconnecter.'
           : res.status === 403
-            ? 'This shop belongs to another account.'
+            ? 'Cette boutique appartient à un autre compte.'
             : typeof data?.message === 'string'
               ? (data.message as string)
-              : `Could not apply the changes (${res.status}).`;
+              : `Impossible d’appliquer les modifications (${res.status}).`;
     return { status: 'error', message };
   }
   return {
@@ -4193,7 +4193,7 @@ export async function fetchAppFeatures(
       { method: 'GET', headers: { Accept: 'application/json' }, credentials: 'include' }
     );
   } catch {
-    return { status: 'error', message: 'Network error while loading features.' };
+    return { status: 'error', message: 'Erreur réseau lors du chargement des fonctionnalités.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Partial<AppFeaturesState> & { error?: unknown; message?: unknown })
@@ -4205,12 +4205,12 @@ export async function fetchAppFeatures(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in to view features.'
+        ? 'Veuillez vous connecter pour voir les fonctionnalités.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : typeof data?.message === 'string'
             ? (data.message as string)
-            : `Could not load features (${res.status}).`;
+            : `Impossible de charger les fonctionnalités (${res.status}).`;
     return { status: 'error', message };
   }
   return {
@@ -4255,26 +4255,26 @@ export interface ThemeOption {
 export const THEME_OPTIONS: ThemeOption[] = [
   {
     id: 'classic',
-    label: 'Classic',
-    hint: 'Today’s look — light, airy, teal-friendly.',
+    label: 'Classique',
+    hint: 'Le look d’aujourd’hui — clair, aéré, teinte sarcelle.',
     preview: { bg: '#f6f7f9', card: '#ffffff', ink: '#0f172a', line: '#e5e7eb' },
   },
   {
     id: 'dark',
-    label: 'Dark',
-    hint: 'Deep neutral surfaces with a bright accent.',
+    label: 'Sombre',
+    hint: 'Surfaces neutres profondes avec un accent lumineux.',
     preview: { bg: '#0b0f19', card: '#151b2b', ink: '#e8ecf4', line: '#26304a' },
   },
   {
     id: 'vibrant',
     label: 'Vibrant',
-    hint: 'Warm, high-contrast, punchy accent gradients.',
+    hint: 'Chaleureux, très contrasté, dégradés d’accent percutants.',
     preview: { bg: '#fff7ed', card: '#ffffff', ink: '#1f130a', line: '#f3d9bf' },
   },
   {
     id: 'minimal',
     label: 'Minimal',
-    hint: 'Flat, monochrome, thin lines — content first.',
+    hint: 'Plat, monochrome, lignes fines — le contenu avant tout.',
     preview: { bg: '#ffffff', card: '#ffffff', ink: '#111111', line: '#ececec' },
   },
   // Market themes — each one is a distinct design (surfaces, ink, status
@@ -4323,12 +4323,12 @@ export const TEMPLATE_OPTIONS: TemplateOption[] = [
   {
     id: 'standard',
     label: 'Standard',
-    hint: 'Hero banner + category rail + product grid (the default).',
+    hint: 'Bandeau hero + rail de catégories + grille de produits (par défaut).',
   },
   {
     id: 'boutique',
     label: 'Boutique',
-    hint: 'Compact editorial header, larger cards, no hero band.',
+    hint: 'En-tête éditorial compact, cartes plus grandes, sans bandeau hero.',
   },
   // These two were already fully implemented in the storefront template AND
   // allowlisted server-side (ERP_TEMPLATE_IDS) — they were simply missing from
@@ -4388,7 +4388,7 @@ export interface FontOption {
 export const FONT_OPTIONS: FontOption[] = [
   {
     id: 'system',
-    label: 'System',
+    label: 'Système',
     stack:
       "'Segoe UI',system-ui,-apple-system,'Helvetica Neue',Arial,'Noto Sans Arabic',sans-serif",
   },
@@ -4417,12 +4417,12 @@ export interface SectionOption {
 
 /** Toggleable storefront sections — all enabled by default. */
 export const SECTION_OPTIONS: SectionOption[] = [
-  { id: 'hero', label: 'Hero banner', hint: 'The headline + call-to-action band.' },
-  { id: 'trust', label: 'Trust strip', hint: 'COD / delivery / support reassurance row.' },
+  { id: 'hero', label: 'Bandeau hero', hint: 'Le bandeau titre + appel à l’action.' },
+  { id: 'trust', label: 'Bandeau de confiance', hint: 'La ligne de réassurance paiement à la livraison / livraison / support.' },
   {
     id: 'categories',
-    label: 'Category rail',
-    hint: 'The horizontal category filter chips.',
+    label: 'Rail de catégories',
+    hint: 'Les puces de filtre de catégories horizontales.',
   },
 ];
 
@@ -4613,7 +4613,7 @@ export async function fetchErpInventory(
   } catch {
     return {
       status: 'error',
-      message: 'Network error while loading inventory.',
+      message: 'Erreur réseau lors du chargement du stock.',
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -4635,12 +4635,12 @@ export async function fetchErpInventory(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in to view inventory.'
+        ? 'Veuillez vous connecter pour voir le stock.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : typeof data?.message === 'string'
             ? (data.message as string)
-            : `Could not load inventory (${res.status}).`;
+            : `Impossible de charger le stock (${res.status}).`;
     return { status: 'error', message };
   }
   return {
@@ -4694,7 +4694,7 @@ export async function postErpMovement(
       }
     );
   } catch {
-    return { status: 'error', message: 'Network error — nothing was changed.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -4705,11 +4705,11 @@ export async function postErpMovement(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in again.'
+        ? 'Veuillez vous reconnecter.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : res.status === 404
-            ? 'Not found — refresh and retry.'
+            ? 'Introuvable — actualisez et réessayez.'
             : typeof data?.message === 'string'
               ? (data.message as string)
               : `The movement failed (${res.status}).`;
@@ -4738,7 +4738,7 @@ export async function postErpWarehouse(
       }
     );
   } catch {
-    return { status: 'error', message: 'Network error — nothing was changed.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -4749,12 +4749,12 @@ export async function postErpWarehouse(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in again.'
+        ? 'Veuillez vous reconnecter.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : typeof data?.message === 'string'
             ? (data.message as string)
-            : `Could not add the warehouse (${res.status}).`;
+            : `Impossible d’ajouter l’entrepôt (${res.status}).`;
     return { status: 'error', message };
   }
   return {
@@ -4781,7 +4781,7 @@ export async function deleteErpWarehouse(
       }
     );
   } catch {
-    return { status: 'error', message: 'Network error — nothing was changed.' };
+    return { status: 'error', message: 'Erreur réseau — rien n’a été modifié.' };
   }
   const data = (await res.json().catch(() => null)) as
     | (Record<string, unknown> & { error?: unknown; message?: unknown })
@@ -4793,12 +4793,12 @@ export async function deleteErpWarehouse(
   if (!res.ok && res.status !== 404) {
     const message =
       res.status === 401
-        ? 'Please sign in again.'
+        ? 'Veuillez vous reconnecter.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : typeof data?.message === 'string'
             ? (data.message as string)
-            : `Could not remove the warehouse (${res.status}).`;
+            : `Impossible de supprimer l’entrepôt (${res.status}).`;
     return { status: 'error', message };
   }
   return { status: 'ok', data: { ok: true } };
@@ -4842,7 +4842,7 @@ export async function postErpDescribe(
   } catch {
     return {
       status: 'error',
-      message: 'Network error while generating the description.',
+      message: 'Erreur réseau lors de la génération de la description.',
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -4855,16 +4855,16 @@ export async function postErpDescribe(
     // 502 = the AI planner is down/misbehaving → a soft, retryable message.
     const message =
       res.status === 502
-        ? 'The description generator is unavailable right now — please try again in a moment.'
+        ? 'Le générateur de description est indisponible pour le moment — veuillez réessayer dans un instant.'
         : res.status === 401
-          ? 'Please sign in again.'
+          ? 'Veuillez vous reconnecter.'
           : res.status === 403
-            ? 'This shop belongs to another account.'
+            ? 'Cette boutique appartient à un autre compte.'
             : res.status === 404
-              ? 'That product was not found — refresh and retry.'
+              ? 'Ce produit est introuvable — actualisez et réessayez.'
               : typeof data?.message === 'string'
                 ? (data.message as string)
-                : `Could not generate a description (${res.status}).`;
+                : `Impossible de générer une description (${res.status}).`;
     return { status: 'error', message };
   }
   const description =
@@ -4872,7 +4872,7 @@ export async function postErpDescribe(
   if (!description) {
     return {
       status: 'error',
-      message: 'The generator returned an empty description — please retry.',
+      message: 'Le générateur a renvoyé une description vide — veuillez réessayer.',
     };
   }
   return {
@@ -4928,7 +4928,7 @@ export async function fetchChargilyStatus(
   } catch {
     return {
       status: 'error',
-      message: 'Network error while loading payment settings.',
+      message: 'Erreur réseau lors du chargement des paramètres de paiement.',
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -4941,12 +4941,12 @@ export async function fetchChargilyStatus(
   if (!res.ok) {
     const message =
       res.status === 401
-        ? 'Please sign in to view payment settings.'
+        ? 'Veuillez vous connecter pour voir les paramètres de paiement.'
         : res.status === 403
-          ? 'This shop belongs to another account.'
+          ? 'Cette boutique appartient à un autre compte.'
           : typeof data?.message === 'string'
             ? (data.message as string)
-            : `Could not load payment settings (${res.status}).`;
+            : `Impossible de charger les paramètres de paiement (${res.status}).`;
     return { status: 'error', message };
   }
   const mode: ChargilyMode = data?.mode === 'live' ? 'live' : 'test';
@@ -4984,7 +4984,7 @@ export async function putChargily(
   } catch {
     return {
       status: 'error',
-      message: 'Network error — payment settings were not saved.',
+      message: 'Erreur réseau — les paramètres de paiement n’ont pas été enregistrés.',
     };
   }
   const data = (await res.json().catch(() => null)) as
@@ -4998,14 +4998,14 @@ export async function putChargily(
       res.status === 400
         ? typeof data?.message === 'string'
           ? (data.message as string)
-          : 'That API secret looks invalid — please check it and try again.'
+          : 'Cette clé secrète API semble invalide — veuillez la vérifier et réessayer.'
         : res.status === 401
-          ? 'Please sign in again.'
+          ? 'Veuillez vous reconnecter.'
           : res.status === 403
-            ? 'This shop belongs to another account.'
+            ? 'Cette boutique appartient à un autre compte.'
             : typeof data?.message === 'string'
               ? (data.message as string)
-              : `Could not save payment settings (${res.status}).`;
+              : `Impossible d’enregistrer les paramètres de paiement (${res.status}).`;
     return { status: 'error', message };
   }
   const mode: ChargilyMode = data?.mode === 'live' ? 'live' : body.mode;
@@ -5033,22 +5033,22 @@ export const PIN_RE = /^[0-9]{4,8}$/;
 
 export function validateStoreName(v: string): string | null {
   const name = v.trim();
-  if (name.length === 0) return 'Enter a store name.';
-  if (name.length > 60) return 'Keep the name under 60 characters.';
+  if (name.length === 0) return 'Entrez un nom de boutique.';
+  if (name.length > 60) return 'Limitez le nom à 60 caractères.';
   return null;
 }
 export function validateWhatsapp(v: string): string | null {
   if (!WHATSAPP_RE.test(v)) {
-    return 'Digits only, 8–15, no “+” (e.g. 213600000000).';
+    return 'Chiffres uniquement, 8 à 15, sans « + » (ex. 213600000000).';
   }
   return null;
 }
 export function validateAccent(v: string): string | null {
-  if (!ACCENT_RE.test(v)) return 'Use a hex color like #0f766e.';
+  if (!ACCENT_RE.test(v)) return 'Utilisez une couleur hexadécimale comme #0f766e.';
   return null;
 }
 export function validatePin(v: string): string | null {
-  if (!PIN_RE.test(v)) return 'Use 4–8 digits.';
+  if (!PIN_RE.test(v)) return 'Utilisez 4 à 8 chiffres.';
   return null;
 }
 
@@ -5267,7 +5267,7 @@ export const Skeleton = ({
 
 // A labeled kind badge (Shop / ERP / App) used in the management list.
 export const KindBadge = ({ kind }: { kind?: AppKind }) => {
-  const label = kind === 'shop' ? 'Shop' : kind === 'erp' ? 'ERP' : 'App';
+  const label = kind === 'shop' ? 'Boutique' : kind === 'erp' ? 'ERP' : 'App';
   const emoji = kind === 'shop' ? '🛍️' : kind === 'erp' ? '📊' : '⚡';
   return (
     <span
