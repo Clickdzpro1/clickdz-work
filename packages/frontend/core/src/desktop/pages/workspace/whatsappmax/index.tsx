@@ -36,6 +36,14 @@ import {
 // Inline styles + no new npm deps + French copy (matches existing conventions).
 // ---------------------------------------------------------------------------
 
+// ── Media-type display labels (i18n) ───────────────────────────────────────
+const MEDIA_LABELS: Record<string, string> = {
+  image: 'Image',
+  video: 'Vidéo',
+  audio: 'Audio',
+  document: 'Document',
+};
+
 // ── Design tokens ──────────────────────────────────────────────────────────
 
 const C = {
@@ -913,7 +921,7 @@ const Composer = ({ chatJid, connected, onDark, onSent, connId }: ComposerProps)
                 }}
                 onClick={() => setMediaKind(k)}
               >
-                {k}
+                {MEDIA_LABELS[k] ?? k}
               </button>
             ))}
           </div>
