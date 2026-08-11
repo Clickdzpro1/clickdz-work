@@ -24,6 +24,7 @@ import {
   Banner,
   btnStyle,
   C,
+  ensureShoperpMotionCss,
   ensureShoperpResponsiveCss,
   fetchAppFeatures,
   fetchErpSummary,
@@ -115,6 +116,7 @@ const ShopErpPage = () => {
 
   useEffect(() => {
     ensureShoperpResponsiveCss();
+    ensureShoperpMotionCss();
   }, []);
 
   useEffect(() => {
@@ -260,7 +262,23 @@ const ShopErpPage = () => {
                     color: C.text,
                   }}
                 >
-                  <span aria-hidden>⚡</span> DzOS
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 11,
+                      background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+                      display: 'grid',
+                      placeItems: 'center',
+                      fontSize: 18,
+                      flexShrink: 0,
+                      boxShadow: '0 2px 8px rgba(30, 150, 235, 0.3)',
+                    }}
+                  >
+                    ⚡
+                  </span>{' '}
+                  DzOS
                 </h1>
                 <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
                   Lancez votre business en ligne — encaissement à la livraison,
@@ -271,15 +289,36 @@ const ShopErpPage = () => {
 
             {state === 'loading' ? (
               <div
+                data-cdz-motion=""
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '28px 4px',
-                  color: C.muted,
+                  flexDirection: 'column',
+                  gap: 16,
+                  padding: '8px 0',
                 }}
               >
-                <Spinner /> Chargement de votre ERP…
+                <div
+                  style={{
+                    borderRadius: 16,
+                    border: `1px solid ${C.border}`,
+                    background: `linear-gradient(135deg, ${C.accentSoft}, transparent)`,
+                    padding: '22px 22px',
+                    display: 'flex',
+                    gap: 18,
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <div style={{ flex: '1 1 320px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div data-cdz-skeleton="" style={{ height: 22, width: '60%', color: C.text }} />
+                    <div data-cdz-skeleton="" style={{ height: 16, width: '90%', color: C.text }} />
+                    <div data-cdz-skeleton="" style={{ height: 16, width: '75%', color: C.text }} />
+                  </div>
+                  <div data-cdz-skeleton="" style={{ height: 44, width: 160, borderRadius: 999, color: C.text }} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, fontSize: 12.5 }}>
+                  <Spinner /> Chargement de votre ERP…
+                </div>
               </div>
             ) : state === 'error' ? (
               <Banner tone="error">
