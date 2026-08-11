@@ -10,7 +10,6 @@ import {
 import {
   Banner,
   C,
-  EmptyNote,
   type ErpOrder,
   fetchErpCollection,
   fmtDZD,
@@ -23,6 +22,7 @@ import {
   orderTotal,
   Panel,
   postOrderStatus,
+  Skeleton,
   Spinner,
   STATUS_COLORS,
   StatusBadge,
@@ -164,16 +164,39 @@ export const OrdersAdmin = ({
 
   if (phase === 'loading') {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '24px 4px',
-          color: C.muted,
-        }}
-      >
-        <Spinner /> Chargement des commandes…
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '4px 0' }}>
+        {/* Status filter chips skeleton */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {[80, 90, 100, 90, 96, 104].map((w, i) => (
+            <div
+              key={i}
+              style={{
+                width: w,
+                height: 30,
+                borderRadius: 999,
+                background: C.panel2,
+                border: `1px solid ${C.border}`,
+                overflow: 'hidden',
+                position: 'relative',
+              }}
+            >
+              <Skeleton rows={1} height={30} />
+            </div>
+          ))}
+        </div>
+        <Skeleton rows={7} height={52} gap={8} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            color: C.muted,
+            fontSize: 12.5,
+          }}
+          role="status"
+        >
+          <Spinner /> Chargement des commandes…
+        </div>
       </div>
     );
   }
@@ -190,6 +213,33 @@ export const OrdersAdmin = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Section header with gradient icon chip */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span
+          aria-hidden
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 15,
+            flexShrink: 0,
+          }}
+        >
+          📦
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: C.text, letterSpacing: '-0.01em' }}>
+            Gestion des commandes
+          </div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>
+            {orders.length} {orders.length === 1 ? 'commande au total' : 'commandes au total'}
+          </div>
+        </div>
+      </div>
+
       {/* Status filter chips */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         <button style={chipStyle(filter === 'all')} onClick={() => setFilter('all')}>
@@ -223,11 +273,35 @@ export const OrdersAdmin = ({
             the header hides (see ORDERS_LIST_CSS). No internal scroll — the
             list is as tall as one page of rows, then the pager takes over. */}
         {visible.length === 0 ? (
-          <EmptyNote>
-            {orders.length === 0
-              ? 'Aucune commande pour le moment — partagez le lien de votre boutique pour commencer à vendre.'
-              : 'Aucune commande ne correspond à ce filtre.'}
-          </EmptyNote>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 10,
+              padding: '32px 16px',
+              textAlign: 'center',
+            }}
+          >
+            <span
+              aria-hidden
+              style={{
+                fontSize: 36,
+                lineHeight: 1,
+                opacity: 0.5,
+              }}
+            >
+              {orders.length === 0 ? '📦' : '🔍'}
+            </span>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.text }}>
+              {orders.length === 0 ? 'Aucune commande pour le moment' : 'Aucune commande ne correspond à ce filtre'}
+            </div>
+            <div style={{ fontSize: 12.5, color: C.muted, maxWidth: 340, lineHeight: 1.5 }}>
+              {orders.length === 0
+                ? 'Partagez le lien de votre boutique pour commencer à recevoir des commandes.'
+                : "Modifiez ou supprimez le filtre de statut pour voir d'autres commandes."}
+            </div>
+          </div>
         ) : (
           <div className="cdz-orders-list">
             <style>{ORDERS_LIST_CSS}</style>
@@ -307,7 +381,22 @@ const OrderRow = ({
       )
     : 0;
   return (
-    <div className="cdz-order-row" style={{ ...orderRowGrid, ...orderRowStyle }}>
+    <div
+      className="cdz-order-row"
+      style={{ ...orderRowGrid, ...orderRowStyle }}
+      onMouseEnter={e => {
+        const el = e.currentTarget as HTMLElement;
+        el.style.background = C.panel2;
+        el.style.borderColor = 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 30%, transparent)';
+        el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.18)';
+      }}
+      onMouseLeave={e => {
+        const el = e.currentTarget as HTMLElement;
+        el.style.background = C.panel;
+        el.style.borderColor = C.border;
+        el.style.boxShadow = 'none';
+      }}
+    >
       <div
         data-col="Réf"
         style={{
@@ -417,11 +506,12 @@ const orderHeadCellStyle: CSSProperties = {
 };
 
 const orderRowStyle: CSSProperties = {
-  padding: '10px',
+  padding: '11px 12px',
   borderRadius: 10,
   border: `1px solid ${C.border}`,
   background: C.panel,
   fontSize: 12.5,
+  transition: 'background 140ms ease, border-color 140ms ease, box-shadow 140ms ease',
 };
 
 const orderCellStyle: CSSProperties = {
