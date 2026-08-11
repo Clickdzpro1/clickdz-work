@@ -954,6 +954,22 @@ export function VpicEditorPanel() {
     return (
       <div style={styles.centerFill}>
         <div style={styles.gatedCard}>
+          {/* Lock icon with gradient treatment matching the editor accent */}
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 52,
+              height: 52,
+              borderRadius: 14,
+              background: 'linear-gradient(135deg, var(--affine-primary-color, #5b8cff) 0%, #06b6d4 100%)',
+              fontSize: 26,
+              boxShadow: '0 6px 20px rgba(91,140,255,0.35)',
+            }}
+          >
+            🔒
+          </span>
           <div style={styles.gatedTitle}>{t('vpic.gatedOffTitle')}</div>
           <div style={styles.gatedBody}>{t('vpic.gatedOffBody')}</div>
         </div>
@@ -974,6 +990,22 @@ export function VpicEditorPanel() {
           </div>
         ) : (
           <div style={styles.emptyState}>
+            {/* Hero icon for the empty state */}
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 56,
+                height: 56,
+                borderRadius: 16,
+                background: 'linear-gradient(135deg, var(--affine-primary-color, #5b8cff) 0%, #06b6d4 100%)',
+                fontSize: 28,
+                boxShadow: '0 6px 20px rgba(91,140,255,0.35)',
+              }}
+            >
+              🖼
+            </span>
             <div style={styles.emptyTitle}>{t('vpic.open')}</div>
             <div style={styles.emptyHint}>{t('vpic.dropHere')}</div>
             <div style={styles.openRow}>
@@ -1553,7 +1585,10 @@ export function VpicEditorPanel() {
             </section>
           </>
         ) : (
-          <div style={styles.railEmpty}>{t('vpic.open')}</div>
+          <div style={styles.railEmpty}>
+            <span style={{ fontSize: 28, opacity: 0.3 }}>🎨</span>
+            {t('vpic.open')}
+          </div>
         )}
       </div>
 
@@ -1663,17 +1698,17 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: '100%',
     maxHeight: '100%',
     objectFit: 'contain',
-    borderRadius: 6,
-    boxShadow: '0 8px 30px rgba(0,0,0,0.35)',
+    borderRadius: 10,
+    boxShadow: '0 12px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)',
     background:
       'repeating-conic-gradient(#2a2f3a 0% 25%, #1c2029 0% 50%) 50% / 20px 20px',
   },
   rail: {
-    flex: '0 0 320px',
-    width: 320,
+    flex: '0 0 324px',
+    width: 324,
     height: '100%',
     overflowY: 'auto',
-    borderInlineStart: '1px solid var(--affine-border-color, #262a35)',
+    borderInlineStart: '1px solid var(--affine-border-color, #1c2029)',
     background: 'var(--affine-background-primary-color, #0b0d12)',
     display: 'flex',
     flexDirection: 'column',
@@ -1690,17 +1725,21 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'var(--affine-background-primary-color, #0b0d12)',
   },
   railEmpty: {
-    padding: 24,
+    padding: '48px 24px',
     textAlign: 'center',
     color: 'var(--affine-text-secondary-color, #8a90a0)',
     fontSize: 13,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 8,
   },
   section: {
-    padding: '12px 12px',
+    padding: '14px 14px',
     borderBottom: '1px solid var(--affine-border-color, #1c2029)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 8,
+    gap: 10,
   },
   sectionHead: {
     display: 'flex',
@@ -1709,11 +1748,14 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
   },
   sectionTitle: {
-    fontSize: 12,
-    fontWeight: 600,
+    fontSize: 11,
+    fontWeight: 700,
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    letterSpacing: '0.07em',
     color: 'var(--affine-text-secondary-color, #8a90a0)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
   },
   sectionSub: {
     fontSize: 11,
@@ -1768,15 +1810,17 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'nowrap',
   },
   primaryBtn: {
-    padding: '6px 14px',
+    padding: '7px 16px',
     fontSize: 12,
-    fontWeight: 600,
-    borderRadius: 7,
+    fontWeight: 700,
+    borderRadius: 8,
     cursor: 'pointer',
     border: '1px solid var(--affine-primary-color, #5b8cff)',
     background: 'var(--affine-primary-color, #5b8cff)',
     color: '#ffffff',
     whiteSpace: 'nowrap',
+    boxShadow: '0 2px 8px rgba(91,140,255,0.35)',
+    transition: 'opacity 150ms ease, box-shadow 150ms ease',
   },
   iconBtn: {
     width: 30,
@@ -1930,47 +1974,54 @@ const styles: Record<string, React.CSSProperties> = {
     color: 'var(--affine-text-secondary-color, #8a90a0)',
   },
   gatedCard: {
-    maxWidth: 420,
-    padding: 28,
+    maxWidth: 440,
+    padding: 36,
     textAlign: 'center',
-    borderRadius: 14,
+    borderRadius: 16,
     border: '1px solid var(--affine-border-color, #262a35)',
     background: 'var(--affine-background-secondary-color, #12141a)',
     display: 'flex',
     flexDirection: 'column',
-    gap: 10,
+    gap: 12,
+    alignItems: 'center',
+    boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
   },
   gatedTitle: {
-    fontSize: 16,
-    fontWeight: 600,
+    fontSize: 18,
+    fontWeight: 700,
     color: 'var(--affine-text-primary-color, #e6e9f0)',
+    letterSpacing: '-0.01em',
   },
   gatedBody: {
     fontSize: 13,
-    lineHeight: 1.6,
+    lineHeight: 1.65,
     color: 'var(--affine-text-secondary-color, #8a90a0)',
+    maxWidth: 320,
   },
   emptyState: {
-    maxWidth: 460,
+    maxWidth: 480,
     width: '100%',
     display: 'flex',
     flexDirection: 'column',
-    gap: 12,
-    padding: 28,
+    gap: 14,
+    padding: 36,
     textAlign: 'center',
-    borderRadius: 14,
-    border: '1px dashed var(--affine-border-color, #262a35)',
+    borderRadius: 16,
+    border: '1.5px dashed var(--affine-border-color, #262a35)',
     background: 'var(--affine-background-primary-color, #0b0d12)',
     alignItems: 'center',
   },
   emptyTitle: {
-    fontSize: 16,
-    fontWeight: 600,
+    fontSize: 17,
+    fontWeight: 700,
     color: 'var(--affine-text-primary-color, #e6e9f0)',
+    letterSpacing: '-0.01em',
   },
   emptyHint: {
-    fontSize: 12,
+    fontSize: 12.5,
     color: 'var(--affine-text-secondary-color, #8a90a0)',
+    lineHeight: 1.6,
+    maxWidth: 320,
   },
   stockPanel: {
     width: '100%',
@@ -1987,11 +2038,12 @@ const styles: Record<string, React.CSSProperties> = {
   stockCell: {
     padding: 0,
     border: '1px solid var(--affine-border-color, #262a35)',
-    borderRadius: 8,
+    borderRadius: 10,
     overflow: 'hidden',
     cursor: 'pointer',
     background: 'transparent',
     aspectRatio: '1 / 1',
+    transition: 'border-color 140ms ease, box-shadow 140ms ease',
   },
   stockImg: {
     width: '100%',
