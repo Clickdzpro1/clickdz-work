@@ -82,19 +82,35 @@ const VoiceStudioPage = () => {
             color: C.text,
           }}
         >
-          <span style={{ fontSize: 16 }}>🎙️</span>
+          {/* Gradient icon chip */}
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 26,
+              height: 26,
+              borderRadius: 8,
+              background: `linear-gradient(135deg, ${C.accent} 0%, color-mix(in srgb, ${C.accent} 60%, #a855f7) 100%)`,
+              fontSize: 13,
+              flexShrink: 0,
+            }}
+          >
+            🎙️
+          </span>
           Studio Vocal
           <span
             style={{
               fontSize: 10,
               fontWeight: 700,
               lineHeight: '15px',
-              padding: '0 6px',
-              borderRadius: 5,
+              padding: '1px 7px',
+              borderRadius: 6,
               letterSpacing: '0.05em',
-              color: C.muted,
-              backgroundColor:
-                'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
+              textTransform: 'uppercase',
+              color: C.accent,
+              background: C.accentSoft,
+              border: `1px solid ${C.accent}30`,
             }}
           >
             béta
@@ -116,6 +132,11 @@ const VoiceStudioPage = () => {
             lineHeight: 1.5,
           }}
         >
+          {/* Subtle page-level gradient wash */}
+          <style>{`
+            @keyframes cdz-voice-page-spin{to{transform:rotate(360deg)}}
+            @keyframes cdz-voice-skel{0%{opacity:.4}50%{opacity:.85}100%{opacity:.4}}
+          `}</style>
           <div
             style={{
               maxWidth: 960,
@@ -123,32 +144,49 @@ const VoiceStudioPage = () => {
               boxSizing: 'border-box',
               margin: '0 auto',
               padding: isPhone
-                ? '16px 12px 32px'
+                ? '20px 14px 40px'
                 : isTablet
-                  ? '20px 16px 40px'
-                  : '28px 24px 48px',
+                  ? '24px 20px 48px'
+                  : '32px 28px 56px',
               display: 'flex',
               flexDirection: 'column',
-              gap: isPhone ? 14 : 20,
+              gap: isPhone ? 16 : 24,
             }}
           >
-            <header
-              style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
-            >
+            {/* Page header */}
+            <header style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <h1
                 style={{
                   margin: 0,
-                  fontSize: 24,
+                  fontSize: isPhone ? 20 : 26,
                   fontWeight: 700,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 10,
+                  gap: 12,
                   color: C.text,
+                  letterSpacing: '-0.01em',
                 }}
               >
-                <span>🎙️</span> Studio Vocal
+                {/* Gradient icon chip — larger hero version */}
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 40,
+                    height: 40,
+                    borderRadius: 12,
+                    background: `linear-gradient(135deg, ${C.accent} 0%, color-mix(in srgb, ${C.accent} 55%, #a855f7) 100%)`,
+                    fontSize: 20,
+                    flexShrink: 0,
+                    boxShadow: `0 4px 16px ${C.accent}40`,
+                  }}
+                >
+                  🎙️
+                </span>
+                Studio Vocal
               </h1>
-              <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
+              <p style={{ margin: 0, color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 560 }}>
                 Composez des narrations multi-voix avec émotion, transcrivez la parole en
                 texte, et générez des voix-off naturelles — tout au même endroit.
               </p>
@@ -162,9 +200,9 @@ const VoiceStudioPage = () => {
               role="tablist"
               style={{
                 display: 'flex',
-                gap: 4,
+                gap: 2,
                 padding: 4,
-                borderRadius: 10,
+                borderRadius: 12,
                 background: C.panel,
                 border: `1px solid ${C.border}`,
                 alignSelf: 'flex-start',
@@ -172,77 +210,76 @@ const VoiceStudioPage = () => {
                 maxWidth: '100%',
                 scrollSnapType: 'x mandatory',
                 WebkitOverflowScrolling: 'touch',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.25)',
               }}
             >
               <TabButton
                 active={tab === 'studio'}
                 onClick={() => setTab('studio')}
+                icon="🎛"
               >
                 Studio
               </TabButton>
               <TabButton
                 active={tab === 'transcribe'}
                 onClick={() => setTab('transcribe')}
+                icon="📝"
               >
                 Transcription
               </TabButton>
               <TabButton
                 active={tab === 'generate'}
                 onClick={() => setTab('generate')}
+                icon="✨"
               >
                 Générer
               </TabButton>
               <TabButton
                 active={tab === 'library'}
                 onClick={() => setTab('library')}
+                icon="🗂"
               >
                 Bibliothèque
               </TabButton>
             </div>
 
             {state === 'loading' ? (
-              <div
-                style={{
-                  padding: '40px 12px',
-                  textAlign: 'center',
-                  color: C.muted,
-                  fontSize: 13,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 10,
-                }}
-              >
-                <PageSpinner /> Chargement du Studio Vocal…
-              </div>
+              <LoadingSkeleton />
             ) : state === 'error' || !caps ? (
               <div
                 style={{
-                  padding: '12px 14px',
-                  borderRadius: 10,
+                  padding: '16px 18px',
+                  borderRadius: 12,
                   fontSize: 13,
                   background: C.errBg,
                   border: `1px solid ${C.errBorder}`,
                   color: C.text,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
                 }}
               >
-                Impossible de charger le Studio Vocal.{' '}
-                <button
-                  type="button"
-                  onClick={() => void load()}
-                  style={{
-                    appearance: 'none',
-                    background: 'none',
-                    border: 'none',
-                    padding: 0,
-                    font: 'inherit',
-                    cursor: 'pointer',
-                    color: C.accent,
-                    textDecoration: 'underline',
-                  }}
-                >
-                  Réessayer
-                </button>
+                <span style={{ fontSize: 18, flexShrink: 0 }}>⚠️</span>
+                <span>
+                  Impossible de charger le Studio Vocal.{' '}
+                  <button
+                    type="button"
+                    onClick={() => void load()}
+                    style={{
+                      appearance: 'none',
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      font: 'inherit',
+                      cursor: 'pointer',
+                      color: C.accent,
+                      textDecoration: 'underline',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Réessayer
+                  </button>
+                </span>
               </div>
             ) : tab === 'studio' ? (
               <StudioTab caps={caps} />
@@ -267,56 +304,129 @@ const VoiceStudioPage = () => {
 const TabButton = ({
   active,
   onClick,
+  icon,
   children,
 }: {
   active: boolean;
   onClick: () => void;
+  icon?: string;
   children: ReactNode;
 }) => {
   const isPhone = useIsNarrow(480);
+  const [hovered, setHovered] = useState(false);
   return (
     <button
       type="button"
       role="tab"
       aria-selected={active}
       onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         appearance: 'none',
         /* >=44 px min-height for comfortable touch target (WCAG 2.5.5). */
         minHeight: 44,
-        padding: isPhone ? '9px 14px' : '7px 18px',
-        borderRadius: 7,
+        padding: isPhone ? '9px 12px' : '8px 16px',
+        borderRadius: 9,
         border: 'none',
         fontSize: 13,
-        fontWeight: 600,
+        fontWeight: active ? 700 : 500,
         cursor: 'pointer',
         flexShrink: 0,
         scrollSnapAlign: 'start',
         whiteSpace: 'nowrap',
-        color: active ? '#fff' : C.muted,
-        background: active ? C.accent : 'transparent',
-        transition: 'background 150ms ease, color 150ms ease',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        color: active ? '#fff' : hovered ? C.text : C.muted,
+        background: active
+          ? `linear-gradient(135deg, ${C.accent} 0%, color-mix(in srgb, ${C.accent} 70%, #7c3aed) 100%)`
+          : hovered
+            ? `color-mix(in srgb, ${C.accent} 10%, transparent)`
+            : 'transparent',
+        boxShadow: active ? `0 2px 8px ${C.accent}50` : 'none',
+        transition: 'background 160ms ease, color 160ms ease, box-shadow 160ms ease, font-weight 120ms ease',
       }}
     >
+      {icon ? (
+        <span style={{ fontSize: 12, opacity: active ? 1 : 0.75 }}>{icon}</span>
+      ) : null}
       {children}
     </button>
   );
 };
 
-const PageSpinner = () => (
-  <span
+/** Skeleton shimmer loader — replaces bare "Chargement…" text. */
+const LoadingSkeleton = () => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <style>
+      {`@keyframes cdz-voice-page-skel{0%{opacity:.35}50%{opacity:.7}100%{opacity:.35}}`}
+    </style>
+    {/* Provider cards skeleton */}
+    <div
+      style={{
+        borderRadius: 13,
+        border: `1px solid ${C.border}`,
+        background: C.panel,
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      <SkeletonBar width={80} height={11} />
+      <div style={{ display: 'flex', gap: 12 }}>
+        <SkeletonBar width="48%" height={64} radius={11} />
+        <SkeletonBar width="48%" height={64} radius={11} />
+      </div>
+      <div style={{ display: 'flex', gap: 12 }}>
+        <SkeletonBar width={160} height={36} radius={8} />
+        <SkeletonBar width={120} height={36} radius={8} />
+      </div>
+    </div>
+    {/* Starters skeleton */}
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {[110, 130, 100, 120].map((w, i) => (
+        <SkeletonBar key={i} width={w} height={34} radius={999} />
+      ))}
+    </div>
+    {/* Segment skeleton */}
+    <div
+      style={{
+        borderRadius: 13,
+        border: `1px solid ${C.border}`,
+        background: C.panel,
+        padding: 15,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      <SkeletonBar width={60} height={22} radius={999} />
+      <SkeletonBar width="100%" height={80} radius={9} />
+      <SkeletonBar width={200} height={32} radius={8} />
+    </div>
+  </div>
+);
+
+const SkeletonBar = ({
+  width,
+  height,
+  radius = 6,
+}: {
+  width: number | string;
+  height: number;
+  radius?: number;
+}) => (
+  <div
     style={{
-      display: 'inline-block',
-      width: 14,
-      height: 14,
-      borderRadius: '50%',
-      border: '2px solid rgba(255,255,255,0.3)',
-      borderTopColor: 'var(--affine-primary-color, #1e96eb)',
-      animation: 'cdz-voice-page-spin 0.7s linear infinite',
+      width,
+      height,
+      borderRadius: radius,
+      background: `color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 14%, transparent)`,
+      animation: 'cdz-voice-page-skel 1.5s ease-in-out infinite',
     }}
-  >
-    <style>{'@keyframes cdz-voice-page-spin{to{transform:rotate(360deg)}}'}</style>
-  </span>
+  />
 );
 
 export const Component = () => {
