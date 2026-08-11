@@ -359,6 +359,7 @@ export const refineInput = style({
 // flight and once it is done (a green download link).
 export const exportRow = style({
   display: 'flex',
+  flexWrap: 'wrap',
   alignItems: 'center',
   gap: 12,
   minHeight: 24,
@@ -388,6 +389,17 @@ export const exportHint = style({
   color: MUTED,
   fontVariantNumeric: 'tabular-nums',
   whiteSpace: 'nowrap',
+});
+
+// Stage + ETA label shown beneath the progress bar while a render is in flight
+// (the coarse phase from the Remotion worker + a computed time-remaining
+// estimate). Muted + tabular so the ETA doesn't jitter as it ticks down.
+export const progressStageLabel = style({
+  fontSize: 11,
+  color: MUTED,
+  fontVariantNumeric: 'tabular-nums',
+  whiteSpace: 'nowrap',
+  marginTop: 4,
 });
 
 export const downloadLink = style({
