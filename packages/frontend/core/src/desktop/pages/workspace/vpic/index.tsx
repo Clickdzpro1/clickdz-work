@@ -136,37 +136,56 @@ const VpicStudioPage = () => {
           }}
         >
           {/* LEFT: product title + subtitle. */}
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              minWidth: 0,
-              lineHeight: 1.2,
-            }}
-          >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            {/* Gradient icon chip for visual anchoring */}
             <span
               style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 28,
+                height: 28,
+                borderRadius: 8,
+                background: 'linear-gradient(135deg, var(--affine-primary-color, #5b8cff) 0%, #06b6d4 100%)',
                 fontSize: 14,
-                fontWeight: 600,
-                color: 'var(--affine-text-primary-color, #e6e9f0)',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
+                flexShrink: 0,
+                boxShadow: '0 2px 8px rgba(91,140,255,0.35)',
               }}
             >
-              {t('vpic.title')}
+              🖼
             </span>
-            <span
+            <div
               style={{
-                fontSize: 11,
-                color: 'var(--affine-text-secondary-color, #8a90a0)',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
+                display: 'flex',
+                flexDirection: 'column',
+                minWidth: 0,
+                lineHeight: 1.2,
               }}
             >
-              {t('vpic.subtitle')}
-            </span>
+              <span
+                style={{
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: 'var(--affine-text-primary-color, #e6e9f0)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {t('vpic.title')}
+              </span>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: 'var(--affine-text-secondary-color, #8a90a0)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {t('vpic.subtitle')}
+              </span>
+            </div>
           </div>
 
           {/* RIGHT: FR / darja language toggle as one segmented control. The
@@ -180,9 +199,12 @@ const VpicStudioPage = () => {
             style={{
               display: 'inline-flex',
               flex: '0 0 auto',
-              borderRadius: 8,
+              borderRadius: 9,
               overflow: 'hidden',
               border: '1px solid var(--affine-border-color, #262a35)',
+              background: 'var(--affine-background-secondary-color, #0e1016)',
+              padding: 3,
+              gap: 2,
             }}
           >
             <button
@@ -190,19 +212,22 @@ const VpicStudioPage = () => {
               aria-pressed={lang === 'fr'}
               onClick={() => setLang('fr')}
               style={{
-                padding: '4px 12px',
+                padding: '4px 14px',
                 fontSize: 12,
-                fontWeight: lang === 'fr' ? 600 : 400,
+                fontWeight: lang === 'fr' ? 700 : 500,
                 cursor: 'pointer',
                 border: 'none',
+                borderRadius: 7,
                 background:
                   lang === 'fr'
-                    ? 'var(--affine-hover-color, #2a2f3a)'
+                    ? 'var(--affine-primary-color, #5b8cff)'
                     : 'transparent',
                 color:
                   lang === 'fr'
-                    ? 'var(--affine-text-primary-color, #e6e9f0)'
+                    ? '#ffffff'
                     : 'var(--affine-text-secondary-color, #8a90a0)',
+                transition: 'background 150ms ease, color 150ms ease',
+                boxShadow: lang === 'fr' ? '0 2px 6px rgba(91,140,255,0.4)' : 'none',
               }}
             >
               FR
@@ -212,21 +237,22 @@ const VpicStudioPage = () => {
               aria-pressed={lang === 'ar'}
               onClick={() => setLang('ar')}
               style={{
-                padding: '4px 12px',
+                padding: '4px 14px',
                 fontSize: 12,
-                fontWeight: lang === 'ar' ? 600 : 400,
+                fontWeight: lang === 'ar' ? 700 : 500,
                 cursor: 'pointer',
                 border: 'none',
-                borderInlineStart:
-                  '1px solid var(--affine-border-color, #262a35)',
+                borderRadius: 7,
                 background:
                   lang === 'ar'
-                    ? 'var(--affine-hover-color, #2a2f3a)'
+                    ? 'var(--affine-primary-color, #5b8cff)'
                     : 'transparent',
                 color:
                   lang === 'ar'
-                    ? 'var(--affine-text-primary-color, #e6e9f0)'
+                    ? '#ffffff'
                     : 'var(--affine-text-secondary-color, #8a90a0)',
+                transition: 'background 150ms ease, color 150ms ease',
+                boxShadow: lang === 'ar' ? '0 2px 6px rgba(91,140,255,0.4)' : 'none',
               }}
             >
               {/* Language endonym (the language's own name), shown literally
