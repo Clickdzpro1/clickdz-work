@@ -159,6 +159,7 @@ export const OpenClawWizard = ({
   // ---- Wizard steps ------------------------------------------------------
   return (
     <Card>
+      <style>{OC_WIZARD_STYLE}</style>
       <StepDots total={FLOW.length} current={stepIdx} />
 
       {step === 'welcome' ? (
@@ -428,9 +429,10 @@ const Card = ({ children }: { children: ReactNode }) => {
         maxWidth: 560,
         margin: '0 auto',
         padding: isPhone ? 16 : 24,
-        borderRadius: 14,
+        borderRadius: 16,
         background: C.panel,
         border: `1px solid ${C.border}`,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
         display: 'flex',
         flexDirection: 'column',
       }}
@@ -451,20 +453,28 @@ const StepShell = ({
   subtitle: string;
   children?: ReactNode;
 }) => (
-  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+  <div className="cdz-oc-wiz-pop" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div
         aria-hidden
         style={{
-          fontSize: 26,
+          width: 36,
+          height: 36,
+          borderRadius: 11,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 16,
           fontFamily: monoFamily,
           fontWeight: 700,
-          color: C.accent,
+          color: '#fff',
+          background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+          flexShrink: 0,
         }}
       >
         {glyph}
       </div>
-      <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: C.text }}>
+      <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: C.text, letterSpacing: '-0.01em' }}>
         {title}
       </h2>
       <p
@@ -481,6 +491,13 @@ const StepShell = ({
     {children}
   </div>
 );
+
+// Inline <style> for the step pop-in (reduced-motion safe).
+const OC_WIZARD_STYLE = `
+@keyframes cdz-oc-wiz-pop-in{from{opacity:0;transform:scale(0.92)}to{opacity:1;transform:none}}
+.cdz-oc-wiz-pop{animation:cdz-oc-wiz-pop-in 240ms ease both}
+@media (prefers-reduced-motion: reduce){.cdz-oc-wiz-pop{animation:none !important}}
+`;
 
 const StepDots = ({ total, current }: { total: number; current: number }) => (
   <div style={{ display: 'flex', gap: 6, marginBottom: 20 }}>
@@ -666,7 +683,19 @@ const DoneCard = ({
           textAlign: 'center',
         }}
       >
-        <div style={{ fontSize: 40 }} aria-hidden>
+        <div
+          aria-hidden
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 14,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 26,
+            background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+          }}
+        >
           🎉
         </div>
         <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: C.text }}>
