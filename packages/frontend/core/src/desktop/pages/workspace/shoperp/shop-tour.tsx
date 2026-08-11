@@ -488,6 +488,7 @@ export const ShopTour = ({
   // measured rect. Keep it portalled.
   return createPortal(
     <div style={rootStyle} role="dialog" aria-modal="true" aria-label={lbl.skipAria}>
+      <style>{'@keyframes cdz-pop-in{from{opacity:0;transform:scale(0.96) translateY(8px)}to{opacity:1;transform:none}}'}</style>
       {/* Backdrop — four dark panels framing the spotlight (a cut-out effect
           without SVG masks). Clicking any panel advances (fast-forward feel);
           the underlying UI is covered so no accidental tab clicks leak. When
@@ -544,13 +545,14 @@ export const ShopTour = ({
           boxSizing: 'border-box',
           background: C.panel,
           border: '1px solid ' + C.border,
-          borderRadius: 14,
+          borderRadius: 16,
           padding: 16,
-          boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+          boxShadow: '0 16px 48px rgba(0,0,0,0.55)',
           pointerEvents: 'auto',
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
+          animation: 'cdz-pop-in 220ms cubic-bezier(0.2,0,0,1)',
         }}
         onClick={e => e.stopPropagation()}
       >
