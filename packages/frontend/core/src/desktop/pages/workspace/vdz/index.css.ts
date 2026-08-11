@@ -699,6 +699,21 @@ export const toolZoomLabel = style({
   textAlign: 'center',
 });
 
+// Compact stage + ETA label shown beside the Export button while a render is in
+// flight (the coarse phase from the Remotion worker + a computed time-remaining
+// estimate). Monospaced + tabular so the ETA doesn't jitter as it ticks down.
+export const exportStageLabel = style({
+  fontFamily:
+    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  fontSize: 11,
+  color: textDim,
+  fontVariantNumeric: 'tabular-nums',
+  whiteSpace: 'nowrap',
+  maxWidth: 240,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
 // ---- Lanes: fixed label column + shared horizontal scroll container -----
 export const lanesViewport = style({
   display: 'flex',
