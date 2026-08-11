@@ -2,9 +2,34 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useAiPulse } from '../../../../modules/vdz/use-ai-pulse';
 import { useVdzCompose } from '../../../../modules/vdz/use-vdz-compose';
-import { useVdzExport } from '../../../../modules/vdz/use-vdz-export';
+import {
+  useVdzExport,
+  type VdzExportStage,
+} from '../../../../modules/vdz/use-vdz-export';
 import { AiPulseTicker } from './ai-pulse-ticker';
 import * as styles from './generate-panel.css';
+
+/**
+ * French stage label for the coarse render phase (mirrors the toolbar helper).
+ * The Remotion worker reports `bundling` / `rendering`; the Classic tier reports
+ * neither, so `null` falls back to a generic "rendering" label.
+ */
+function exportStageLabel(stage: VdzExportStage): string {
+  if (stage === 'bundling') return 'Préparation du rendu…';
+  if (stage === 'rendering') return 'Rendu des images…';
+  return 'Rendu en cours…';
+}
+
+/** Format an ETA (seconds remaining) as a compact French string. */
+function formatEta(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '';
+  const total = Math.round(seconds);
+  if (total < 1) return '≈ 0s restantes';
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  if (mins > 0) return `≈ ${mins}m ${secs}s restantes`;
+  return `≈ ${secs}s restantes`;
+}
 
 /**
  * Vdz Studio — AI Video Generator panel.
@@ -73,6 +98,8 @@ export const VdzGeneratePanel = ({
     error: exportError,
     fileUrl: exportFileUrl,
     unavailable: exportUnavailable,
+    stage: exportStage,
+    etaSeconds: exportEtaSeconds,
     start: startExport,
     reset: resetExport,
   } = useVdzExport();
@@ -451,6 +478,12 @@ export const VdzGeneratePanel = ({
                   />
                 </div>
                 <span className={styles.exportHint}>{exportPct}%</span>
+                <span className={styles.progressStageLabel}>
+                  {exportStageLabel(exportStage)}
+                  {exportEtaSeconds != null
+                    ? ` ${formatEta(exportEtaSeconds)}`
+                    : ''}
+                </span>
               </>
             ) : exportStatus === 'done' && exportFileUrl ? (
               <a
