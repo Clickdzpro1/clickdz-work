@@ -3,7 +3,7 @@
 // Same integration pattern as SlidePro: embed via iframe.
 
 import { useCallback, useEffect, useState } from 'react';
-import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
+import { Banner, btnStyle, C, ensureShoperpResponsiveCss, linkBtnStyle, miniBtnStyle, Spinner } from './shoperp-shared';
 import { provisionApp, withBridgeCode } from './app-provision';
 
 const COURSEPRO_URL_KEY = 'cdz.coursepro.url';
@@ -63,7 +63,22 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   return (
     <div data-cdz-surface="" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: `1px solid ${C.border}`, background: C.panel2, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 20 }}>🎓</span>
+        <span
+          aria-hidden
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            background: 'linear-gradient(135deg, #0d9488, #0f766e)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 18,
+            flexShrink: 0,
+            boxShadow: '0 2px 8px rgba(13, 148, 136, 0.3)',
+          }}
+        >
+          🎓
+        </span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>CoursePro</div>
           <div style={{ fontSize: 11.5, color: C.muted }}>LMS IA · Propulsé par ClassroomIO + CDZ AI</div>
@@ -71,10 +86,54 @@ export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: (status === 'ready' || status === 'degraded') ? 'hidden' : 'auto', background: C.bg }}>
-        {status === 'loading' ? <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0 40px 20px' }}><Spinner /> Connexion à CoursePro…</div>
-        : status === 'error' ? (
-          <div style={{ padding: '24px 20px' }}>
-            <Banner tone="error">Impossible de se connecter à CoursePro pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
+        {status === 'loading' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '48px 20px', flex: 1 }}>
+            <span
+              aria-hidden
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, #0d9488, #0f766e)',
+                display: 'grid',
+                placeItems: 'center',
+                fontSize: 26,
+                boxShadow: '0 4px 16px rgba(13, 148, 136, 0.3)',
+              }}
+            >
+              🎓
+            </span>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Connexion à CoursePro…</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: C.muted, fontSize: 12.5 }}>
+              <Spinner /> Préparation de votre plateforme de formation
+            </div>
+          </div>
+        ) : status === 'error' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: '48px 20px', flex: 1, textAlign: 'center' }}>
+            <span
+              aria-hidden
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                background: 'color-mix(in srgb, #ef4444 15%, transparent)',
+                display: 'grid',
+                placeItems: 'center',
+                fontSize: 26,
+              }}
+            >
+              ⚠️
+            </span>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Impossible de se connecter</div>
+            <div style={{ fontSize: 12.5, color: C.muted, maxWidth: 320, lineHeight: 1.5 }}>
+              CoursePro n'est pas disponible pour le moment. Vérifiez votre connexion puis réessayez.
+            </div>
+            <button
+              style={{ ...btnStyle('primary'), marginTop: 4 }}
+              onClick={() => void load()}
+            >
+              ↻ Réessayer
+            </button>
           </div>
         ) : (
           /* Full-bleed layout: the iframe flex-fills the entire remaining
