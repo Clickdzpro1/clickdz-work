@@ -112,11 +112,44 @@ export const LibraryTab = ({ reloadKey = 0 }: LibraryTabProps) => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Header + refresh */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
+        <div
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.07em',
+            textTransform: 'uppercase',
+            color: C.muted,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 20,
+              height: 20,
+              borderRadius: 6,
+              background: `linear-gradient(135deg, ${C.accent} 0%, color-mix(in srgb, ${C.accent} 55%, #06b6d4) 100%)`,
+              fontSize: 11,
+            }}
+          >
+            🗂
+          </span>
           Ma bibliothèque
-        </span>
+        </div>
         {!loading ? (
-          <span style={{ fontSize: 11.5, color: C.muted }}>
+          <span
+            style={{
+              fontSize: 11,
+              color: C.muted,
+              padding: '2px 8px',
+              borderRadius: 999,
+              background: `color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 12%, transparent)`,
+            }}
+          >
             {clips.length} élément{clips.length === 1 ? '' : 's'}
           </span>
         ) : null}
@@ -142,31 +175,29 @@ export const LibraryTab = ({ reloadKey = 0 }: LibraryTabProps) => {
       ) : null}
 
       {loading ? (
-        <div
-          style={{
-            padding: '36px 12px',
-            textAlign: 'center',
-            color: C.muted,
-            fontSize: 13,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 10,
-          }}
-        >
-          <Spinner /> Chargement de la bibliothèque…
-        </div>
+        <LibrarySkeleton />
       ) : clips.length === 0 ? (
         <div
           style={{
-            padding: '36px 12px',
+            padding: '48px 24px',
             textAlign: 'center',
             color: C.muted,
             fontSize: 13,
+            border: `1px dashed ${C.border}`,
+            borderRadius: 14,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 10,
           }}
         >
-          Aucun élément dans la bibliothèque. Générez un clip ou sauvegardez
-          une transcription pour la retrouver ici.
+          <span style={{ fontSize: 32, opacity: 0.4 }}>🗂</span>
+          <span style={{ fontWeight: 600, color: C.text, fontSize: 14 }}>
+            Bibliothèque vide
+          </span>
+          <span style={{ maxWidth: 320 }}>
+            Générez un clip ou sauvegardez une transcription pour le retrouver ici.
+          </span>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -174,13 +205,15 @@ export const LibraryTab = ({ reloadKey = 0 }: LibraryTabProps) => {
             <div
               key={item.id}
               style={{
-                borderRadius: 12,
+                borderRadius: 14,
                 border: `1px solid ${C.border}`,
                 background: C.panel,
-                padding: 14,
+                padding: 16,
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 10,
+                boxShadow: '0 1px 4px rgba(0,0,0,0.15)',
+                transition: 'border-color 140ms ease, box-shadow 140ms ease',
               }}
             >
               <div
@@ -281,42 +314,85 @@ const ActionButton = ({
   disabled?: boolean;
   onClick: () => void;
   children: ReactNode;
-}) => (
-  <button
-    type="button"
-    disabled={disabled}
-    onClick={onClick}
-    style={{
-      appearance: 'none',
-      padding: '5px 11px',
-      minHeight: 40,
-      borderRadius: 7,
-      border: `1px solid ${C.border}`,
-      background: 'transparent',
-      color: disabled ? C.muted : C.text,
-      fontSize: 12,
-      fontWeight: 600,
-      cursor: disabled ? 'not-allowed' : 'pointer',
-      opacity: disabled ? 0.5 : 1,
-      transition: 'background 140ms ease',
-    }}
-  >
-    {children}
-  </button>
-);
+}) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        appearance: 'none',
+        padding: '6px 13px',
+        minHeight: 40,
+        borderRadius: 8,
+        border: `1px solid ${hovered && !disabled ? C.accent + '70' : C.border}`,
+        background: hovered && !disabled
+          ? `color-mix(in srgb, ${C.accent} 8%, transparent)`
+          : 'transparent',
+        color: disabled ? C.muted : hovered ? C.accent : C.text,
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        transition: 'background 140ms ease, border-color 140ms ease, color 140ms ease',
+      }}
+    >
+      {children}
+    </button>
+  );
+};
 
-const Spinner = () => (
-  <span
-    style={{
-      display: 'inline-block',
-      width: 11,
-      height: 11,
-      borderRadius: '50%',
-      border: '2px solid rgba(255,255,255,0.35)',
-      borderTopColor: '#fff',
-      animation: 'cdz-voice-lib-spin 0.7s linear infinite',
-    }}
-  >
-    <style>{'@keyframes cdz-voice-lib-spin{to{transform:rotate(360deg)}}'}</style>
-  </span>
+const LibrarySkeleton = () => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <style>{'@keyframes cdz-lib-skel{0%{opacity:.35}50%{opacity:.75}100%{opacity:.35}}'}</style>
+    {[1, 2, 3].map(i => (
+      <div
+        key={i}
+        style={{
+          borderRadius: 12,
+          border: `1px solid ${C.border}`,
+          background: C.panel,
+          padding: 14,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div
+            style={{
+              width: 70,
+              height: 20,
+              borderRadius: 999,
+              background: `color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 14%, transparent)`,
+              animation: 'cdz-lib-skel 1.4s ease-in-out infinite',
+              animationDelay: `${i * 0.15}s`,
+            }}
+          />
+          <div
+            style={{
+              flex: 1,
+              height: 14,
+              borderRadius: 6,
+              background: `color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 10%, transparent)`,
+              animation: 'cdz-lib-skel 1.4s ease-in-out infinite',
+              animationDelay: `${i * 0.15 + 0.1}s`,
+            }}
+          />
+        </div>
+        <div
+          style={{
+            height: 34,
+            borderRadius: 6,
+            background: `color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 8%, transparent)`,
+            animation: 'cdz-lib-skel 1.4s ease-in-out infinite',
+            animationDelay: `${i * 0.15 + 0.2}s`,
+          }}
+        />
+      </div>
+    ))}
+  </div>
 );
