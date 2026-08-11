@@ -351,20 +351,39 @@ export const LocalBackupPanel = ({ slug }: { slug: string }) => {
         display: 'flex',
         flexDirection: 'column',
         gap: 14,
-        borderRadius: 12,
+        borderRadius: 14,
         background: C.panel,
         border: `1px solid ${C.border}`,
         padding: 16,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
       }}
     >
-      <div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
-          Sauvegarde locale
-        </div>
-        <div style={{ fontSize: 12.5, color: C.muted, marginTop: 2 }}>
-          Exportez vos données ERP (produits, commandes, stock, clients,
-          fournisseurs, factures, caisse…) dans un seul fichier gardé sur
-          votre machine — utile hors ligne ou en cas de problème serveur.
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span
+          aria-hidden
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            background: 'linear-gradient(135deg, #0f766e, #115e59)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 17,
+            flexShrink: 0,
+            boxShadow: '0 2px 8px rgba(15, 118, 110, 0.25)',
+          }}
+        >
+          💾
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+            Sauvegarde locale
+          </div>
+          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 2, lineHeight: 1.5 }}>
+            Exportez vos données ERP (produits, commandes, stock, clients,
+            fournisseurs, factures, caisse…) dans un seul fichier gardé sur
+            votre machine — utile hors ligne ou en cas de problème serveur.
+          </div>
         </div>
       </div>
 
@@ -404,14 +423,28 @@ export const LocalBackupPanel = ({ slug }: { slug: string }) => {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
-          padding: '10px 12px',
-          borderRadius: 8,
+          gap: 12,
+          padding: '12px 14px',
+          borderRadius: 12,
           background: C.panel2,
           border: `1px solid ${C.border}`,
         }}
       >
-        <span aria-hidden>🛟</span>
+        <span
+          aria-hidden
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 8,
+            background: 'color-mix(in srgb, #0f766e 18%, transparent)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 14,
+            flexShrink: 0,
+          }}
+        >
+          🛟
+        </span>
         <div style={{ flex: 1, fontSize: 12.5, color: C.text }}>
           {autoSnapshot ? (
             <>
