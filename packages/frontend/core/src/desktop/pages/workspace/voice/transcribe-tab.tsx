@@ -488,22 +488,40 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
         <div
           style={{
             flex: '1 1 320px',
-            borderRadius: 12,
+            borderRadius: 14,
             border: `1px solid ${C.border}`,
             background: C.panel,
-            padding: 18,
+            padding: 20,
             display: 'flex',
             flexDirection: 'column',
             gap: 12,
+            boxShadow: '0 1px 6px rgba(0,0,0,0.18)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
-              Live transcription
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 30,
+                height: 30,
+                borderRadius: 9,
+                background: `linear-gradient(135deg, ${C.recording} 0%, #dc2626 100%)`,
+                fontSize: 15,
+                flexShrink: 0,
+              }}
+            >
+              🎙
             </span>
-            <span style={{ fontSize: 11, color: C.muted }}>
-              ~{REALTIME_CHUNK_SECONDS}s chunks
-            </span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                Transcription en direct
+              </div>
+              <div style={{ fontSize: 11, color: C.muted }}>
+                Segments de ~{REALTIME_CHUNK_SECONDS}s
+              </div>
+            </div>
           </div>
 
           {micState === 'unsupported' ? (
@@ -603,21 +621,44 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
         <div
           style={{
             flex: '1 1 320px',
-            borderRadius: 12,
-            border: `1px dashed ${C.border}`,
+            borderRadius: 14,
+            border: `1.5px dashed ${C.border}`,
             background: C.panel,
-            padding: 18,
+            padding: 20,
             display: 'flex',
             flexDirection: 'column',
             gap: 12,
+            boxShadow: '0 1px 6px rgba(0,0,0,0.14)',
           }}
         >
-          <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>
-            Transcribe a file
-          </span>
-          <p style={{ margin: 0, fontSize: 12.5, color: C.muted }}>
-            Upload an audio file (mp3, wav, m4a, webm, ogg…) for a single,
-            high-accuracy transcription with timestamps.
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 30,
+                height: 30,
+                borderRadius: 9,
+                background: `linear-gradient(135deg, ${C.accent} 0%, color-mix(in srgb, ${C.accent} 55%, #06b6d4) 100%)`,
+                fontSize: 15,
+                flexShrink: 0,
+              }}
+            >
+              📂
+            </span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                Transcrire un fichier
+              </div>
+              <div style={{ fontSize: 11, color: C.muted }}>
+                mp3, wav, m4a, webm, ogg…
+              </div>
+            </div>
+          </div>
+          <p style={{ margin: 0, fontSize: 12.5, color: C.muted, lineHeight: 1.5 }}>
+            Téléversez un fichier audio pour une transcription haute précision
+            avec horodatage.
           </p>
           <input
             ref={fileInputRef}
@@ -795,12 +836,21 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
                 color: C.muted,
                 fontSize: 13,
                 textAlign: 'center',
-                padding: '36px 12px',
+                padding: '36px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 8,
               }}
             >
-              {micState === 'recording'
-                ? 'Listening… your words will appear here.'
-                : 'Record from your mic or upload a file to see the transcript.'}
+              <span style={{ fontSize: 28, opacity: 0.35 }}>
+                {micState === 'recording' ? '👂' : '📝'}
+              </span>
+              <span>
+                {micState === 'recording'
+                  ? "À l’écoute… vos mots apparaîtront ici."
+                  : 'Enregistrez via le micro ou téléversez un fichier pour voir la transcription.'}
+              </span>
             </div>
           ) : (
             <>
@@ -863,18 +913,34 @@ export const TranscribeTab = ({ available }: { available: boolean }) => {
       {(analysis || analysisError) ? (
         <div
           style={{
-            borderRadius: 12,
+            borderRadius: 14,
             border: `1px solid ${C.border}`,
             background: C.panel,
-            padding: 16,
+            padding: 18,
             display: 'flex',
             flexDirection: 'column',
             gap: 12,
+            boxShadow: '0 1px 6px rgba(0,0,0,0.16)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-              Analyse
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 24,
+                height: 24,
+                borderRadius: 7,
+                background: 'linear-gradient(135deg, #f59e0b 0%, #f97316 100%)',
+                fontSize: 12,
+                flexShrink: 0,
+              }}
+            >
+              ✦
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+              Analyse IA
             </span>
             {analysis?.language ? (
               <span
@@ -970,29 +1036,36 @@ const ActionButton = ({
   disabled?: boolean;
   onClick: () => void;
   children: ReactNode;
-}) => (
-  <button
-    type="button"
-    disabled={disabled}
-    onClick={onClick}
-    style={{
-      appearance: 'none',
-      padding: '5px 11px',
-      minHeight: 40,
-      borderRadius: 7,
-      border: `1px solid ${C.border}`,
-      background: 'transparent',
-      color: disabled ? C.muted : C.text,
-      fontSize: 12,
-      fontWeight: 600,
-      cursor: disabled ? 'not-allowed' : 'pointer',
-      opacity: disabled ? 0.5 : 1,
-      transition: 'background 140ms ease',
-    }}
-  >
-    {children}
-  </button>
-);
+}) => {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        appearance: 'none',
+        padding: '5px 11px',
+        minHeight: 40,
+        borderRadius: 7,
+        border: `1px solid ${hovered && !disabled ? C.accent + '70' : C.border}`,
+        background: hovered && !disabled
+          ? `color-mix(in srgb, ${C.accent} 8%, transparent)`
+          : 'transparent',
+        color: disabled ? C.muted : hovered ? C.accent : C.text,
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        transition: 'background 140ms ease, border-color 140ms ease, color 140ms ease',
+      }}
+    >
+      {children}
+    </button>
+  );
+};
 
 const Spinner = () => (
   <span
