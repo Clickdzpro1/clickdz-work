@@ -525,25 +525,26 @@ export default function MaskPanel(props: MaskPanelProps): ReactElement {
   const overlay: React.CSSProperties = {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(0,0,0,0.55)',
+    background: 'rgba(0,0,0,0.65)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1000,
     padding: 16,
+    backdropFilter: 'blur(4px)',
   };
   const modal: React.CSSProperties = {
-    background: 'var(--affine-background-primary-color, #fff)',
-    color: 'var(--affine-text-primary-color, #111)',
-    borderRadius: 12,
-    boxShadow: '0 12px 40px rgba(0,0,0,0.35)',
+    background: 'var(--affine-background-primary-color, #0b0d12)',
+    color: 'var(--affine-text-primary-color, #e6e9f0)',
+    borderRadius: 16,
+    boxShadow: '0 20px 60px rgba(0,0,0,0.55), 0 0 0 1px var(--affine-border-color, #262a35)',
     maxWidth: 'min(96vw, 980px)',
     maxHeight: '92vh',
     overflow: 'auto',
-    padding: 20,
+    padding: 24,
     display: 'flex',
     flexDirection: 'column',
-    gap: 14,
+    gap: 16,
   };
   const headerRow: React.CSSProperties = {
     display: 'flex',
@@ -554,7 +555,7 @@ export default function MaskPanel(props: MaskPanelProps): ReactElement {
   const toolRow: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
     flexWrap: 'wrap',
   };
   const canvasWrap: React.CSSProperties = {
@@ -563,12 +564,13 @@ export default function MaskPanel(props: MaskPanelProps): ReactElement {
     height: display.h,
     maxWidth: '100%',
     margin: '0 auto',
-    borderRadius: 8,
+    borderRadius: 12,
     overflow: 'hidden',
     background:
-      'repeating-conic-gradient(#e6e6e6 0% 25%, #f6f6f6 0% 50%) 50% / 20px 20px',
+      'repeating-conic-gradient(#2a2f3a 0% 25%, #1c2029 0% 50%) 50% / 20px 20px',
     touchAction: 'none', // let us own touch gestures for painting
     cursor: imgReady ? 'none' : 'default', // custom circle cursor stands in
+    boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
   };
   const layered: React.CSSProperties = {
     position: 'absolute',
@@ -578,48 +580,65 @@ export default function MaskPanel(props: MaskPanelProps): ReactElement {
     display: 'block',
   };
   const btn: React.CSSProperties = {
-    padding: '8px 14px',
-    borderRadius: 8,
-    border: '1px solid var(--affine-border-color, #ddd)',
-    background: 'var(--affine-background-secondary-color, #f5f5f5)',
+    padding: '8px 16px',
+    borderRadius: 9,
+    border: '1px solid var(--affine-border-color, #262a35)',
+    background: 'var(--affine-background-secondary-color, #12141a)',
     color: 'inherit',
     cursor: 'pointer',
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: 500,
+    transition: 'background 140ms ease, border-color 140ms ease',
   };
   const primaryBtn: React.CSSProperties = {
-    ...btn,
+    padding: '10px 22px',
+    borderRadius: 9,
     border: 'none',
-    background: 'var(--affine-primary-color, #1e6fff)',
+    background: 'var(--affine-primary-color, #5b8cff)',
     color: '#fff',
-    fontWeight: 600,
+    fontWeight: 700,
+    fontSize: 14,
+    cursor: working ? 'not-allowed' : 'pointer',
     opacity: working ? 0.7 : 1,
+    boxShadow: working ? 'none' : '0 3px 12px rgba(91,140,255,0.4)',
+    transition: 'opacity 150ms ease, box-shadow 150ms ease',
   };
   const toggleBtn = (active: boolean): React.CSSProperties => ({
     ...btn,
+    border: `1px solid ${active ? 'var(--affine-primary-color, #5b8cff)' : 'var(--affine-border-color, #262a35)'}`,
     background: active
-      ? 'var(--affine-primary-color, #1e6fff)'
-      : 'var(--affine-background-secondary-color, #f5f5f5)',
+      ? 'var(--affine-primary-color, #5b8cff)'
+      : 'var(--affine-background-secondary-color, #12141a)',
     color: active ? '#fff' : 'inherit',
+    boxShadow: active ? '0 2px 8px rgba(91,140,255,0.35)' : 'none',
   });
   const errorBox: React.CSSProperties = {
-    background: 'rgba(255, 76, 76, 0.12)',
-    color: 'var(--affine-error-color, #d33)',
-    border: '1px solid rgba(255,76,76,0.35)',
-    borderRadius: 8,
-    padding: '10px 12px',
-    fontSize: 14,
+    background: 'rgba(255, 76, 76, 0.10)',
+    color: 'var(--affine-error-color, #ff6b6b)',
+    border: '1px solid rgba(255,76,76,0.30)',
+    borderRadius: 10,
+    padding: '11px 14px',
+    fontSize: 13,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
   };
   const promptInput: React.CSSProperties = {
     flex: 1,
     minWidth: 200,
-    padding: '10px 12px',
-    borderRadius: 8,
-    border: '1px solid var(--affine-border-color, #ddd)',
-    background: 'var(--affine-background-primary-color, #fff)',
+    padding: '10px 14px',
+    borderRadius: 9,
+    border: '1px solid var(--affine-border-color, #262a35)',
+    background: 'var(--affine-background-secondary-color, #0e1016)',
     color: 'inherit',
     fontSize: 14,
+    outline: 'none',
+    transition: 'border-color 150ms ease',
   };
-  const label: React.CSSProperties = { fontSize: 13, opacity: 0.85 };
+  const label: React.CSSProperties = {
+    fontSize: 13,
+    color: 'var(--affine-text-secondary-color, #8a90a0)',
+  };
 
   // Map the typed failure to a pinned, translated message.
   const failMessage =
@@ -644,12 +663,30 @@ export default function MaskPanel(props: MaskPanelProps): ReactElement {
     >
       <div style={modal}>
         <div style={headerRow}>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700 }}>
-              {t('vpic.genFill')}
-            </div>
-            <div style={{ fontSize: 13, opacity: 0.75, marginTop: 2 }}>
-              {t('vpic.genFillHint')}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 38,
+                height: 38,
+                borderRadius: 11,
+                background: 'linear-gradient(135deg, var(--affine-primary-color, #5b8cff) 0%, #a855f7 100%)',
+                fontSize: 18,
+                flexShrink: 0,
+                boxShadow: '0 4px 14px rgba(91,140,255,0.35)',
+              }}
+            >
+              🎨
+            </span>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: '-0.01em' }}>
+                {t('vpic.genFill')}
+              </div>
+              <div style={{ fontSize: 12.5, color: 'var(--affine-text-secondary-color, #8a90a0)', marginTop: 3 }}>
+                {t('vpic.genFillHint')}
+              </div>
             </div>
           </div>
           <button
