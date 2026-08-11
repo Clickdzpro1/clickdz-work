@@ -540,7 +540,23 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
 
       {/* ---- Global engine controls ---- */}
       <section style={panelCard}>
-        <div style={sectionLabel}>Engine</div>
+        <div style={sectionLabel}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 18,
+              height: 18,
+              borderRadius: 5,
+              background: `linear-gradient(135deg, ${C.accent} 0%, color-mix(in srgb, ${C.accent} 55%, #a855f7) 100%)`,
+              fontSize: 10,
+            }}
+          >
+            ⚡
+          </span>
+          Moteur
+        </div>
 
         {/* Provider cards */}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
@@ -659,8 +675,24 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
       </section>
 
       {/* ---- Smart starters (context-aware) ---- */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <span style={sectionLabel}>✦ Idées pour démarrer</span>
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <span style={sectionLabel}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 18,
+              height: 18,
+              borderRadius: 5,
+              background: `linear-gradient(135deg, #f59e0b 0%, #f97316 100%)`,
+              fontSize: 10,
+            }}
+          >
+            ✦
+          </span>
+          Idées pour démarrer
+        </span>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {starters.map(chip => (
             <button
@@ -677,13 +709,35 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
       </section>
 
       {/* ---- Segment timeline ---- */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+          <div style={sectionLabel}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                borderRadius: 5,
+                background: `linear-gradient(135deg, ${C.accent} 0%, color-mix(in srgb, ${C.accent} 55%, #06b6d4) 100%)`,
+                fontSize: 10,
+              }}
+            >
+              📋
+            </span>
             Segments
-          </span>
-          <span style={{ fontSize: 11.5, color: C.muted }}>
-            {segments.length} · each with its own voice, emotion &amp; speed
+          </div>
+          <span
+            style={{
+              fontSize: 11,
+              color: C.muted,
+              padding: '2px 8px',
+              borderRadius: 999,
+              background: `color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 12%, transparent)`,
+            }}
+          >
+            {segments.length} · voix, émotion &amp; vitesse indépendantes
           </span>
         </div>
 
@@ -787,9 +841,23 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
       {/* ---- History ---- */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-            Recent generations
-          </span>
+          <div style={sectionLabel}>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                borderRadius: 5,
+                background: `linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)`,
+                fontSize: 10,
+              }}
+            >
+              🕓
+            </span>
+            Historique
+          </div>
           <div style={{ flex: 1 }} />
           {history.length ? (
             <button type="button" onClick={clearHistory} style={linkBtn}>
@@ -800,7 +868,8 @@ export const StudioTab = ({ caps }: StudioTabProps) => {
 
         {!history.length ? (
           <div style={emptyBox}>
-            Your last {HISTORY_LIMIT} generations will appear here.
+            <span style={{ fontSize: 24, opacity: 0.5 }}>🕓</span>
+            <span>Vos {HISTORY_LIMIT} dernières générations apparaîtront ici.</span>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1195,21 +1264,25 @@ const CloningNotice = ({ caps }: { caps: VoiceCapabilities }) => {
 // ===========================================================================
 
 const panelCard: CSSProperties = {
-  borderRadius: 13,
+  borderRadius: 14,
   border: `1px solid ${C.border}`,
   background: C.panel,
-  padding: 16,
+  padding: 18,
   display: 'flex',
   flexDirection: 'column',
-  gap: 12,
+  gap: 14,
+  boxShadow: '0 1px 6px rgba(0,0,0,0.2)',
 };
 
 const sectionLabel: CSSProperties = {
   fontSize: 11,
   fontWeight: 700,
-  letterSpacing: '0.06em',
+  letterSpacing: '0.07em',
   textTransform: 'uppercase',
   color: C.muted,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
 };
 
 const fieldCol: CSSProperties = {
@@ -1304,16 +1377,17 @@ const addSegmentBtn: CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   gap: 8,
-  padding: '11px 16px',
+  padding: '12px 20px',
   minHeight: 44,
-  borderRadius: 10,
-  border: `1px dashed ${C.border}`,
-  background: 'transparent',
+  borderRadius: 12,
+  border: `1.5px dashed ${C.accent}60`,
+  background: `color-mix(in srgb, ${C.accent} 5%, transparent)`,
   color: C.accent,
   fontSize: 13,
   fontWeight: 600,
   cursor: 'pointer',
-  transition: 'background 140ms ease',
+  transition: 'background 140ms ease, border-color 140ms ease',
+  width: '100%',
 };
 
 function primaryBtn(enabled: boolean): CSSProperties {
@@ -1411,22 +1485,27 @@ const bannerErr: CSSProperties = {
 };
 
 const emptyBox: CSSProperties = {
-  padding: '22px 12px',
+  padding: '32px 16px',
   textAlign: 'center',
-  fontSize: 12.5,
+  fontSize: 13,
   color: C.muted,
   border: `1px dashed ${C.border}`,
-  borderRadius: 10,
+  borderRadius: 12,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: 8,
 };
 
 const historyRow: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 12,
-  padding: '10px 13px',
-  borderRadius: 9,
+  padding: '11px 14px',
+  borderRadius: 10,
   border: `1px solid ${C.border}`,
   background: C.panel,
+  transition: 'border-color 140ms ease, box-shadow 140ms ease',
 };
 
 const historyText: CSSProperties = {
@@ -1466,7 +1545,8 @@ const IconBtn = ({
   // under the ~40px comfortable-tap threshold); desktop keeps the compact 28px
   // so the segment header row stays dense.
   const isPhone = useIsNarrow(480);
-  const size = isPhone ? 40 : 28;
+  const size = isPhone ? 40 : 30;
+  const [hovered, setHovered] = useState(false);
   return (
     <button
       type="button"
@@ -1474,6 +1554,8 @@ const IconBtn = ({
       aria-label={title}
       disabled={disabled}
       onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         appearance: 'none',
         width: size,
@@ -1481,14 +1563,17 @@ const IconBtn = ({
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        borderRadius: 7,
-        border: `1px solid ${C.border}`,
-        background: 'transparent',
-        color: disabled ? C.muted : C.text,
+        borderRadius: 8,
+        border: `1px solid ${hovered && !disabled ? C.accent + '60' : C.border}`,
+        background: hovered && !disabled
+          ? `color-mix(in srgb, ${C.accent} 10%, transparent)`
+          : 'transparent',
+        color: disabled ? C.muted : hovered ? C.accent : C.text,
         cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.4 : 1,
+        opacity: disabled ? 0.35 : 1,
         padding: 0,
         flexShrink: 0,
+        transition: 'background 140ms ease, border-color 140ms ease, color 140ms ease',
       }}
     >
       {children}
