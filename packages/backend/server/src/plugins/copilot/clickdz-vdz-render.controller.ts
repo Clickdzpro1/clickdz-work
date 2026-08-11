@@ -81,10 +81,13 @@ const MIN_DIMENSION = 320; // px, per side floor
 const MAX_DIMENSION = 4096; // px, per side ceiling (4K+)
 const ALLOWED_FPS = new Set([24, 25, 30, 60]);
 const DEFAULT_FPS = 30;
-// Classic (HTML/headless-Chrome) tier length cap. Raised 120 → 300 in this
-// round (cdz-render's MAX_DURATION_S is raised to match). Over this we reject at
-// the edge with the C2 duration_cap body BEFORE round-tripping to cdz-render.
-const CLASSIC_MAX_SEC = 300;
+// Classic (HTML/headless-Chrome) tier length cap. Env-overridable (default 600s
+// — up from the old hard 300s) so compositions up to 10 min use the FAST Classic
+// tier instead of forcing the slow Remotion worker. Over this we reject at the
+// edge with the C2 duration_cap body BEFORE round-tripping to cdz-render.
+// NOTE: cdz-render's own MAX_DURATION_S must be raised to match (or exceed) this
+// value, or the classic tier will reject the render server-side.
+const CLASSIC_MAX_SEC = Number(process.env.CLASSIC_MAX_SEC || 600);
 
 // ---------------------------------------------------------------------------
 // C3 — signed-URL blob export (worker→app). The Remotion worker has NO app
