@@ -1,5 +1,7 @@
 // ZOOM+ — Video conferencing tab for ClickDz Work
-// Powered by La Suite Meet (LiveKit, MIT license) + CDZ AI for transcription.
+// ZOOM+ — Video conferencing for ClickDz Work (self-hosted La Suite Meet
+// instance on meet.clickdz.ai, MIT license; LiveKit SFU; CDZ AI for post-call
+// transcription/summary).
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
 import { provisionApp } from './app-provision';
@@ -12,7 +14,7 @@ const ZOOMPLUS_URL_KEY = 'cdz.zoomplus.url';
  * bridge-code fallback that used this is removed (Meet's OIDC drops the
  * bridge_code, so the fallback showed a permanent login screen).
  */
-const ZOOMPLUS_INSTANCE_URL = 'https://meet-frontend-production.up.railway.app';
+const ZOOMPLUS_INSTANCE_URL = 'https://meet.clickdz.ai';
 
 // Kept for the localStorage override contract (a self-hoster may still repoint
 // the host). Unused by the load() flow now but referenced by the override path.
@@ -353,7 +355,7 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         <span style={{ fontSize: 20 }}>🎥</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>ZOOM+</div>
-          <div style={{ fontSize: 11.5, color: C.muted }}>Visioconférence · Powered by La Suite Meet + LiveKit</div>
+          <div style={{ fontSize: 11.5, color: C.muted }}>Visioconférence ZOOM+</div>
         </div>
         {status === 'ready' && recordingSupported && recState === 'idle' && (
           <span
