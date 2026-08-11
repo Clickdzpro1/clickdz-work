@@ -278,15 +278,34 @@ export const TemplatePicker = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <style>{tplCardHoverStyle}</style>
       {/* Header / intro copy — business-type framing, not boutique-centric. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
-          Modèles de business
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span
+          aria-hidden
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 17,
+            flexShrink: 0,
+            boxShadow: '0 2px 8px rgba(30, 150, 235, 0.25)',
+          }}
+        >
+          🎨
         </span>
-        <span style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.45 }}>
-          Pharmacie, restaurant, cabinet, mode… choisissez votre type de
-          business.
-        </span>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
+            Modèles de business
+          </span>
+          <span style={{ fontSize: 12.5, color: C.muted, lineHeight: 1.45 }}>
+            Pharmacie, restaurant, cabinet, mode… choisissez votre type de
+            business.
+          </span>
+        </div>
       </div>
 
       {/* Business-type tabs — derived from the catalog data (mapped verticals). */}
@@ -371,6 +390,18 @@ export const TemplatePickerLoading = () => (
 
 // ---- Card ------------------------------------------------------------------
 
+// Scoped hover lift for unselected template cards — inline styles cannot
+// express :hover, so a tiny <style> block handles the shadow/transform.
+const tplCardHoverStyle = `
+[data-cdz-tpl-card]:hover {
+  box-shadow: 0 4px 14px rgba(0,0,0,0.18) !important;
+  transform: translateY(-2px);
+}
+[data-cdz-tpl-card]:active {
+  transform: translateY(0);
+}
+`;
+
 const TemplateCard = ({
   selected,
   onClick,
@@ -398,6 +429,7 @@ const TemplateCard = ({
     type="button"
     aria-pressed={selected}
     onClick={onClick}
+    data-cdz-tpl-card={selected ? '' : undefined}
     style={{
       appearance: 'none',
       display: 'flex',
@@ -405,15 +437,15 @@ const TemplateCard = ({
       alignItems: 'stretch',
       gap: 8,
       padding: 10,
-      borderRadius: 12,
+      borderRadius: 14,
       textAlign: 'left',
       cursor: 'pointer',
       color: C.text,
       background: selected ? C.accentSoft : C.bg,
       border: `1px solid ${selected ? C.accent : C.border}`,
-      boxShadow: selected ? `0 0 0 1px ${C.accent}` : 'none',
+      boxShadow: selected ? `0 0 0 1px ${C.accent}, 0 2px 8px rgba(0,0,0,0.12)` : '0 1px 2px rgba(0,0,0,0.08)',
       transition:
-        'border-color 150ms ease, background 150ms ease, box-shadow 150ms ease',
+        'border-color 150ms ease, background 150ms ease, box-shadow 200ms ease, transform 200ms ease',
       minWidth: 0,
       width: '100%',
       height: '100%',
@@ -425,14 +457,14 @@ const TemplateCard = ({
       style={{
         position: 'relative',
         height: 64,
-        borderRadius: 8,
+        borderRadius: 10,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         fontSize: 26,
         color: dashed ? C.muted : '#fff',
         background: `linear-gradient(135deg, ${gradient[0]}, ${gradient[1]})`,
-        ...(dashed ? { border: `1px dashed ${C.border}` } : {}),
+        ...(dashed ? { border: `1px dashed ${C.border}` } : { boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.15)' }),
       }}
     >
       {glyph}
