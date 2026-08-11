@@ -646,9 +646,9 @@ const IntegrationsPage = () => {
             style={{
               fontSize: 10,
               fontWeight: 700,
-              lineHeight: '15px',
-              padding: '0 6px',
-              borderRadius: 5,
+              lineHeight: '16px',
+              padding: '0 8px',
+              borderRadius: 999,
               letterSpacing: '0.05em',
               color: C.muted,
               backgroundColor:
@@ -674,7 +674,15 @@ const IntegrationsPage = () => {
             lineHeight: 1.5,
           }}
         >
+          <style>{`
+@keyframes cdz-integrations-pop{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.cdz-integrations-pop{animation:cdz-integrations-pop 200ms ease both}
+@media (prefers-reduced-motion: reduce){.cdz-integrations-pop{animation:none !important}}
+.cdz-tk-card{transition:box-shadow 160ms ease,border-color 160ms ease}
+.cdz-tk-card:hover{box-shadow:0 4px 16px rgba(0,0,0,0.2)}
+`}</style>
           <div
+            className="cdz-integrations-pop"
             style={{
               maxWidth: 960,
               margin: '0 auto',
@@ -696,7 +704,23 @@ const IntegrationsPage = () => {
                   color: C.text,
                 }}
               >
-                <span>🔌</span> Intégrations
+                <span
+                  aria-hidden
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 11,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 18,
+                    background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+                    flexShrink: 0,
+                  }}
+                >
+                  🔌
+                </span>{' '}
+                Intégrations
               </h1>
               <p style={{ margin: 0, color: C.muted, fontSize: 13 }}>
                 Connectez ClickDz Work aux outils que vous utilisez déjà. Parcourez le
@@ -799,13 +823,14 @@ const IntegrationsPage = () => {
                       width: '100%',
                       boxSizing: 'border-box',
                       padding: '10px 34px 10px 34px',
-                      borderRadius: 10,
+                      borderRadius: 12,
                       fontSize: 13,
                       fontFamily: 'inherit',
                       color: C.text,
                       background: C.panel,
                       border: `1px solid ${C.border}`,
                       outline: 'none',
+                      transition: 'border-color 160ms ease',
                     }}
                   />
                   {searchInput ? (
@@ -889,6 +914,7 @@ const IntegrationsPage = () => {
                       return (
                         <div
                           key={tk.slug}
+                          className="cdz-tk-card"
                           style={{
                             display: 'flex',
                             flexDirection: 'column',
@@ -983,8 +1009,9 @@ const IntegrationsPage = () => {
                               border: isConnected
                                 ? `1px solid ${C.okBorder}`
                                 : 'none',
-                              borderRadius: 8,
+                              borderRadius: 999,
                               padding: '8px 12px',
+                              minHeight: 40,
                               fontSize: 13,
                               fontWeight: 600,
                               cursor:
@@ -1051,14 +1078,16 @@ const IntegrationsPage = () => {
                         onClick={() => void loadMore()}
                         style={{
                           appearance: 'none',
-                          borderRadius: 8,
+                          borderRadius: 999,
                           padding: '8px 16px',
+                          minHeight: 40,
                           fontSize: 12,
                           fontWeight: 600,
                           cursor: 'pointer',
                           color: C.text,
                           background: 'transparent',
                           border: `1px solid ${C.border}`,
+                          transition: 'border-color 160ms ease',
                         }}
                       >
                         Charger plus
@@ -1087,9 +1116,10 @@ const IntegrationsPage = () => {
                 flexDirection: 'column',
                 gap: 12,
                 padding: 18,
-                borderRadius: 12,
+                borderRadius: 14,
                 background: C.panel,
                 border: `1px solid ${C.border}`,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
               }}
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1104,7 +1134,23 @@ const IntegrationsPage = () => {
                     gap: 8,
                   }}
                 >
-                  <span>▶</span> Exécuter
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 8,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 14,
+                      background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+                      flexShrink: 0,
+                    }}
+                  >
+                    ▶
+                  </span>{' '}
+                  Exécuter
                 </h2>
                 <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>
                   Décrivez ce que vous voulez faire ; l’agent sélectionne et exécute les
@@ -1131,7 +1177,7 @@ const IntegrationsPage = () => {
                   boxSizing: 'border-box',
                   resize: 'vertical',
                   padding: '10px 12px',
-                  borderRadius: 8,
+                  borderRadius: 12,
                   fontSize: 13,
                   fontFamily: 'inherit',
                   lineHeight: 1.5,
@@ -1139,6 +1185,7 @@ const IntegrationsPage = () => {
                   background: C.bg,
                   border: `1px solid ${C.border}`,
                   opacity: !enabled ? 0.55 : 1,
+                  transition: 'border-color 160ms ease',
                 }}
               />
 
@@ -1208,8 +1255,9 @@ const IntegrationsPage = () => {
                   style={{
                     appearance: 'none',
                     border: 'none',
-                    borderRadius: 8,
+                    borderRadius: 999,
                     padding: '9px 18px',
+                    minHeight: 40,
                     fontSize: 13,
                     fontWeight: 700,
                     display: 'inline-flex',
@@ -1219,6 +1267,7 @@ const IntegrationsPage = () => {
                     color: '#fff',
                     background: C.accent,
                     opacity: canRun ? 1 : 0.5,
+                    transition: 'opacity 160ms ease',
                   }}
                 >
                   {running ? (
@@ -1264,7 +1313,7 @@ const IntegrationsPage = () => {
                   <div
                     style={{
                       padding: '14px 16px',
-                      borderRadius: 10,
+                      borderRadius: 12,
                       background: C.accentSoft,
                       border: `1px solid ${C.border}`,
                     }}
@@ -1408,7 +1457,7 @@ const StepRow = ({ step, index }: { step: RunStep; index: number }) => {
   return (
     <div
       style={{
-        borderRadius: 8,
+        borderRadius: 12,
         background: C.bg,
         border: `1px solid ${C.border}`,
         overflow: 'hidden',
@@ -1517,7 +1566,7 @@ const TabBar = ({
       display: 'flex',
       gap: 4,
       padding: 4,
-      borderRadius: 12,
+      borderRadius: 999,
       background: C.panel,
       border: `1px solid ${C.border}`,
       alignSelf: 'flex-start',
@@ -1542,7 +1591,7 @@ const TabBar = ({
             /* 44 px min-height for comfortable touch target (WCAG 2.5.5). */
             minHeight: 44,
             padding: '7px 16px',
-            borderRadius: 8,
+            borderRadius: 999,
             fontSize: 13,
             fontWeight: 600,
             flexShrink: 0,
@@ -1613,7 +1662,23 @@ const FlowList = ({
               gap: 8,
             }}
           >
-            <span>🧭</span> Flux
+            <span
+              aria-hidden
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 8,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 14,
+                background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+                flexShrink: 0,
+              }}
+            >
+              🧭
+            </span>{' '}
+            Flux
           </h2>
           <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>
             Enchaînez vos outils connectés dans une automatisation. Ouvrez-en une pour la modifier sur
@@ -1627,8 +1692,9 @@ const FlowList = ({
           style={{
             appearance: 'none',
             border: 'none',
-            borderRadius: 8,
+            borderRadius: 999,
             padding: '8px 16px',
+            minHeight: 40,
             fontSize: 13,
             fontWeight: 700,
             cursor: 'pointer',
@@ -1637,6 +1703,8 @@ const FlowList = ({
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
+            transition: 'opacity 160ms ease',
+            opacity: 0.9,
           }}
         >
           + Nouveau flux
@@ -1674,29 +1742,51 @@ const FlowList = ({
       ) : flows.length === 0 ? (
         <div
           style={{
-            padding: '24px 16px',
-            borderRadius: 10,
+            padding: '28px 16px',
+            borderRadius: 12,
             fontSize: 13,
             textAlign: 'center',
             background: C.panel,
             border: `1px dashed ${C.border}`,
             color: C.muted,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 12,
           }}
         >
-          Aucun flux pour le moment. Appuyez sur <strong>+ Nouveau flux</strong> pour créer votre première
-          automatisation.
+          <div
+            aria-hidden
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 22,
+              background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+            }}
+          >
+            🧭
+          </div>
+          <div>
+            Aucun flux pour le moment. Appuyez sur <strong>+ Nouveau flux</strong> pour créer votre première
+            automatisation.
+          </div>
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {flows.map(flow => (
             <div
               key={flow.id}
+              className="cdz-tk-card"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 gap: 12,
                 padding: '12px 14px',
-                borderRadius: 10,
+                borderRadius: 12,
                 background: C.panel,
                 border: `1px solid ${C.border}`,
               }}
@@ -1717,7 +1807,7 @@ const FlowList = ({
                       width: '100%',
                       boxSizing: 'border-box',
                       padding: '4px 8px',
-                      borderRadius: 6,
+                      borderRadius: 8,
                       fontSize: 13,
                       fontWeight: 600,
                       fontFamily: 'inherit',
@@ -1725,6 +1815,7 @@ const FlowList = ({
                       background: C.bg,
                       border: `1px solid ${C.accent}`,
                       outline: 'none',
+                      transition: 'border-color 160ms ease',
                     }}
                   />
                 ) : (
@@ -1797,14 +1888,16 @@ const FlowList = ({
 const miniBtnStyle = (danger: boolean): CSSProperties => ({
   appearance: 'none',
   flexShrink: 0,
-  borderRadius: 8,
+  borderRadius: 999,
   padding: '6px 12px',
+  minHeight: 36,
   fontSize: 12,
   fontWeight: 600,
   cursor: 'pointer',
   color: danger ? 'var(--affine-error-color, #eb4b4b)' : C.text,
   background: 'transparent',
   border: `1px solid ${danger ? C.errBorder : C.border}`,
+  transition: 'border-color 160ms ease',
 });
 
 // The flow editor: a rename field + Save/Run/Delete/Back controls above the
@@ -1850,14 +1943,16 @@ const FlowEditor = ({
           onClick={onBack}
           style={{
             appearance: 'none',
-            borderRadius: 8,
-            padding: '7px 12px',
+            borderRadius: 999,
+            padding: '7px 14px',
+            minHeight: 40,
             fontSize: 12,
             fontWeight: 600,
             cursor: 'pointer',
             color: C.text,
             background: 'transparent',
             border: `1px solid ${C.border}`,
+            transition: 'border-color 160ms ease',
           }}
         >
           ← Flux
@@ -1872,7 +1967,7 @@ const FlowEditor = ({
             minWidth: 160,
             boxSizing: 'border-box',
             padding: '8px 12px',
-            borderRadius: 8,
+            borderRadius: 12,
             fontSize: 14,
             fontWeight: 600,
             fontFamily: 'inherit',
@@ -1880,6 +1975,7 @@ const FlowEditor = ({
             background: C.panel,
             border: `1px solid ${C.border}`,
             outline: 'none',
+            transition: 'border-color 160ms ease',
           }}
         />
         <button
@@ -1888,8 +1984,9 @@ const FlowEditor = ({
           onClick={onSave}
           style={{
             appearance: 'none',
-            borderRadius: 8,
+            borderRadius: 999,
             padding: '8px 16px',
+            minHeight: 40,
             fontSize: 13,
             fontWeight: 700,
             cursor: saving || (!dirty && !isNew) ? 'default' : 'pointer',
@@ -1900,6 +1997,7 @@ const FlowEditor = ({
             display: 'inline-flex',
             alignItems: 'center',
             gap: 6,
+            transition: 'opacity 160ms ease',
           }}
         >
           {saving ? (
@@ -1920,8 +2018,9 @@ const FlowEditor = ({
           style={{
             appearance: 'none',
             border: 'none',
-            borderRadius: 8,
+            borderRadius: 999,
             padding: '8px 18px',
+            minHeight: 40,
             fontSize: 13,
             fontWeight: 700,
             cursor: !enabled || running ? 'default' : 'pointer',
@@ -1931,6 +2030,7 @@ const FlowEditor = ({
             display: 'inline-flex',
             alignItems: 'center',
             gap: 8,
+            transition: 'opacity 160ms ease',
           }}
         >
           {running ? (
@@ -1959,6 +2059,7 @@ const FlowEditor = ({
           overflow: 'hidden',
           background: C.bg,
           border: `1px solid ${C.border}`,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
         }}
       >
         <FlowCanvas flow={flow} catalog={catalog} onChange={onChange} />
@@ -2003,7 +2104,7 @@ const Banner = ({
     <div
       style={{
         padding: '12px 14px',
-        borderRadius: 10,
+        borderRadius: 12,
         fontSize: 13,
         background: map.bg,
         border: `1px solid ${map.border}`,
