@@ -305,9 +305,11 @@ export const TeamPanel = ({
         </Panel>
       ) : disabled ? (
         <Panel title="Équipe">
-          <div style={{ textAlign: 'center', padding: '22px 12px' }}>
-            <div style={{ fontSize: 30, marginBottom: 8 }}>🕒</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
+          <div style={{ textAlign: 'center', padding: '32px 12px' }}>
+            <div aria-hidden style={{ width: 56, height: 56, borderRadius: 16, display: 'grid', placeItems: 'center', fontSize: 26, margin: '0 auto 12px', background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))', border: `1px solid ${C.border}` }}>
+              🕒
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
               Activation en attente
             </div>
             <div style={{ ...hintStyle, maxWidth: 420, margin: '6px auto 0' }}>
@@ -596,12 +598,13 @@ const TokenModal = ({
         position: 'fixed',
         inset: 0,
         zIndex: 1000,
-        background: 'rgba(0,0,0,0.5)',
+        background: 'rgba(0,0,0,0.65)',
         display: 'grid',
         placeItems: 'center',
         padding: 20,
       }}
     >
+      <style>{'@keyframes cdz-pop-in{from{opacity:0;transform:scale(0.96) translateY(8px)}to{opacity:1;transform:none}}'}</style>
       <div
         onClick={e => e.stopPropagation()}
         style={{
@@ -609,9 +612,10 @@ const TokenModal = ({
           maxWidth: 440,
           background: C.panel,
           border: `1px solid ${C.border}`,
-          borderRadius: 14,
+          borderRadius: 16,
           overflow: 'hidden',
-          boxShadow: '0 10px 40px rgba(0,0,0,0.4)',
+          boxShadow: '0 18px 48px rgba(0,0,0,0.5)',
+          animation: 'cdz-pop-in 220ms cubic-bezier(0.2,0,0,1)',
         }}
       >
         <div
@@ -621,11 +625,13 @@ const TokenModal = ({
             background: C.panel2,
             display: 'flex',
             alignItems: 'center',
-            gap: 8,
+            gap: 10,
           }}
         >
-          <span style={{ fontSize: 18 }}>🔑</span>
-          <div style={{ fontSize: 15, fontWeight: 750, color: C.text }}>
+          <span aria-hidden style={{ width: 32, height: 32, borderRadius: 10, display: 'grid', placeItems: 'center', fontSize: 16, flexShrink: 0, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))', border: `1px solid ${C.border}` }}>
+            🔑
+          </span>
+          <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
             {reissue ? 'Nouveau jeton' : 'Jeton d’accès créé'}
           </div>
         </div>
@@ -649,7 +655,7 @@ const TokenModal = ({
                 fontSize: 12.5,
                 wordBreak: 'break-all',
                 padding: '10px 12px',
-                borderRadius: 8,
+                borderRadius: 10,
                 background: C.bg,
                 border: `1px solid ${C.border}`,
                 color: C.text,
