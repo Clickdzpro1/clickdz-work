@@ -12,7 +12,6 @@ import {
   C,
   cancelPurchaseOrder,
   createPurchaseOrder,
-  EmptyNote,
   Field,
   fetchErpInventory,
   fetchPurchaseOrder,
@@ -31,6 +30,7 @@ import {
   type ProcSupplier,
   receivePurchaseOrder,
   saveSupplier,
+  Skeleton,
   Spinner,
   tdStyle,
   thStyle,
@@ -81,8 +81,8 @@ const selectStyle: CSSProperties = {
 const tabletStyle = (active: boolean): CSSProperties => ({
   appearance: 'none',
   cursor: 'pointer',
-  borderRadius: 8,
-  padding: '7px 14px',
+  borderRadius: 999,
+  padding: '7px 16px',
   fontSize: 13,
   fontWeight: 700,
   display: 'inline-flex',
@@ -275,16 +275,29 @@ export const ProcurementPanel = ({
 
   if (phase === 'loading') {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '24px 4px',
-          color: C.muted,
-        }}
-      >
-        <Spinner /> Chargement des fournisseurs…
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '4px 0' }}>
+        {/* Tab-lets skeleton */}
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ width: 150, height: 36, borderRadius: 8, background: C.panel2, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+            <Skeleton rows={1} height={36} />
+          </div>
+          <div style={{ width: 180, height: 36, borderRadius: 8, background: C.panel2, border: `1px solid ${C.border}`, overflow: 'hidden' }}>
+            <Skeleton rows={1} height={36} />
+          </div>
+        </div>
+        <Skeleton rows={5} height={48} gap={8} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            color: C.muted,
+            fontSize: 12.5,
+          }}
+          role="status"
+        >
+          <Spinner /> Chargement des fournisseurs…
+        </div>
       </div>
     );
   }
@@ -300,8 +313,42 @@ export const ProcurementPanel = ({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      {/* Tab-lets + refresh */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Section header with gradient icon chip */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span
+          aria-hidden
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            background: 'linear-gradient(135deg, #e8a33d, #c97d1f)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 15,
+            flexShrink: 0,
+          }}
+        >
+          🏭
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: C.text, letterSpacing: '-0.01em' }}>
+            Fournisseurs & Approvisionnement
+          </div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>
+            {suppliers.length} fournisseur{suppliers.length !== 1 ? 's' : ''} · {orders.length} bon{orders.length !== 1 ? 's' : ''} de commande
+          </div>
+        </div>
+        <button
+          style={miniBtnStyle('secondary', busy)}
+          disabled={busy}
+          onClick={() => void load(true)}
+        >
+          {busy ? <Spinner /> : <span aria-hidden>↻</span>} Actualiser
+        </button>
+      </div>
+
+      {/* Tab-lets */}
       <div
         style={{
           display: 'flex',
@@ -320,14 +367,6 @@ export const ProcurementPanel = ({
             <span style={{ opacity: 0.7 }}>· {orders.length}</span>
           </button>
         </div>
-        <div style={{ flex: 1 }} />
-        <button
-          style={miniBtnStyle('secondary', busy)}
-          disabled={busy}
-          onClick={() => void load(true)}
-        >
-          {busy ? <Spinner /> : <span aria-hidden>↻</span>} Actualiser
-        </button>
       </div>
 
       {readOnly ? (
@@ -446,16 +485,34 @@ const SuppliersTablet = ({
 
       {suppliers.length === 0 ? (
         formFor === null ? (
-          <EmptyNote>
-            Aucun fournisseur — ajoutez votre premier fournisseur (nom + numéro
-            WhatsApp) pour créer des bons de commande. <br />
-            <span style={{ opacity: 0.8 }}>Zid el fournisseur ta3ek.</span>
-          </EmptyNote>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 10,
+              padding: '36px 16px',
+              textAlign: 'center',
+            }}
+          >
+            <span aria-hidden style={{ fontSize: 40, lineHeight: 1, opacity: 0.5 }}>🏭</span>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+              Aucun fournisseur
+            </div>
+            <div style={{ fontSize: 12.5, color: C.muted, maxWidth: 340, lineHeight: 1.5 }}>
+              Ajoutez votre premier fournisseur (nom + numéro WhatsApp) pour créer des bons de commande.
+            </div>
+            {!readOnly ? (
+              <button style={miniBtnStyle('primary', busy)} disabled={busy} onClick={() => setFormFor('')}>
+                + Nouveau fournisseur
+              </button>
+            ) : null}
+          </div>
         ) : null
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-            <thead>
+            <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: C.panel2 }}>
               <tr>
                 <th style={thStyle}>Nom</th>
                 <th style={thStyle}>Téléphone</th>
@@ -469,7 +526,12 @@ const SuppliersTablet = ({
                 const dette = detteLabel(num(s.balance));
                 const phoneDigits = s.phone.replace(/[^0-9]/g, '');
                 return (
-                  <tr key={s.id} style={s.active ? undefined : { opacity: 0.55 }}>
+                  <tr
+                    key={s.id}
+                    style={s.active ? undefined : { opacity: 0.55 }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                  >
                     <td style={tdStyle}>
                       <div
                         style={{
@@ -531,9 +593,39 @@ const SuppliersTablet = ({
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'center', whiteSpace: 'nowrap' }}>
                       {s.active ? (
-                        <span style={{ color: C.okText, fontWeight: 700 }}>Oui</span>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '3px 9px',
+                            borderRadius: 999,
+                            color: 'var(--affine-success-color, #4cae4c)',
+                            background: 'color-mix(in srgb, var(--affine-success-color, #4cae4c) 14%, transparent)',
+                            border: '1px solid color-mix(in srgb, var(--affine-success-color, #4cae4c) 30%, transparent)',
+                          }}
+                        >
+                          ✓ Actif
+                        </span>
                       ) : (
-                        <span style={{ color: C.muted, fontWeight: 700 }}>Non</span>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            padding: '3px 9px',
+                            borderRadius: 999,
+                            color: C.muted,
+                            background: 'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 12%, transparent)',
+                            border: `1px solid color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 25%, transparent)`,
+                          }}
+                        >
+                          Inactif
+                        </span>
                       )}
                     </td>
                     {!readOnly ? (
@@ -788,7 +880,7 @@ const OrdersTablet = ({
             <button
               style={miniBtnStyle('primary', busy || suppliers.length === 0)}
               disabled={busy || suppliers.length === 0}
-              title={suppliers.length === 0 ? 'Ajoutez d’abord un fournisseur' : 'Créer un bon de commande'}
+              title={suppliers.length === 0 ? "Ajoutez d'abord un fournisseur" : "Créer un bon de commande"}
               onClick={() => setCreating(true)}
             >
               + Nouveau bon
@@ -814,18 +906,40 @@ const OrdersTablet = ({
 
         {orders.length === 0 ? (
           !creating ? (
-            <EmptyNote>
-              {suppliers.length === 0 ? (
-                <>Ajoutez d’abord un fournisseur, puis créez votre premier bon de commande.</>
-              ) : (
-                <>Aucun bon de commande — créez-en un pour commander du stock à un fournisseur.</>
-              )}
-            </EmptyNote>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 10,
+                padding: '36px 16px',
+                textAlign: 'center',
+              }}
+            >
+              <span aria-hidden style={{ fontSize: 40, lineHeight: 1, opacity: 0.5 }}>🧾</span>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+                {suppliers.length === 0 ? "Ajoutez d'abord un fournisseur" : 'Aucun bon de commande'}
+              </div>
+              <div style={{ fontSize: 12.5, color: C.muted, maxWidth: 340, lineHeight: 1.5 }}>
+                {suppliers.length === 0
+                  ? "Ajoutez d'abord un fournisseur, puis créez votre premier bon de commande."
+                  : 'Créez un bon de commande pour commander du stock à un fournisseur.'}
+              </div>
+              {suppliers.length > 0 && !readOnly ? (
+                <button
+                  style={miniBtnStyle('primary', busy || suppliers.length === 0)}
+                  disabled={busy || suppliers.length === 0}
+                  onClick={() => setCreating(true)}
+                >
+                  + Nouveau bon de commande
+                </button>
+              ) : null}
+            </div>
           ) : null
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-              <thead>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: C.panel2 }}>
                 <tr>
                   <th style={thStyle}>N°</th>
                   <th style={thStyle}>Date</th>
@@ -837,7 +951,11 @@ const OrdersTablet = ({
               </thead>
               <tbody>
                 {orders.map(po => (
-                  <tr key={po.id}>
+                  <tr
+                    key={po.id}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                  >
                     <td
                       style={{
                         ...tdStyle,
@@ -1089,7 +1207,7 @@ const PurchaseOrderForm = ({
                 placeholder="PU achat"
                 disabled={busy}
                 onChange={e => setLine(i, { unitCost: e.target.value })}
-                title="Prix unitaire d’achat (DZD)"
+                title="Prix unitaire d'achat (DZD)"
               />
               <span
                 style={{
@@ -1486,7 +1604,7 @@ const PurchaseOrderDetail = ({
               {/* Lines with progress bars */}
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                  <thead>
+                  <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: C.panel2 }}>
                     <tr>
                       <th style={thStyle}>Article</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>PU</th>
@@ -1554,8 +1672,11 @@ const PurchaseOrderDetail = ({
                                 style={{
                                   height: '100%',
                                   width: `${pct}%`,
-                                  background: pct >= 100 ? C.okText : C.accent,
-                                  transition: 'width 200ms ease',
+                                  background: pct >= 100
+                                    ? 'linear-gradient(90deg, var(--affine-success-color, #4cae4c), #22c55e)'
+                                    : 'linear-gradient(90deg, #1e96eb, #0e6bbf)',
+                                  transition: 'width 300ms ease',
+                                  borderRadius: 999,
                                 }}
                               />
                             </div>
@@ -1633,8 +1754,8 @@ const PurchaseOrderDetail = ({
               {receiving && warehouses.length === 0 && !po.warehouseId ? (
                 <Banner tone="info">
                   Aucun entrepôt configuré — le stock reçu sera enregistré sur
-                  l’entrepôt par défaut du bon. Ajoutez des entrepôts dans
-                  l’onglet <strong>Inventaire</strong> pour choisir la destination.
+                  l'entrepôt par défaut du bon. Ajoutez des entrepôts dans
+                  l'onglet <strong>Inventaire</strong> pour choisir la destination.
                 </Banner>
               ) : null}
             </>
@@ -1658,7 +1779,7 @@ const PurchaseOrderDetail = ({
                   <button
                     style={btnStyle('primary', disabled || !hasWarehouse)}
                     disabled={disabled || !hasWarehouse}
-                    title={hasWarehouse ? 'Réceptionner du stock' : 'Ajoutez d’abord un entrepôt (onglet Inventaire)'}
+                    title={hasWarehouse ? "Réceptionner du stock" : "Ajoutez d'abord un entrepôt (onglet Inventaire)"}
                     onClick={startReceive}
                   >
                     📥 Réceptionner
