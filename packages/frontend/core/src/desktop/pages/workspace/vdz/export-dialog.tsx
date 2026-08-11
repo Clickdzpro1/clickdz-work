@@ -32,8 +32,9 @@ import * as styles from './export-dialog.css';
  *
  * SUMMARY (read-only): resolution = the timeline canvas W×H; duration = the
  * canonical C1 length as mm:ss; fps = the timeline fps. When Classic is selected
- * and the timeline exceeds the classic cap (300s), an inline warning recommends
- * switching to Remotion (the classic render tier rejects longer compositions).
+ * and the timeline exceeds the classic cap (env-overridable, default 600s), an
+ * inline warning recommends switching to Remotion (the classic render tier
+ * rejects longer compositions).
  *
  * Portaled to document.body so its fixed backdrop escapes the studio header's
  * containing block (mirrors template-gallery.tsx); the backdrop carries the
