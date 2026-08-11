@@ -43,6 +43,7 @@ import {
   Panel,
   postErpSettings,
   postInvoice,
+  Skeleton,
   Spinner,
   tdStyle,
   thStyle,
@@ -139,7 +140,7 @@ const REASON_FR: Record<string, string> = {
   line_price_invalid: 'Prix unitaire invalide sur une ligne.',
   line_tva_invalid: 'Taux de TVA invalide sur une ligne.',
   order_has_no_lines: 'La commande ne contient aucun article.',
-  not_a_draft: 'Ce document n’est plus un brouillon.',
+  not_a_draft: "Ce document n'est plus un brouillon.",
   seller_identity_incomplete:
     'Identité vendeur incomplète — renseignez raison sociale, RC, NIF, NIS et ART dans Réglages avant de valider une facture (obligatoire légalement).',
   already_void: 'Ce document est déjà annulé.',
@@ -190,7 +191,7 @@ export const InvoicingPanel = ({
         <Banner tone="info">
           <strong>Facturation — activation en attente.</strong> Ce module
           (devis, bons de livraison, factures) sera bientôt disponible sur votre
-          espace. Rien à faire de votre côté — il s’activera automatiquement.
+          espace. Rien à faire de votre côté — il s'activera automatiquement.
         </Banner>
       ) : (
         <>
@@ -361,16 +362,20 @@ const InvoiceList = ({
 
       {/* Body ------------------------------------------------------------- */}
       {phase === 'loading' ? (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '22px 4px',
-            color: C.muted,
-          }}
-        >
-          <Spinner /> Chargement des factures…
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Skeleton rows={3} height={36} />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              color: C.muted,
+              fontSize: 12.5,
+            }}
+            role="status"
+          >
+            <Spinner /> Chargement des factures…
+          </div>
         </div>
       ) : phase === 'error' ? (
         <Banner tone="error">
@@ -402,8 +407,15 @@ const InvoiceList = ({
               {rows.map(inv => (
                 <tr
                   key={inv.id}
-                  style={{ cursor: 'pointer' }}
+                  style={{ cursor: 'pointer', transition: 'background 120ms ease' }}
                   onClick={() => onOpen(inv)}
+                  onMouseEnter={e => {
+                    (e.currentTarget as HTMLTableRowElement).style.background =
+                      'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 5%, transparent)';
+                  }}
+                  onMouseLeave={e => {
+                    (e.currentTarget as HTMLTableRowElement).style.background = 'transparent';
+                  }}
                 >
                   <td
                     style={{
@@ -601,7 +613,7 @@ const InvoiceEditor = ({
           tone: 'error',
           text:
             out.reason === 'invoice_not_draft'
-              ? 'Ce document n’est plus un brouillon.'
+              ? "Ce document n'est plus un brouillon."
               : out.reason === 'invoice_already_void'
                 ? 'Ce document est déjà annulé.'
                 : reasonFr(out.reason),
@@ -780,7 +792,7 @@ const InvoiceEditor = ({
       {isLocked ? (
         <Banner tone="info">
           {saved?.status === 'valide'
-            ? 'Document validé (numéro légal attribué) — non modifiable. Vous pouvez l’imprimer, l’annuler ou le convertir.'
+            ? "Document validé (numéro légal attribué) — non modifiable. Vous pouvez l'imprimer, l'annuler ou le convertir."
             : 'Document annulé — conservé pour la traçabilité légale.'}
         </Banner>
       ) : null}
@@ -826,7 +838,7 @@ const InvoiceEditor = ({
           {type === 'facture' &&
           (payment === 'cash' || payment === 'cod') ? (
             <div style={{ ...hintStyle, marginTop: 8 }}>
-              Un timbre fiscal ({INVOICE_TIMBRE_RATE_LABEL}) s’applique aux
+              Un timbre fiscal ({INVOICE_TIMBRE_RATE_LABEL}) s'applique aux
               factures réglées en espèces / à la livraison.
             </div>
           ) : null}
@@ -889,7 +901,7 @@ const InvoiceEditor = ({
                   value={cust.nif || ''}
                   maxLength={60}
                   disabled={!editable}
-                  placeholder="N° d’identification fiscale"
+                  placeholder="N° d'identification fiscale"
                   onChange={e => setCustField('nif', e.target.value)}
                 />
               </Field>
@@ -899,11 +911,11 @@ const InvoiceEditor = ({
                   value={cust.nis || ''}
                   maxLength={60}
                   disabled={!editable}
-                  placeholder="N° d’identification statistique"
+                  placeholder="N° d'identification statistique"
                   onChange={e => setCustField('nis', e.target.value)}
                 />
               </Field>
-              <Field label="Art. (article d’imposition)">
+              <Field label="Art. (article d'imposition)">
                 <input
                   style={inputStyle}
                   value={cust.art || ''}
@@ -1077,7 +1089,7 @@ const InvoiceEditor = ({
               strong
             />
             <div style={{ ...hintStyle, fontSize: 11 }}>
-              Totaux indicatifs — le serveur recalcule à l’enregistrement.
+              Totaux indicatifs — le serveur recalcule à l'enregistrement.
             </div>
           </div>
         </div>
@@ -1209,20 +1221,24 @@ const OrderPicker = ({
       }
     >
       {phase === 'loading' ? (
-        <div
-          style={{
-            display: 'flex',
-            gap: 10,
-            alignItems: 'center',
-            padding: '14px 4px',
-            color: C.muted,
-          }}
-        >
-          <Spinner /> Chargement des commandes…
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <Skeleton rows={2} height={36} />
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              color: C.muted,
+              fontSize: 12.5,
+            }}
+            role="status"
+          >
+            <Spinner /> Chargement des commandes…
+          </div>
         </div>
       ) : phase === 'error' ? (
         <Banner tone="error">
-          Impossible de charger les commandes pour l’instant.
+          Impossible de charger les commandes pour l'instant.
         </Banner>
       ) : orders.length === 0 ? (
         <EmptyNote>Aucune commande à convertir pour le moment.</EmptyNote>
@@ -1242,7 +1258,17 @@ const OrderPicker = ({
             </thead>
             <tbody>
               {orders.map(o => (
-                <tr key={String(o.ref || o.id)}>
+                <tr
+                  key={String(o.ref || o.id)}
+                  style={{ transition: 'background 120ms ease' }}
+                  onMouseEnter={e => {
+                    (e.currentTarget as HTMLTableRowElement).style.background =
+                      'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 5%, transparent)';
+                  }}
+                  onMouseLeave={e => {
+                    (e.currentTarget as HTMLTableRowElement).style.background = 'transparent';
+                  }}
+                >
                   <td
                     style={{
                       ...tdStyle,
@@ -1470,7 +1496,7 @@ const SellerIdentityPanel = ({
                   <Spinner dark /> Enregistrement…
                 </>
               ) : (
-                'Enregistrer l’identité'
+                "Enregistrer l'identité"
               )}
             </button>
           </div>
@@ -1530,8 +1556,8 @@ const ShowInAppPanel = ({
       setNotice({
         tone: 'ok',
         text: enabled
-          ? 'Module Factures retiré de l’app publiée.'
-          : 'Module Factures activé dans l’app publiée. Re-publiez pour l’appliquer.',
+          ? "Module Factures retiré de l'app publiée."
+          : "Module Factures activé dans l'app publiée. Re-publiez pour l'appliquer.",
       });
       onMutated?.();
     } else if (out.status === 'unavailable') {
@@ -1543,7 +1569,7 @@ const ShowInAppPanel = ({
   }, [readOnly, busy, settings, enabled, slug, onMutated, onWritesBlocked]);
 
   return (
-    <Panel title="Afficher dans l’app publiée">
+    <Panel title="Afficher dans l'app publiée">
       <div
         style={{
           display: 'flex',
@@ -1552,6 +1578,21 @@ const ShowInAppPanel = ({
           flexWrap: 'wrap',
         }}
       >
+        <span
+          aria-hidden
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 10,
+            background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 17,
+            flexShrink: 0,
+          }}
+        >
+          🧾
+        </span>
         <div style={{ flex: 1, minWidth: 200, ...hintStyle }}>
           Ajoute un onglet <strong style={{ color: C.text }}>Factures</strong> à
           votre application ERP publiée (le personnel pourra générer des
@@ -1567,7 +1608,7 @@ const ShowInAppPanel = ({
           ) : enabled ? (
             'Activé ✓ — retirer'
           ) : (
-            'Activer dans l’app'
+            "Activer dans l'app"
           )}
         </button>
       </div>
