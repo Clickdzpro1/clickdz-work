@@ -63,11 +63,12 @@ const DEAD_GAP_SECONDS = 0.75;
 const LONG_UNTITLED_SECONDS = 25;
 
 /**
- * The classic HTML export tier caps a composition at 300s (see the render
- * service). Past this we nudge the user toward the Remotion export engine,
- * which has no such ceiling — so a long project can still export cleanly.
+ * The classic HTML export tier caps a composition at 600s by default (see the
+ * render service — env-overridable via CLASSIC_MAX_SEC). Past this we nudge the
+ * user toward the Remotion export engine, which has no such ceiling — so a long
+ * project can still export cleanly.
  */
-const LONG_EXPORT_SECONDS = 300;
+const LONG_EXPORT_SECONDS = 600;
 
 /**
  * Aspect-ratio tolerance. width/height within this fraction of 16:9 (1.777…)
