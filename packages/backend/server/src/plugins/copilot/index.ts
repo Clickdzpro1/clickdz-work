@@ -37,6 +37,13 @@ import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
 import { ClickDzVpicController } from './clickdz-vpic.controller';
 import { ClickDzVoiceAiController } from './clickdz-voice-ai.controller';
 import { ClickDzAudioLibraryController } from './clickdz-audio-library.controller';
+// CDZ: ZOOM+ host-controls + meeting-summary REST controllers. Additive +
+// flag-gated: every route is behind CDZ_ZOOMPLUS_HOST_CONTROLS_ENABLED /
+// CDZ_ZOOMPLUS_ENABLED (default OFF ⇒ a typed 404), so registering the
+// controllers is byte-inert until the owner enables the flags. The services
+// they inject are ALREADY registered as providers above.
+import { ClickDzZoomPlusController } from './clickdz-zoomplus.controller';
+import { ClickDzZoomPlusSummaryController } from './clickdz-zoomplus-summary.controller';
 import { ClickDzAdminConfigResolver } from './clickdz-admin-config.resolver';
 import { ClickDzAdminEntitlementsResolver } from './clickdz-admin-entitlements.resolver';
 import { ClickDzZoomPlusSummaryResolver } from './clickdz-zoomplus-summary.resolver';
@@ -176,6 +183,16 @@ export class CopilotApiModule {}
     // clips). Additive + session-authed; the clip bytes reuse the existing
     // @Public copilot blob GET route for <audio> playback.
     ClickDzAudioLibraryController,
+    // CDZ: ZOOM+ host-controls REST controller (mute/kick/camera/screen-share/
+    // rename/promote/demote/list/end). Additive + flag-gated
+    // (CDZ_ZOOMPLUS_HOST_CONTROLS_ENABLED, default OFF ⇒ typed 404). Injects
+    // the ALREADY-registered ClickDzZoomPlusService provider.
+    ClickDzZoomPlusController,
+    // CDZ: ZOOM+ meeting-summary REST controller (POST /api/v1/zoomplus/summary
+    // + GET /api/v1/zoomplus/summary/enabled). Additive + flag-gated
+    // (CDZ_ZOOMPLUS_ENABLED + CDZ_AI_KEY, default OFF ⇒ {ok:false}). Injects
+    // the ALREADY-registered ClickDzZoomPlusSummaryService provider.
+    ClickDzZoomPlusSummaryController,
     WorkspaceMcpController,
   ],
 })
