@@ -48,6 +48,14 @@ RUN npm run build
 # the app is the only caller; set CONCURRENCY to fit the node's RAM.
 ENV PORT=8787
 ENV CONCURRENCY=1
+# TMPDIR is where Remotion stages the rendered frames + the stitched mp4. The
+# default /tmp is disk-backed and safe for any size. For a ~1.5x temp-I/O
+# speedup, set TMPDIR=/dev/shm via a Railway env var INSTEAD — /dev/shm is a
+# RAM-backed tmpfs. CAVEAT: the Linux /dev/shm default is only 64 MB, which will
+# CRASH a large render (ENOSPC), so only switch to /dev/shm when the container's
+# shm size is raised (e.g. --shm-size=2g / Railway's equivalent). Leaving /tmp
+# here keeps every render safe out of the box.
+ENV TMPDIR=/tmp
 EXPOSE 8787
 
 CMD ["node", "dist/server.js"]
