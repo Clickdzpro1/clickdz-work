@@ -409,9 +409,9 @@ const HermesConsole = ({
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
-                padding: '5px 11px',
-                minHeight: 36,
-                borderRadius: 7,
+                padding: '5px 14px',
+                minHeight: 40,
+                borderRadius: 999,
                 fontSize: 12,
                 fontWeight: 600,
                 fontFamily: 'inherit',
@@ -419,6 +419,7 @@ const HermesConsole = ({
                 color: P.text,
                 background: 'transparent',
                 border: `1px solid ${P.border}`,
+                transition: 'border-color 160ms ease',
               }}
             >
               ← Tableau de bord
