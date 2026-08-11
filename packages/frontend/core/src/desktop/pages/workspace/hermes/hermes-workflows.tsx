@@ -297,7 +297,23 @@ export function HermesWorkflowsPanel({
 
       <div style={headerStyle}>
         <h2 style={headerTitleStyle}>
-          <span aria-hidden>⚡</span> Quick-start workflows
+          <span
+            aria-hidden
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 14,
+              background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+              flexShrink: 0,
+            }}
+          >
+            ⚡
+          </span>{' '}
+          Quick-start workflows
         </h2>
         <p style={headerSubStyle}>
           Pick a task to load it into the composer — then run, tweak, or ask
