@@ -320,15 +320,19 @@ const ProviderCard = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span
               style={{
-                background: '#22c55e',
-                color: '#04210f',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                background: 'color-mix(in srgb, #22c55e 16%, transparent)',
+                color: '#22c55e',
                 borderRadius: 999,
-                padding: '2px 10px',
-                fontSize: 12,
+                padding: '3px 10px',
+                fontSize: 11,
                 fontWeight: 700,
+                border: '1px solid color-mix(in srgb, #22c55e 35%, transparent)',
               }}
             >
-              Connecté
+              ● Connecté
             </span>
             <span style={{ fontSize: 12.5, color: C.muted }}>
               {status.enabled
@@ -474,9 +478,32 @@ export const PaymentsPanel = ({
 }) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={hintStyle}>
-        Connectez votre propre passerelle de paiement. Vos clés sont chiffrées
-        côté serveur et ne sont jamais réaffichées.
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <span
+          aria-hidden
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 17,
+            flexShrink: 0,
+            boxShadow: '0 2px 8px rgba(30, 150, 235, 0.25)',
+          }}
+        >
+          💳
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+            Passerelles de paiement
+          </div>
+          <div style={{ ...hintStyle, marginTop: 2 }}>
+            Connectez votre propre passerelle de paiement. Vos clés sont chiffrées
+            côté serveur et ne sont jamais réaffichées.
+          </div>
+        </div>
       </div>
       {PROVIDERS.map(meta => (
         <ProviderCard key={meta.id} meta={meta} slug={slug} readOnly={readOnly} />
