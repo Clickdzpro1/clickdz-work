@@ -5,6 +5,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
 import { provisionApp } from './app-provision';
+import { ZoomPlusHostPanel } from './zoomplus-host-panel';
+import { ZoomPlusSummaryPanel } from './zoomplus-summary-panel';
 
 const ZOOMPLUS_URL_KEY = 'cdz.zoomplus.url';
 
@@ -462,20 +464,50 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
           /* Full-bleed layout: the iframe flex-fills the entire remaining
              viewport (no fixed heights, no max-width, no rounded/bordered
              "browser window" chrome) so the embedded app fits the studio's
-             resolution exactly. */
-          <iframe
-            src={iframeSrc}
-            style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', display: 'block' }}
-            title="ZOOM+"
-            /* Permissions Policy delegation — REQUIRED for a cross-origin
-               iframe: without `allow`, getUserMedia / getDisplayMedia /
-               navigator.clipboard are blocked silently (no permission
-               prompt ever shows). NOTE: allow-camera/allow-microphone are
-               NOT sandbox tokens — the old sandbox attr silently blocked
-               mic, camera, screen share AND the copy-link clipboard. */
-            allow="camera *; microphone *; display-capture *; clipboard-read *; clipboard-write *; fullscreen *; autoplay *; speaker-selection *; screen-wake-lock *"
-            allowFullScreen
-          />
+             resolution exactly. The host-control + résumé panels mount as a
+             collapsible overlay drawer on top of the iframe (absolute, top-
+             right) so they never reduce the iframe area. Both panels probe
+             their /enabled endpoint on mount and render null when the flag
+             is off — mounting them is always safe. */
+          <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <iframe
+              src={iframeSrc}
+              style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', display: 'block' }}
+              title="ZOOM+"
+              /* Permissions Policy delegation — REQUIRED for a cross-origin
+                 iframe: without `allow`, getUserMedia / getDisplayMedia /
+                 navigator.clipboard are blocked silently (no permission
+                 prompt ever shows). NOTE: allow-camera/allow-microphone are
+                 NOT sandbox tokens — the old sandbox attr silently blocked
+                 mic, camera, screen share AND the copy-link clipboard. */
+              allow="camera *; microphone *; display-capture *; clipboard-read *; clipboard-write *; fullscreen *; autoplay *; speaker-selection *; screen-wake-lock *"
+              allowFullScreen
+            />
+            {/* Collapsible overlay drawer — host controls + résumé.
+                TODO: the real LiveKit room name should come from Meet's room
+                creation API (the iframe loads Meet which creates/joins a room
+                internally). For v1 we pass `slug` as the room identifier; the
+                backend can map it. When the real room name is available, pass
+                it here instead. */}
+            <div
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                maxWidth: 360,
+                minWidth: 280,
+                zIndex: 10,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+                borderBottomLeftRadius: 10,
+                overflow: 'hidden',
+              }}
+            >
+              {/* TODO: replace `slug` with the real LiveKit room name once
+                  Meet's room creation API exposes it. */}
+              <ZoomPlusHostPanel room={slug} />
+              <ZoomPlusSummaryPanel room={slug} />
+            </div>
+          </div>
         )}
       </div>
     </div>
