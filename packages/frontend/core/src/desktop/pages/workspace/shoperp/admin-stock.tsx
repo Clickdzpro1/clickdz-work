@@ -10,7 +10,6 @@ import {
   btnStyle,
   C,
   type DescribeResult,
-  EmptyNote,
   type ErpProduct,
   fetchErpCollection,
   Field,
@@ -25,6 +24,7 @@ import {
   postErpDescribe,
   postErpProduct,
   productTitle,
+  Skeleton,
   Spinner,
   tdStyle,
   thStyle,
@@ -226,16 +226,31 @@ export const StockAdmin = ({
 
   if (phase === 'loading') {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '24px 4px',
-          color: C.muted,
-        }}
-      >
-        <Spinner /> Chargement des produits…
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '4px 0' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 12,
+          }}
+        >
+          <Skeleton rows={1} height={70} />
+          <Skeleton rows={1} height={70} />
+          <Skeleton rows={1} height={70} />
+        </div>
+        <Skeleton rows={6} height={48} gap={8} />
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            color: C.muted,
+            fontSize: 12.5,
+          }}
+          role="status"
+        >
+          <Spinner /> Chargement des produits…
+        </div>
       </div>
     );
   }
@@ -253,16 +268,36 @@ export const StockAdmin = ({
   const lowCount = products.filter(isLowStock).length;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Section header with gradient icon chip */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ flex: 1, fontSize: 12.5, color: C.muted }}>
-          {products.length} {products.length === 1 ? 'produit' : 'produits'}
-          {lowCount > 0 ? (
-            <span style={{ color: '#e8a33d', fontWeight: 700 }}>
-              {' '}
-              · {lowCount} en stock faible
-            </span>
-          ) : null}
+        <span
+          aria-hidden
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            background: 'linear-gradient(135deg, #8b5cf6, #6d28d9)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 15,
+            flexShrink: 0,
+          }}
+        >
+          🏷️
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: C.text, letterSpacing: '-0.01em' }}>
+            Catalogue produits
+          </div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>
+            {products.length} {products.length === 1 ? 'produit' : 'produits'}
+            {lowCount > 0 ? (
+              <span style={{ color: '#e8a33d', fontWeight: 700 }}>
+                {' '}· {lowCount} en stock faible
+              </span>
+            ) : null}
+          </div>
         </div>
         {!showAdd ? (
           <button
@@ -274,6 +309,75 @@ export const StockAdmin = ({
           </button>
         ) : null}
       </div>
+
+      {/* KPI chips */}
+      {products.length > 0 ? (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              borderRadius: 12,
+              padding: '10px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 3,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+            }}
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: C.muted }}>
+              Produits actifs
+            </div>
+            <div style={{ fontSize: 19, fontWeight: 800, color: C.text, letterSpacing: '-0.02em' }}>
+              {products.filter(p => p.active !== false).length}
+            </div>
+          </div>
+          <div
+            style={{
+              background: lowCount > 0 ? 'color-mix(in srgb, #e8a33d 8%, transparent)' : C.panel,
+              border: `1px solid ${lowCount > 0 ? 'color-mix(in srgb, #e8a33d 40%, transparent)' : C.border}`,
+              borderRadius: 12,
+              padding: '10px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 3,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+            }}
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: lowCount > 0 ? '#e8a33d' : C.muted }}>
+              Stock faible
+            </div>
+            <div style={{ fontSize: 19, fontWeight: 800, color: lowCount > 0 ? '#e8a33d' : C.text, letterSpacing: '-0.02em' }}>
+              {lowCount}
+            </div>
+          </div>
+          <div
+            style={{
+              background: C.panel,
+              border: `1px solid ${C.border}`,
+              borderRadius: 12,
+              padding: '10px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 3,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+            }}
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: C.muted }}>
+              Catégories
+            </div>
+            <div style={{ fontSize: 19, fontWeight: 800, color: C.text, letterSpacing: '-0.02em' }}>
+              {new Set(products.map(p => p.category).filter(Boolean)).size || '—'}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {notice ? (
         <Banner tone={notice.tone === 'ok' ? 'ok' : 'error'}>
@@ -292,9 +396,32 @@ export const StockAdmin = ({
 
       <Panel title={`Catalogue · ${products.length}`}>
         {products.length === 0 ? (
-          <EmptyNote>
-            Aucun produit pour le moment — ajoutez votre premier produit pour commencer à vendre.
-          </EmptyNote>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 10,
+              padding: '36px 16px',
+              textAlign: 'center',
+            }}
+          >
+            <span aria-hidden style={{ fontSize: 40, lineHeight: 1, opacity: 0.5 }}>🏷️</span>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>
+              Aucun produit pour le moment
+            </div>
+            <div style={{ fontSize: 12.5, color: C.muted, maxWidth: 320, lineHeight: 1.5 }}>
+              Ajoutez votre premier produit (nom, prix, stock) pour commencer à vendre.
+            </div>
+            {!readOnly ? (
+              <button
+                style={miniBtnStyle('primary')}
+                onClick={() => setShowAdd(true)}
+              >
+                + Ajouter un produit
+              </button>
+            ) : null}
+          </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table
@@ -304,7 +431,7 @@ export const StockAdmin = ({
                 fontSize: 12.5,
               }}
             >
-              <thead>
+              <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: C.panel2 }}>
                 <tr>
                   {['Produit', 'Prix', 'Stock', 'Seuil réappro', 'État', ''].map(
                     (h, i) => (
@@ -385,7 +512,11 @@ const ProductRow = ({
   const inactive = p.active === false;
 
   return (
-    <tr style={inactive ? { opacity: 0.55 } : undefined}>
+    <tr
+      style={inactive ? { opacity: 0.55 } : undefined}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = C.panel2; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+    >
       <td style={tdStyle}>
         <div
           style={{
@@ -450,16 +581,55 @@ const ProductRow = ({
       </td>
       <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
         {inactive ? (
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: C.muted }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 700,
+              padding: '3px 9px',
+              borderRadius: 999,
+              color: C.muted,
+              background: 'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 14%, transparent)',
+              border: `1px solid color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 30%, transparent)`,
+            }}
+          >
             Inactif
           </span>
         ) : isLowStock(p) ? (
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: '#e8a33d' }}>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 700,
+              padding: '3px 9px',
+              borderRadius: 999,
+              color: '#e8a33d',
+              background: 'color-mix(in srgb, #e8a33d 14%, transparent)',
+              border: '1px solid color-mix(in srgb, #e8a33d 35%, transparent)',
+            }}
+          >
             ⚠ Bas
           </span>
         ) : (
-          <span style={{ fontSize: 11.5, fontWeight: 700, color: C.okText }}>
-            OK
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              fontSize: 11,
+              fontWeight: 700,
+              padding: '3px 9px',
+              borderRadius: 999,
+              color: 'var(--affine-success-color, #4cae4c)',
+              background: 'color-mix(in srgb, var(--affine-success-color, #4cae4c) 14%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--affine-success-color, #4cae4c) 30%, transparent)',
+            }}
+          >
+            ✓ OK
           </span>
         )}
       </td>
