@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import type { VdzClip, VdzOp, VdzTimeline } from '../../../../modules/vdz';
+import type { VdzExportStage } from '../../../../modules/vdz/use-vdz-export';
 import { VDZ_RATIO_PRESETS } from '../../../../modules/vdz/presets';
 import * as chrome from './chrome-studio.css';
 import { formatTimecode } from './constants';
@@ -65,6 +66,43 @@ interface ToolbarProps {
   exportUnavailable?: boolean;
   /** A short human status/error line for the export, or null. */
   exportNote?: string | null;
+  /**
+   * The coarse render phase (Remotion worker only; `null` for the Classic tier
+   * or before a stage is reported). Shown beside the Export button as a label.
+   */
+  exportStage?: VdzExportStage;
+  /**
+   * Estimated seconds remaining (Remotion worker only; `null` when there is not
+   * enough progress yet). Shown beside the Export button as "≈ Xm Ys restantes".
+   */
+  exportEtaSeconds?: number | null;
+}
+
+/**
+ * French stage label for the coarse render phase. The Remotion worker reports
+ * `bundling` (loading + measuring the composition) and `rendering` (per-frame
+ * capture + stitch); the Classic tier reports neither, so the caller passes
+ * `null` and we return a generic "rendering" label.
+ */
+function exportStageLabel(stage: VdzExportStage): string {
+  if (stage === 'bundling') return 'Préparation du rendu…';
+  if (stage === 'rendering') return 'Rendu des images…';
+  return 'Rendu en cours…';
+}
+
+/**
+ * Format an ETA (seconds remaining) as a compact French "≈ Xm Ys restantes"
+ * string. Returns an empty string when the value is missing or non-finite so
+ * the caller can render it unconditionally without a guard.
+ */
+function formatEta(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '';
+  const total = Math.round(seconds);
+  if (total < 1) return '≈ 0s restantes';
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  if (mins > 0) return `≈ ${mins}m ${secs}s restantes`;
+  return `≈ ${secs}s restantes`;
 }
 
 /** How close (fractional aspect delta) a preset must be to be the "current"
@@ -616,6 +654,8 @@ export function Toolbar({
   exportFileUrl,
   exportUnavailable,
   exportNote,
+  exportStage,
+  exportEtaSeconds,
 }: ToolbarProps) {
   const exportPct = Math.round((exportProgress ?? 0) * 100);
   return (
@@ -802,6 +842,26 @@ export function Toolbar({
                   {exportBusy ? `⤓ Exporting ${exportPct}%` : '⬇ Export MP4'}
                 </button>
               )
+            ) : null}
+            {onExport && exportBusy ? (
+              <span
+                className={styles.exportStageLabel}
+                title={
+                  exportStage
+                    ? `${exportStageLabel(exportStage)} ${formatEta(
+                        exportEtaSeconds
+                      )}`.trim()
+                    : undefined
+                }
+              >
+                {exportStageLabel(exportStage)}
+                {exportEtaSeconds != null ? (
+                  <>
+                    {' '}
+                    {formatEta(exportEtaSeconds)}
+                  </>
+                ) : null}
+              </span>
             ) : null}
             {onExport && exportNote ? (
               <span
