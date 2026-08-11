@@ -484,7 +484,16 @@ export class ClickDzAppProvisionController {
         process.env.CDZ_ZOOM_IDP_URL ||
         'https://cdz-zoom-idp-production.up.railway.app'
       ).replace(/\/+$/, '');
+      // Self-host transition (ZOOM+ upgrade): when CDZ_ZOOMPLUS_USE_SELF_HOSTED
+      // is enabled, prefer CDZ_ZOOMPLUS_SELF_HOSTED_URL (our branded
+      // meet.clickdz.ai instance) over the legacy CDZ_ZOOMPLUS_URL default. The
+      // flag defaults OFF so the existing Railway-hosted flow is unchanged until
+      // the owner flips it — a zero-risk, per-request rollback path.
+      const selfHostedUrl = process.env.CDZ_ZOOMPLUS_SELF_HOSTED_URL?.trim();
+      const useSelfHosted =
+        process.env.CDZ_ZOOMPLUS_USE_SELF_HOSTED === '1' && !!selfHostedUrl;
       const meetFrontend = (
+        (useSelfHosted && selfHostedUrl) ||
         process.env.CDZ_ZOOMPLUS_URL ||
         'https://meet-frontend-production.up.railway.app'
       ).replace(/\/+$/, '');
