@@ -31,8 +31,11 @@ const C = {
 const CONN_CSS = `
 @keyframes cdz-hermesx-conn-shimmer{0%{opacity:0.4}50%{opacity:0.75}100%{opacity:0.4}}
 .cdz-hermesx-skel{animation:cdz-hermesx-conn-shimmer 1.2s ease-in-out infinite}
+.cdz-hermesx-group{transition:box-shadow 160ms ease}
+.cdz-hermesx-group:hover{box-shadow:0 4px 16px rgba(0,0,0,0.18)}
 @media (prefers-reduced-motion: reduce){
   .cdz-hermesx-skel{animation:none !important;opacity:0.55}
+  .cdz-hermesx-group{transition:none !important}
 }
 `;
 
@@ -143,14 +146,15 @@ const manageLinkStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   minHeight: 36,
-  padding: '6px 12px',
-  borderRadius: 8,
+  padding: '6px 14px',
+  borderRadius: 999,
   fontSize: 12,
   fontWeight: 600,
   color: C.accent,
   background: C.accentSoft,
   border: `1px solid color-mix(in srgb, ${C.accent} 45%, transparent)`,
   whiteSpace: 'nowrap',
+  transition: 'border-color 160ms ease',
 };
 
 const groupStyle: CSSProperties = {
@@ -162,6 +166,9 @@ const groupStyle: CSSProperties = {
   background: C.panel,
   border: `1px solid ${C.border}`,
 };
+
+// className companion for the group card (hover shadow via CONN_CSS)
+const groupClassName = 'cdz-hermesx-group';
 
 const groupTitleStyle: CSSProperties = {
   margin: 0,
@@ -185,7 +192,7 @@ const rowStyle: CSSProperties = {
   justifyContent: 'space-between',
   gap: 10,
   padding: '8px 10px',
-  borderRadius: 8,
+  borderRadius: 10,
   background: C.bg,
   border: `1px solid ${C.border}`,
 };
@@ -293,7 +300,23 @@ export function HermesConnectionsPanel({
       <div style={headerRowStyle}>
         <div style={{ minWidth: 0 }}>
           <h2 style={headerTitleStyle}>
-            <span aria-hidden>🔌</span> Tools &amp; connections
+            <span
+              aria-hidden
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 8,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 14,
+                background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+                flexShrink: 0,
+              }}
+            >
+              🔌
+            </span>{' '}
+            Tools &amp; connections
           </h2>
           <p style={headerSubStyle}>
             {readyCount} of {tools.length} tool{tools.length === 1 ? '' : 's'} ready.
@@ -338,7 +361,7 @@ export function HermesConnectionsPanel({
         const list = groups[kind];
         if (list.length === 0) return null;
         return (
-          <section key={kind} style={groupStyle}>
+          <section key={kind} className={groupClassName} style={groupStyle}>
             <h3 style={groupTitleStyle}>
               <span aria-hidden>{meta.icon}</span> {meta.title}
             </h3>
