@@ -46,12 +46,13 @@ export interface VdzRenderCapabilities {
  * transient network error or an older server without the route). Classic is
  * assumed available (it is the working baseline path), Remotion assumed OFF (so
  * we never present it as a working choice when we don't actually know), and the
- * cap falls back to the well-known classic ceiling (300s).
+ * cap falls back to the well-known classic ceiling (600s — mirrors the backend's
+ * env-overridable CLASSIC_MAX_SEC default).
  */
 export const DEFAULT_RENDER_CAPABILITIES: VdzRenderCapabilities = {
   classic: true,
   remotion: false,
-  classicMaxSec: 300,
+  classicMaxSec: 600,
 };
 
 /**
@@ -91,11 +92,22 @@ export type VdzExportStatus =
   | 'error'
   | 'unavailable';
 
+/**
+ * The coarse render phase, mirrored from the Remotion worker's GET /jobs/:id
+ * `stage` field (additive). The Classic (HTML) tier does not report a stage, so
+ * the hook leaves it `null` there and the UI falls back to a generic label.
+ */
+export type VdzExportStage = 'bundling' | 'rendering' | null;
+
 interface RenderStatusBody {
   status?: string;
   progress?: unknown;
   error?: string;
   size?: unknown;
+  // ADDITIVE (Remotion worker only): the coarse phase + the wall-clock render
+  // start (ms epoch), so the FE can label the stage and compute an ETA.
+  stage?: string;
+  startedAt?: unknown;
 }
 
 async function readError(res: Response): Promise<string> {
@@ -107,7 +119,7 @@ async function readError(res: Response): Promise<string> {
     // rather than leaking the literal token to the user.
     if (data?.error === 'duration_cap') {
       const maxSec = Number(data?.maxSec);
-      const cap = Number.isFinite(maxSec) && maxSec > 0 ? maxSec : 300;
+      const cap = Number.isFinite(maxSec) && maxSec > 0 ? maxSec : 600;
       return `This timeline is longer than the ${cap}s limit for the Classic engine. Switch to Remotion (beta) to export the full length.`;
     }
     const msg =
@@ -151,6 +163,18 @@ export interface UseVdzExport {
   /** true when the service reported itself unconfigured (degrade the UI). */
   unavailable: boolean;
   /**
+   * The coarse render phase (Remotion worker only; `null` for the Classic tier
+   * or before a stage is reported). Lets the UI label what is happening instead
+   * of a bare progress bar.
+   */
+  stage: VdzExportStage;
+  /**
+   * Estimated seconds remaining, or `null` when there is not enough progress to
+   * compute a stable ETA (progress < 2% or no render start time). Updated each
+   * poll from `elapsed / progress - elapsed`.
+   */
+  etaSeconds: number | null;
+  /**
    * Kick off a render for the given composition HTML. `extra` is an OPTIONAL,
    * additive set of fields merged into the POST body. The timeline export hook
    * uses it to send the C2 render-request fields — `engine`, `width`, `height`,
@@ -183,6 +207,10 @@ export function useVdzExport(): UseVdzExport {
   // Set when the failure was a lost job (mid-poll 404 past the retry budget) so
   // the UI can offer a one-click re-enqueue rather than a dead-end error.
   const [lostJob, setLostJob] = useState(false);
+  // The coarse render phase (Remotion worker's `stage` field) + the ETA computed
+  // from the worker's `startedAt` + progress. Both reset on start/reset/cancel.
+  const [stage, setStage] = useState<VdzExportStage>(null);
+  const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
 
   // Guards against setting state after unmount / across a reset.
   const activeRef = useRef(0);
@@ -194,6 +222,8 @@ export function useVdzExport(): UseVdzExport {
     setError(null);
     setFileUrl(null);
     setLostJob(false);
+    setStage(null);
+    setEtaSeconds(null);
   }, []);
 
   // Cancel an in-flight export: invalidate the poll loop and return to idle,
@@ -205,6 +235,8 @@ export function useVdzExport(): UseVdzExport {
     setError(null);
     setFileUrl(null);
     setLostJob(false);
+    setStage(null);
+    setEtaSeconds(null);
   }, []);
 
   // Cancel polling on unmount.
@@ -223,6 +255,8 @@ export function useVdzExport(): UseVdzExport {
     setError(null);
     setFileUrl(null);
     setLostJob(false);
+    setStage(null);
+    setEtaSeconds(null);
 
     // 1) enqueue
     let jobId: string;
@@ -311,9 +345,34 @@ export function useVdzExport(): UseVdzExport {
       const p = Number(body?.progress);
       if (Number.isFinite(p)) setProgress(Math.max(0, Math.min(1, p)));
 
+      // ADDITIVE (Remotion worker): thread the coarse stage + compute an ETA
+      // from the worker's startedAt + progress. The Classic tier sends neither,
+      // so stage stays null and no ETA is shown (the UI falls back to a generic
+      // "rendering" label + bare percentage).
+      const rawStage = typeof body?.stage === 'string' ? body.stage : null;
+      if (rawStage === 'bundling' || rawStage === 'rendering') {
+        if (activeRef.current === token) setStage(rawStage);
+      }
+      const startedAtMs = Number(body?.startedAt);
+      if (
+        activeRef.current === token &&
+        Number.isFinite(startedAtMs) &&
+        startedAtMs > 0 &&
+        p > 0.02
+      ) {
+        const elapsedSec = (Date.now() - startedAtMs) / 1000;
+        if (elapsedSec > 0) {
+          const total = elapsedSec / p;
+          setEtaSeconds(Math.max(0, total - elapsedSec));
+        }
+      } else if (activeRef.current === token && p <= 0.02) {
+        setEtaSeconds(null);
+      }
+
       if (body?.status === 'done') {
         if (activeRef.current === token) {
           setProgress(1);
+          setEtaSeconds(0);
           setFileUrl(cdzApiUrl(`${statusUrl}/file`));
           setStatus('done');
         }
@@ -341,6 +400,8 @@ export function useVdzExport(): UseVdzExport {
     fileUrl,
     unavailable: status === 'unavailable',
     lostJob,
+    stage,
+    etaSeconds,
     start,
     cancel,
     reset,
