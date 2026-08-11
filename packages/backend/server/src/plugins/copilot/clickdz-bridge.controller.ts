@@ -25,7 +25,7 @@ import type { Request, Response } from 'express';
 // SECURITY: cryptographically strong randomness for unguessable auto-slugs.
 // C6: createHmac also powers the Chargily webhook signature check (HMAC-SHA256
 // of the raw body with the merchant's apiSecret, compared constant-time).
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 
 // WS4 publish-cap: the global AuthGuard already authenticates these first-party
 // routes (no @Public / no bridge token). `CurrentUser` just RECEIVES the
@@ -782,13 +782,16 @@ const CDZIMAGE_TIERS: Record<
   'gemini-3-pro-image': { engine: 'gemini-3-pro-image', quality: 'high', label: 'CDZIM Pro' },
   'gemini-2.5-flash-image': { engine: 'gemini-2.5-flash-image', quality: 'low', label: 'CDZIM Classic' },
 };
-// WS12: default tier lowered from cdzimage-2.0 (gpt-image-2 / high) to
-// cdzimage-1.5 (gpt-image-1.5 / medium) so a generation that sends no explicit
-// model is fast (30–60s) rather than the slowest 60–90s+ config. The owner saw
-// "takes forever" from the silent worst-case default; 2.0 stays reachable when
-// a client explicitly asks for it. CDZIMAGE_REQUIRE_MODEL continues to force a
-// pick where the surfaces opt into strict mode.
-const CDZIMAGE_DEFAULT_TIER = 'cdzimage-1.5';
+// WS12→ImgPerf: default tier lowered from cdzimage-1.5 (gpt-image-1.5 / medium,
+// 30–60s) to cdzimage-1.0 (gpt-image-1-mini / low, ~10–15s) so a generation
+// that sends no explicit model is fast rather than the slow 30–60s config. The
+// owner saw "takes forever" from the silent worst-case default; 1.5 and 2.0
+// stay reachable when a client explicitly asks for them. Env-overridable via
+// CDZIMAGE_DEFAULT_TIER so ops can revert without a redeploy if needed.
+// CDZIMAGE_REQUIRE_MODEL continues to force a pick where the surfaces opt into
+// strict mode.
+const CDZIMAGE_DEFAULT_TIER =
+  process.env.CDZIMAGE_DEFAULT_TIER || 'cdzimage-1.0';
 const CDZIMAGE_LEGACY_ALIASES: Record<string, string> = {
   // the old "ClickDz 1.0 smart image" marketing ids → best tier
   'clickdz-image': CDZIMAGE_DEFAULT_TIER,
@@ -805,6 +808,27 @@ const CDZIMAGE_LEGACY_ALIASES: Record<string, string> = {
  * (WS1 PR4/PR5); flip the env after those deploy.
  */
 const CDZIMAGE_REQUIRE_MODEL = process.env.CDZIMAGE_REQUIRE_MODEL === '1';
+
+// ImgPerf: prompt-pro (enhancement) is OFF by default — it adds 2–8s of
+// cdz-flash latency on the critical path for EVERY non-fast request. The owner
+// reported "takes forever"; enhancement is the single biggest non-provider
+// latency contributor. Set CDZIMAGE_ENHANCE_DEFAULT=1 to restore the old
+// always-on behavior. Explicit body.enhance=true / body.enhance=false always
+// win over this default (see wantsEnhance below).
+const ENHANCE_DEFAULT_ON = process.env.CDZIMAGE_ENHANCE_DEFAULT === '1';
+
+// ImgPerf: Redis prompt-hash cache for text-to-image generations. ON by
+// default (CDZ_IMAGE_CACHE_ENABLED !== '0'); eliminates 20–40% of provider
+// calls by returning the cached response for identical prompts. Only
+// text-to-image (i2iMode 'none') is cached — edit/reinterpret modes depend on
+// input pixels the hash can't capture, so they always bypass the cache. Fail-
+// open: any cache read/write error falls through to a normal generation.
+const CDZ_IMAGE_CACHE_ENABLED = process.env.CDZ_IMAGE_CACHE_ENABLED !== '0';
+const CDZ_IMAGE_CACHE_TTL = Math.max(
+  60,
+  Number(process.env.CDZ_IMAGE_CACHE_TTL) || 86400
+);
+const CDZ_IMAGE_CACHE_PREFIX = 'cdzimg:v1:';
 
 interface CdzImageResolution {
   tierId: string;
@@ -2924,16 +2948,21 @@ export class ClickDzBridgeController {
     // on a ~6s budget folded into the raw prompt.
     const fastMode = body?.fast === true;
 
-    // ---- Prompt-pro (always on for tier/legacy/default requests) ---------
+    // ---- Prompt-pro (env-gated default; explicit opt-in/out wins) -------
     // Raw-engine requests (OpenAI-compatible machine clients) keep their
-    // prompt verbatim; `enhance: false` is the explicit opt-out for everyone.
+    // prompt verbatim. For everyone else, enhancement defaults OFF
+    // (ENHANCE_DEFAULT_ON — set CDZIMAGE_ENHANCE_DEFAULT=1 to restore the old
+    // always-on behavior). body.enhance=true is a hard opt-in, body.enhance=
+    // false is a hard opt-out; fastMode skips enhancement below regardless.
     // Edit mode enhances the INSTRUCTION only (the engine sees the pixels);
     // reinterpret mode folds the vision description into the enhancement.
     let prompt = String(body?.prompt || '');
     let enhancedPrompt: string | undefined;
     let ocrUsed = false;
     const wantsEnhance =
-      body?.enhance !== false && resolution.source !== 'raw-engine';
+      resolution.source !== 'raw-engine' &&
+      (body?.enhance === true ||
+        (body?.enhance !== false && ENHANCE_DEFAULT_ON));
     if (fastMode) {
       // Skip prompt-pro; still fold a reinterpret reference in via a tightened
       // (~6s) vision describe, falling open to the bare prompt on timeout.
@@ -2975,6 +3004,70 @@ export class ClickDzBridgeController {
       : tierQuality;
     const finalPrompt = String(prompt || body?.prompt || '');
     const size = String(body?.size || '1024x1024');
+
+    // ImgPerf: Redis prompt-hash cache (text-to-image only). Computes a stable
+    // key from the canonicalized request, checks the cache, and returns the
+    // stored response on a hit — skipping the provider call entirely. Fail-
+    // open: any cache error falls through to a normal generation below.
+    if (CDZ_IMAGE_CACHE_ENABLED && i2iMode === 'none') {
+      const normalizedPrompt = finalPrompt
+        .normalize('NFC')
+        .trim()
+        .replace(/\s+/g, ' ');
+      const cacheKey =
+        CDZ_IMAGE_CACHE_PREFIX +
+        createHash('sha256')
+          .update(
+            JSON.stringify({
+              prompt: normalizedPrompt,
+              model,
+              size,
+              quality,
+              enhance: wantsEnhance,
+              i2iMode,
+            })
+          )
+          .digest('hex');
+      try {
+        const cached = await this.redis.get(cacheKey).catch(() => null);
+        if (cached) {
+          const cachedData = JSON.parse(cached) as any;
+          if (cachedData && Array.isArray(cachedData?.data)) {
+            // Re-attach the live clickdz metadata so the response carries
+            // current resolution info; mark the cache hit for observability.
+            cachedData.clickdz = {
+              ...(cachedData.clickdz ?? {}),
+              model: resolution.tierId,
+              label: resolution.label,
+              engine: resolution.engine,
+              model_source: resolution.source,
+              enhanced_prompt: cachedData.clickdz?.enhanced_prompt,
+              reference_ocr_used: cachedData.clickdz?.reference_ocr_used ?? false,
+              fast: fastMode,
+              quality,
+              imageCacheHit: true,
+            };
+            cachedData._cache = 'hit';
+            void createPostHogClientFromEnv().capture({
+              event: 'generation_completed',
+              distinctId: user?.id ?? 'anonymous',
+              properties: {
+                kind: 'image',
+                model: resolution.tierId,
+                engine: resolution.engine,
+                quality,
+                fast: fastMode,
+                i2i: i2iMode,
+                cache: 'hit',
+              },
+            });
+            return cachedData;
+          }
+        }
+      } catch {
+        // Cache read/parse failure — fail open, proceed to live generation.
+      }
+    }
 
     let response: Awaited<ReturnType<typeof fetch>>;
     let data: any;
@@ -3106,6 +3199,7 @@ export class ClickDzBridgeController {
       reference_ocr_used: ocrUsed,
       fast: fastMode,
       quality,
+      imageCacheHit: false,
       ...(i2iMode !== 'none'
         ? {
             i2i: {
@@ -3115,6 +3209,39 @@ export class ClickDzBridgeController {
           }
         : {}),
     };
+    // ImgPerf: store successful text-to-image generations in the prompt-hash
+    // cache so identical subsequent requests hit instead of re-calling the
+    // provider. Only text-to-image (i2iMode 'none') — edit/reinterpret depend
+    // on input pixels the hash can't capture. Fail-open: a cache write error
+    // is swallowed and NEVER breaks a successful generation.
+    if (CDZ_IMAGE_CACHE_ENABLED && i2iMode === 'none') {
+      try {
+        const normalizedPrompt = finalPrompt
+          .normalize('NFC')
+          .trim()
+          .replace(/\s+/g, ' ');
+        const cacheKey =
+          CDZ_IMAGE_CACHE_PREFIX +
+          createHash('sha256')
+            .update(
+              JSON.stringify({
+                prompt: normalizedPrompt,
+                model,
+                size,
+                quality,
+                enhance: wantsEnhance,
+                i2iMode,
+              })
+            )
+            .digest('hex');
+        await this.redis
+          .set(cacheKey, JSON.stringify(data), 'EX', CDZ_IMAGE_CACHE_TTL)
+          .catch(() => {});
+      } catch {
+        // Cache write failure — fail open, the generation already succeeded.
+      }
+    }
+    data._cache = 'miss';
     // PostHog server-side event (no-op unless CDZ_POSTHOG_KEY/HOST are set):
     // a generation completed on the paid images route. Fire-and-forget — never
     // delays or fails the response.
