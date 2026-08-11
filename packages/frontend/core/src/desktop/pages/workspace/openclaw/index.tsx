@@ -1394,9 +1394,9 @@ const headerGlyphStyle: CSSProperties = {
 const betaBadgeStyle: CSSProperties = {
   fontSize: 10,
   fontWeight: 700,
-  lineHeight: '15px',
-  padding: '0 6px',
-  borderRadius: 5,
+  lineHeight: '16px',
+  padding: '0 8px',
+  borderRadius: 999,
   letterSpacing: '0.05em',
   color: C.muted,
   backgroundColor:
@@ -1406,13 +1406,15 @@ const headerBackBtnStyle: CSSProperties = {
   appearance: 'none',
   marginInlineStart: 'auto',
   cursor: 'pointer',
-  padding: '4px 12px',
-  borderRadius: AgentPalette.radius.md,
+  padding: '4px 14px',
+  minHeight: 36,
+  borderRadius: 999,
   fontSize: 12,
   fontWeight: 600,
   color: C.text,
   background: 'transparent',
   border: `1px solid ${C.border}`,
+  transition: 'border-color 160ms ease',
 };
 const capChipStyle: CSSProperties = {
   display: 'inline-flex',
