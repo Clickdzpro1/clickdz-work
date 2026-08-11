@@ -474,11 +474,12 @@ const Composer = ({
       style={{
         background: C.panel,
         border: `1px solid ${C.border}`,
-        borderRadius: 12,
+        borderRadius: 14,
         padding: 16,
         display: 'flex',
         flexDirection: 'column',
         gap: 14,
+        boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
       }}
     >
       <div>
@@ -486,15 +487,18 @@ const Composer = ({
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 8,
+            gap: 10,
             fontSize: 16,
             fontWeight: 800,
             color: C.text,
           }}
         >
-          <span aria-hidden>✨</span> Modifier avec l’IA
+          <span aria-hidden style={{ width: 36, height: 36, borderRadius: 11, display: 'grid', placeItems: 'center', fontSize: 18, flexShrink: 0, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))', border: `1px solid ${C.border}` }}>
+            ✨
+          </span>
+          Modifier avec l’IA
         </div>
-        <div style={{ ...hintStyle, marginTop: 4 }}>
+        <div style={{ ...hintStyle, marginTop: 4, marginLeft: 46 }}>
           Décrivez le changement en une phrase (français ou darja). L’IA réécrit
           votre boutique et vous montre un aperçu avant publication.
         </div>
@@ -631,10 +635,11 @@ const PreviewCard = ({
     style={{
       background: C.panel,
       border: `1px solid ${C.border}`,
-      borderRadius: 12,
+      borderRadius: 14,
       overflow: 'hidden',
       display: 'flex',
       flexDirection: 'column',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
     }}
   >
     {/* Header: title + device toggle */}
@@ -649,24 +654,29 @@ const PreviewCard = ({
         flexWrap: 'wrap',
       }}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>
-          Aperçu — avant publication
-        </div>
-        {summary ? (
-          <div
-            style={{
-              fontSize: 11.5,
-              color: C.muted,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-            title={summary}
-          >
-            {summary}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span aria-hidden style={{ width: 28, height: 28, borderRadius: 9, display: 'grid', placeItems: 'center', fontSize: 14, flexShrink: 0, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))' }}>
+          👁️
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: C.text }}>
+            Aperçu — avant publication
           </div>
-        ) : null}
+          {summary ? (
+            <div
+              style={{
+                fontSize: 11.5,
+                color: C.muted,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={summary}
+            >
+              {summary}
+            </div>
+          ) : null}
+        </div>
       </div>
       <div
         style={{
@@ -801,11 +811,12 @@ const VersionRail = ({
     style={{
       background: C.panel,
       border: `1px solid ${C.border}`,
-      borderRadius: 12,
+      borderRadius: 14,
       overflow: 'hidden',
       minWidth: 0,
       position: 'sticky',
       top: 8,
+      boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
     }}
   >
     <div
@@ -813,6 +824,9 @@ const VersionRail = ({
         padding: '9px 14px',
         borderBottom: `1px solid ${C.border}`,
         background: C.panel2,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
         fontSize: 11,
         fontWeight: 700,
         letterSpacing: '0.04em',
@@ -820,7 +834,10 @@ const VersionRail = ({
         color: C.muted,
       }}
     >
-      🕑 Historique
+      <span aria-hidden style={{ width: 24, height: 24, borderRadius: 8, display: 'grid', placeItems: 'center', fontSize: 12, flexShrink: 0, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))' }}>
+        🕑
+      </span>
+      Historique
     </div>
     <div style={{ padding: 12 }}>
       {message ? (
@@ -909,22 +926,24 @@ const ConfirmDialog = ({
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'rgba(8,9,11,0.6)',
+      background: 'rgba(0,0,0,0.65)',
       padding: 16,
     }}
     onClick={() => {
       if (!busy) onCancel();
     }}
   >
+    <style>{'@keyframes cdz-pop-in{from{opacity:0;transform:scale(0.96) translateY(8px)}to{opacity:1;transform:none}}'}</style>
     <div
       onClick={e => e.stopPropagation()}
       style={{
         width: 'min(420px, 100%)',
         background: C.panel,
         border: `1px solid ${C.border}`,
-        borderRadius: 14,
+        borderRadius: 16,
         overflow: 'hidden',
         boxShadow: '0 24px 80px rgba(0,0,0,0.5)',
+        animation: 'cdz-pop-in 220ms cubic-bezier(0.2,0,0,1)',
       }}
     >
       <div
@@ -932,11 +951,17 @@ const ConfirmDialog = ({
           padding: '12px 16px',
           borderBottom: `1px solid ${C.border}`,
           background: C.panel2,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
           fontSize: 13,
           fontWeight: 800,
           color: C.text,
         }}
       >
+        <span aria-hidden style={{ width: 28, height: 28, borderRadius: 9, display: 'grid', placeItems: 'center', fontSize: 14, flexShrink: 0, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))' }}>
+          🕑
+        </span>
         Restaurer cette version ?
       </div>
       <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -982,8 +1007,8 @@ function chipStyle(disabled: boolean): CSSProperties {
     alignItems: 'flex-start',
     gap: 2,
     textAlign: 'left',
-    padding: '7px 11px',
-    borderRadius: 9,
+    padding: '8px 12px',
+    borderRadius: 11,
     border: `1px solid ${C.border}`,
     background: C.panel2,
     color: C.text,
@@ -992,6 +1017,7 @@ function chipStyle(disabled: boolean): CSSProperties {
     cursor: disabled ? 'default' : 'pointer',
     opacity: disabled ? 0.5 : 1,
     maxWidth: 260,
+    transition: 'border-color 160ms ease, box-shadow 200ms ease',
   };
 }
 
