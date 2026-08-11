@@ -47,13 +47,13 @@ import {
 // ---------------------------------------------------------------------------
 
 /** French labels for the registry categories (display + grouping order). */
-const CATEGORY_LABELS: Record<string, { label: string; sub: string }> = {
-  sell: { label: 'Vente', sub: 'kter el bi3' },
-  engage: { label: 'Engagement', sub: 'rbet el client' },
-  logistics: { label: 'Logistique', sub: 'livraison w tetbi3' },
-  content: { label: 'Contenu', sub: 'sections w affichage' },
-  i18n: { label: 'Langue', sub: 'darja w français' },
-  erp_module: { label: 'Modules ERP', sub: 'zid des outils' },
+const CATEGORY_LABELS: Record<string, { label: string; sub: string; icon: string }> = {
+  sell: { label: 'Vente', sub: 'kter el bi3', icon: '🛒' },
+  engage: { label: 'Engagement', sub: 'rbet el client', icon: '💬' },
+  logistics: { label: 'Logistique', sub: 'livraison w tetbi3', icon: '🚚' },
+  content: { label: 'Contenu', sub: 'sections w affichage', icon: '📰' },
+  i18n: { label: 'Langue', sub: 'darja w français', icon: '🌐' },
+  erp_module: { label: 'Modules ERP', sub: 'zid des outils', icon: '🔧' },
 };
 
 /** Stable category display order; unknown categories fall to the end. */
@@ -429,7 +429,7 @@ export const ShopFeatures = ({
     ];
     return orderedCats.map(cat => ({
       cat,
-      meta: CATEGORY_LABELS[cat] ?? { label: cat, sub: '' },
+      meta: CATEGORY_LABELS[cat] ?? { label: cat, sub: '', icon: '📦' },
       features: byCat.get(cat) ?? [],
     }));
   }, [catalog]);
@@ -443,18 +443,19 @@ export const ShopFeatures = ({
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: 10,
-            padding: '40px 20px',
+            gap: 12,
+            padding: '44px 20px',
             textAlign: 'center',
             background: C.panel,
             border: `1px solid ${C.border}`,
-            borderRadius: 12,
+            borderRadius: 16,
+            boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
           }}
         >
-          <span aria-hidden style={{ fontSize: 30, opacity: 0.7 }}>
+          <span aria-hidden style={{ width: 56, height: 56, borderRadius: 16, display: 'grid', placeItems: 'center', fontSize: 26, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))', border: `1px solid ${C.border}` }}>
             🧩
           </span>
-          <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>
             Fonctionnalités — bientôt disponible
           </div>
           <div
@@ -495,14 +496,16 @@ export const ShopFeatures = ({
           gap: 10,
           flexWrap: 'wrap',
           padding: '10px 14px',
-          borderRadius: 10,
+          borderRadius: 12,
           background: C.accentSoft,
           border: `1px solid ${C.border}`,
           fontSize: 12.5,
           color: C.text,
         }}
       >
-        <span aria-hidden>⚡</span>
+        <span aria-hidden style={{ width: 28, height: 28, borderRadius: 9, display: 'grid', placeItems: 'center', fontSize: 14, flexShrink: 0, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))' }}>
+          ⚡
+        </span>
         <span style={{ flex: 1, minWidth: 180 }}>
           Les fonctionnalités s’appliquent en direct après enregistrement +
           re-publication — pas besoin de recréer la boutique.
@@ -581,17 +584,22 @@ export const ShopFeatures = ({
           <div
             style={{
               display: 'flex',
-              alignItems: 'baseline',
-              gap: 8,
-              padding: '2px 2px',
+              alignItems: 'center',
+              gap: 10,
+              padding: '4px 2px',
             }}
           >
-            <span style={labelStyle}>{group.meta.label}</span>
-            {group.meta.sub ? (
-              <span style={{ fontSize: 11, color: C.muted }}>
-                · {group.meta.sub}
-              </span>
-            ) : null}
+            <span aria-hidden style={{ width: 36, height: 36, borderRadius: 11, display: 'grid', placeItems: 'center', fontSize: 16, flexShrink: 0, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))', border: `1px solid ${C.border}` }}>
+              {group.meta.icon}
+            </span>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+              <span style={labelStyle}>{group.meta.label}</span>
+              {group.meta.sub ? (
+                <span style={{ fontSize: 11, color: C.muted }}>
+                  · {group.meta.sub}
+                </span>
+              ) : null}
+            </div>
           </div>
           {/* Single-column on mobile; two-up on wide via auto-fit grid. */}
           <div
@@ -713,8 +721,9 @@ const FeatureCard = ({
         border: `1px solid ${on ? C.accent : C.border}`,
         borderRadius: 12,
         overflow: 'hidden',
-        transition: 'border-color 160ms ease',
+        transition: 'border-color 160ms ease, box-shadow 200ms ease',
         minWidth: 0,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.10)',
       }}
     >
       {/* Card head: label block + toggle switch. */}
