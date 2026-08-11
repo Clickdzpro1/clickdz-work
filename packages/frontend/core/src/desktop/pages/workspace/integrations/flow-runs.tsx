@@ -179,7 +179,7 @@ const FlowStepRow = ({ step, index }: { step: FlowRunStep; index: number }) => {
   return (
     <div
       style={{
-        borderRadius: 8,
+        borderRadius: 12,
         background: C.bg,
         border: `1px solid ${C.border}`,
         overflow: 'hidden',
@@ -377,14 +377,16 @@ const RunDetail = ({
           onClick={onBack}
           style={{
             appearance: 'none',
-            borderRadius: 8,
-            padding: '6px 12px',
+            borderRadius: 999,
+            padding: '6px 14px',
+            minHeight: 36,
             fontSize: 12,
             fontWeight: 600,
             cursor: 'pointer',
             color: C.text,
             background: 'transparent',
             border: `1px solid ${C.border}`,
+            transition: 'border-color 160ms ease',
           }}
         >
           ← Back to runs
@@ -420,8 +422,9 @@ const RunDetail = ({
             style={{
               appearance: 'none',
               border: 'none',
-              borderRadius: 8,
+              borderRadius: 999,
               padding: '8px 16px',
+              minHeight: 40,
               fontSize: 12,
               fontWeight: 700,
               display: 'inline-flex',
@@ -449,7 +452,7 @@ const RunDetail = ({
         <div
           style={{
             padding: '10px 14px',
-            borderRadius: 10,
+            borderRadius: 12,
             fontSize: 12.5,
             background: C.accentSoft,
             border: `1px solid ${C.border}`,
@@ -477,7 +480,7 @@ const RunDetail = ({
         <div
           style={{
             padding: '12px 14px',
-            borderRadius: 10,
+            borderRadius: 12,
             fontSize: 13,
             background: C.errBg,
             border: `1px solid ${C.errBorder}`,
@@ -498,7 +501,7 @@ const RunDetail = ({
               flexWrap: 'wrap',
               gap: 20,
               padding: '12px 16px',
-              borderRadius: 10,
+              borderRadius: 12,
               background: C.panel,
               border: `1px solid ${C.border}`,
               fontSize: 12,
@@ -547,7 +550,7 @@ const RunDetail = ({
             <div
               style={{
                 padding: '12px 14px',
-                borderRadius: 10,
+                borderRadius: 12,
                 fontSize: 13,
                 background: C.accentSoft,
                 border: `1px solid ${C.border}`,
@@ -589,13 +592,13 @@ const RunRow = ({
         gap: 12,
         width: '100%',
         padding: '12px 14px',
-        borderRadius: 10,
+        borderRadius: 12,
         cursor: 'pointer',
         color: C.text,
         background: C.panel,
         border: `1px solid ${inDlq ? C.errBorder : C.border}`,
         font: 'inherit',
-        transition: 'border-color 150ms ease, background 150ms ease',
+        transition: 'border-color 150ms ease, background 150ms ease, box-shadow 160ms ease',
       }}
     >
       <span
@@ -721,7 +724,23 @@ export const FlowRunsView = ({
             gap: 8,
           }}
         >
-          <span>📜</span> Runs
+          <span
+            aria-hidden
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 14,
+              background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+              flexShrink: 0,
+            }}
+          >
+            📜
+          </span>{' '}
+          Runs
         </h2>
         <p style={{ margin: 0, color: C.muted, fontSize: 12 }}>
           Every flow execution, newest first. Open one to see its per-node timeline;
@@ -735,8 +754,9 @@ export const FlowRunsView = ({
         onClick={refresh}
         style={{
           appearance: 'none',
-          borderRadius: 8,
+          borderRadius: 999,
           padding: '7px 14px',
+          minHeight: 36,
           fontSize: 12,
           fontWeight: 600,
           cursor: loading ? 'default' : 'pointer',
@@ -747,6 +767,7 @@ export const FlowRunsView = ({
           display: 'inline-flex',
           alignItems: 'center',
           gap: 6,
+          transition: 'border-color 160ms ease',
         }}
       >
         {loading ? <Spinner dark /> : '↻'} Refresh
@@ -776,7 +797,7 @@ export const FlowRunsView = ({
       <div
         style={{
           padding: '12px 14px',
-          borderRadius: 10,
+          borderRadius: 12,
           fontSize: 13,
           background: C.errBg,
           border: `1px solid ${C.errBorder}`,
@@ -793,18 +814,39 @@ export const FlowRunsView = ({
     body = (
       <div
         style={{
-          padding: '20px 16px',
-          borderRadius: 10,
+          padding: '28px 16px',
+          borderRadius: 12,
           fontSize: 13,
           textAlign: 'center',
           background: C.panel,
           border: `1px dashed ${C.border}`,
           color: C.muted,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 12,
         }}
       >
-        {enabled
-          ? 'No runs yet. Build a flow in the Flows tab and press Run to see its execution here.'
-          : 'Runs appear here once an owner sets COMPOSIO_API_KEY and you run a flow.'}
+        <div
+          aria-hidden
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 22,
+            background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+          }}
+        >
+          📜
+        </div>
+        <div>
+          {enabled
+            ? 'No runs yet. Build a flow in the Flows tab and press Run to see its execution here.'
+            : 'Runs appear here once an owner sets COMPOSIO_API_KEY and you run a flow.'}
+        </div>
       </div>
     );
   } else {
