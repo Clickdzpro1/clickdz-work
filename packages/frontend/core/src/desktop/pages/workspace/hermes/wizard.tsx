@@ -284,6 +284,7 @@ export const HermesWizard = ({
 
   return (
     <Card>
+      <style>{WIZARD_STYLE}</style>
       <StepDots total={FLOW.length} current={stepIdx} />
 
       {step === 'welcome' ? (
@@ -688,9 +689,10 @@ const Card = ({ children }: { children: ReactNode }) => (
       boxSizing: 'border-box',
       margin: '0 auto',
       padding: 24,
-      borderRadius: 14,
+      borderRadius: 16,
       background: C.panel,
       border: `1px solid ${C.border}`,
+      boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
       display: 'flex',
       flexDirection: 'column',
     }}
@@ -710,12 +712,25 @@ const StepShell = ({
   subtitle: string;
   children?: ReactNode;
 }) => (
-  <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ fontSize: 30 }} aria-hidden>
+  <div className="cdz-hermes-wiz-pop" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexDirection: 'column', gap: 6 }}>
+      <div
+        aria-hidden
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 11,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 18,
+          background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+          flexShrink: 0,
+        }}
+      >
         {emoji}
       </div>
-      <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: C.text }}>
+      <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: C.text, letterSpacing: '-0.01em' }}>
         {title}
       </h2>
       <p style={{ margin: 0, fontSize: 13.5, color: C.muted, lineHeight: 1.55 }}>
@@ -742,6 +757,13 @@ const StepDots = ({ total, current }: { total: number; current: number }) => (
     ))}
   </div>
 );
+
+// Inline <style> for the gradient chip keyframes (reduced-motion safe).
+const WIZARD_STYLE = `
+@keyframes cdz-hermes-wiz-pop{from{opacity:0;transform:scale(0.92)}to{opacity:1;transform:none}}
+.cdz-hermes-wiz-pop{animation:cdz-hermes-wiz-pop 240ms ease both}
+@media (prefers-reduced-motion: reduce){.cdz-hermes-wiz-pop{animation:none !important}}
+`;
 
 const ToolRow = ({
   tool,
@@ -897,7 +919,19 @@ const DoneCard = ({
         textAlign: 'center',
       }}
     >
-      <div style={{ fontSize: 40 }} aria-hidden>
+      <div
+        aria-hidden
+        style={{
+          width: 52,
+          height: 52,
+          borderRadius: 14,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: 26,
+          background: `linear-gradient(135deg, ${C.accent}, color-mix(in srgb, ${C.accent} 65%, #000))`,
+        }}
+      >
         🎉
       </div>
       <h2 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: C.text }}>
