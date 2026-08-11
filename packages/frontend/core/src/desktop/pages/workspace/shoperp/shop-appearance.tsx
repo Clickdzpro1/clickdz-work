@@ -725,10 +725,11 @@ export const ShopAppearance = ({
             url ? (
               <div
                 style={{
-                  borderRadius: 12,
+                  borderRadius: 14,
                   overflow: 'hidden',
                   border: `1px solid ${C.border}`,
                   background: C.panel,
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
                 }}
               >
                 <iframe
@@ -866,7 +867,7 @@ const MockPreview = ({
   return (
     <div
       style={{
-        borderRadius: 12,
+        borderRadius: 14,
         overflow: 'hidden',
         border: `1px solid ${C.border}`,
         background: pal.bg,
@@ -874,6 +875,7 @@ const MockPreview = ({
         color: pal.ink,
         maxHeight: 520,
         overflowY: 'auto',
+        boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
       }}
     >
       {/* Header */}
@@ -1134,10 +1136,11 @@ const RebaseDialog = ({
       display: 'grid',
       placeItems: 'center',
       padding: 16,
-      background: 'rgba(8,10,16,0.62)',
+      background: 'rgba(0,0,0,0.65)',
     }}
     onClick={onCancel}
   >
+    <style>{'@keyframes cdz-pop-in{from{opacity:0;transform:scale(0.96) translateY(8px)}to{opacity:1;transform:none}}'}</style>
     <div
       style={{
         width: '100%',
@@ -1145,17 +1148,18 @@ const RebaseDialog = ({
         boxSizing: 'border-box',
         background: C.panel,
         border: `1px solid ${C.border}`,
-        borderRadius: 14,
+        borderRadius: 16,
         padding: 20,
         boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
         display: 'flex',
         flexDirection: 'column',
         gap: 12,
+        animation: 'cdz-pop-in 220ms cubic-bezier(0.2,0,0,1)',
       }}
       onClick={e => e.stopPropagation()}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 22 }} aria-hidden>
+        <span aria-hidden style={{ width: 36, height: 36, borderRadius: 11, display: 'grid', placeItems: 'center', fontSize: 18, flexShrink: 0, background: 'linear-gradient(135deg, #e8a33d, #c97d1f)', border: `1px solid ${C.border}` }}>
           ⚠️
         </span>
         <div style={{ fontSize: 17, fontWeight: 800, color: C.text }}>
@@ -1251,14 +1255,15 @@ function choiceButtonStyle(active: boolean, disabled: boolean): CSSProperties {
     alignItems: 'center',
     gap: 6,
     padding: '12px 8px',
-    borderRadius: 10,
+    borderRadius: 12,
     cursor: disabled ? 'default' : 'pointer',
     opacity: disabled ? 0.6 : 1,
     background: active ? C.accentSoft : C.bg,
     border: `1px solid ${active ? C.accent : C.border}`,
     color: C.text,
-    transition: 'border-color 160ms ease, background 160ms ease',
+    transition: 'border-color 160ms ease, background 160ms ease, box-shadow 200ms ease',
     textAlign: 'center',
+    boxShadow: active ? '0 1px 4px rgba(0,0,0,0.12)' : 'none',
   };
 }
 
