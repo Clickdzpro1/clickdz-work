@@ -39,6 +39,10 @@ import { ClickDzVoiceAiController } from './clickdz-voice-ai.controller';
 import { ClickDzAudioLibraryController } from './clickdz-audio-library.controller';
 import { ClickDzAdminConfigResolver } from './clickdz-admin-config.resolver';
 import { ClickDzAdminEntitlementsResolver } from './clickdz-admin-entitlements.resolver';
+import { ClickDzZoomPlusSummaryResolver } from './clickdz-zoomplus-summary.resolver';
+import { ClickDzZoomPlusSummaryService } from './clickdz-zoomplus-summary.service';
+import { ClickDzZoomPlusService } from './clickdz-zoomplus.service';
+import { ClickDzZoomPlusResolver } from './clickdz-zoomplus.resolver';
 import { CopilotController } from './controller';
 import { WorkspaceMcpController } from './mcp/controller';
 import { McpCredentialService } from './mcp/credential';
@@ -121,6 +125,17 @@ export class CopilotApiModule {}
     // CDZ: admin analytics — adminUserAppEntitlements query (dashboard
     // entitlements card + CSV export). Read-only, @Admin()-guarded.
     ClickDzAdminEntitlementsResolver,
+    // CDZ: ZOOM+ post-call meeting summary — flag-gated (CDZ_ZOOMPLUS_ENABLED +
+    // CDZ_AI_KEY) GraphQL mutation + probe query. Host-authed (not @Admin), the
+    // gate lives in the service. Byte-inert until the flag is flipped.
+    ClickDzZoomPlusSummaryService,
+    ClickDzZoomPlusSummaryResolver,
+    // CDZ: ZOOM+ host-controls backend (LiveKit RoomService). Flag-gated
+    // (CDZ_ZOOMPLUS_HOST_CONTROLS_ENABLED, default OFF) — the service
+    // constructor is inert and every method checks enabled() at call time,
+    // so registering it here is zero-risk until the flag is flipped.
+    ClickDzZoomPlusService,
+    ClickDzZoomPlusResolver,
   ],
   controllers: [
     CopilotController,
