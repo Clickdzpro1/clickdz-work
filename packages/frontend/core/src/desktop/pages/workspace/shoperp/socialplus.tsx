@@ -416,31 +416,35 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
   const navStyle = (v: View) => ({
     fontSize: 12,
     fontWeight: view === v ? 700 : 500,
-    padding: '5px 14px',
-    borderRadius: 8,
+    padding: '6px 15px',
+    borderRadius: 999,
     border: 'none',
     cursor: 'pointer',
     background: view === v ? C.accent : 'transparent',
     color: view === v ? '#fff' : C.muted,
     whiteSpace: 'nowrap' as const,
+    transition: 'color 160ms ease, background 160ms ease',
   });
 
   const langBtnStyle = (l: Lang) => ({
     fontSize: 11,
-    padding: '3px 8px',
-    borderRadius: 6,
+    padding: '4px 11px',
+    borderRadius: 999,
     border: `1px solid ${lang === l ? C.accent : C.border}`,
     background: lang === l ? C.accentSoft : 'transparent',
     color: lang === l ? C.accent : C.muted,
     cursor: 'pointer',
     fontWeight: lang === l ? 700 : 500,
+    transition: 'color 160ms ease, border-color 160ms ease, background 160ms ease',
   });
 
   return (
     <div data-cdz-surface="" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: `1px solid ${C.border}`, background: C.panel2, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 20 }}>{'📱'}</span>
+        <span aria-hidden style={{ width: 36, height: 36, borderRadius: 11, display: 'grid', placeItems: 'center', fontSize: 16, flexShrink: 0, background: 'linear-gradient(135deg, var(--affine-primary-color, #1e96eb), color-mix(in srgb, var(--affine-primary-color, #1e96eb) 70%, #000))', border: `1px solid ${C.border}` }}>
+          {'📱'}
+        </span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text, direction: rtl ? 'rtl' : undefined }}>
             {dict.title}
@@ -463,7 +467,7 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
       </div>
 
       {/* Navigation */}
-      <div style={{ display: 'flex', gap: 2, padding: '8px 16px', background: C.panel, borderBottom: `1px solid ${C.border}`, overflowX: 'auto' }}>
+      <div style={{ display: 'flex', gap: 4, padding: '8px 16px', background: C.panel, borderBottom: `1px solid ${C.border}`, overflowX: 'auto' }}>
         {VIEWS.map(v => (
           <button key={v} style={navStyle(v)} onClick={() => { setView(v); if (v !== 'composer') { setEditPost(undefined); setInitScheduledAt(undefined); } }}>
             {dict[`view_${v}`] ?? v}
