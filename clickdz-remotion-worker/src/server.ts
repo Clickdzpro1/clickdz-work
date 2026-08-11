@@ -43,7 +43,36 @@ const MAX_BODY = '8mb';
 // The composition id registered in src/Root.tsx.
 const COMPOSITION_ID = 'VdzVideo';
 
+// --- Render-speed tuning (all env-gated, safe defaults) ---------------------
+// jpegQuality: frame-capture quality. 70 is noticeably faster than the Remotion
+// default ~80 with only a minor perceptual tradeoff (these are intermediate
+// frames, not the final encode).
+const JPEG_QUALITY = Number(process.env.REMOTION_JPEG_QUALITY || 70);
+// crf: h264 constant rate factor. 28 is a good speed/size/quality balance; the
+// Remotion default (~18-20) is slow and produces very large files. Raise for
+// smaller/faster, lower for higher fidelity.
+const CRF = Number(process.env.REMOTION_CRF || 28);
+// offthreadVideoThreads: worker threads for <OffthreadVideo> frame extraction.
+// 2 is a sane default for a small node; raise for video-heavy compositions.
+const OFFTHREAD_THREADS = Number(process.env.REMOTION_OFFTHREAD_THREADS || 2);
+// Per-render frame concurrency. `null` lets Remotion auto-size to the host CPUs
+// (1-2 on a small Railway node = slow). Set REMOTION_CONCURRENCY to override.
+const RENDER_CONCURRENCY = process.env.REMOTION_CONCURRENCY
+  ? Number(process.env.REMOTION_CONCURRENCY)
+  : null;
+// Multi-process Chrome on Linux spreads frame capture across processes (faster
+// on multi-core). Default ON; set CDZ_REMOTION_MULTIPROC=0 to disable.
+const MULTIPROC = process.env.CDZ_REMOTION_MULTIPROC !== '0';
+
 type JobStatus = 'queued' | 'rendering' | 'done' | 'error';
+/**
+ * The coarse render phase, exposed (additively) on the GET /jobs/:id body so the
+ * frontend can label what is happening instead of a bare progress bar. Remotion's
+ * `renderMedia` folds bundling + frame capture + stitching into one call, so we
+ * split it at the two observable boundaries we control: `bundling` before
+ * `selectComposition`, `rendering` once `renderMedia` is driving the frames.
+ */
+type JobStage = 'bundling' | 'rendering';
 interface Job {
   id: string;
   status: JobStatus;
@@ -51,6 +80,10 @@ interface Job {
   outputPath: string;
   error?: string;
   createdAt: number;
+  // ADDITIVE (see the GET /jobs/:id serializer): the coarse phase + the wall-clock
+  // moment the render started, so the FE can compute an ETA from progress + elapsed.
+  stage: JobStage;
+  startedAt: number;
 }
 
 const jobs = new Map<string, Job>();
@@ -86,29 +119,47 @@ async function bootstrapBundle(): Promise<void> {
   }
 }
 
-/** Render one job to its output mp4, updating progress as it goes. */
+/** Render one job to its output mp4, updating progress + stage as it goes. */
 async function runJob(job: Job, manifest: RenderManifest): Promise<void> {
   if (!serveUrl) {
     throw new Error(bundleError || 'Remotion bundle is not ready');
   }
   const inputProps = { manifest };
+  // selectComposition loads the bundle + measures the composition (duration,
+  // dimensions) — that is the "bundling" phase the FE labels distinctly from
+  // the per-frame render below.
+  job.stage = 'bundling';
   const composition = await selectComposition({
     serveUrl,
     id: COMPOSITION_ID,
     inputProps,
   });
 
+  job.stage = 'rendering';
   await renderMedia({
     composition,
     serveUrl,
     codec: 'h264',
     outputLocation: job.outputPath,
     inputProps,
-    concurrency: null, // let Remotion size to the host; job-level cap is above
+    // Env-overridable: null → Remotion auto-sizes to host CPUs; a number pins it.
+    concurrency: RENDER_CONCURRENCY,
     timeoutInMilliseconds: RENDER_TIMEOUT_MS,
     onProgress: ({ progress }) => {
       job.progress = Math.max(0, Math.min(1, progress));
     },
+    // --- Speed/quality tuning (env-gated, see the consts above) ---
+    imageFormat: 'jpeg', // the fast default — explicit so a future Remotion
+    // change to png never silently slows renders.
+    jpegQuality: JPEG_QUALITY,
+    crf: CRF,
+    offthreadVideoThreads: OFFTHREAD_THREADS,
+    // Multi-process Chrome spreads frame capture across cores on Linux. Gated
+    // off by CDZ_REMOTION_MULTIPROC=0 (e.g. on a 1-core node where the extra
+    // process overhead is pure cost).
+    ...(MULTIPROC
+      ? { chromiumOptions: { enableMultiProcessOnLinux: true } }
+      : {}),
   });
 }
 
@@ -123,6 +174,7 @@ function pump(): void {
     if (!manifest) continue;
     active++;
     job.status = 'rendering';
+    job.startedAt = Date.now();
     runJob(job, manifest)
       .then(() => {
         job.status = 'done';
@@ -185,12 +237,17 @@ app.post('/render', async (req, res) => {
 
   await mkdir(WORK_DIR, { recursive: true });
   const id = randomUUID();
+  const now = Date.now();
   const job: Job = {
     id,
     status: 'queued',
     progress: 0,
     outputPath: path.join(WORK_DIR, `${id}.mp4`),
-    createdAt: Date.now(),
+    createdAt: now,
+    // `startedAt` is set when the render actually begins (in pump); `stage`
+    // begins at bundling and flips to rendering once renderMedia takes over.
+    stage: 'bundling',
+    startedAt: now,
   };
   jobs.set(id, job);
   pendingManifests.set(id, manifest);
@@ -209,6 +266,10 @@ app.get('/jobs/:id', (req, res) => {
   res.json({
     status: job.status,
     progress: job.progress,
+    // ADDITIVE: the coarse render phase + the wall-clock render start, so the FE
+    // can label the stage and compute an ETA. Older clients ignore both.
+    stage: job.stage,
+    startedAt: job.startedAt,
     ...(job.error ? { error: job.error } : {}),
   });
 });
