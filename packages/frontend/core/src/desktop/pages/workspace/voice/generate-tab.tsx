@@ -579,9 +579,34 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
             gap: 10,
           }}
         >
-          <span style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-            Recent generations
-          </span>
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.07em',
+              textTransform: 'uppercase',
+              color: C.muted,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 18,
+                height: 18,
+                borderRadius: 5,
+                background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                fontSize: 10,
+              }}
+            >
+              🕓
+            </span>
+            Historique
+          </div>
           <div style={{ flex: 1 }} />
           {history.length ? (
             <button
@@ -607,15 +632,20 @@ export const GenerateTab = ({ providers, defaultProvider }: GenerateTabProps) =>
         {!history.length ? (
           <div
             style={{
-              padding: '22px 12px',
+              padding: '32px 16px',
               textAlign: 'center',
-              fontSize: 12.5,
+              fontSize: 13,
               color: C.muted,
               border: `1px dashed ${C.border}`,
-              borderRadius: 10,
+              borderRadius: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 8,
             }}
           >
-            Your last {HISTORY_LIMIT} generations will appear here.
+            <span style={{ fontSize: 24, opacity: 0.45 }}>🕓</span>
+            <span>Vos {HISTORY_LIMIT} dernières générations apparaîtront ici.</span>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
