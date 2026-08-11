@@ -50,6 +50,7 @@ import {
   type ShipRateInput,
   type ShipTrackingStatus,
   type ShipWilaya,
+  Skeleton,
   Spinner,
   StatusBadge,
   STATUS_COLORS,
@@ -274,8 +275,8 @@ const AppVisibilityToggle = ({
       setOn(next);
       setNotice(
         next
-          ? 'La Livraison est visible dans l’app publiée.'
-          : 'La Livraison est masquée dans l’app publiée.'
+          ? "La Livraison est visible dans l'app publiée."
+          : "La Livraison est masquée dans l'app publiée."
       );
       onMutated?.();
     } else if (out.status === 'unavailable') {
@@ -293,21 +294,34 @@ const AppVisibilityToggle = ({
         alignItems: 'center',
         gap: 12,
         flexWrap: 'wrap',
-        padding: '11px 14px',
-        borderRadius: 12,
+        padding: '12px 16px',
+        borderRadius: 14,
         background: C.panel,
         border: `1px solid ${C.border}`,
+        boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
       }}
     >
-      <span aria-hidden style={{ fontSize: 18 }}>
+      <span
+        aria-hidden
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 10,
+          background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+          display: 'grid',
+          placeItems: 'center',
+          fontSize: 18,
+          flexShrink: 0,
+        }}
+      >
         🚚
       </span>
       <div style={{ flex: 1, minWidth: 180 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-          Afficher dans l’app publiée
+          Afficher dans l'app publiée
         </div>
         <div style={{ fontSize: 11.5, color: C.muted }}>
-          Ajoute l’onglet « Livraison » (livreurs + suivi) à l’app de vos vendeurs.
+          Ajoute l'onglet « Livraison » (livreurs + suivi) à l'app de vos vendeurs.
         </div>
         {notice ? (
           <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4 }}>{notice}</div>
@@ -842,7 +856,7 @@ const ConnectCard = ({
           Collez vos identifiants API depuis votre espace {label}
           {meta.connectHintExtra ?? ''}. Vos clés sont chiffrées et ne sont
           jamais réaffichées. Rana nخزنوهم مشفّرين — matbanwelkch.
-          {singleToken ? ' Ce transporteur ne demande qu’un token.' : ''}
+          {singleToken ? " Ce transporteur ne demande qu'un token." : ''}
         </div>
         <div style={twoColStyle}>
           {/* Token-only providers (Maystro) hide the API-ID field entirely. */}
@@ -914,7 +928,7 @@ const PickupWilayaCard = ({
     <Panel title="Wilaya de départ">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={hintStyle}>
-          D’où partent vos colis ? Cette wilaya sert d’origine pour l’expédition et
+          D'où partent vos colis ? Cette wilaya sert d'origine pour l'expédition et
           le calcul des frais. Men win yطلعو الكوليات.
         </div>
         {wilayasPhase === 'loading' ? (
@@ -971,7 +985,7 @@ const FeesPreview = ({
   const run = useCallback(async () => {
     if (busy) return;
     if (!pickupWilaya) {
-      setErr('Choisissez d’abord votre wilaya de départ.');
+      setErr("Choisissez d'abord votre wilaya de départ.");
       return;
     }
     if (!toWilaya) {
@@ -1149,7 +1163,7 @@ const CourierOrders = ({
       if (!oid) return;
       if (readOnly) return onWritesBlocked();
       if (!pickupWilaya) {
-        setRowNotice({ id: oid, text: 'Choisissez votre wilaya de départ d’abord.', bad: true });
+        setRowNotice({ id: oid, text: "Choisissez votre wilaya de départ d'abord.", bad: true });
         return;
       }
       setBusyId(oid);
@@ -1265,7 +1279,7 @@ const CourierOrders = ({
         {toShip.length === 0 ? (
           <EmptyNote>
             Aucune commande prête à expédier. Confirmez une commande (onglet
-            Commandes) pour l’envoyer via {label}.
+            Commandes) pour l'envoyer via {label}.
           </EmptyNote>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1384,9 +1398,9 @@ const CourierOrders = ({
                           fontWeight: 700,
                           fontSize: 12,
                         }}
-                        title="Télécharger l’étiquette (PDF)"
+                        title="Télécharger l'étiquette (PDF)"
                       >
-                        🏷️ Télécharger l’étiquette
+                        🏷️ Télécharger l'étiquette
                       </a>
                     ) : null}
                     <span style={{ flex: 1 }} />
@@ -1598,7 +1612,19 @@ const CouriersTab = ({
               </thead>
               <tbody>
                 {list.map(c => (
-                  <tr key={c.id}>
+                  <tr
+                    key={c.id}
+                    style={{
+                      transition: 'background 120ms ease',
+                    }}
+                    onMouseEnter={e => {
+                      (e.currentTarget as HTMLTableRowElement).style.background =
+                        'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 5%, transparent)';
+                    }}
+                    onMouseLeave={e => {
+                      (e.currentTarget as HTMLTableRowElement).style.background = 'transparent';
+                    }}
+                  >
                     <td style={{ ...tdStyle, fontWeight: 700 }}>{c.name}</td>
                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                       {c.phone ? (
@@ -1761,7 +1787,7 @@ const CourierForm = ({
               onChange={e => setCodFee(e.target.value.replace(/[^\d]/g, ''))}
             />
           </Field>
-          <Field label="Statut" hint="Un livreur inactif reste masqué à l’assignation.">
+          <Field label="Statut" hint="Un livreur inactif reste masqué à l'assignation.">
             <label
               style={{
                 display: 'inline-flex',
@@ -1958,7 +1984,7 @@ const RatesTab = ({
     }
     const inputs = buildInputs();
     if (inputs.length === 0) {
-      setNotice({ tone: 'error', text: 'Renseignez au moins un tarif avant d’enregistrer.' });
+      setNotice({ tone: 'error', text: "Renseignez au moins un tarif avant d'enregistrer." });
       return;
     }
     setSaving(true);
@@ -1984,7 +2010,7 @@ const RatesTab = ({
       return;
     }
     if (!csv.trim()) {
-      setNotice({ tone: 'error', text: 'Collez le CSV (wilaya,frais,domicile,bureau) d’abord.' });
+      setNotice({ tone: 'error', text: "Collez le CSV (wilaya,frais,domicile,bureau) d'abord." });
       return;
     }
     setImporting(true);
@@ -2030,7 +2056,7 @@ const RatesTab = ({
   if (list.length === 0) {
     return (
       <Banner tone="info">
-        Ajoutez d’abord un livreur dans l’onglet « Livreurs » pour définir sa grille
+        Ajoutez d'abord un livreur dans l'onglet « Livreurs » pour définir sa grille
         tarifaire par wilaya.
       </Banner>
     );
@@ -2080,7 +2106,7 @@ const RatesTab = ({
             setShowCsv(s => !s);
           }}
         >
-          {showCsv ? 'Fermer l’import' : '⇪ Importer CSV'}
+          {showCsv ? "Fermer l'import" : '⇪ Importer CSV'}
         </button>
       </div>
 
@@ -2097,7 +2123,7 @@ const RatesTab = ({
             <div style={hintStyle}>
               Une ligne par wilaya : <code style={csvCodeStyle}>code,frais,domicile,bureau</code>{' '}
               (frais/domicile/bureau optionnels). Collez le tarif de votre livreur —
-              l’en-tête est ignoré automatiquement.
+              l'en-tête est ignoré automatiquement.
             </div>
             <textarea
               style={{
@@ -2530,16 +2556,20 @@ const ShipmentsTab = ({
 // ===========================================================================
 
 const LoadingRow = ({ label }: { label: string }) => (
-  <div
-    style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
-      padding: '24px 4px',
-      color: C.muted,
-    }}
-  >
-    <Spinner /> {label}
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <Skeleton rows={2} height={44} />
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        color: C.muted,
+        fontSize: 12.5,
+      }}
+      role="status"
+    >
+      <Spinner /> {label}
+    </div>
   </div>
 );
 
@@ -2573,10 +2603,13 @@ const csvCodeStyle: CSSProperties = {
 function subTabStyle(active: boolean): CSSProperties {
   return {
     appearance: 'none',
-    background: 'none',
+    background: active
+      ? 'color-mix(in srgb, var(--affine-primary-color, #1e96eb) 10%, transparent)'
+      : 'none',
     border: 'none',
     borderBottom: active ? `2px solid ${C.accent}` : '2px solid transparent',
-    padding: '8px 12px',
+    borderRadius: active ? '8px 8px 0 0' : undefined,
+    padding: '8px 14px',
     fontSize: 13,
     fontWeight: 700,
     cursor: 'pointer',
@@ -2584,7 +2617,7 @@ function subTabStyle(active: boolean): CSSProperties {
     alignItems: 'center',
     gap: 6,
     color: active ? C.text : C.muted,
-    transition: 'color 160ms ease, border-color 160ms ease',
+    transition: 'color 160ms ease, border-color 160ms ease, background 160ms ease',
   };
 }
 
@@ -2695,10 +2728,11 @@ const ActiveBadge = ({ active }: { active: boolean }) => {
 
 const matrixWrapStyle: CSSProperties = {
   border: `1px solid ${C.border}`,
-  borderRadius: 12,
+  borderRadius: 14,
   overflow: 'auto',
   maxHeight: 460,
   background: C.panel,
+  boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
 };
 
 const matrixThStyle: CSSProperties = {
@@ -2753,10 +2787,12 @@ const shipmentCardStyle: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   gap: 8,
-  padding: '11px 12px',
-  borderRadius: 10,
-  background: C.bg,
+  padding: '12px 14px',
+  borderRadius: 12,
+  background: C.panel,
   border: `1px solid ${C.border}`,
+  boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+  transition: 'box-shadow 160ms ease, border-color 160ms ease',
 };
 
 // ---- wa.me link builder: strip non-digits, keep a bare international number.
