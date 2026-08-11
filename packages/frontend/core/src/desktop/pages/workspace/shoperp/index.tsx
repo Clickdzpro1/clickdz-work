@@ -24,7 +24,6 @@ import {
   Banner,
   btnStyle,
   C,
-  ensureShoperpMotionCss,
   ensureShoperpResponsiveCss,
   fetchAppFeatures,
   fetchErpSummary,
@@ -58,6 +57,34 @@ import { ShopWizard } from './wizard';
 // ---------------------------------------------------------------------------
 
 type LoadState = 'loading' | 'ready' | 'error';
+
+// Skeleton shimmer for the loading state. Injected once per document; the
+// keyframe + scoped rule animate the [data-cdz-skeleton] placeholder blocks
+// above. Idempotent — guarded by a sentinel <style id>. Uses the same cdz-skel
+// shimmer the rest of the DzOS surface uses (surface → hover → surface sweep).
+const SHOPERP_MOTION_STYLE_ID = 'cdz-shoperp-motion-css';
+function ensureShoperpMotionCss(): void {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById(SHOPERP_MOTION_STYLE_ID)) return;
+  const el = document.createElement('style');
+  el.id = SHOPERP_MOTION_STYLE_ID;
+  el.textContent = `
+@keyframes cdz-skel {
+  0% { background-position: 0% 0; }
+  100% { background-position: 400px 0; }
+}
+[data-cdz-skeleton] {
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--affine-v2-layer-background-secondary, #12151d) 25%, var(--affine-v2-layer-background-tertiary, #232838) 50%, var(--affine-v2-layer-background-secondary, #12151d) 75%);
+  background-size: 400px 100%;
+  animation: cdz-skel 1.4s ease-in-out infinite;
+  opacity: 0.55;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-cdz-skeleton] { animation: none; }
+}`;
+  document.head.appendChild(el);
+}
 
 function singleShopTarget(
   apps: MineApp[]
