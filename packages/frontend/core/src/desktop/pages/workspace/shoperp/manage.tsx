@@ -60,6 +60,22 @@ export const ManageView = ({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span
+          aria-hidden
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 17,
+            flexShrink: 0,
+            boxShadow: '0 2px 8px rgba(30, 150, 235, 0.25)',
+          }}
+        >
+          📦
+        </span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: C.text }}>
             Vos boutiques &amp; applications
@@ -87,10 +103,11 @@ export const ManageView = ({
         {loose.length > 0 ? (
           <div
             style={{
-              borderRadius: 12,
+              borderRadius: 14,
               background: C.panel,
               border: `1px solid ${C.border}`,
               overflow: 'hidden',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
             }}
           >
             {loose.map(app => (
@@ -141,10 +158,12 @@ const StoreGroup = ({
   return (
     <div
       style={{
-        borderRadius: 12,
+        borderRadius: 14,
         background: C.panel,
         border: `1px solid ${C.border}`,
         overflow: 'hidden',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+        transition: 'box-shadow 200ms ease',
       }}
     >
       <div
@@ -152,7 +171,7 @@ const StoreGroup = ({
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          padding: '9px 14px',
+          padding: '10px 14px',
           borderBottom: `1px solid ${C.border}`,
           background: C.panel2,
           fontSize: 11,
@@ -162,7 +181,21 @@ const StoreGroup = ({
           color: C.muted,
         }}
       >
-        <span aria-hidden>🔗</span>
+        <span
+          aria-hidden
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 7,
+            background: 'linear-gradient(135deg, #1e96eb, #0e6bbf)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 11,
+            flexShrink: 0,
+          }}
+        >
+          🔗
+        </span>
         Store · {storeSlug}
         {/* Reset the header's uppercase/tracking for the action cluster */}
         <div
