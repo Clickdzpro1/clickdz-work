@@ -18,6 +18,7 @@ import {
   Panel,
   postErpSettings,
   putChargily,
+  Skeleton,
   Spinner,
   validateAccent,
   validatePin,
@@ -143,7 +144,34 @@ export const SettingsAdmin = ({
   const accentValid = ACCENT_RE.test(accent.trim());
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Section header with gradient icon chip */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span
+          aria-hidden
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 10,
+            background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: 15,
+            flexShrink: 0,
+          }}
+        >
+          ⚙️
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: C.text, letterSpacing: '-0.01em' }}>
+            Réglages de la boutique
+          </div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>
+            Informations générales, contact et sécurité
+          </div>
+        </div>
+      </div>
+
       {notice ? (
         <Banner
           tone={
@@ -508,16 +536,21 @@ const PaymentsSection = ({
         ) : null}
 
         {phase === 'loading' ? (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '16px 4px',
-              color: C.muted,
-            }}
-          >
-            <Spinner /> Chargement des réglages de paiement…
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Skeleton rows={1} height={52} />
+            <Skeleton rows={1} height={44} />
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                color: C.muted,
+                fontSize: 12.5,
+              }}
+              role="status"
+            >
+              <Spinner /> Chargement des réglages de paiement…
+            </div>
           </div>
         ) : phase === 'unavailable' ? (
           <EmptyNote>
@@ -538,10 +571,14 @@ const PaymentsSection = ({
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 8,
+                  gap: 10,
                   flexWrap: 'wrap',
                   fontSize: 12.5,
                   color: C.muted,
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  background: C.panel2,
+                  border: `1px solid ${C.border}`,
                 }}
               >
                 <span
@@ -550,13 +587,16 @@ const PaymentsSection = ({
                     fontWeight: 700,
                     letterSpacing: '0.04em',
                     textTransform: 'uppercase',
-                    padding: '2px 9px',
+                    padding: '3px 10px',
                     borderRadius: 999,
-                    color: '#fff',
-                    background: chargily.enabled ? C.accent : C.muted,
+                    color: chargily.enabled ? '#fff' : C.muted,
+                    background: chargily.enabled
+                      ? C.accent
+                      : 'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 20%, transparent)',
+                    border: `1px solid ${chargily.enabled ? C.accent : C.border}`,
                   }}
                 >
-                  {chargily.enabled ? 'Activé' : 'Désactivé'}
+                  {chargily.enabled ? '✓ Activé' : 'Désactivé'}
                 </span>
                 <span>
                   Clé enregistrée :{' '}
