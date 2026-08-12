@@ -475,6 +475,50 @@ function streamAnswer(res, model, text) {
 
 const now = () => Math.floor(Date.now() / 1000);
 
+// ---- image generation (Google Gemini image models, e.g. Nano Banana) -------
+// Real image GENERATION for the platform (Studio Image, deck art, etc.). The
+// key (GEMINI_IMAGE_API) is read at call time so saving it + a redeploy is
+// enough — no code change. Returns raw base64 PNG.
+async function geminiGenerateImage(model, prompt) {
+  const key = process.env.GEMINI_IMAGE_API || '';
+  if (!key) {
+    const e = new Error('image generation is not configured (GEMINI_IMAGE_API unset)');
+    e.status = 503; throw e;
+  }
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90000);
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    const e = new Error(`gemini image ${r.status}: ${t.slice(0, 300)}`);
+    e.status = r.status === 429 ? 429 : 502;
+    throw e;
+  }
+  const j = await r.json();
+  const parts = j?.candidates?.[0]?.content?.parts || [];
+  const img = parts.find(p => p?.inlineData?.data || p?.inline_data?.data);
+  const b64 = img?.inlineData?.data || img?.inline_data?.data;
+  if (!b64) {
+    const e = new Error('gemini returned no image data');
+    e.status = 502; throw e;
+  }
+  return b64;
+}
+
 // ------------------------------------------------------------------- MCP
 const MCP_TOOLS = [
   {
@@ -646,7 +690,7 @@ async function requestHandler(req, res) {
     return json(res, 200, {
       name: 'CDZ AI',
       tagline: 'The ClickDz supermodel platform — real Claude, Gemini and GPT behind one API.',
-      endpoints: ['/v1/models', '/v1/chat/completions', '/v1/audio/transcriptions', '/v1/images/describe', '/mcp'],
+      endpoints: ['/v1/models', '/v1/chat/completions', '/v1/audio/transcriptions', '/v1/images/generations', '/v1/images/describe', '/mcp'],
       docs: 'OpenAI-compatible. Authorization: Bearer <key>.',
     });
   }
@@ -694,6 +738,25 @@ async function requestHandler(req, res) {
         choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
+    }
+
+    if (path === '/v1/images/generations' && req.method === 'POST') {
+      const parsed = JSON.parse(body || '{}');
+      const prompt = String(parsed.prompt || '').trim();
+      if (!prompt) return err(res, 400, 'prompt is required', 'invalid_request_error');
+      const n = Math.min(Math.max(parseInt(parsed.n, 10) || 1, 1), 4);
+      // Accept an explicit gemini image model, else the configured default.
+      const model = (parsed.model && /gemini/i.test(parsed.model))
+        ? parsed.model
+        : (process.env.CDZ_IMAGE_MODEL || 'gemini-2.5-flash-image');
+      usage.byModel[model] = (usage.byModel[model] || 0) + 1;
+      const data = [];
+      for (let i = 0; i < n; i++) {
+        const b64 = await geminiGenerateImage(model, prompt);
+        // OpenAI-images-compatible shape (b64_json) plus a ready data URL.
+        data.push({ b64_json: b64, url: `data:image/png;base64,${b64}` });
+      }
+      return json(res, 200, { created: now(), data });
     }
 
     if (path === '/v1/images/describe' && req.method === 'POST') {
