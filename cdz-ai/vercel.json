@@ -1,3 +1,1 @@
-{
-  "regions": ["fra1"]
-}
+{"regions":["fra1"],"crons":[{"path":"/v1","schedule":"*/4 * * * *"}]}
