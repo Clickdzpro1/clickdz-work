@@ -1,0 +1,20 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy all application files
+COPY package.json ./
+COPY index.mjs ./
+COPY guards.mjs ./
+COPY docs.mjs ./
+COPY docs.html ./
+COPY docs.html.template ./
+COPY workers.catalog.json ./
+
+# No npm install needed — zero external dependencies (Node built-ins only)
+
+ENV PORT=80
+
+EXPOSE 80
+
+CMD ["node", "index.mjs"]
