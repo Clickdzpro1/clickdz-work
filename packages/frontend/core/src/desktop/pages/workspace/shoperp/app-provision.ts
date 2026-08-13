@@ -81,7 +81,14 @@ export async function provisionApp(app: string): Promise<ProvisionedApp | null> 
   return null;
 }
 
-/** Append `bridge_code` to a base URL, respecting any existing query string. */
-export function withBridgeCode(baseUrl: string, code: string): string {
-  return `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}bridge_code=${encodeURIComponent(code)}`;
+/** Append `bridge_code` (and optionally `username`) to a base URL, respecting
+ *  any existing query string. The username enables the shim's bridge-provision
+ *  fallback: when /api/bridge/session fails (user doesn't exist in the app's
+ *  own DB), the shim auto-creates them via /api/v1/admin/bridge-provision. */
+export function withBridgeCode(baseUrl: string, code: string, username?: string): string {
+  let url = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}bridge_code=${encodeURIComponent(code)}`;
+  if (username) {
+    url += `&username=${encodeURIComponent(username)}`;
+  }
+  return url;
 }

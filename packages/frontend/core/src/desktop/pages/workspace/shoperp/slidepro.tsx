@@ -54,7 +54,7 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
       setStatus('error');
       return 'error';
     }
-    setIframeSrc(p.loginUrl || withBridgeCode(slideProInstanceUrl(), p.code));
+    setIframeSrc(p.loginUrl || withBridgeCode(slideProInstanceUrl(), p.code, p.username));
     setStatus('ready');
     return 'ready';
   }, []);
