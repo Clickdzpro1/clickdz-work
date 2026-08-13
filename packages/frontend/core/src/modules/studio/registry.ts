@@ -235,9 +235,8 @@ export const STUDIOS: StudioDef[] = [
     label: 'SlidePro',
     route: '/slidepro',
     icon: () => createElement(FrameIcon),
-    group: 'commerce',
+    group: 'create',
     testId: 'slider-bar-slidepro-button',
-    beta: true,
   },
   {
     id: 'coursepro',
