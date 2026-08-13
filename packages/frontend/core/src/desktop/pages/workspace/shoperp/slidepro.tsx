@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Banner, btnStyle, C, ensureShoperpResponsiveCss, linkBtnStyle, miniBtnStyle, Spinner } from './shoperp-shared';
-import { provisionApp, withBridgeCode } from './app-provision';
-/* SlidePro - AI Presentation Generator powered by Presenton (Apache 2.0) + CDZ AI */
+import { provisionApp } from './app-provision';
+/* SlidePro - AI Presentation Generator powered by Presenton (Apache 2.0) + CDZ AI
+ *
+ * MICROFRONTEND: SlidePro is now served same-origin at /slidepro via Vercel
+ * rewrites on affine-proxy. The presenton Next.js frontend runs as its own
+ * Vercel project (slidepro-frontend) and is proxied under work.clickdz.ai/slidepro.
+ * This eliminates the cross-site shim entirely — the iframe is same-origin,
+ * so the AFFiNE session cookie is first-party and the presenton auto-provision
+ * route (/api/bridge-redeem) can set first-party session cookies directly. */
 
 const SLIDEPRO_URL_KEY = 'cdz.slidepro.url';
 
 /**
- * Base URL used ONLY for the bridge-code fallback (and as a last resort). We use
- * the SHIM host as the base so proxying + auth keep working; the shim redeems
- * the bridge_code and lands the user logged in. A self-hoster can repoint this
- * via localStorage without a rebuild — but there is no fake per-shop host.
+ * The same-origin path where the presenton frontend is mounted via Vercel
+ * rewrites. A self-hoster can repoint this via localStorage to an external URL
+ * (e.g. the legacy shim) without a rebuild.
  */
-const SLIDEPRO_INSTANCE_URL = 'https://slidepro-shim-production.up.railway.app';
+const SLIDEPRO_PATH = '/slidepro';
 
 function slideProInstanceUrl(): string {
   try {
@@ -20,31 +26,34 @@ function slideProInstanceUrl(): string {
   } catch {
     /* storage unavailable — fall through to the default */
   }
-  return SLIDEPRO_INSTANCE_URL;
+  return SLIDEPRO_PATH;
+}
+
+/** Build the same-origin iframe URL with bridge_code + username query params. */
+function buildSlideproIframeUrl(baseUrl: string, code: string, username: string): string {
+  const url = new URL(baseUrl, typeof window !== 'undefined' ? window.location.origin : 'https://work.clickdz.ai');
+  url.searchParams.set('bridge_code', code);
+  if (username) url.searchParams.set('username', username);
+  return url.toString();
 }
 
 export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void }) => {
   const [status, setStatus] = useState<'loading' | 'ready' | 'degraded' | 'error'>('loading');
   const [iframeSrc, setIframeSrc] = useState('');
-  // "↻ Vérifier" feedback: a manual re-check should never look like a no-op.
-  // checking=true drives the button's spinner/disabled state; checkNote is a
-  // short-lived French message reporting the outcome, shown even when the
-  // status doesn't change (e.g. still ready, still preparing).
   const [checking, setChecking] = useState(false);
   const [checkNote, setCheckNote] = useState('');
 
-  // Robust flow: provision the app, then iframe the shim loginUrl (preferred) or
-  // the bridge-code URL. The iframe load IS the health check — no CORS probe.
-  // E1.1: on provision failure, fall back to the bare shim URL (degraded mode)
-  // so the user sees the app (with its own login flow) instead of a hard red
-  // banner. Only show the error state if there is no URL at all to iframe.
-  // Returns the resolved status so callers (like the manual "Vérifier" check
-  // below) can report an accurate result without racing React's state batching.
+  // Microfrontend flow: provision the app (gets bridge_code + username),
+  // then iframe the SAME-ORIGIN /slidepro path with the bridge params.
+  // The presenton frontend detects the params, calls /api/bridge-redeem
+  // (which auto-provisions the user + sets a first-party session cookie),
+  // and reloads — landing the user logged in without any login screen.
+  // On provision failure, fall back to the bare /slidepro path (degraded).
   const load = useCallback(async (): Promise<'ready' | 'degraded' | 'error'> => {
     setStatus('loading');
     const p = await provisionApp('slidepro');
     if (!p) {
-      // E1.1 fallback: iframe the bare shim URL so the panel is still usable.
+      // Fallback: iframe the bare /slidepro path (presenton's own login flow).
       const fallback = slideProInstanceUrl();
       if (fallback) {
         setIframeSrc(fallback);
@@ -54,7 +63,8 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
       setStatus('error');
       return 'error';
     }
-    setIframeSrc(p.loginUrl || withBridgeCode(slideProInstanceUrl(), p.code, p.username));
+    // Same-origin iframe: /slidepro?bridge_code=X&username=Y
+    setIframeSrc(buildSlideproIframeUrl(slideProInstanceUrl(), p.code, p.username));
     setStatus('ready');
     return 'ready';
   }, []);
