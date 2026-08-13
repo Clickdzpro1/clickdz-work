@@ -52,6 +52,24 @@ export class StickerBlockComponent extends GfxBlockComponent<StickerBlockModel> 
   override connectedCallback() {
     super.connectedCallback();
     this.resourceController.setEngine(this.std.store.blobSync);
+    // P0 FIX (BUG A): mirror the image block's blob lifecycle. Without these,
+    // blobUrl$ is never populated → static stickers render <img src=nothing>
+    // (invisible) and animated stickers render a blank <canvas>. The original
+    // connectedCallback only called setEngine(), so the blob URL was never
+    // resolved and no sourceId$ change ever refreshed it.
+    this.disposables.add(this.resourceController.subscribe());
+    this.disposables.add(this.resourceController);
+    this.disposables.add(
+      this.model.props.sourceId$.subscribe(() => {
+        void this.resourceController.refreshUrlWith().then(() => {
+          if (this.isAnimated) void this.#renderLottie();
+        });
+      })
+    );
+    // Initial load — resolve the blob URL for the sticker that already exists.
+    void this.resourceController.refreshUrlWith().then(() => {
+      if (this.isAnimated) void this.#renderLottie();
+    });
   }
 
   override updated() {
@@ -60,12 +78,25 @@ export class StickerBlockComponent extends GfxBlockComponent<StickerBlockModel> 
 
   override disconnectedCallback() {
     this.#destroyLottie();
+    // P0 FIX (BUG A): revoke the object URL so we don't leak blob URLs when the
+    // sticker block is removed from the canvas.
+    this.resourceController.dispose();
     super.disconnectedCallback();
   }
 
   async #loadLottie() {
     if (this.#lottieModule) return;
-    this.#lottieModule = await import('@lottiefiles/dotlottie-web');
+    // P0 FIX (BUG D): wrap the dynamic import so a missing/failed
+    // @lottiefiles/dotlottie-web load is diagnosable instead of silently
+    // swallowed by the fire-and-forget #renderLottie() call.
+    try {
+      this.#lottieModule = await import('@lottiefiles/dotlottie-web');
+    } catch (err) {
+      console.error(
+        '[StickerBlock] Failed to load @lottiefiles/dotlottie-web:',
+        err
+      );
+    }
   }
 
   async #renderLottie() {
@@ -98,6 +129,6 @@ export class StickerBlockComponent extends GfxBlockComponent<StickerBlockModel> 
     if (this.isAnimated) {
       return html`<canvas></canvas>`;
     }
-    return html`<img src=${this.blobUrl || nothing} alt="sticker" />`;
+    return html`<img src=${this.blobUrl || nothing} alt="sticker" />;
   }
 }
