@@ -2836,6 +2836,49 @@ export class ClickDzBridgeController {
       );
     }
 
+    // ---- Per-user generation cap (2026-08-14 budget hardening) ------------
+    // Enforce daily quota per authenticated user via Redis INCR + EXPIRE.
+    // Config via env: CDZ_IMAGE_DAILY_LIMIT (default 50), CDZ_IMAGE_DAILY_LIMIT_ENABLED (default 1).
+    // Fail-open on Redis errors so a cache outage does not block generations.
+    const dailyLimitEnabled = process.env.CDZ_IMAGE_DAILY_LIMIT_ENABLED !== '0';
+    const dailyLimit = Math.max(1, parseInt(process.env.CDZ_IMAGE_DAILY_LIMIT || '50', 10) || 50);
+    if (dailyLimitEnabled && user?.id) {
+      const dayKey = new Date().toISOString().slice(0,10).replace(/-/g,'');
+      const quotaKey = `clickdz:gen:${user.id}:${dayKey}`;
+      try {
+        const count = await this.redis.incr(quotaKey);
+        if (count === 1) {
+          await this.redis.expire(quotaKey, 86400);
+        }
+        if (count > dailyLimit) {
+          await this.redis.decr(quotaKey);
+          throw new HttpException(
+            {
+              error: {
+                message: `Daily image generation limit reached (${dailyLimit}/day). Try again tomorrow.`,
+                type: 'rate_limit_error',
+                code: 'daily_limit_exceeded',
+                limit: dailyLimit,
+                count,
+              },
+            },
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+        }
+      } catch (err) {
+        if (
+          err instanceof HttpException &&
+          (err as any)?.getResponse?.()?.error?.code === 'daily_limit_exceeded'
+        ) {
+          throw err;
+        }
+        // Fail-open on Redis errors (log but allow generation)
+        try {
+          this.logger?.warn?.(`Quota check failed (fail-open) for ${user.id}: ${(err as Error)?.message}`);
+        } catch {}
+      }
+    }
+
     // ---- CDZIMAGE model resolution (WS1) --------------------------------
     const requestedModel = String(body?.model || '');
     let resolution = resolveCdzImageModel(requestedModel);
