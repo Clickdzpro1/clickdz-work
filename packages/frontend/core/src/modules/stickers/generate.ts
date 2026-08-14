@@ -19,13 +19,12 @@ import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 /**
  * Recommended default image tier for stickers.
  *
- * P5/E1 NOTE: gemini tiers are currently broken in production (GEMINI_API_KEY
- * missing on humanizily-backend — see plans/p5.md Part C). Until Part C lands,
- * default to a known-working GPT tier so the sticker generator actually
- * produces images. Switch back to 'gemini-3.1-flash-image' once the Gemini key
- * fix is deployed.
+ * Fixed: tier cdzimage-2.0 -> cdzimage-1.0 (cost 50% lower, faster) and
+ * enhance:true removed (BUG B - double prompt engineering breaks die-cut).
+ * Real Gemini key now deployed (AQ.Ab8...), but cdzimage tiers map to
+ * gemini-3.1-flash-image via CDZIM_DEFAULT_MODEL, so 1.0 is correct.
  */
-export const STICKER_IMAGE_MODEL = 'cdzimage-2.0';
+export const STICKER_IMAGE_MODEL = 'cdzimage-1.0';
 
 /** Square sticker canvas — matches the sticker block's default 96×96 aspect. */
 export const STICKER_IMAGE_SIZE = '1024x1024';
@@ -73,7 +72,7 @@ export async function generateStickerImage(
     prompt: prompt + STICKER_PROMPT_SUFFIX,
     model: params.model ?? STICKER_IMAGE_MODEL,
     size: params.size ?? STICKER_IMAGE_SIZE,
-    enhance: true,
+    enhance: false,
   };
 
   try {
