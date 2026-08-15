@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Banner, btnStyle, C, ensureShoperpResponsiveCss, linkBtnStyle, miniBtnStyle, Spinner } from './shoperp-shared';
 import { provisionApp } from './app-provision';
-/* SlidePro - AI Presentation Generator powered by Presenton (Apache 2.0) + CDZ AI
+/* SlidePro - AI Presentation Generator powered by ClickDz
  *
  * MICROFRONTEND: SlidePro is now served same-origin at /slidepro via Vercel
  * rewrites on affine-proxy. The presenton Next.js frontend runs as its own
@@ -112,7 +112,7 @@ export const SlideProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: { 
         </span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>SlidePro</div>
-          <div style={{ fontSize: 11.5, color: C.muted }}>Présentations IA · Powered by Presenton + CDZ AI</div>
+          <div style={{ fontSize: 11.5, color: C.muted }}>AI Presentations · Powered by ClickDz</div>
         </div>
         {/* No external "open in new tab" link: SlidePro is iframe-only inside
             ClickDz Work (users must use it in-app, never via an external URL). */}
