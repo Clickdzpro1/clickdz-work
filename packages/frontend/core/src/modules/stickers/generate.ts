@@ -1,30 +1,27 @@
 // modules/stickers/generate.ts
 //
-// WS6 — AI sticker GENERATOR.
+// WS14 — AI sticker GENERATOR (Prodia Flux Schnell via Vercel AI Gateway).
 //
-// Calls the ALREADY-EXISTING bridge image route (POST /api/v1/images/generations,
+// Calls the bridge image route (POST /api/v1/images/generations,
 // clickdz-bridge.controller.ts imageGenerations()) with a transparent / die-cut
 // sticker prompt, and returns the resulting image as a Blob ready to hand to
 // `ingestStickerAsset` + `addSticker(std, sourceId, 'static', …)`.
 //
 // Transport is a 1:1 mirror of modules/vpic/use-vpic-generate.ts (the verified
 // generation path): JSON body, session-cookie auth, response normalized to
-// `data[0].url` (a data: URL). We add ONLY the sticker-specific prompt suffix
-// and a Gemini image tier default — the Nano-Banana line (gemini-3.1-flash-image)
-// handles clean die-cut cutouts and small text far better than gpt-image for
-// this use case (see plans/map2.md WS6b).
+// `data[0].url` (a data: URL). We add ONLY the sticker-specific prompt suffix.
+// WS14: tier switched to Prodia Flux Schnell (cdzimage-flux) — ~$0.001-0.0025/img
+// (33-67x cheaper than Gemini), good die-cut quality for vector-style stickers.
 
 import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 
 /**
  * Recommended default image tier for stickers.
  *
- * Fixed: tier cdzimage-2.0 -> cdzimage-1.0 (cost 50% lower, faster) and
- * enhance:true removed (BUG B - double prompt engineering breaks die-cut).
- * Real Gemini key now deployed (AQ.Ab8...), but cdzimage tiers map to
- * gemini-3.1-flash-image via CDZIM_DEFAULT_MODEL, so 1.0 is correct.
+ * WS14: switched from cdzimage-1.0 (gpt-image-1-mini) to cdzimage-flux
+ * (Prodia Flux Schnell via Vercel AI Gateway). ~$0.001-0.0025/img.
  */
-export const STICKER_IMAGE_MODEL = 'cdzimage-1.0';
+export const STICKER_IMAGE_MODEL = 'cdzimage-flux';
 
 /** Square sticker canvas — matches the sticker block's default 96×96 aspect. */
 export const STICKER_IMAGE_SIZE = '1024x1024';
