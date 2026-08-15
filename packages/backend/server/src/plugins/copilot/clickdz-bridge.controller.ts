@@ -509,6 +509,27 @@ const CDZ_AI_BASE_URL = CDZ_AI_GATEWAY_IMAGE_BASE;
 const CDZ_AI_KEY = CDZ_AI_GATEWAY_IMAGE_KEY;
 const CDZ_AI_ORIGIN = CDZ_AI_GATEWAY_IMAGE_KEY ? CDZ_AI_GATEWAY_IMAGE_BASE : '';
 const CDZ_AGENT_MODEL = CDZ_CHAT_MODEL;
+// WS14 REGRESSION FIX (2026-08-15): the chat-consolidation commit deleted
+// these const definitions but kept resolveAgentForRequest/assertMakeReady/
+// runMakeAgent, which still reference them — the server build is
+// transpile-only (no typecheck), so the dangling identifiers shipped and
+// every runMakeAgent call became an instant ReferenceError (6 call sites:
+// image enhancer, shop copy, ERP describe, ...). Restored verbatim from
+// pre-WS14 (61067f24): with the reroute flag ON (the default whenever the
+// Gateway key exists) runMakeAgent serves via the Gateway and these consts
+// only gate the legacy fallback, which cleanly 503s (make_not_configured)
+// when the MAKE_* env vars are absent.
+const MAKE_API_BASE = process.env.MAKE_API_BASE || 'https://eu1.make.com/api/v2';
+const MAKE_API_KEY = process.env.MAKE_API_KEY || '';
+const MAKE_TEAM_ID = process.env.MAKE_TEAM_ID || '';
+const MAKE_AGENT_ID = process.env.MAKE_SUPERAGENT_ID || process.env.MAKE_AGENT_ID || '';
+const MAKE_ARABIC_AGENT_ID = process.env.MAKE_ARABIC_AGENT_ID || MAKE_AGENT_ID;
+const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
+const MAKE_BUILDER_AGENT_ID = process.env.MAKE_BUILDER_AGENT_ID || '';
+// Master switch for the reroute. Defaults ON whenever a Gateway key is present
+// (the working path). Set CDZ_AGENT_VIA_CDZ_AI=0 to force the legacy Make path.
+const CDZ_AGENT_VIA_CDZ_AI =
+  process.env.CDZ_AGENT_VIA_CDZ_AI === '0' ? false : !!CDZ_AI_KEY;
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
 

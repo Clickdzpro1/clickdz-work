@@ -488,7 +488,12 @@ function orderTotal(o: Record<string, unknown>): number {
  * call behind a human `approval_request` in 'ask' mode. Reads = false.
  */
 function buildToolCatalog(): HermesTool[] {
-  const makeAvailable = !!(GATEWAY_KEY);
+  // GATEWAY_KEY was never defined in this file — a leftover from the WS14
+  // migration that shipped because the server build is transpile-only (no
+  // typecheck), then crash-looped the container at module init (TDZ
+  // ReferenceError, 2026-08-15 20:19 UTC outage). The Gateway credential
+  // this file actually defines is CDZ_AI_KEY.
+  const makeAvailable = !!CDZ_AI_KEY;
   return [
     {
       slug: 'shops_list',
@@ -2106,7 +2111,7 @@ export class ClickDzHermesController {
       catalog.find(t => t.slug === slug) as HermesTool;
     // Availability predicates mirror buildToolCatalog() EXACTLY (env-derived).
     const composioOn = (): boolean => !!COMPOSIO_API_KEY;
-    const makeOn = (): boolean => !!(GATEWAY_KEY);
+    const makeOn = (): boolean => !!CDZ_AI_KEY; // see buildToolCatalog note
     const avail: Record<string, () => boolean> = {
       shops_list: () => true,
       shop_erp_summary: () => true,
