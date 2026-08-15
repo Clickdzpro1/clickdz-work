@@ -18,24 +18,12 @@ import {
 } from './clickdz-vdz-video-prompt';
 
 // ---------------------------------------------------------------------------
-// Make.com engine wiring — mirrors clickdz-bridge.controller's runMakeAgent
-// (same env vars, same request shape, same fetch/timeout). Kept local so this
-// controller is self-contained, exactly like the peer ClickDz controllers.
+// WS14: VDZ Compose migrated to Vercel AI Gateway — same key as chat + images.
+// zai/glm-4.6v-flash (128K ctx, vision-capable) handles long HTML motion-graphics
+// composition better than the legacy Make.com agent.
 // ---------------------------------------------------------------------------
-const MAKE_API_BASE =
-  process.env.MAKE_API_BASE || 'https://eu1.make.com/api/v2';
-const MAKE_API_KEY = process.env.MAKE_API_KEY || '';
-const MAKE_TEAM_ID = process.env.MAKE_TEAM_ID || '';
-const MAKE_AGENT_ID =
-  process.env.MAKE_SUPERAGENT_ID || process.env.MAKE_AGENT_ID || '';
-// The code/creative agent handles long HTML generations; fall back to the
-// default agent when it is not separately configured.
-const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
-
-// Composition HTML can be large; give the engine the same generous ceiling the
-// /apps routes use for code generation and fail controlled instead of hanging.
-const MAKE_TIMEOUT_MS = 240_000;
-// Hard cap on returned composition size (matches the /apps 400KB output trim).
+const COMPOSE_MODEL = 'zai/glm-4.6v-flash';
+const COMPOSE_TIMEOUT_MS = 240_000;
 const MAX_OUTPUT_HTML_CHARS = 400_000;
 
 /**
@@ -97,49 +85,47 @@ function extractVdzHtml(reply: string): string {
 export class ClickDzVdzComposeController {
   private readonly logger = new Logger(ClickDzVdzComposeController.name);
 
-  private assertMakeReady() {
-    if (!MAKE_API_KEY || !MAKE_TEAM_ID || !MAKE_AGENT_ID) {
+  private async runGatewayCompose(content: string): Promise<string> {
+    const gatewayKey = process.env.CUSTOM_LLM_API_KEY || '';
+    const gatewayBase = process.env.AI_GATEWAY_BASE || 'https://ai-gateway.vercel.sh';
+    if (!gatewayKey) {
       throw new CopilotProviderSideError({
-        provider: 'make',
+        provider: 'gateway',
         kind: 'not_configured',
-        message: 'Make.com AI agent is not configured',
+        message: 'Vercel AI Gateway key is not configured',
       });
     }
-  }
-
-  /** Run the Make agent for one composition turn (new or refine). */
-  private async runMakeAgent(content: string): Promise<string> {
-    this.assertMakeReady();
-    const agentId = MAKE_CODE_AGENT_ID || MAKE_AGENT_ID;
-    const joined = `USER: ${content}`;
-    let response: Response;
     try {
-      response = await fetch(
-        `${MAKE_API_BASE}/ai-agents/v1/agents/${agentId}/run?teamId=${MAKE_TEAM_ID}`,
+      const response = await fetch(
+        `${gatewayBase}/v1/chat/completions`,
         {
           method: 'POST',
           headers: {
-            Authorization: `Token ${MAKE_API_KEY}`,
+            Authorization: `Bearer ${gatewayKey}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            messages: [
-              {
-                role: 'user',
-                content: `You are ClickDz Work AI. Answer directly and helpfully. Requested model: clickdz-vdz.\n\n${joined}`,
-              },
-            ],
-            config: {},
+            model: COMPOSE_MODEL,
+            messages: [{ role: 'user', content }],
+            max_tokens: 8000,
           }),
-          // large motion-graphics generations can take a couple of minutes —
-          // fail controlled instead of hanging forever
-          signal: AbortSignal.timeout(MAKE_TIMEOUT_MS),
+          signal: AbortSignal.timeout(COMPOSE_TIMEOUT_MS),
         }
       );
+      const data = (await response.json()) as any;
+      const result = data?.choices?.[0]?.message?.content;
+      if (!response.ok || typeof result !== 'string') {
+        throw new CopilotProviderSideError({
+          provider: 'gateway',
+          kind: 'api_error',
+          message: `Gateway returned ${response.status}`,
+        });
+      }
+      return result;
     } catch (cause) {
-      // network / timeout — surface as a typed provider error (not a 500).
+      if (cause instanceof CopilotProviderSideError) throw cause;
       throw new CopilotProviderSideError({
-        provider: 'make',
+        provider: 'gateway',
         kind: 'network_error',
         message:
           cause instanceof Error
@@ -150,7 +136,7 @@ export class ClickDzVdzComposeController {
 
     if (!response.ok) {
       throw new CopilotProviderSideError({
-        provider: 'make',
+        provider: 'gateway',
         kind: 'upstream_error',
         message: `Make.com agent failed: ${response.status} ${response.statusText}`,
       });
@@ -168,7 +154,7 @@ export class ClickDzVdzComposeController {
     let html = extractVdzHtml(reply || '');
     if (!html) {
       throw new CopilotProviderSideError({
-        provider: 'make',
+        provider: 'gateway',
         kind: 'invalid_output',
         message:
           'The model did not return a valid video composition. Try rephrasing.',
@@ -197,7 +183,7 @@ export class ClickDzVdzComposeController {
     }
     this.logger.log(`[vdz-compose] user=${user.id} prompt=${prompt.length}chars`);
     const content = buildComposeContent(prompt);
-    const reply = await this.runMakeAgent(content);
+    const reply = await this.runGatewayCompose(content);
     const html = this.toComposition(reply);
     return { html };
   }
@@ -233,7 +219,7 @@ export class ClickDzVdzComposeController {
     this.logger.log(
       `[vdz-compose] refine user=${user.id} html=${html.length}chars instruction=${instruction.length}chars`
     );
-    const reply = await this.runMakeAgent(content);
+    const reply = await this.runGatewayCompose(content);
     const refined = this.toComposition(reply);
     return { html: refined };
   }
