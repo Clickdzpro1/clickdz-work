@@ -299,11 +299,9 @@ function isSafePublicUrl(u: string): boolean {
   return true;
 }
 
-const MAKE_API_BASE = process.env.MAKE_API_BASE || 'https://eu1.make.com/api/v2';
-const MAKE_API_KEY = process.env.MAKE_API_KEY || '';
-const MAKE_TEAM_ID = process.env.MAKE_TEAM_ID || '';
-const MAKE_AGENT_ID = process.env.MAKE_SUPERAGENT_ID || process.env.MAKE_AGENT_ID || '';
-const MAKE_ARABIC_AGENT_ID = process.env.MAKE_ARABIC_AGENT_ID || MAKE_AGENT_ID;
+// WS14: Make.com AI Agents retired. All chat flows now use a SINGLE model —
+// zai/glm-4.6v-flash (9B vision-language, 128K ctx, 1.5s latency, 126 TPS)
+// via the SAME Vercel AI Gateway key the image pipeline and LLMs already use.
 // WS1 (CDZIMAGE): ONE unified OpenAI key for all image generation. Order:
 // the dedicated image key, then the app's canonical OPEN_AI (present on
 // prod), then the generic fallback.
@@ -482,54 +480,18 @@ const BULK_TTS_MAX_CHUNK_CHARS = 1_500;
 // Upper bound on chunks per request protects the serial loop and rate budget.
 const BULK_TTS_MAX_CHUNKS = 120;
 const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
-const MAKE_CODE_AGENT_ID = process.env.MAKE_CODE_AGENT_ID || '';
-const MAKE_BUILDER_AGENT_ID = process.env.MAKE_BUILDER_AGENT_ID || '';
-// machine access token for external OpenAI-compatible clients
-// (ClickDz Builder / bolt.diy). Unset = machine access disabled.
+// WS14: Make.com AI Agents + api.clickdz.ai retired. All LLM traffic now
+// flows through Vercel AI Gateway on the same key already used for images.
+// Single model: zai/glm-4.6v-flash (9B vision-language, 128K ctx, streaming).
 const CLICKDZ_BRIDGE_TOKEN = process.env.CLICKDZ_BRIDGE_TOKEN || '';
-const CDZ_AI_BASE_URL = (
-  process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
-)
-  // Trailing slashes first, THEN a trailing `/v1`. Every call site below appends
-  // `/v1/chat/completions`, so a base URL that already ends in `/v1` produced
-  // `.../v1/v1/chat/completions` — a 404. Production is configured exactly that
-  // way, which is why the direct fast path silently failed everywhere: the vdz
-  // dock surfaced it as a 500, and the reasoning pulse swallowed it and served
-  // its static fallback lines. Normalising here fixes every append site at once
-  // and accepts the base URL with or without the `/v1` suffix.
-  .replace(/\/+$/, '')
-  .replace(/\/v1$/, '');
-const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
-// --- REROUTE (planner/agent path) ---------------------------------------
-// The Make AI-Agents path used by runMakeAgent is dead in production (the
-// configured agent UUIDs live in a different Make team, and the backend's Make
-// org is paused). cdz-flash via api.clickdz.ai is the WORKING brain the simple
-// chat + Hermes planner already use. These consts let runMakeAgent prefer
-// cdz-flash and only touch Make as a last resort.
-//
-// CDZ_AI_ORIGIN re-strips a trailing `/v1` (CDZ_AI_BASE_URL is already
-// normalised above, so this is idempotent belt-and-suspenders) so the single
-// canonical `/v1/chat/completions` path is appended exactly once regardless of
-// how the env is set.
-const CDZ_AI_ORIGIN = CDZ_AI_BASE_URL.replace(/\/v1$/, '').replace(/\/+$/, '');
-const CDZ_AGENT_MODEL = process.env.CDZ_AGENT_MODEL || 'cdz-flash';
-// Master switch for the reroute. Defaults ON whenever a CDZ_AI_KEY is present
-// (the working path). Set CDZ_AGENT_VIA_CDZ_AI=0 to force the legacy Make path.
-const CDZ_AGENT_VIA_CDZ_AI =
-  process.env.CDZ_AGENT_VIA_CDZ_AI === '0' ? false : !!CDZ_AI_KEY;
-// CDZ_AI direct-path models: the OpenAI-compatible `cdz-*` catalog served by
-// CDZ_AI_BASE_URL (same ids `runFastPlanner`/pulse/vdz use). ONLY these can be
-// real-streamed pass-through (A1); the marketing `clickdz-*` ids map to the
-// Make agent, which has no token stream, so they keep the buffered path.
-const CDZ_DIRECT_STREAM_MODELS = new Set([
-  'cdz-ultra',
-  'cdz-council',
-  'cdz-sage',
-  'cdz-architect',
-  'cdz-scholar',
-  'cdz-flash',
-  'cdz-polyglot',
-]);
+const CDZ_CHAT_MODEL = 'zai/glm-4.6v-flash';
+
+// Legacy alias preserved for downstream code that references these constants
+// by name (runFastPlanner, Hermes, vdz compose, etc.). All point at Gateway.
+const CDZ_AI_BASE_URL = CDZ_AI_GATEWAY_IMAGE_BASE;
+const CDZ_AI_KEY = CDZ_AI_GATEWAY_IMAGE_KEY;
+const CDZ_AI_ORIGIN = CDZ_AI_GATEWAY_IMAGE_KEY ? CDZ_AI_GATEWAY_IMAGE_BASE : '';
+const CDZ_AGENT_MODEL = CDZ_CHAT_MODEL;
 const VERCEL_TOKEN = process.env.VERCEL_TOKEN || '';
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || '';
 
@@ -965,25 +927,9 @@ const IMAGE_ENHANCER_GUIDELINES = [
   '- output ONLY the final prompt text, no commentary, at most 180 words',
 ].join('\n');
 
-const MODELS = [
-  'clickdz-ultra',
-  'clickdz-builder',
-  'clickdz-fast',
-  'clickdz-smart',
-  'clickdz-arabic',
-  'gpt-5.5',
-  'gpt-5-mini',
-  'claude-opus-4-8',
-  'claude-sonnet-5',
-  'gemini-3.5-flash',
-  'gemini-2.5-pro',
-  // CDZIMAGE tiers (dall-e-3 retired; legacy ids still resolve server-side)
-  'cdzimage-2.0',
-  'cdzimage-1.5',
-  'cdzimage-1.0',
-  // WS14: Prodia Flux Schnell via Vercel AI Gateway (replaces Gemini image tiers)
-  'cdzimage-flux',
-];
+// WS14: Single model architecture — zai/glm-4.6v-flash for chat/vision/planning,
+// prodia/flux-fast-schnell for images. One Gateway key, one billing line.
+const MODELS = [CDZ_CHAT_MODEL, 'cdzimage-flux'];
 
 function now() {
   return Math.floor(Date.now() / 1000);
@@ -2293,7 +2239,7 @@ export class ClickDzBridgeController {
    * emits a terminal `finish_reason:'stop'` + `[DONE]` and closes; a client abort
    * cancels the upstream fetch. Returns `true` when it has handled the response.
    */
-  private async streamCdzChat(
+  private async streamGatewayChat(
     res: Response,
     id: string,
     model: string,
@@ -2448,11 +2394,8 @@ export class ClickDzBridgeController {
         object: 'model',
         created: now(),
         owned_by:
-          id.startsWith('gemini-') && id.endsWith('-image')
-            ? 'clickdz-images'
-            : id.startsWith('cdzimage-')
-              ? 'openai-images'
-              : 'make.com',
+          // WS14: all models served via Vercel AI Gateway
+          'clickdz-ai',
       })),
     };
   }
@@ -2467,56 +2410,41 @@ export class ClickDzBridgeController {
   ) {
     this.assertBridgeToken(req);
     const id = `chatcmpl_${Date.now()}`;
-    const model = body?.model || 'clickdz-smart';
+    // WS14: single model — zai/glm-4.6v-flash (9B vision-language, 128K ctx)
+    const model = CDZ_CHAT_MODEL;
     const messages = normalizeMessages(body?.messages || []);
+    const maxTokens = clampMaxTokens(body?.max_tokens, DEFAULT_MAX_TOKENS);
+    const gatewayKey = CDZ_AI_GATEWAY_IMAGE_KEY;
+    if (!gatewayKey) {
+      throw new HttpException(
+        { error: { message: 'AI Gateway key not configured', type: 'configuration_error', code: 'gateway_key_missing' } },
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
 
-    // REAL streaming (A1), opt-in behind the SAME `body.stream` flag: only for
-    // the CDZ_AI direct-path `cdz-*` models when a key is configured. Everything
-    // else (marketing `clickdz-*` → Make, or no CDZ_AI key) is UNCHANGED below.
-    // Pipes upstream SSE deltas straight through; on a clean upstream failure it
-    // returns false and we fall back to the existing buffered path — no
-    // regression to the OpenAI-shape contract external clients consume.
-    if (body?.stream && CDZ_AI_KEY && CDZ_DIRECT_STREAM_MODELS.has(model)) {
-      // Tie an AbortController to the response lifecycle: `close` fires when the
-      // client disconnects, letting us cancel the upstream fetch. (`res.on` is
-      // always available and typed; Express 4's `req.signal` is not.)
+    // Always stream — native SSE pass-through from GLM-4.6V-Flash.
+    if (body?.stream !== false) {
       const clientAbort = new AbortController();
       res.on('close', () => clientAbort.abort());
-      const streamed = await this.streamCdzChat(
-        res,
-        id,
-        model,
-        messages,
-        clampMaxTokens(body?.max_tokens, DEFAULT_MAX_TOKENS),
-        clientAbort.signal
-      );
+      const streamed = await this.streamGatewayChat(res, id, model, messages, maxTokens, clientAbort.signal);
       if (streamed) return;
-      // else: upstream didn't start — fall through to the buffered path.
     }
 
-    const agentOverride = this.resolveAgentForRequest(model, messages);
-    const content = await this.runMakeAgent(messages, model, agentOverride);
-
-    if (body?.stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.write(
-        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: now(), model, choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] })}\n\n`
+    // Non-streaming fallback (bufif body.stream === false)
+    const resp = await fetch(`${CDZ_AI_GATEWAY_IMAGE_BASE}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${gatewayKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
+      signal: AbortSignal.timeout(60000),
+    });
+    const data = (await resp.json().catch(() => null)) as any;
+    const content = data?.choices?.[0]?.message?.content;
+    if (!resp.ok || typeof content !== 'string') {
+      throw new HttpException(
+        { error: { message: `Chat failed: ${resp.status}`, type: 'provider_error' } },
+        HttpStatus.BAD_GATEWAY,
       );
-      const chunks = content.match(/.{1,48}(\s|$)/g) || [content];
-      for (const chunk of chunks) {
-        res.write(
-          `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: now(), model, choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }] })}\n\n`
-        );
-      }
-      res.write(
-        `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: now(), model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`
-      );
-      res.write('data: [DONE]\n\n');
-      res.end();
-      return;
     }
-
     res.json(openAIChatResponse(id, model, content));
   }
 
@@ -2527,36 +2455,19 @@ export class ClickDzBridgeController {
     const request = String(body?.request || '').trim();
     if (!request) {
       throw new HttpException(
-        {
-          error: {
-            message: 'A request is required',
-            type: 'invalid_request_error',
-            code: 'request_missing',
-          },
-        },
+        { error: { message: 'A request is required', type: 'invalid_request_error', code: 'request_missing' } },
         HttpStatus.BAD_REQUEST
       );
     }
-    // SECURITY: cap request size on this cost-triggering route (413).
     if (request.length > MAX_PROMPT_CHARS) {
-      throw new PayloadTooLargeException(
-        `Request is too long (max ${MAX_PROMPT_CHARS} characters)`
-      );
+      throw new PayloadTooLargeException(`Request is too long (max ${MAX_PROMPT_CHARS} characters)`);
     }
-
     const raw = await this.runFastPlanner(request);
-
     return parsePlanClarification(raw);
   }
 
   /**
-   * CDZIMAGE detail-gathering (WS1 PR6): one fast, SKIPPABLE clarification
-   * before an image generation. cdz-flash inspects the prompt and returns
-   * `needs_details` + one decisive question with 2–4 concrete option chips +
-   * suggested enrichments. Rich prompts auto-skip (`needs_details: false`).
-   * FAIL-OPEN CONTRACT: any parse/model failure returns needs_details:false —
-   * a clarifier hiccup must never block generation, and the client's
-   * "Generate now" button simply ignores the card.
+   * WS1 PR6 — image prompt clarifier (zai/glm-4.6v-flash, vision-capable).
    */
   @Throttle('strict')
   @Post('/api/v1/images/clarify')
@@ -2564,10 +2475,7 @@ export class ClickDzBridgeController {
     const prompt = String(body?.prompt || '').trim();
     if (!prompt) {
       throw new HttpException(
-        {
-          error: {
-            message: 'A non-empty "prompt" string is required',
-            type: 'invalid_request_error',
+        { error: { message: 'A non-empty "prompt" string is required', type: 'invalid_request_error',
             code: 'prompt_missing',
           },
         },
