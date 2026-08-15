@@ -207,7 +207,11 @@ export function buildAccountLedger(
   accountCode: string,
   openingBalance: number = 0
 ): AccountLedger | null {
-  const account = PCN_CHART[accountCode as AccountCode];
+  // String -> numeric-literal-key lookup: PCN_CHART uses unquoted numeric
+  // keys, so AccountCode is a union of NUMBER literals and a direct
+  // string cast is TS2352. Runtime indexing coerces anyway ('411' hits
+  // key 411), so the double cast is safe and behavior-identical.
+  const account = PCN_CHART[accountCode as unknown as AccountCode];
   if (!account) return null;
 
   const filtered = entries
@@ -305,7 +309,9 @@ export function buildTrialBalance(
   // Calculate closing balances
   const result: TrialBalanceLine[] = [];
   for (const [code, line] of map) {
-    const acct = PCN_CHART[code as AccountCode]!;
+    // Object.entries stringifies the numeric keys — same TS2352 story as
+    // buildAccountLedger's lookup above; the entry provably exists.
+    const acct = PCN_CHART[code as unknown as AccountCode]!;
     const balance = acct.sign === 'debit'
       ? line.openingDebit - line.openingCredit + line.movementsDebit - line.movementsCredit
       : line.openingCredit - line.openingDebit + line.movementsCredit - line.movementsDebit;

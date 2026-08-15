@@ -38,6 +38,7 @@ import { InvoicingPanel } from './invoicing';
 import { ProcurementPanel } from './procurement';
 import { ShippingPanel } from './shipping';
 import { CaissePanel } from './caisse';
+import { AccountingPanel } from './accounting';
 import { ReportsPanel } from './reports';
 import { TeamPanel } from './team';
 // WS11: Social and ZOOM+ are removed from the DzOS dashboard tab strip. They
@@ -99,6 +100,7 @@ export type DashboardSection =
   | 'shipping'
   | 'caisse'
   | 'reports'
+  | 'comptabilite'
   // WS12: SlidePro/CoursePro removed from the DzOS dashboard — they remain
   // reachable via their standalone /slidepro and /coursepro routes + the global
   // sidebar. (WS11 earlier removed Social/ZOOM+ from this tab strip too.)
@@ -125,6 +127,7 @@ const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
   { id: 'shipping', label: 'Livraison', icon: '🚚' },
   { id: 'caisse', label: 'Caisse', icon: '💰' },
   { id: 'reports', label: 'Rapports', icon: '📈' },
+  { id: 'comptabilite', label: 'Comptabilité', icon: '📒' },
   { id: 'team', label: 'Équipe', icon: '👥' },
   // WS12: SlidePro/CoursePro removed from the DzOS tab strip (reachable via
   // their standalone routes + the global sidebar). WS11 removed Social/ZOOM+.
@@ -500,6 +503,8 @@ export const ErpDashboard = ({
           <CaissePanel slug={slug} settings={summary.settings} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
         ) : section === 'reports' ? (
           <ReportsPanel slug={slug} currency={currency} onWritesBlocked={handleWritesBlocked} />
+        ) : section === 'comptabilite' ? (
+          <AccountingPanel slug={slug} summary={summary} currency={currency} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
         ) : section === 'team' ? (
           <TeamPanel slug={slug} settings={summary.settings} readOnly={writesBlocked} onWritesBlocked={handleWritesBlocked} onMutated={refetch} />
         ) : section === 'features' ? (

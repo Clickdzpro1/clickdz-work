@@ -163,6 +163,23 @@ import {
   type CourierLite,
 } from './clickdz-erp-caisse';
 import {
+  buildAccountLedger,
+  buildAgedReceivables,
+  buildBalanceSheet,
+  buildCashFlowStatement,
+  buildG50Summary,
+  buildIncomeStatement,
+  buildTrialBalance,
+  buildTVASummary,
+  entriesCollectionFor,
+  entriesCollectionForDate,
+  generateFactureNormalisee,
+  PCN_CHART,
+  validateJournalEntry,
+  validateNIF,
+  type JournalEntry,
+} from './clickdz-erp-accounting';
+import {
   describeViolations,
   lintShopContract,
 } from './clickdz-shop-contract';
@@ -7516,6 +7533,395 @@ export class ClickDzBridgeController {
       `[erp] caisse-update slug=${slug} user=${user.id} id=${entryId} coll=${targetCollection}`
     );
     return { ok: true, entry: saved.record };
+  }
+
+  // ---------------------------------------------------------------------------
+  // COMPTA (WS-ERP-ACCOUNTING) — PCN DZ journal + états financiers + fiscal.
+  // Mirrors the R2-d caisse surface: auth'd owner-only, monthly Redis-hash
+  // partitions (`compta-entries-YYYYMM`), INTEGER DZD. ALL money math lives in
+  // ./clickdz-erp-accounting (zero-import helper, same contract as
+  // clickdz-erp-caisse.ts); these routes own ONLY the I/O — resolve partitions,
+  // validate, create, hand raw entries to the builders.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Monthly `compta-entries-YYYYMM` partitions covering [fromISO, toISO],
+   * oldest-first, capped (a fiscal year is 12; the cap bounds degenerate
+   * ranges the same way caisse's 730-day window does). Falls back to the
+   * current month when the range is unusable.
+   */
+  private comptaPartitionsInRange(
+    fromISO: string,
+    toISO: string,
+    cap = 24
+  ): string[] {
+    const from = /^\d{4}-\d{2}/.test(fromISO) ? fromISO.slice(0, 7) : '';
+    const to = /^\d{4}-\d{2}/.test(toISO) ? toISO.slice(0, 7) : '';
+    if (!from || !to || from > to) return [entriesCollectionFor()];
+    const out: string[] = [];
+    let y = parseInt(from.slice(0, 4), 10);
+    let m = parseInt(from.slice(5, 7), 10);
+    const ty = parseInt(to.slice(0, 4), 10);
+    const tm = parseInt(to.slice(5, 7), 10);
+    while (y < ty || (y === ty && m <= tm)) {
+      out.push(`compta-entries-${y}${String(m).padStart(2, '0')}`);
+      if (out.length >= cap) break;
+      m += 1;
+      if (m > 12) {
+        m = 1;
+        y += 1;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Read + concat several monthly partitions. A single failed partition is
+   * skipped (a month with no entries yet must not 502 a year report — same
+   * stance as the caisse PUT's partition scan); null ONLY when EVERY read
+   * failed, which is indistinguishable from the data API being down.
+   */
+  private async comptaReadPartitions(
+    slug: string,
+    partitions: string[]
+  ): Promise<JournalEntry[] | null> {
+    const out: JournalEntry[] = [];
+    let okCount = 0;
+    for (const collection of partitions) {
+      const rows = await this.erpList(slug, collection);
+      if (rows) {
+        okCount += 1;
+        out.push(...(rows as JournalEntry[]));
+      }
+    }
+    return okCount === 0 && partitions.length > 0 ? null : out;
+  }
+
+  /**
+   * COMPTA — GET /api/v1/apps/:slug/erp/compta?month=YYYYMM (auth'd,
+   * owner-only). Lists ONE monthly journal partition; defaults to the current
+   * month. Mirrors the caisse list route exactly.
+   */
+  @Throttle('default', { limit: 120, ttl: 60_000 })
+  @Get('/api/v1/apps/:slug/erp/compta')
+  async erpComptaList(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('month') month: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const m = caisseStr(month).trim();
+    const collection = /^\d{6}$/.test(m)
+      ? `compta-entries-${m}`
+      : entriesCollectionFor();
+    const entries = await this.erpList(slug, collection);
+    if (!entries) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    this.logger.log(
+      `[erp] compta-list slug=${slug} user=${user.id} coll=${collection} n=${entries.length}`
+    );
+    return { collection, entries };
+  }
+
+  /**
+   * COMPTA — GET /api/v1/apps/:slug/erp/compta/chart (auth'd, owner-only).
+   * The PCN DZ chart of accounts, served so the studio's account picker is
+   * always in sync with what validateJournalEntry accepts (the chart lives
+   * server-side only — the frontend must never duplicate it).
+   */
+  @Throttle('default', { limit: 120, ttl: 60_000 })
+  @Get('/api/v1/apps/:slug/erp/compta/chart')
+  async erpComptaChart(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    return { chart: PCN_CHART };
+  }
+
+  /**
+   * COMPTA — POST /api/v1/apps/:slug/erp/compta (auth'd, owner-only).
+   * BODY = one journal entry { date, label, accountCode, debit XOR credit,
+   * reference?, pieceRef?, partnerId? }. Normalized here (integer DZD, trimmed
+   * + capped strings), validated by the sibling helper (PCN code allowlist,
+   * debit-xor-credit), created in the monthly partition derived from the
+   * entry's own date (back-dated entries land in the right month).
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/compta')
+  async erpComptaCreate(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const entry: JournalEntry = {
+      date: caisseStr(body?.date).slice(0, 10),
+      label: caisseStr(body?.label).trim().slice(0, 200),
+      accountCode: caisseStr(body?.accountCode).trim().slice(0, 8),
+      debit: Math.max(0, Math.round(Number(body?.debit) || 0)),
+      credit: Math.max(0, Math.round(Number(body?.credit) || 0)),
+      reference: caisseStr(body?.reference).trim().slice(0, 64),
+      pieceRef: caisseStr(body?.pieceRef).trim().slice(0, 64),
+    };
+    const partnerId = caisseStr(body?.partnerId).trim().slice(0, 64);
+    if (partnerId) entry.partnerId = partnerId;
+    const invalid = validateJournalEntry(entry);
+    if (invalid) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_entry', message: invalid });
+      return;
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const created = await this.erpCreateRecord(
+      slug,
+      entriesCollectionForDate(caisseStr(entry.date)),
+      entry as unknown as ErpRecord,
+      token
+    );
+    if (!created.ok) {
+      this.erpWriteFailed(res, created.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] compta-create slug=${slug} user=${user.id} code=${entry.accountCode} d=${entry.debit} c=${entry.credit}`
+    );
+    return { ok: true, entry: created.record };
+  }
+
+  /**
+   * COMPTA — GET /api/v1/apps/:slug/erp/compta/report (auth'd, owner-only).
+   * One aggregating read for every état: ?type=trial|ledger|income|bilan|
+   * cashflow|g50|tva|aged plus the params each builder needs. Reads the
+   * partitions the period spans and hands the raw entries to the zero-import
+   * builders — no money math here.
+   */
+  @Throttle('default', { limit: 60, ttl: 60_000 })
+  @Get('/api/v1/apps/:slug/erp/compta/report')
+  async erpComptaReport(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('type') type: string | undefined,
+    @Query('year') year: string | undefined,
+    @Query('month') month: string | undefined,
+    @Query('from') from: string | undefined,
+    @Query('to') to: string | undefined,
+    @Query('account') account: string | undefined,
+    @Query('asof') asof: string | undefined,
+    @Query('openingCash') openingCash: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const kind = caisseStr(type).trim();
+    const yStr = caisseStr(year).trim();
+    const fiscalYear = /^\d{4}$/.test(yStr)
+      ? parseInt(yStr, 10)
+      : new Date().getUTCFullYear();
+    const isDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const fromISO = isDate(caisseStr(from).trim())
+      ? caisseStr(from).trim()
+      : `${fiscalYear}-01-01`;
+    const toISO = isDate(caisseStr(to).trim())
+      ? caisseStr(to).trim()
+      : `${fiscalYear}-12-31`;
+    const fail502 = () => {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+    };
+
+    if (kind === 'trial' || kind === 'ledger') {
+      const entries = await this.comptaReadPartitions(
+        slug,
+        this.comptaPartitionsInRange(fromISO, toISO)
+      );
+      if (!entries) return fail502();
+      if (kind === 'trial') {
+        return {
+          type: kind,
+          from: fromISO,
+          to: toISO,
+          report: buildTrialBalance(entries, fromISO, toISO),
+        };
+      }
+      const code = caisseStr(account).trim();
+      const ledger = buildAccountLedger(entries, code);
+      if (!ledger) {
+        res
+          .status(HttpStatus.BAD_REQUEST)
+          .json({ error: 'unknown_account', account: code });
+        return;
+      }
+      return { type: kind, from: fromISO, to: toISO, report: ledger };
+    }
+
+    if (
+      kind === 'income' ||
+      kind === 'bilan' ||
+      kind === 'cashflow' ||
+      kind === 'g50'
+    ) {
+      const entries = await this.comptaReadPartitions(
+        slug,
+        this.comptaPartitionsInRange(`${fiscalYear}-01-01`, `${fiscalYear}-12-31`)
+      );
+      if (!entries) return fail502();
+      if (kind === 'income') {
+        return { type: kind, report: buildIncomeStatement(entries, fiscalYear) };
+      }
+      if (kind === 'bilan') {
+        return { type: kind, report: buildBalanceSheet(entries, fiscalYear) };
+      }
+      if (kind === 'g50') {
+        return { type: kind, report: buildG50Summary(entries, fiscalYear) };
+      }
+      const opening = Math.round(Number(caisseStr(openingCash).trim()) || 0);
+      return {
+        type: kind,
+        report: buildCashFlowStatement(entries, fiscalYear, opening),
+      };
+    }
+
+    if (kind === 'tva') {
+      const raw = caisseStr(month).trim();
+      const ym = /^\d{6}$/.test(raw)
+        ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}`
+        : /^\d{4}-\d{2}$/.test(raw)
+          ? raw
+          : new Date().toISOString().slice(0, 7);
+      const entries = await this.comptaReadPartitions(slug, [
+        `compta-entries-${ym.replace('-', '')}`,
+      ]);
+      if (!entries) return fail502();
+      return { type: kind, report: buildTVASummary(entries, ym) };
+    }
+
+    if (kind === 'aged') {
+      const asOfISO = isDate(caisseStr(asof).trim())
+        ? caisseStr(asof).trim()
+        : new Date().toISOString().slice(0, 10);
+      const windowStart = new Date(
+        new Date(`${asOfISO}T00:00:00Z`).getTime() - 730 * 86_400_000
+      )
+        .toISOString()
+        .slice(0, 10);
+      const entries = await this.comptaReadPartitions(
+        slug,
+        this.comptaPartitionsInRange(windowStart, asOfISO)
+      );
+      if (!entries) return fail502();
+      const code = caisseStr(account).trim() || '411';
+      return {
+        type: kind,
+        asof: asOfISO,
+        account: code,
+        report: buildAgedReceivables(entries, asOfISO, code),
+      };
+    }
+
+    res
+      .status(HttpStatus.BAD_REQUEST)
+      .json({ error: 'unknown_report', type: kind });
+    return;
+  }
+
+  /**
+   * COMPTA — POST /api/v1/apps/:slug/erp/compta/facture (auth'd, owner-only).
+   * Generates a Facture Normalisée (Article 23 LF 2022) as standalone HTML.
+   * Pure compute — nothing is written. NIFs are validated with the sibling
+   * helper (15 digits, the legal identifier); every string is HTML-escaped
+   * HERE because the generator interpolates its args verbatim, and the result
+   * is opened as a document by the studio.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/compta/facture')
+  async erpComptaFacture(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const esc = (v: unknown) =>
+      caisseStr(v)
+        .slice(0, 300)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    const sellerNIF = caisseStr(body?.sellerNIF).replace(/\s/g, '');
+    const buyerNIF = caisseStr(body?.buyerNIF).replace(/\s/g, '');
+    const badNif = (field: string, message: string | undefined) => {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_nif', field, message });
+    };
+    const vSeller = validateNIF(sellerNIF);
+    if (!vSeller.valid) return badNif('sellerNIF', vSeller.error);
+    const vBuyer = validateNIF(buyerNIF);
+    if (!vBuyer.valid) return badNif('buyerNIF', vBuyer.error);
+    const rawItems = Array.isArray(body?.items) ? body.items.slice(0, 50) : [];
+    if (rawItems.length === 0) {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_items', message: 'At least one item required' });
+      return;
+    }
+    const TVA_RATES = [0, 0.09, 0.19];
+    const items: {
+      description: string;
+      quantity: number;
+      unitPrice: number;
+      tvaRate: number;
+    }[] = [];
+    for (const raw of rawItems) {
+      const quantity = Math.round(Number(raw?.quantity) || 0);
+      const unitPrice = Math.round(Number(raw?.unitPrice) || 0);
+      const tvaRate = Number(raw?.tvaRate);
+      if (quantity <= 0 || unitPrice < 0 || !TVA_RATES.includes(tvaRate)) {
+        res.status(HttpStatus.BAD_REQUEST).json({
+          error: 'invalid_items',
+          message:
+            'Each item needs quantity > 0, unitPrice >= 0 (integer DZD) and tvaRate in {0, 0.09, 0.19}',
+        });
+        return;
+      }
+      items.push({
+        description: esc(raw?.description) || '—',
+        quantity,
+        unitPrice,
+        tvaRate,
+      });
+    }
+    // RC format varies across legacy registrations, so it is escaped but NOT
+    // format-blocked (unlike the NIF, whose 15-digit shape is unambiguous).
+    const html = generateFactureNormalisee({
+      sellerName: esc(body?.sellerName) || '—',
+      sellerAddress: esc(body?.sellerAddress) || '—',
+      sellerNIF,
+      sellerRC: esc(body?.sellerRC),
+      sellerAIS: esc(body?.sellerAIS) || undefined,
+      buyerName: esc(body?.buyerName) || '—',
+      buyerAddress: esc(body?.buyerAddress) || '—',
+      buyerNIF,
+      invoiceNumber: esc(body?.invoiceNumber) || '—',
+      invoiceDate: esc(body?.invoiceDate) || new Date().toISOString().slice(0, 10),
+      items,
+    });
+    this.logger.log(
+      `[erp] compta-facture slug=${slug} user=${user.id} items=${items.length}`
+    );
+    return { html };
   }
 
   /**
