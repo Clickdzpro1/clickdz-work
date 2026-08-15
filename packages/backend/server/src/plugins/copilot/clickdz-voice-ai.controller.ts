@@ -63,13 +63,18 @@ const CDZ_VOICE_AI_ENABLED = process.env.CDZ_VOICE_AI_ENABLED || '';
 // SAME way (strip trailing slashes THEN a trailing `/v1`, because every call
 // site appends `/v1/chat/completions`; production sets the base URL with a `/v1`
 // suffix, which would otherwise produce `.../v1/v1/...` → 404).
-const CDZ_AI_BASE_URL = (process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai')
+// WS14: the Vercel AI Gateway — the same env pair the bridge reads (the
+// legacy CDZ_AI_BASE_URL/CDZ_AI_KEY api.clickdz.ai pair is deliberately
+// not read; a legacy key fails Gateway auth looking like a model error).
+const CDZ_AI_BASE_URL = (process.env.CDZ_AI_GATEWAY_BASE || 'https://ai-gateway.vercel.sh')
   .replace(/\/+$/, '')
   .replace(/\/v1$/, '');
-const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
-// The fast model for a short script pass. Overridable via env, default cdz-flash
-// (the same model the vdz dock uses on its direct fast path).
-const VOICE_FAST_MODEL = process.env.CDZ_FAST_MODEL || 'cdz-flash';
+const CDZ_AI_KEY =
+  process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
+// The fast model for a short script pass. Overridable via env.
+// WS14 default: the Gateway single chat model. NOTE: an explicit
+// CDZ_FAST_MODEL env override still wins — unset any legacy value.
+const VOICE_FAST_MODEL = process.env.CDZ_FAST_MODEL || 'zai/glm-4.6v-flash';
 
 // Output/response bounds. A narration script is short; keep the token budget
 // tight and the timeout well under the bridge's 240s so the panel fails fast.

@@ -44,8 +44,11 @@ import { Throttle } from '../../base';
 // ---------------------------------------------------------------------------
 // Engine config — read the SAME env consts the bridge / vdz controllers read.
 // ---------------------------------------------------------------------------
+// WS14: the Vercel AI Gateway — the same env pair the bridge reads (the
+// legacy CDZ_AI_BASE_URL/CDZ_AI_KEY api.clickdz.ai pair is deliberately
+// not read; a legacy key fails Gateway auth looking like a model error).
 const CDZ_AI_BASE_URL = (
-  process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
+  process.env.CDZ_AI_GATEWAY_BASE || 'https://ai-gateway.vercel.sh'
 )
   // Trailing slashes first, THEN a trailing `/v1`. Every call site below appends
   // `/v1/chat/completions`, so a base URL that already ends in `/v1` produced
@@ -56,9 +59,11 @@ const CDZ_AI_BASE_URL = (
   // and accepts the base URL with or without the `/v1` suffix.
   .replace(/\/+$/, '')
   .replace(/\/v1$/, '');
-const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
-// The fast/flash model the bridge's planner + the vdz dock both prefer.
-const CDZ_FAST_MODEL = 'cdz-flash';
+const CDZ_AI_KEY =
+  process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
+// WS14 default: the Gateway single chat model. NOTE: this is a bare literal
+// (no env-override on this route) — unset any legacy value elsewhere.
+const CDZ_FAST_MODEL = 'zai/glm-4.6v-flash';
 
 // ---------------------------------------------------------------------------
 // Request + response bounds. `task` is a ONE-LINE description of what the user

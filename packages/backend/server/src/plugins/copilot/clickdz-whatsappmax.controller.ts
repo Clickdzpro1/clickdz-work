@@ -129,18 +129,24 @@ const QR_POLL_INTERVAL_MS = 800;
 const QR_POLL_MAX_ATTEMPTS = 12;
 
 // --- WS-AI: synchronous AI assist (draft/summary/translate) -----------------
-// Same OpenAI-compatible cdz-flash brain the bridge controller's direct fast
-// path calls (clickdz-bridge.controller.ts ~L490-530), re-derived HERE from the
-// SAME env vars so this controller stays import-isolated from the bridge one
-// (no cross-controller coupling — additive, self-contained, same idiom as the
-// gateway client above). CDZ_AI_BASE_URL may or may not carry a trailing `/v1`
-// depending on deploy config; strip it once so the single canonical
+// Same OpenAI-compatible brain the bridge controller's direct fast path calls
+// (clickdz-bridge.controller.ts ~L490-530), re-derived HERE from the SAME env
+// vars so this controller stays import-isolated from the bridge one (no
+// cross-controller coupling — additive, self-contained, same idiom as the
+// gateway client above). CDZ_AI_GATEWAY_BASE may or may not carry a trailing
+// `/v1` depending on deploy config; strip it once so the single canonical
 // `/v1/chat/completions` path below is appended exactly once either way.
-const WAMAX_AI_ORIGIN = (process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai')
+// WS14: the Vercel AI Gateway — the same env pair the bridge reads (the
+// legacy CDZ_AI_BASE_URL/CDZ_AI_KEY api.clickdz.ai pair is deliberately
+// not read; a legacy key fails Gateway auth looking like a model error).
+const WAMAX_AI_ORIGIN = (process.env.CDZ_AI_GATEWAY_BASE || 'https://ai-gateway.vercel.sh')
   .replace(/\/+$/, '')
   .replace(/\/v1$/, '');
-const WAMAX_AI_KEY = process.env.CDZ_AI_KEY || '';
-const WAMAX_AI_MODEL = process.env.CDZ_AGENT_MODEL || 'cdz-flash';
+const WAMAX_AI_KEY =
+  process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
+// WS14 default: the Gateway single chat model. NOTE: an explicit
+// CDZ_AGENT_MODEL env override still wins — unset any legacy value.
+const WAMAX_AI_MODEL = process.env.CDZ_AGENT_MODEL || 'zai/glm-4.6v-flash';
 // Bounded timeout for the synchronous assist calls — these back a live UI
 // affordance (draft/summarize/translate button), so fail fast rather than hang.
 const WAMAX_AI_TIMEOUT_MS = 15_000;
