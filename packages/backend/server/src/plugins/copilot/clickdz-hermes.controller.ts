@@ -482,7 +482,7 @@ function orderTotal(o: Record<string, unknown>): number {
  * call behind a human `approval_request` in 'ask' mode. Reads = false.
  */
 function buildToolCatalog(): HermesTool[] {
-  const makeAvailable = !!(MAKE_API_KEY && MAKE_TEAM_ID && MAKE_AGENT_ID);
+  const makeAvailable = !!(GATEWAY_KEY);
   return [
     {
       slug: 'shops_list',
@@ -2100,7 +2100,7 @@ export class ClickDzHermesController {
       catalog.find(t => t.slug === slug) as HermesTool;
     // Availability predicates mirror buildToolCatalog() EXACTLY (env-derived).
     const composioOn = (): boolean => !!COMPOSIO_API_KEY;
-    const makeOn = (): boolean => !!(MAKE_API_KEY && MAKE_TEAM_ID && MAKE_AGENT_ID);
+    const makeOn = (): boolean => !!(GATEWAY_KEY);
     const avail: Record<string, () => boolean> = {
       shops_list: () => true,
       shop_erp_summary: () => true,
