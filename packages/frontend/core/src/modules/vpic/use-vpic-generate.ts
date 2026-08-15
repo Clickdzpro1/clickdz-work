@@ -34,17 +34,12 @@ import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
 import { useCallback, useState } from 'react';
 
 /**
- * The image tiers offered by VPIC (labels are proper nouns, not translated).
- * CDZIM (Gemini) tiers first, then the CDZIMAGE (OpenAI) tiers. The backend
- * (clickdz-bridge.controller.ts CDZIMAGE_TIERS) accepts both the gemini-* engine
- * ids and the cdzimage-* tier ids, so every id here is passed straight through
- * as `model`.
+ * WS14: Image tiers offered by VPIC. Gemini retired — replaced by Prodia
+ * Flux Schnell via Vercel AI Gateway (~$0.001/img). CDZIMAGE (OpenAI) tiers
+ * kept for explicit high-quality requests.
  */
 export const CDZIMAGE_TIERS = [
-  { id: 'gemini-3-pro-image', label: 'CDZIM Pro' },
-  { id: 'gemini-3.1-flash-image', label: 'CDZIM Flash' },
-  { id: 'gemini-3.1-flash-lite-image', label: 'CDZIM Lite' },
-  { id: 'gemini-2.5-flash-image', label: 'CDZIM Classic' },
+  { id: 'cdzimage-flux', label: 'CDZIMAGE Flux' },
   { id: 'cdzimage-2.0', label: 'CDZIMAGE 2.0' },
   { id: 'cdzimage-1.5', label: 'CDZIMAGE 1.5' },
   { id: 'cdzimage-1.0', label: 'CDZIMAGE 1.0' },
