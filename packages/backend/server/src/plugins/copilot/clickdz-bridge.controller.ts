@@ -2143,7 +2143,7 @@ export class ClickDzBridgeController {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'cdz-flash',
+            model: CDZ_CHAT_MODEL,
             messages: [{ role: 'user', content: prompt }],
             // SECURITY: clamp to a sane ceiling (<=4096, floor 1) to cap
             // upstream cost. Keeps the existing 700 default.
@@ -2216,7 +2216,7 @@ export class ClickDzBridgeController {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'cdz-flash',
+          model: CDZ_CHAT_MODEL,
           messages: [{ role: 'user', content: summaryPrompt }],
           max_tokens: clampMaxTokens(60, 60),
         }),
@@ -2542,7 +2542,7 @@ export class ClickDzBridgeController {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'cdz-flash',
+            model: CDZ_CHAT_MODEL,
             messages: [{ role: 'user', content: prompt }],
             max_tokens: clampMaxTokens(400, DEFAULT_MAX_TOKENS),
           }),
@@ -2630,7 +2630,7 @@ export class ClickDzBridgeController {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'cdz-flash',
+            model: CDZ_CHAT_MODEL,
             messages: [
               {
                 role: 'user',
@@ -2697,7 +2697,7 @@ export class ClickDzBridgeController {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'cdz-flash',
+            model: CDZ_CHAT_MODEL,
             messages: [{ role: 'user', content: enhancerInput }],
             // ~180-word prompt ceiling per the guidelines; clamp cost hard.
             max_tokens: clampMaxTokens(400, DEFAULT_MAX_TOKENS),
@@ -3786,7 +3786,7 @@ export class ClickDzBridgeController {
             Accept: 'text/event-stream',
           },
           body: JSON.stringify({
-            model: 'cdz-architect',
+            model: CDZ_CHAT_MODEL,
             messages: [{ role: 'user', content }],
             stream: true,
             max_tokens: 16000,
@@ -10345,7 +10345,7 @@ export class ClickDzBridgeController {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'cdz-flash',
+          model: CDZ_CHAT_MODEL,
           messages: [{ role: 'user', content: prompt }],
           max_tokens: clampMaxTokens(500, 500),
         }),

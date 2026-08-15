@@ -166,12 +166,18 @@ const MAKE_BUILDER_AGENT_ID = process.env.MAKE_BUILDER_AGENT_ID || '';
 // trailing `/v1` (and trailing slashes) so the origin is clean whether the
 // operator set it WITH or WITHOUT `/v1`, then append the single canonical path
 // below. The replace() chain never crashes at import. ---
-const CDZ_AI_BASE_URL = (process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai')
+// WS14: the Vercel AI Gateway — the same env pair the bridge reads (the
+// legacy CDZ_AI_BASE_URL/CDZ_AI_KEY api.clickdz.ai pair is deliberately
+// not read; a legacy key fails Gateway auth looking like a model error).
+const CDZ_AI_BASE_URL = (process.env.CDZ_AI_GATEWAY_BASE || 'https://ai-gateway.vercel.sh')
   .replace(/\/+$/, '')
   .replace(/\/v1$/, '')
   .replace(/\/+$/, '');
-const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
-const CDZ_PLANNER_MODEL = process.env.CDZ_PLANNER_MODEL || 'cdz-flash';
+const CDZ_AI_KEY =
+  process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
+// WS14 default: the Gateway single chat model. NOTE: an explicit
+// CDZ_PLANNER_MODEL env override still wins — unset any legacy value.
+const CDZ_PLANNER_MODEL = process.env.CDZ_PLANNER_MODEL || 'zai/glm-4.6v-flash';
 // The single canonical OpenAI-compatible endpoint path — kept as consts so the
 // resolved base+path is logged once (NO key) and the URL is built in exactly
 // one place.

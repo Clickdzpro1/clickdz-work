@@ -9,25 +9,21 @@ import { CopilotProviderType, ModelOutputType } from './types';
 
 const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9-_]+$/;
 
-// A stale DB profile must never shrink the ClickDz model catalog. The bootstrap
-// remains the source of credentials/base URL; this only restores known model ids.
-const CLICKDZ_PROVIDER_MODELS = [
-  'cdz-ultra',
-  'cdz-council',
-  'cdz-sage',
-  'cdz-architect',
-  'cdz-scholar',
-  'cdz-flash',
-  'cdz-polyglot',
-  'claude-opus-4-8',
-  'claude-sonnet-4-6',
-  'claude-haiku-4-5',
-  'gemini-3.1-pro-preview',
-  'gemini-3.5-flash',
-  'gpt-5.5',
-  'gpt-5.4',
-  'gpt-5.4-mini',
-] as const;
+// WS14: this is now an ALLOWLIST, not a floor.
+//
+// It used to hold the 15 legacy Make-engine ids and was UNIONED into the
+// `cdz-ai` profile so a stale DB profile could never shrink the catalog. That
+// union is precisely why repointing the profile at the Vercel AI Gateway still
+// surfaced models nobody registered: whatever the bootstrap wrote, these ids
+// were added back on every registry load, so the profile could only ever grow.
+// Inverting it to a filter means the effective model set can never exceed this
+// list, so a stale DB row or config-volume profile cannot smuggle a Gateway
+// model (e.g. poolside/laguna-s-2.1-free) into the registry.
+//
+// The bootstrap remains the source of credentials and base URL. Keep in sync
+// with CDZ_MODELS in scripts/cdz-ai-config.mjs and CDZ_CHAT_MODEL in
+// clickdz-bridge.controller.ts.
+const CLICKDZ_PROVIDER_MODELS = ['zai/glm-4.6v-flash'] as const;
 
 const LEGACY_PROVIDER_ORDER: CopilotProviderType[] = [
   CopilotProviderType.OpenAI,
@@ -113,6 +109,19 @@ function parseModelPrefix(
   return { providerId, modelId: model || undefined };
 }
 
+// Clamp the `cdz-ai` profile to the WS14 allowlist. Never returns an empty
+// list: a profile with no usable ids falls back to the allowlist itself, so a
+// partial DB row degrades to the known-good model rather than leaving the
+// provider with nothing to serve (which reads to users as "native AI is down").
+function clampToClickDzCatalog(models?: string[]): string[] {
+  const allowed = CLICKDZ_PROVIDER_MODELS as readonly string[];
+  if (!models?.length) {
+    return [...allowed];
+  }
+  const kept = models.filter(model => allowed.includes(model));
+  return kept.length ? kept : [...allowed];
+}
+
 function normalizeProfile(
   profile: CopilotProviderProfile
 ): NormalizedCopilotProviderProfile {
@@ -120,7 +129,7 @@ function normalizeProfile(
     ...profile,
     models:
       profile.id === 'cdz-ai'
-        ? unique([...(profile.models ?? []), ...CLICKDZ_PROVIDER_MODELS])
+        ? clampToClickDzCatalog(profile.models)
         : profile.models,
     enabled: profile.enabled !== false,
     priority: profile.priority ?? 0,

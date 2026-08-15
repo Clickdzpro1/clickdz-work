@@ -45,7 +45,8 @@ import {
  *
  * ENGINE (mirrors the bridge chat route): we call the SAME Make AI-agent path
  * `runMakeAgent` uses, with the same MAKE_* env consts and the same
- * `CDZ_AI_KEY` direct-model fast path the bridge's planner uses as a fallback.
+ * Gateway (CDZ_AI_GATEWAY_KEY) direct-model fast path the bridge's planner
+ * uses as a fallback.
  * The bridge does not export these helpers, so the minimal call shape is
  * duplicated here (the backend must compile without importing the frontend and
  * we do not edit the bridge controller).
@@ -60,7 +61,11 @@ const MAKE_TEAM_ID = process.env.MAKE_TEAM_ID || '';
 const MAKE_AGENT_ID =
   process.env.MAKE_SUPERAGENT_ID || process.env.MAKE_AGENT_ID || '';
 const CDZ_AI_BASE_URL = (
-  process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
+  // WS14: the Vercel AI Gateway — the same env pair the bridge reads. The
+  // legacy CDZ_AI_BASE_URL/CDZ_AI_KEY (api.clickdz.ai) are deliberately NOT
+  // read: forwarding a legacy key to the Gateway fails auth in a way that
+  // reads like a model error.
+  process.env.CDZ_AI_GATEWAY_BASE || 'https://ai-gateway.vercel.sh'
 )
   // Trailing slashes first, THEN a trailing `/v1`. Every call site below appends
   // `/v1/chat/completions`, so a base URL that already ends in `/v1` produced
@@ -71,7 +76,11 @@ const CDZ_AI_BASE_URL = (
   // and accepts the base URL with or without the `/v1` suffix.
   .replace(/\/+$/, '')
   .replace(/\/v1$/, '');
-const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
+const CDZ_AI_KEY =
+  process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
+// Keep in sync with CDZ_CHAT_MODEL in clickdz-bridge.controller.ts and
+// CDZ_MODELS in scripts/cdz-ai-config.mjs (the WS14 single-model allowlist).
+const CDZ_CHAT_MODEL = 'zai/glm-4.6v-flash';
 
 // ---------------------------------------------------------------------------
 // Transcription (captions) — OpenAI Whisper. There is NO Gemini API key on
@@ -539,7 +548,7 @@ export class ClickDzVdzController {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'cdz-flash',
+            model: CDZ_CHAT_MODEL,
             messages,
             max_tokens: VDZ_MODEL_MAX_TOKENS,
           }),
