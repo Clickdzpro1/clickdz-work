@@ -323,18 +323,16 @@ const OPENAI_IMAGE_API_KEY =
 //                              be rejected by generativelanguage.googleapis.com
 //                              when passed as a ?key= query parameter — do NOT
 //                              map that token here.
-//   2. GEMINI_API_KEY        — legacy/generic Google key env (kept for compat).
-//   3. CDZIM_API_KEY         — older CDZIM alias (kept for compat).
-//
-// No key set -> only gemini-* requests 503 with a clear `gemini_image_key_missing`
-// error; the OpenAI path is byte-identical and untouched.
-const CDZ_GEMINI_IMAGE_KEY =
-  process.env.CDZ_GEMINI_IMAGE_KEY ||
-  process.env.GEMINI_API_KEY ||
-  process.env.CDZIM_API_KEY ||
+// WS14: Gemini image generation retired in favour of Prodia Flux Schnell via
+// Vercel AI Gateway. The Gateway provides unified billing, retries, and failover.
+// All image-only models now route through POST /v1/images/generations
+// (OpenAI-compatible endpoint). The same key works for both text and images.
+const CDZ_AI_GATEWAY_IMAGE_KEY =
+  process.env.CDZ_AI_GATEWAY_KEY ||
+  process.env.CUSTOM_LLM_API_KEY ||
   '';
-const GEMINI_API_BASE =
-  process.env.GEMINI_API_BASE || 'https://generativelanguage.googleapis.com/v1beta';
+const CDZ_AI_GATEWAY_IMAGE_BASE =
+  process.env.CDZ_AI_GATEWAY_BASE || 'https://ai-gateway.vercel.sh';
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || '';
 // P5 (VOICE STUDIO): OpenAI as a SECOND voice provider (STT via Whisper + TTS
 // via /v1/audio/speech). Key cascade mirrors the vdz controller's AUDIO cascade
@@ -774,24 +772,17 @@ const CDZIMAGE_TIERS: Record<
   'cdzimage-2.0': { engine: 'gpt-image-2', quality: 'high', label: 'CDZIMAGE 2.0' },
   'cdzimage-1.5': { engine: 'gpt-image-1.5', quality: 'medium', label: 'CDZIMAGE 1.5' },
   'cdzimage-1.0': { engine: 'gpt-image-1-mini', quality: 'low', label: 'CDZIMAGE 1.0' },
-  // CDZIM (Gemini) tiers — engine id == tier id, so raw-engine requests map
-  // back to these exact entries (quality feeds the clickdz metadata only;
-  // nothing Gemini-specific is sent upstream).
-  'gemini-3.1-flash-image': { engine: 'gemini-3.1-flash-image', quality: 'medium', label: 'CDZIM Flash' },
-  'gemini-3.1-flash-lite-image': { engine: 'gemini-3.1-flash-lite-image', quality: 'low', label: 'CDZIM Lite' },
-  'gemini-3-pro-image': { engine: 'gemini-3-pro-image', quality: 'high', label: 'CDZIM Pro' },
-  'gemini-2.5-flash-image': { engine: 'gemini-2.5-flash-image', quality: 'low', label: 'CDZIM Classic' },
+  // WS14: CDZIM Flux — Prodia Flux Schnell via Vercel AI Gateway. Text-to-image
+  // only (no i2i). ~$0.001-0.0025/img (33-67x cheaper than Gemini nanobanana2).
+  'cdzimage-flux': { engine: 'prodia-flux-schnell', quality: 'medium', label: 'CDZIMAGE Flux' }
 };
-// WS12→ImgPerf: default tier lowered from cdzimage-1.5 (gpt-image-1.5 / medium,
-// 30–60s) to cdzimage-1.0 (gpt-image-1-mini / low, ~10–15s) so a generation
-// that sends no explicit model is fast rather than the slow 30–60s config. The
-// owner saw "takes forever" from the silent worst-case default; 1.5 and 2.0
-// stay reachable when a client explicitly asks for them. Env-overridable via
-// CDZIMAGE_DEFAULT_TIER so ops can revert without a redeploy if needed.
-// CDZIMAGE_REQUIRE_MODEL continues to force a pick where the surfaces opt into
-// strict mode.
+// WS14: default image tier switched to Prodia Flux Schnell via Vercel AI Gateway.
+// ~$0.001-0.0025/img (33-67x cheaper than nanobanana2) with comparable quality
+// for presentation visuals. Text-to-image only — i2i/edit requests must use a
+// gpt-image-* tier explicitly. Env-overridable via CDZIMAGE_DEFAULT_TIER so ops
+// can revert to cdzimage-1.0 without a redeploy if needed.
 const CDZIMAGE_DEFAULT_TIER =
-  process.env.CDZIMAGE_DEFAULT_TIER || 'cdzimage-1.0';
+  process.env.CDZIMAGE_DEFAULT_TIER || 'cdzimage-flux';
 const CDZIMAGE_LEGACY_ALIASES: Record<string, string> = {
   // the old "ClickDz 1.0 smart image" marketing ids → best tier
   'clickdz-image': CDZIMAGE_DEFAULT_TIER,
@@ -990,11 +981,8 @@ const MODELS = [
   'cdzimage-2.0',
   'cdzimage-1.5',
   'cdzimage-1.0',
-  // CDZIM (Gemini) image tiers — engine id == tier id (see CDZIMAGE_TIERS)
-  'gemini-3-pro-image',
-  'gemini-3.1-flash-image',
-  'gemini-3.1-flash-lite-image',
-  'gemini-2.5-flash-image',
+  // WS14: Prodia Flux Schnell via Vercel AI Gateway (replaces Gemini image tiers)
+  'cdzimage-flux',
 ];
 
 function now() {
@@ -2932,15 +2920,16 @@ export class ClickDzBridgeController {
         HttpStatus.SERVICE_UNAVAILABLE
       );
     }
-    if (String(resolution.engine).startsWith('gemini-') && !CDZ_GEMINI_IMAGE_KEY) {
+    // WS14: Prodia Flux Schnell via Vercel AI Gateway — text-to-image only.
+    // The gateway key is the same CUSTOM_LLM_API_KEY used for chat LLMs.
+    if (String(resolution.engine) === 'prodia-flux-schnell' && !CDZ_AI_GATEWAY_IMAGE_KEY) {
       throw new HttpException(
         {
           error: {
             message:
-              'Gemini image generation is not configured. Set CDZ_GEMINI_IMAGE_KEY to a valid Google AIza... key on the bridge service. ' +
-              'The GEMINI env on this service is a CDZ-gateway token, not a direct Google key — it must not be used here.',
+              'Flux image generation is not configured. Set CDZ_AI_GATEWAY_KEY or CUSTOM_LLM_API_KEY to a valid Vercel AI Gateway key.',
             type: 'configuration_error',
-            code: 'gemini_image_key_missing',
+            code: 'flux_image_key_missing',
           },
         },
         HttpStatus.SERVICE_UNAVAILABLE
@@ -3030,9 +3019,10 @@ export class ClickDzBridgeController {
     // gpt-image-* rejects response_format/style and always returns b64_json;
     // (all CDZIMAGE OpenAI engines are gpt-image-*, guard kept for safety.)
     const isGptImage = String(model).startsWith('gpt-image');
-    // CDZIM: gemini-* engines route to the Gemini generateContent API instead
-    // of the OpenAI images API (branch below, keyed on this flag).
-    const isGemini = String(model).startsWith('gemini-');
+    // WS14: prodia-flux-schnell routes through Vercel AI Gateway's OpenAI-compatible
+    // /v1/images/generations endpoint. Flux is text-to-image only — i2i requests
+    // fall through to the gpt-image-* OpenAI edit path.
+    const isFluxGateway = String(model) === 'prodia-flux-schnell';
     // Per-tier quality default (2.0 high / 1.5 medium / 1.0 low); explicit
     // body.quality wins when it's one of the valid knobs. Fast mode drops the
     // resolved-tier default one notch (never the engine); body.quality wins.
@@ -3114,50 +3104,47 @@ export class ClickDzBridgeController {
 
     let response: Awaited<ReturnType<typeof fetch>>;
     let data: any;
-    if (isGemini) {
-      // CDZIM (Gemini): generateContent endpoint. The prompt is a single text
-      // part; i2i edit mode appends the input image as an inlineData part
-      // (same fetchImageInput resolution/size caps as the OpenAI edit path —
-      // Gemini has no mask knob, so a supplied mask is intentionally ignored).
-      // quality/style/response_format/size are OpenAI-only params and are NOT
-      // sent upstream. The response is translated into the OpenAI shape
-      // ({ data: [{ b64_json }] }) so the b64->data.url normalizer and the
-      // clickdz metadata block below work untouched.
-      const parts: Array<Record<string, unknown>> = [{ text: finalPrompt }];
+    if (isFluxGateway) {
+      // WS14: Prodia Flux Schnell via Vercel AI Gateway (OpenAI-compatible endpoint).
+      // Text-to-image only — Flux has no image-to-image capability. The Gateway
+      // provides automatic retry, failover, and unified billing on the existing key.
+      // Response is already in OpenAI shape: { data: [{ b64_json }] }.
       if (i2iMode === 'edit') {
-        const img = await fetchImageInput(imageRef, 'image');
-        parts.push({
-          inlineData: {
-            mimeType: img.mime,
-            data: Buffer.from(img.bytes).toString('base64'),
+        throw new HttpException(
+          {
+            error: {
+              message:
+                'Flux Schnell is text-to-image only. Use a gpt-image-* tier for image-to-image editing.',
+              type: 'invalid_request_error',
+              code: 'flux_no_i2i',
+            },
           },
-        });
+          HttpStatus.BAD_REQUEST
+        );
       }
-      // Google's generateContent API requires BOTH 'TEXT' and 'IMAGE' in
-      // responseModalities for image-generation models (gemini-3.x and above).
-      // Sending ['IMAGE'] alone is rejected or returns an unexpected shape.
-      const geminiRes = await fetch(
-        `${GEMINI_API_BASE}/models/${model}:generateContent?key=${CDZ_GEMINI_IMAGE_KEY}`,
+      const fluxRes = await fetch(
+        `${CDZ_AI_GATEWAY_IMAGE_BASE}/v1/images/generations`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            Authorization: `Bearer ${CDZ_AI_GATEWAY_IMAGE_KEY}`,
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify({
-            contents: [{ role: 'user', parts }],
-            generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },
+            model: 'prodia/flux-fast-schnell',
+            prompt: finalPrompt,
+            n: 1,
+            size,
           }),
           signal: AbortSignal.timeout(
-            fastMode ? FAST_IMAGE_TIMEOUT_MS : 180000
+            fastMode ? FAST_IMAGE_TIMEOUT_MS : 120000
           ),
         }
       );
-      const geminiData = (await geminiRes.json()) as any;
-      if (!geminiRes.ok) {
-        throw new HttpException(geminiData, geminiRes.status);
+      data = (await fluxRes.json()) as any;
+      if (!fluxRes.ok) {
+        throw new HttpException(data, fluxRes.status);
       }
-      const b64 = geminiData?.candidates?.[0]?.content?.parts?.find(
-        (part: any) => typeof part?.inlineData?.data === 'string'
-      )?.inlineData?.data as string | undefined;
-      data = { data: [{ b64_json: b64 }] };
     } else if (i2iMode === 'edit') {
       // TRUE image-to-image: multipart to /v1/images/edits. Inputs resolve
       // from data: URLs (inline) or SSRF-guarded public URLs; hard size caps.
