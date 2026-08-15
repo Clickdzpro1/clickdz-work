@@ -7601,13 +7601,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@lottiefiles/dotlottie-web@npm:^0.38.0":
-  version: 0.65.0
-  resolution: "@lottiefiles/dotlottie-web@npm:0.65.0"
-  checksum: 10/221c3287cdea610bfe802caeb2fac768b851285f99dca5287a644e811733992f482ef2fb7b8379796b147143c92d8af86d25c708265802a014e1c3b1e962dac3
-  languageName: node
-  linkType: hard
-
 "@lottiefiles/dotlottie-web@npm:0.65.0":
   version: 0.65.0
   resolution: "@lottiefiles/dotlottie-web@npm:0.65.0"
