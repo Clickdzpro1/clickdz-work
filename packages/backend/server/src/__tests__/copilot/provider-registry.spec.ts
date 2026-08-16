@@ -30,24 +30,25 @@ test('buildProviderRegistry should keep explicit profile over legacy compatibili
   t.deepEqual(profile?.config, { apiKey: 'new' });
 });
 
-test('buildProviderRegistry should restore the complete ClickDz model catalog', t => {
+test('buildProviderRegistry clamps the cdz-ai profile to the WS14 Gateway allowlist', t => {
+  // WS14: the cdz-ai profile is clamped to the single Gateway model. A stale DB
+  // row that lists retired ids (cdz-ultra, cdz-council, raw vendor ids, …) can
+  // never re-introduce them — the effective set degrades to the known-good
+  // model instead. See clampToClickDzCatalog in provider-registry.ts.
   const registry = buildProviderRegistry({
     profiles: [
       {
         id: 'cdz-ai',
         type: CopilotProviderType.OpenAI,
         config: { apiKey: 'test', baseURL: 'https://api.clickdz.ai/v1' },
-        models: ['cdz-ultra'],
+        models: ['cdz-ultra', 'cdz-council'],
       },
     ],
   });
 
   const models = registry.profiles.get('cdz-ai')?.models ?? [];
-  t.is(models.length, 15);
-  t.true(models.includes('cdz-council'));
-  t.true(models.includes('claude-opus-4-8'));
-  t.true(models.includes('gemini-3.5-flash'));
-  t.true(models.includes('gpt-5.4-mini'));
+  t.deepEqual(models, ['alibaba/qwen3.7-flash']);
+  t.false(models.includes('cdz-council'));
 });
 
 test('buildProviderRegistry should reject duplicated profile ids', t => {

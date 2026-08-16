@@ -233,9 +233,8 @@ export class ChatInputPreference extends SignalWatcher(
       padding: 3px;
       box-sizing: border-box;
     }
-    /* gold flagship ring — a slowly turning gold sheen + soft glow that
-       marks the most powerful engines (Ultra, Council, Opus 4.8, GPT 5.5,
-       Gemini 3.1 Pro) */
+    /* gold flagship ring — a slowly turning gold sheen + soft glow reserved
+       for premium (flagship) engines; see CDZ_FLAGSHIP_MODELS */
     @property --cdz-gold-angle {
       syntax: '<angle>';
       initial-value: 0deg;
@@ -605,8 +604,20 @@ export class ChatInputPreference extends SignalWatcher(
           ? undefined
           : html`<div class="ai-model-group-header">${label}</div>`;
 
-    // group the roster by vendor; keep flagship-first order WITHIN each group.
-    const VENDOR_ORDER = ['CDZ', 'Claude', 'Gemini', 'GPT'];
+    // group the roster by its tier/category label. With the WS14 single-model
+    // Gateway the categories are the speed tiers (Rapide / Équilibré /
+    // Puissant); the legacy vendor names are kept in the order so a mixed list
+    // (should the server ever return more) still sorts sensibly. Flagship-first
+    // WITHIN each group.
+    const VENDOR_ORDER = [
+      'Rapide',
+      'Équilibré',
+      'Puissant',
+      'CDZ',
+      'Claude',
+      'Gemini',
+      'GPT',
+    ];
     const vendorRank = (category: string) => {
       const i = VENDOR_ORDER.indexOf(category);
       return i === -1 ? VENDOR_ORDER.length : i;
@@ -767,11 +778,6 @@ export class ChatInputPreference extends SignalWatcher(
         },
       })
     );
-
-    // NOTE: the council roster is fixed server-side (CDZ Council fans out to
-    // three frontier models + synthesis inside CDZ AI), so there is no
-    // client-side member picker anymore — selecting the CDZ Council model is
-    // all that's needed.
 
     modelItems.push(
       menu.toggleSwitch({

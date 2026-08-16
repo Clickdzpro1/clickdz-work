@@ -26,10 +26,14 @@ const WINDOW_MS = 60_000;
 const FAILURE_THRESHOLD = 3;
 const COOLDOWN_MS = 90_000;
 
+// Legacy per-model fallback overrides. The council fan-out model (cdz-council)
+// was removed with the WS14 single-model migration and is intentionally absent
+// here. Remaining rows are legacy aliases kept only for the model-resolution
+// seam; a model with no row simply gets no circuit-breaker fallback (the
+// turn-orchestrator's own retry-to-fallback path still applies).
 const FALLBACK_MAP: Record<string, string> = {
   'cdz-sage': 'cdz-flash',
   'cdz-ultra': 'cdz-flash',
-  'cdz-council': 'cdz-flash',
   'cdz-architect': 'cdz-flash',
   'cdz-scholar': 'cdz-flash',
 };

@@ -20,14 +20,7 @@ import type { StreamObject } from '../ai-chat-messages';
 export class ChatContentStreamObjects extends WithDisposable(
   ShadowlessElement
 ) {
-  static override styles = css`
-    .reasoning-wrapper {
-      padding: 16px 20px;
-      margin: 8px 0;
-      border-radius: 8px;
-      background-color: rgba(0, 0, 0, 0.05);
-    }
-  `;
+  static override styles = css``;
 
   @property({ attribute: false })
   accessor answer!: StreamObject[];
@@ -281,18 +274,47 @@ export class ChatContentStreamObjects extends WithDisposable(
     ></chat-content-rich-text>`;
   }
 
+  // A reasoning block is "still thinking" only while the turn is generating
+  // AND nothing that ends the reasoning phase (answer text or a tool call/
+  // result) comes after it in the stream. Once any of those follow, the model
+  // has moved on, so the panel auto-collapses to its summary chip.
+  private isReasoningActive(index: number) {
+    if (this.state !== 'generating') return false;
+    for (let i = index + 1; i < this.answer.length; i++) {
+      const next = this.answer[i];
+      if (
+        next.type === 'text-delta' ||
+        next.type === 'tool-call' ||
+        next.type === 'tool-result'
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private renderReasoning(text: string, active: boolean) {
+    return html`<chat-content-reasoning
+      .text=${text}
+      .active=${active}
+      .state=${this.state}
+      .extensions=${this.extensions}
+      .affineFeatureFlagService=${this.affineFeatureFlagService}
+      .theme=${this.theme}
+    ></chat-content-reasoning>`;
+  }
+
   protected override render() {
     return html`<div>
-      ${this.answer.map(data => {
+      ${this.answer.map((data, index) => {
         switch (data.type) {
           case 'text-delta':
             return this.renderRichText(data.textDelta);
           case 'reasoning':
-            return html`
-              <div class="reasoning-wrapper">
-                ${this.renderRichText(data.textDelta)}
-              </div>
-            `;
+            return this.renderReasoning(
+              data.textDelta,
+              this.isReasoningActive(index)
+            );
           case 'tool-call':
             return this.renderToolCall(data);
           case 'tool-result':

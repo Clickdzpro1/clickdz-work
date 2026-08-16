@@ -2,161 +2,96 @@ import { WithDisposable } from '@blocksuite/affine/global/lit';
 import { css, html, LitElement } from 'lit';
 import { property } from 'lit/decorators.js';
 
-// Side-effect import: registers <cdz-pulse-ticker> (reasoning-pulse animation
-// shown beneath the "working" tip while the chat answer is pending).
-import '../components/cdz-pulse-ticker';
-
+/**
+ * Compact "thinking" indicator shown for a pending assistant turn BEFORE the
+ * first token (or first reasoning delta) arrives.
+ *
+ * This replaces the old `cdz-pulse-ticker`-driven card, which faked reasoning
+ * by streaming canned French phrases fetched from `/api/v1/ai/pulse`. Real
+ * reasoning now renders in <chat-content-reasoning> once the model emits it, so
+ * this element only needs to bridge the brief gap until the stream starts: a
+ * small pulsing brand dot + a single shimmering "Réflexion…" line. No network,
+ * no rotating copy, nothing dated.
+ */
 export class AILoading extends WithDisposable(LitElement) {
   static override styles = css`
     :host {
       display: block;
       width: 100%;
     }
-    /* One cohesive card: the pill owns the chrome (border, tint, radius) and
-       the narrated pulse line lives INSIDE it as a second row, separated only
-       by a soft divider — not as a second bordered box. */
-    .cdz-chat-pulse {
-      display: block;
-      width: 100%;
-    }
-    .generating-tip {
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      gap: 9px;
-      overflow: hidden;
-      width: min(460px, 100%);
-      box-sizing: border-box;
-      padding: 10px 14px 14px;
-      border: 1px solid color-mix(in srgb, #2f7bff 28%, transparent);
-      border-radius: 14px;
-      color: var(--affine-v2-text-primary);
-      background: color-mix(
-        in srgb,
-        #2f7bff 6%,
-        var(--affine-v2-layer-background-primary)
-      );
-    }
-    .tip-head {
-      display: flex;
+    .cdz-thinking {
+      display: inline-flex;
       align-items: center;
-      gap: 11px;
-    }
-    .tip-divider {
-      height: 1px;
-      background: color-mix(
-        in srgb,
-        var(--affine-v2-layer-insideBorder-border) 70%,
-        transparent
-      );
-    }
-    .orb {
-      width: 22px;
-      height: 22px;
-      flex: 0 0 22px;
-      border-radius: 7px;
-      background: conic-gradient(
-        from 45deg,
-        #2f7bff,
-        #8b5cf6,
-        #10a37f,
-        #2f7bff
-      );
-      box-shadow: 0 0 18px color-mix(in srgb, #2f7bff 42%, transparent);
-      animation: cdz-orb 1.35s ease-in-out infinite;
-    }
-    .text {
-      font-family: Inter, system-ui, sans-serif;
+      gap: 10px;
+      padding: 4px 0;
+      color: var(--affine-text-secondary-color);
+      font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto,
+        Helvetica, Arial, sans-serif;
       font-size: 13px;
-      font-weight: 650;
+      font-weight: 500;
       line-height: 20px;
     }
-    .dots::after {
-      content: '';
-      animation: cdz-dots 1.2s steps(4, end) infinite;
+    .dot {
+      flex: 0 0 9px;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background-image: linear-gradient(135deg, #5b8cff, #a06bff);
+      animation: cdz-thinking-pulse 1.4s ease-in-out infinite;
     }
-    .progress {
-      position: absolute;
-      right: 0;
-      bottom: 0;
-      left: 0;
-      height: 3px;
-      background: color-mix(in srgb, #2f7bff 12%, transparent);
-    }
-    .progress::after {
-      content: '';
-      display: block;
-      width: 38%;
-      height: 100%;
-      border-radius: inherit;
-      /* Soft ends so the bar reads as a travelling highlight rather than a hard
-         block clipping in and out at the edges. */
+    /* Shimmer sweep across the single line — quiet, brand-tinted. */
+    .label {
       background: linear-gradient(
         90deg,
-        transparent,
-        #2f7bff,
-        #8b5cf6,
-        #10a37f,
-        transparent
+        var(--affine-text-secondary-color) 0%,
+        var(--affine-text-primary-color) 20%,
+        var(--affine-text-secondary-color) 40%
       );
-      /* An indeterminate bar wants to accelerate in and decelerate out, not
-         slow down at BOTH ends. ease-in-out did the latter, which made the
-         sweep look like it stalled on every cycle. This curve keeps the middle
-         of the travel quick. */
-      animation: cdz-progress 1.5s cubic-bezier(0.5, 0.05, 0.3, 0.95) infinite;
-      will-change: transform;
+      background-size: 200% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: cdz-thinking-shimmer 2s linear infinite;
     }
-    @keyframes cdz-orb {
+    @keyframes cdz-thinking-pulse {
       0%,
       100% {
-        transform: scale(0.88) rotate(-8deg);
-        opacity: 0.72;
+        transform: scale(0.82);
+        box-shadow: 0 0 0 0 rgba(91, 140, 255, 0.5);
+        opacity: 0.85;
       }
       50% {
-        transform: scale(1.06) rotate(8deg);
+        transform: scale(1.12);
+        box-shadow: 0 0 10px 3px rgba(160, 107, 255, 0.4);
         opacity: 1;
       }
     }
-    @keyframes cdz-progress {
+    @keyframes cdz-thinking-shimmer {
       from {
-        transform: translateX(-110%);
+        background-position: 200% 0;
       }
       to {
-        transform: translateX(340%);
-      }
-    }
-    @keyframes cdz-dots {
-      0% {
-        content: '';
-      }
-      25% {
-        content: '.';
-      }
-      50% {
-        content: '..';
-      }
-      75%,
-      100% {
-        content: '...';
+        background-position: -200% 0;
       }
     }
     @media (prefers-reduced-motion: reduce) {
-      .orb,
-      .progress::after,
-      .dots::after {
+      .dot {
         animation: none;
+        opacity: 0.9;
       }
-      .dots::after {
-        content: '...';
+      .label {
+        animation: none;
+        -webkit-text-fill-color: var(--affine-text-secondary-color);
       }
     }
   `;
 
   @property({ attribute: false })
-  accessor stopGenerating!: () => void;
+  accessor stopGenerating: (() => void) | undefined;
 
-  // First ~100 chars of the user's message driving this pending answer, passed
-  // to the reasoning-pulse ticker as its `task` (empty → generic pulse lines).
+  // Retained for backward compatibility with call sites that still pass the
+  // originating user prompt; no longer used for content (the fake reasoning
+  // ticker it fed has been removed).
   @property({ attribute: false })
   accessor task = '';
 
@@ -164,20 +99,9 @@ export class AILoading extends WithDisposable(LitElement) {
   accessor testId = 'ai-loading';
 
   override render() {
-    return html`<div class="generating-tip">
-      <div class="tip-head">
-        <span class="orb" aria-hidden="true"></span>
-        <span class="text">ClickDz AI travaille<span class="dots"></span></span>
-      </div>
-      <div class="tip-divider" aria-hidden="true"></div>
-      <cdz-pulse-ticker
-        class="cdz-chat-pulse"
-        .task=${this.task}
-        surface="chat"
-        ?active=${true}
-        ?embedded=${true}
-      ></cdz-pulse-ticker>
-      <span class="progress" aria-hidden="true"></span>
+    return html`<div class="cdz-thinking" role="status" aria-live="polite">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="label">Réflexion…</span>
     </div>`;
   }
 }
