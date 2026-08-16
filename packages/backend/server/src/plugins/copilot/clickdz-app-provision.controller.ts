@@ -21,11 +21,19 @@ import { sealSecret, openSecret } from './clickdz-secret-box';
 
 /**
  * ClickDz App Provisioning — automatic per-user accounts for the embedded
- * open-source apps (SlidePro, Social+, CoursePro, ZOOM+).
+ * open-source apps (CoursePro, ZOOM+).
  *
- * The user's standing directive: every app opens with an account ALREADY made
- * for the current user — no signup screen, no external link. This controller is
- * the AFFiNE-side half of that contract. Two route families:
+ * SlidePro NOTE: SlidePro was DELETED as an embedded app. It is now a fully
+ * native in-house studio (React page + POST /api/v1/slidepro/* AI endpoints,
+ * see clickdz-slidepro.controller.ts) that reuses the app's own copilot AI
+ * gateway and image-generation routes. It no longer iframes an external
+ * presenton fork, so it is no longer provisioned here (removed from APPS below,
+ * along with its admin-login/ensure-user chain and CDZ_SLIDEPRO_* env vars).
+ *
+ * The user's standing directive: every remaining embedded app opens with an
+ * account ALREADY made for the current user — no signup screen, no external
+ * link. This controller is the AFFiNE-side half of that contract. Two route
+ * families:
  *
  *  1. POST /api/v1/apps/provision  (session-gated, per-user)
  *     Called by the frontend panel before it iframes an app. Resolves the
@@ -70,7 +78,9 @@ const CODE_TTL_MS = 90_000;
 // WS9: 'socialplus' is no longer provisioned here — the native Social studio
 // connects/publishes per-user through Composio (clickdz-integrations.controller)
 // and no longer embeds Postiz, so it needs no bridge account/login URL.
-const APPS = ['slidepro', 'coursepro', 'zoomplus'] as const;
+// SlidePro removed: it is now a native in-house studio (no external app to
+// provision/auto-login into) — see clickdz-slidepro.controller.ts.
+const APPS = ['coursepro', 'zoomplus'] as const;
 type AppId = (typeof APPS)[number];
 
 function b64url(input: string): string {
@@ -92,68 +102,12 @@ function nonceKey(nonce: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// SlidePro (Presenton) — real per-user account provisioning + auto-login.
-// The admin creds are Railway references to the cdz-slidepro service's own
-// AUTH_USERNAME/AUTH_PASSWORD (never handled in plaintext here). We log in as
-// admin once per call to create the user (idempotent on 409), then log in AS
-// the user to mint their presenton_session JWT, which we hand back as a
-// one-time auto-login URL fragment for the iframe.
+// SlidePro removed (now native): the Presenton per-user provisioning +
+// auto-login chain (admin-login → ensure-user → user-login minting a
+// presenton_session JWT) and its CDZ_SLIDEPRO_URL / CDZ_SLIDEPRO_ADMIN_* env
+// vars were deleted. SlidePro no longer embeds an external service, so there is
+// no upstream account to create or session to mint here.
 // ---------------------------------------------------------------------------
-const SLIDEPRO_URL = (
-  process.env.CDZ_SLIDEPRO_URL ||
-  'https://cdz-slidepro-production.up.railway.app'
-).replace(/\/+$/, '');
-const SLIDEPRO_ADMIN_USERNAME = process.env.CDZ_SLIDEPRO_ADMIN_USERNAME || '';
-const SLIDEPRO_ADMIN_PASSWORD = process.env.CDZ_SLIDEPRO_ADMIN_PASSWORD || '';
-
-interface SlideProSession {
-  cookie: string; // "presenton_session=<jwt>"
-}
-
-// E1.2: per-call upstream timeouts shortened from 10 s → 5 s so the worst-case
-// SlidePro chain (admin-login + ensure-user + user-login = 3 × 5 s = 15 s) fits
-// comfortably within the FE's 25 s budget even on a cold service.
-const SLIDEPRO_CALL_TIMEOUT_MS = 5_000;
-
-async function slideproLogin(
-  username: string,
-  password: string
-): Promise<SlideProSession | null> {
-  try {
-    const res = await fetch(`${SLIDEPRO_URL}/api/v1/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(SLIDEPRO_CALL_TIMEOUT_MS),
-    });
-    if (!res.ok) return null;
-    const setCookie = res.headers.get('set-cookie') || '';
-    const match = setCookie.match(/presenton_session=([^;]+)/);
-    if (!match) return null;
-    return { cookie: `presenton_session=${match[1]}` };
-  } catch {
-    return null;
-  }
-}
-
-async function slideproEnsureUser(
-  adminCookie: string,
-  username: string,
-  password: string
-): Promise<boolean> {
-  try {
-    const res = await fetch(`${SLIDEPRO_URL}/api/v1/admin/users`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Cookie: adminCookie },
-      body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(SLIDEPRO_CALL_TIMEOUT_MS),
-    });
-    // 201 created, 409 already exists — both mean the account is usable.
-    return res.status === 201 || res.status === 409;
-  } catch {
-    return false;
-  }
-}
 
 // WS9: the Social+ (Postiz) provisioning helpers (postizRegister/postizLogin +
 // POSTIZ_URL / CDZ_POSTIZ_URL / CDZ_POSTIZ_SHIM_URL) were removed. The native
@@ -249,7 +203,7 @@ export class ClickDzAppProvisionController {
 
   /**
    * POST /api/v1/apps/provision
-   * Body: { app: 'slidepro'|'coursepro'|'zoomplus' }
+   * Body: { app: 'coursepro'|'zoomplus' }
    * Returns: { code, expiresAt, account: { username } , appUrl }
    * Ensures the current user has an account record for the app (creating a
    * sealed credential on first call), then mints a one-time bridge code.
@@ -327,7 +281,7 @@ export class ClickDzAppProvisionController {
       const username = `u_${user.id.replace(/-/g, '').slice(0, 20)}`;
       // A random per-user credential, sealed at rest. The actual per-app
       // account is created lazily by the service's auth shim when it redeems a
-      // code (SlidePro admin API, Postiz /auth/register, Meet OIDC, etc.).
+      // code (Postiz /auth/register, Meet OIDC, etc.).
       const credential = randomBytes(24).toString('base64url');
       const sealed = sealSecret(credential);
       record = {
@@ -362,73 +316,11 @@ export class ClickDzAppProvisionController {
       /* if Redis is down the code still verifies by signature, just re-usable */
     }
 
-    // SlidePro: provision the account + build an auto-login URL, best-effort.
-    // We do this server-to-server so the iframe can land the user already
-    // logged in without ever showing a signup/login screen.
-    //
-    // E1.2 optimisation: when `record` already existed on entry (i.e. the user
-    // has opened SlidePro before), we SKIP the admin-login + ensure-user
-    // round-trips (2 × 5 s saved) and go straight to the user-login to mint a
-    // fresh session. The ensure-user call is idempotent (it only creates the
-    // account once) so repeating it is safe but wasteful on cold services.
-    // `recordAlreadyExisted` is true when we read a non-null record from Redis
-    // before the create block above; we track it via the pre-check.
+    // SlidePro removed (now native): its server-to-server provisioning branch
+    // (admin-login → ensure-user → user-login, stashing a presenton_session JWT
+    // for the shim) was deleted. SlidePro no longer embeds an external service,
+    // so no auto-login URL is minted for it here.
     let loginUrl: string | undefined;
-    if (
-      app === 'slidepro' &&
-      SLIDEPRO_ADMIN_USERNAME &&
-      SLIDEPRO_ADMIN_PASSWORD &&
-      plainCredential
-    ) {
-      try {
-        // On first provision (no prior record) run the full 3-call chain.
-        // On repeat opens skip admin-login + ensure-user (2 calls saved).
-        let ensureOk = recordAlreadyExisted; // assume account exists on repeat
-        if (!recordAlreadyExisted) {
-          const admin = await slideproLogin(
-            SLIDEPRO_ADMIN_USERNAME,
-            SLIDEPRO_ADMIN_PASSWORD
-          );
-          if (admin) {
-            ensureOk = await slideproEnsureUser(
-              admin.cookie,
-              record.username,
-              plainCredential
-            );
-          }
-        }
-        if (ensureOk) {
-          const userSess = await slideproLogin(
-            record.username,
-            plainCredential
-          );
-          if (userSess) {
-            // Stash the user's presenton_session JWT in Redis keyed by the code
-            // nonce; the login shim redeems it (one-time, short TTL) via
-            // /api/bridge/session, sets it as a first-party cookie on the shim
-            // domain, and lands in the app authenticated.
-            const jwt = userSess.cookie.replace(/^presenton_session=/, '');
-            try {
-              await this.redis.set(
-                `clickdz:appsession:${nonce}`,
-                jwt,
-                'PX',
-                CODE_TTL_MS,
-                'NX'
-              );
-            } catch {
-              /* non-fatal */
-            }
-            const shim = (
-              process.env.CDZ_SLIDEPRO_SHIM_URL || SLIDEPRO_URL
-            ).replace(/\/+$/, '');
-            loginUrl = `${shim}/?ticket=${encodeURIComponent(code)}`;
-          }
-        }
-      } catch {
-        loginUrl = undefined; // fall through to the code-only flow
-      }
-    }
 
     // WS9: the Social+ (Postiz) provisioning branch was removed. The native
     // Social studio connects/publishes per-user through Composio and no longer
@@ -503,7 +395,25 @@ export class ClickDzAppProvisionController {
       // authenticate → IdP /authorize (cookie present) → auto-approve →
       // callback → LOGIN_REDIRECT_URL (Meet home, now authenticated). Without
       // this the SPA just shows a "Login" button and never auto-logs-in.
-      const meetAuthenticate = `${meetFrontend}/api/v1.0/authenticate/`;
+      //
+      // ZOOM+ meetings upgrade: when the panel passes a specific `room`, ask
+      // Meet to return the browser INTO that room after auth instead of the
+      // Meet home, so the iframe lands directly in the meeting. We pass BOTH the
+      // Django-standard `next` (REDIRECT_FIELD_NAME, honoured by
+      // mozilla-django-oidc) and a `returnTo` alias, since the Meet frontend has
+      // used either name across versions. This is best-effort: if Meet ignores
+      // it the user still lands logged-in on the Meet home and can open the room
+      // via the copyable deep-link. A blank room preserves prior behaviour
+      // exactly. Only a same-origin Meet path is ever built (no open redirect);
+      // the room is sanitized to a safe path segment.
+      const rawRoom = String((body as any)?.room ?? '').trim();
+      const room = rawRoom.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 96);
+      let meetAuthenticate = `${meetFrontend}/api/v1.0/authenticate/`;
+      if (room) {
+        const roomUrl = `${meetFrontend}/${encodeURIComponent(room)}`;
+        const enc = encodeURIComponent(roomUrl);
+        meetAuthenticate += `?next=${enc}&returnTo=${enc}`;
+      }
       loginUrl = `${idp}/prime?code=${encodeURIComponent(code)}&next=${encodeURIComponent(meetAuthenticate)}`;
     }
 
@@ -535,8 +445,9 @@ export class ClickDzAppProvisionController {
    * Verifies a bridge code (same format as /api/bridge/exchange) and, if a
    * per-user app session was stashed for it at provision time, returns + burns
    * it. The shim sets it as a first-party cookie on the app domain. The cookie
-   * name differs per app (Presenton `presenton_session`, Postiz `auth`), so we
-   * return the pair and let the shim set it generically.
+   * name differs per app (Postiz `auth`, ClassroomIO
+   * `__Secure-classroomio.session_token`), so we return the pair and let the
+   * shim set it generically.
    */
   @Public()
   @Throttle('strict')
@@ -589,11 +500,11 @@ export class ClickDzAppProvisionController {
     if (!jwt) {
       throw new BadRequest('No session for ticket');
     }
-    // Cookie name per app (Presenton `presenton_session`, Postiz `auth`,
-    // ClassroomIO `__Secure-classroomio.session_token`).
-    // WS17: the old `socialplus` branch was dead (socialplus was removed from
-    // APPS in WS9) — remap the `auth` cookie to `postiz`, the service that
-    // actually uses it, so the branch is no longer unreachable.
+    // Cookie name per app (Postiz `auth`, ClassroomIO
+    // `__Secure-classroomio.session_token`). The `presenton_session` fallback is
+    // LEGACY-ONLY now: SlidePro is native and no longer stashes a session here,
+    // so nothing reaches this default via provision(). It is retained solely so
+    // a stale deployed shim mid-transition still gets a well-formed reply.
     const cookieName =
       app === 'postiz'
         ? 'auth'
@@ -607,10 +518,12 @@ export class ClickDzAppProvisionController {
    * POST /api/bridge/bootstrap
    * Headers: Authorization: Bearer <BRIDGE_SECRET>  (the login shim)
    * Body: { ticket }
-   * Returns: { presenton_session, auth, cookie_name, cookie_value }
+   * Returns: { presenton_session, cookie_name, cookie_value }
    * Same verification as /api/bridge/session but ALSO returns the legacy
-   * `presenton_session`/`auth` field names so a v1 shim reading either shape
-   * works. (The deployed SlidePro shim v1 reads `presenton_session` directly.)
+   * `presenton_session` field name so a v1 shim reading either shape works.
+   * LEGACY-ONLY: SlidePro is now native and no longer provisioned, so nothing in
+   * this codebase calls bootstrap for it — the route is kept purely so a stale
+   * deployed shim mid-transition still gets a well-formed reply.
    */
   @Public()
   @Throttle('strict')

@@ -64,6 +64,63 @@ async function fetchEnabled(): Promise<boolean> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Recordings — server-side LiveKit Egress recordings for this room. Fail-open:
+// null on any error (egress unconfigured, host controls off, network). The
+// panel renders the list only when there is something to show.
+// ---------------------------------------------------------------------------
+
+interface RecordingFile {
+  filename?: string;
+  location?: string;
+  size?: number;
+  duration?: number;
+}
+interface RecordingItem {
+  egressId: string;
+  status: string;
+  startedAt?: number;
+  endedAt?: number;
+  files: RecordingFile[];
+}
+
+async function fetchRecordings(room: string): Promise<RecordingItem[] | null> {
+  try {
+    const res = await fetch(
+      `/api/v1/zoomplus/host/recordings?room=${encodeURIComponent(room)}`,
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as
+      | { ok?: boolean; recordings?: RecordingItem[] }
+      | null;
+    if (!data || data.ok === false) return null;
+    return Array.isArray(data.recordings) ? data.recordings : [];
+  } catch {
+    return null;
+  }
+}
+
+function fmtBytes(n?: number): string {
+  if (!n || n <= 0) return '';
+  const mb = n / (1024 * 1024);
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} Go`;
+  return `${mb.toFixed(1)} Mo`;
+}
+
+function fmtDuration(ns?: number): string {
+  // LiveKit reports duration in nanoseconds.
+  if (!ns || ns <= 0) return '';
+  const totalSec = Math.round(ns / 1e9);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}m ${String(s).padStart(2, '0')}s`;
+}
+
 async function postSummary(body: {
   transcript: string;
   lang: string;
@@ -112,7 +169,7 @@ const LANG_OPTIONS: { value: string; label: string }[] = [
 // Component
 // ---------------------------------------------------------------------------
 
-export const ZoomPlusSummaryPanel = ({ room: _room }: { room: string }) => {
+export const ZoomPlusSummaryPanel = ({ room }: { room: string }) => {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -120,6 +177,9 @@ export const ZoomPlusSummaryPanel = ({ room: _room }: { room: string }) => {
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SummaryResult | null>(null);
+  // Server-side recordings for this room (null = not loaded / unavailable).
+  const [recordings, setRecordings] = useState<RecordingItem[] | null>(null);
+  const [recLoading, setRecLoading] = useState(false);
 
   // --- Probe on mount ---
   useEffect(() => {
@@ -132,6 +192,19 @@ export const ZoomPlusSummaryPanel = ({ room: _room }: { room: string }) => {
       cancelled = true;
     };
   }, []);
+
+  // --- Load recordings when the panel is opened (and a room is set) ---
+  const loadRecordings = useCallback(async () => {
+    if (!room) return;
+    setRecLoading(true);
+    const list = await fetchRecordings(room);
+    setRecLoading(false);
+    setRecordings(list);
+  }, [room]);
+
+  useEffect(() => {
+    if (expanded && room) void loadRecordings();
+  }, [expanded, room, loadRecordings]);
 
   // --- Submit ---
   const handleSubmit = useCallback(async () => {
@@ -271,6 +344,73 @@ export const ZoomPlusSummaryPanel = ({ room: _room }: { room: string }) => {
       {/* Expanded body */}
       {expanded && (
         <div style={bodyStyle}>
+          {/* Server-side recordings (LiveKit Egress). Shown only when there are
+              finished recordings for this room; the source of the transcript. */}
+          {recordings && recordings.length > 0 && (
+            <div style={cardStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <div style={{ ...cardTitleStyle, marginBottom: 0, flex: 1 }}>🎞️ Enregistrements</div>
+                <button
+                  style={miniBtnStyle('secondary', recLoading)}
+                  disabled={recLoading}
+                  onClick={() => void loadRecordings()}
+                  title="Rafraîchir"
+                >
+                  {recLoading ? <Spinner /> : '↻'}
+                </button>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {recordings.map((r, i) => {
+                  const file = r.files[0];
+                  const started = r.startedAt
+                    ? new Date(r.startedAt / 1e6).toLocaleString('fr-FR')
+                    : '';
+                  const meta = [fmtDuration(file?.duration), fmtBytes(file?.size)]
+                    .filter(Boolean)
+                    .join(' · ');
+                  return (
+                    <div
+                      key={r.egressId || i}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        fontSize: 12,
+                        color: C.text,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <span style={{ fontWeight: 600 }}>{started || `Enregistrement ${i + 1}`}</span>
+                      {meta && <span style={{ color: C.muted }}>{meta}</span>}
+                      <span
+                        style={{
+                          fontSize: 10.5,
+                          fontWeight: 700,
+                          padding: '1px 7px',
+                          borderRadius: 999,
+                          color: C.muted,
+                          background: C.bg,
+                          border: `1px solid ${C.border}`,
+                        }}
+                      >
+                        {r.status.replace(/^EGRESS_/, '').toLowerCase() || 'terminé'}
+                      </span>
+                      {file?.location && (
+                        <span style={{ fontSize: 11, color: C.muted, fontFamily: 'monospace', wordBreak: 'break-all', flexBasis: '100%' }}>
+                          {file.location}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 6, lineHeight: 1.4 }}>
+                Les fichiers sont stockés sur le stockage configuré du serveur. Générez un résumé en
+                collant la transcription ci-dessous.
+              </div>
+            </div>
+          )}
+
           {/* Title input */}
           <div>
             <div style={labelStyle}>Titre (optionnel)</div>

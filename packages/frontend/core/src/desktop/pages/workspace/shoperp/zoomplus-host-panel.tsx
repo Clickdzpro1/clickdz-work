@@ -89,7 +89,7 @@ async function postAction(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -107,6 +107,46 @@ async function postAction(
       ok: false,
       message: err instanceof Error ? err.message : "Erreur réseau",
     };
+  }
+}
+
+// Room state — exists / participant count / policy flags (locked, muteOnEntry,
+// recording). Backed by LiveKit ListRooms metadata. Fail-open (null on error).
+interface RoomState {
+  exists: boolean;
+  numParticipants: number;
+  locked: boolean;
+  muteOnEntry: boolean;
+  recording: boolean;
+}
+
+async function fetchRoomState(
+  room: string,
+  signal?: AbortSignal
+): Promise<RoomState | null> {
+  try {
+    const res = await fetch(
+      `/api/v1/zoomplus/host/room-state?room=${encodeURIComponent(room)}`,
+      {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: signal ?? AbortSignal.timeout(10000),
+      }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json().catch(() => null)) as
+      | (RoomState & { ok?: boolean })
+      | null;
+    if (!data || data.ok === false) return null;
+    return {
+      exists: !!data.exists,
+      numParticipants: Number(data.numParticipants ?? 0),
+      locked: !!data.locked,
+      muteOnEntry: !!data.muteOnEntry,
+      recording: !!data.recording,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -170,9 +210,19 @@ export const ZoomPlusHostPanel = ({ room }: { room: string }) => {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmingEnd, setConfirmingEnd] = useState(false);
+  // Room policy state (locked / mute-on-entry / recording) + recording support.
+  const [roomState, setRoomState] = useState<RoomState | null>(null);
+  // Whether the recording (Egress) control is usable. null = untested; false =
+  // the deployment reported egress unavailable (so we HIDE the button, never
+  // fake it); true = a start/stop succeeded.
+  const [recordingSupported, setRecordingSupported] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState<string | null>(null); // in-flight action id
   const { status, show } = useStatusToast();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Guards the "mute on entry" auto-enforcement so we don't re-mute a
+  // participant the host deliberately un-muted within the same session.
+  const enforcedMutedRef = useRef<Set<string>>(new Set());
 
   // --- Probe on mount ---
   useEffect(() => {
@@ -186,16 +236,40 @@ export const ZoomPlusHostPanel = ({ room }: { room: string }) => {
     };
   }, []);
 
-  // --- Poll participants while expanded ---
+  // --- Poll participants + room state while expanded ---
   const refresh = useCallback(async () => {
     if (!room) return;
     setLoading(true);
     abortRef.current?.abort();
     abortRef.current = new AbortController();
-    const list = await fetchParticipants(room, abortRef.current.signal);
+    const signal = abortRef.current.signal;
+    const [list, state] = await Promise.all([
+      fetchParticipants(room, signal),
+      fetchRoomState(room, signal),
+    ]);
     setLoading(false);
     if (list !== null) {
       setParticipants(list);
+    }
+    if (state !== null) {
+      setRoomState(state);
+      // Enforce "mute on entry": if the policy is on, mute any participant whose
+      // mic is live and whom we haven't already enforced this session. The host
+      // can still un-mute someone (we remember and won't re-mute them).
+      if (state.muteOnEntry && list) {
+        for (const p of list) {
+          const mic = p.tracks?.find(t => t.type === 'audio' && t.source === 'mic');
+          if (mic && !mic.muted && !enforcedMutedRef.current.has(p.identity)) {
+            enforcedMutedRef.current.add(p.identity);
+            void postAction('/api/v1/zoomplus/host/mute', {
+              room,
+              identity: p.identity,
+              trackSid: mic.sid,
+              muted: true,
+            });
+          }
+        }
+      }
     }
   }, [room]);
 
@@ -330,6 +404,68 @@ export const ZoomPlusHostPanel = ({ room }: { room: string }) => {
     }
   }, [room, show]);
 
+  // --- Lock / unlock the meeting (room metadata; real LiveKit op) ---
+  const handleToggleLock = useCallback(async () => {
+    const next = !(roomState?.locked ?? false);
+    setBusy('lock');
+    const result = await postAction('/api/v1/zoomplus/host/lock', { room, locked: next });
+    setBusy(null);
+    if (result.ok) {
+      setRoomState(s => (s ? { ...s, locked: next } : s));
+      show('ok', next ? "Réunion verrouillée" : "Réunion déverrouillée");
+      void refresh();
+    } else {
+      show('error', result.message || "Échec du verrouillage");
+    }
+  }, [room, roomState, refresh, show]);
+
+  // --- Toggle "mute on entry" policy ---
+  const handleToggleMuteOnEntry = useCallback(async () => {
+    const next = !(roomState?.muteOnEntry ?? false);
+    setBusy('moe');
+    const result = await postAction('/api/v1/zoomplus/host/mute-on-entry', { room, enabled: next });
+    setBusy(null);
+    if (result.ok) {
+      setRoomState(s => (s ? { ...s, muteOnEntry: next } : s));
+      // Reset the enforcement memory so the policy re-applies cleanly.
+      enforcedMutedRef.current.clear();
+      show('ok', next ? "Micros coupés à l’entrée activé" : "Désactivé");
+      void refresh();
+    } else {
+      show('error', result.message || "Échec du changement de politique");
+    }
+  }, [room, roomState, refresh, show]);
+
+  // --- Recording start/stop (LiveKit Egress) ---
+  // A failed start with a "no egress"/unavailable message flips recordingSupported
+  // to false so the control HIDES (we never fake recording).
+  const handleToggleRecording = useCallback(async () => {
+    const isRec = roomState?.recording ?? false;
+    setBusy('rec');
+    const path = isRec
+      ? '/api/v1/zoomplus/host/recording/stop'
+      : '/api/v1/zoomplus/host/recording/start';
+    const result = await postAction(path, { room });
+    setBusy(null);
+    if (result.ok) {
+      setRecordingSupported(true);
+      setRoomState(s => (s ? { ...s, recording: !isRec } : s));
+      show('ok', isRec ? "Enregistrement arrêté" : "Enregistrement démarré");
+      void refresh();
+    } else {
+      // Distinguish "egress not configured" (hide the control) from a transient
+      // failure (keep it, show the error).
+      const msg = (result.message || '').toLowerCase();
+      if (
+        !isRec &&
+        (msg.includes('egress') || msg.includes('not configured') || msg.includes('unavailable') || msg.includes('501') || msg.includes('unimplemented'))
+      ) {
+        setRecordingSupported(false);
+      }
+      show('error', result.message || "Échec de l’enregistrement");
+    }
+  }, [room, roomState, refresh, show]);
+
   // --- Render ---
   // Probe not yet resolved — render nothing (fail-open, invisible).
   if (enabled === null) return null;
@@ -417,6 +553,18 @@ export const ZoomPlusHostPanel = ({ room }: { room: string }) => {
         <span style={{ fontWeight: 800, color: C.text, flex: 1 }}>
           Contrôle hôte
         </span>
+        {roomState?.recording && (
+          <span
+            aria-label="Enregistrement en cours"
+            title="Enregistrement en cours"
+            style={{ fontSize: 11, color: 'var(--affine-error-color, #eb4b4b)', fontWeight: 700 }}
+          >
+            ⏺ REC
+          </span>
+        )}
+        {roomState?.locked && (
+          <span title="Réunion verrouillée" style={{ fontSize: 12 }}>🔒</span>
+        )}
         <span style={{ fontSize: 11, color: C.muted }}>
           {participants.length} participant(s)
         </span>
@@ -589,6 +737,49 @@ export const ZoomPlusHostPanel = ({ room }: { room: string }) => {
                 </div>
               );
             })}
+
+          {/* Meeting-wide policy controls — lock / mute-on-entry / recording.
+              All wired to REAL LiveKit ops via the backend. The recording
+              button is HIDDEN (not faked) when egress is unavailable. */}
+          {room && (
+            <div
+              style={{
+                ...footerStyle,
+                borderTop: `1px solid ${C.border}`,
+                background: C.panel2,
+              }}
+            >
+              <button
+                style={miniBtnStyle(roomState?.locked ? 'danger' : 'secondary', busy === 'lock')}
+                disabled={busy === 'lock'}
+                onClick={() => void handleToggleLock()}
+                title={roomState?.locked ? "Déverrouiller la réunion" : "Verrouiller la réunion"}
+              >
+                {busy === 'lock' ? <Spinner /> : roomState?.locked ? '🔒 Verrouillée' : '🔓 Verrouiller'}
+              </button>
+
+              <button
+                style={miniBtnStyle(roomState?.muteOnEntry ? 'danger' : 'secondary', busy === 'moe')}
+                disabled={busy === 'moe'}
+                onClick={() => void handleToggleMuteOnEntry()}
+                title="Couper les micros à l’entrée"
+              >
+                {busy === 'moe' ? <Spinner /> : roomState?.muteOnEntry ? '🔕 Sourdine entrée' : '🔔 Sourdine entrée'}
+              </button>
+
+              {/* Recording — only shown while egress hasn't reported unavailable. */}
+              {recordingSupported !== false && (
+                <button
+                  style={miniBtnStyle(roomState?.recording ? 'danger' : 'secondary', busy === 'rec')}
+                  disabled={busy === 'rec'}
+                  onClick={() => void handleToggleRecording()}
+                  title={roomState?.recording ? "Arrêter l’enregistrement serveur" : "Démarrer l’enregistrement serveur"}
+                >
+                  {busy === 'rec' ? <Spinner /> : roomState?.recording ? '⏹ Enregistrement' : '⏺ Enregistrer (serveur)'}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Footer actions */}
           {room && (

@@ -1,25 +1,57 @@
-// ZOOM+ — Video conferencing tab for ClickDz Work
-// ZOOM+ — Video conferencing for ClickDz Work (self-hosted La Suite Meet
-// instance on meet.clickdz.ai, MIT license; LiveKit SFU; CDZ AI for post-call
-// transcription/summary).
+// ZOOM+ — Video conferencing for ClickDz Work.
+//
+// WHAT POWERS MEETINGS: a self-hosted La Suite Meet instance (meet.clickdz.ai,
+// Django + LiveKit SFU) embedded via iframe, auto-logged-in through the
+// meet-idp-bridge (OIDC). Our AFFiNE backend has direct LiveKit
+// RoomService/Egress admin access (clickdz-zoomplus.service) which powers the
+// REAL host controls (mute / kick / lock / recording) + the room policy this
+// page pre-applies when a meeting starts. Post-call summaries go through the
+// app's existing copilot endpoint (/api/v1/zoomplus/summary → cdz-ai).
+//
+// THIS SHELL is a real meetings product, not a bare iframe:
+//   · Réunions — schedule meetings with real settings (waiting room, passcode,
+//     mute-on-entry, auto-record, lock, co-hosts, recurrence, tz), listed as
+//     upcoming/past with start / join / copy-invite / delete. The schedule is
+//     persisted per-workspace in localStorage (the house pattern — see
+//     shipping.tsx pickupStorageKey); each meeting's identity is its LiveKit
+//     room name, which is a REAL joinable room in the live Meet instance.
+//   · En direct — the embedded Meet room + the live host-controls & résumé
+//     panels (real LiveKit ops via the backend).
+//   · Paramètres — per-workspace default settings for all the toggles above.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { C, ensureShoperpResponsiveCss, Spinner, Banner, linkBtnStyle, miniBtnStyle } from './shoperp-shared';
+import {
+  C,
+  ensureShoperpResponsiveCss,
+  Spinner,
+  Banner,
+  linkBtnStyle,
+  miniBtnStyle,
+} from './shoperp-shared';
 import { provisionApp } from './app-provision';
 import { ZoomPlusHostPanel } from './zoomplus-host-panel';
 import { ZoomPlusSummaryPanel } from './zoomplus-summary-panel';
+import { ZoomPlusScheduler } from './zoomplus-scheduler';
+import { ZoomPlusMeetingsList } from './zoomplus-meetings-list';
+import { ZoomPlusDefaultsPanel } from './zoomplus-defaults-panel';
+import {
+  type Meeting,
+  readMeetings,
+  applyRoomPolicy,
+  roomJoinUrl,
+  probeCapabilities,
+  type ProviderCapabilities,
+} from './zoomplus-meetings';
 
 const ZOOMPLUS_URL_KEY = 'cdz.zoomplus.url';
 
 /**
  * Base URL for the Meet frontend host. Kept for a self-hoster override via
- * localStorage (no rebuild needed); there is no fake per-shop host. WS17: the
- * bridge-code fallback that used this is removed (Meet's OIDC drops the
- * bridge_code, so the fallback showed a permanent login screen).
+ * localStorage (no rebuild needed); there is no fake per-shop host.
  */
 const ZOOMPLUS_INSTANCE_URL = 'https://meet.clickdz.ai';
 
 // Kept for the localStorage override contract (a self-hoster may still repoint
-// the host). Unused by the load() flow now but referenced by the override path.
+// the host).
 function zoomPlusInstanceUrl(): string {
   try {
     const override = localStorage.getItem(ZOOMPLUS_URL_KEY);
@@ -31,8 +63,7 @@ function zoomPlusInstanceUrl(): string {
 }
 
 // Recording support is only usable in a secure context with the MediaRecorder
-// + getDisplayMedia APIs (e.g. plain http:// dev hosts or very old browsers
-// don't have them) — checked once so we can show a French inline message
+// + getDisplayMedia APIs — checked once so we can show a French inline message
 // instead of letting the button throw.
 function isRecordingSupported(): boolean {
   try {
@@ -79,18 +110,36 @@ function recordingFilename(): string {
   return `clickdz-reunion-${date}-${time}.webm`;
 }
 
+type MainTab = 'meetings' | 'live' | 'settings';
+
 export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'no-login' | 'slow'>('loading');
+  // --- Top-level navigation ------------------------------------------------
+  const [tab, setTab] = useState<MainTab>('meetings');
+
+  // --- Meetings store (per-workspace localStorage) -------------------------
+  const [meetings, setMeetings] = useState<Meeting[]>([]);
+  // The meeting currently open in the live room (drives the iframe + host
+  // panel room name). null = the workspace "salle personnelle" (slug) is used.
+  const [activeMeeting, setActiveMeeting] = useState<Meeting | null>(null);
+  const [policyNote, setPolicyNote] = useState<string | null>(null);
+
+  // --- Provider capabilities (probed once) ---------------------------------
+  const [caps, setCaps] = useState<ProviderCapabilities | null>(null);
+
+  // --- Live-room connection state (Meet iframe) ----------------------------
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error' | 'no-login' | 'slow'>('idle');
   const [iframeSrc, setIframeSrc] = useState('');
 
-  // --- Local meeting recording state -------------------------------------
-  // Idle → recording → back to idle. Everything captured stays on-device:
-  // we never upload the blob, we only trigger a browser download.
+  // The LiveKit room the host panel / iframe target. When a meeting is open we
+  // use its room; otherwise the workspace personal room (slug).
+  const activeRoom = activeMeeting ? activeMeeting.room : slug;
+
+  // --- Local (on-device) meeting recording state ---------------------------
   const [recState, setRecState] = useState<'idle' | 'starting' | 'recording'>('idle');
   const [recElapsed, setRecElapsed] = useState(0);
-  const [recNote, setRecNote] = useState<string | null>(null); // "saved" confirmation
+  const [recNote, setRecNote] = useState<string | null>(null);
   const [micDenied, setMicDenied] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -103,6 +152,19 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   const recNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const recordingSupported = isRecordingSupported();
+
+  // --- Load the store + probe capabilities on mount ------------------------
+  useEffect(() => {
+    ensureShoperpResponsiveCss();
+    setMeetings(readMeetings(slug));
+    void (async () => {
+      setCaps(await probeCapabilities());
+    })();
+  }, [slug]);
+
+  const refreshMeetings = useCallback(() => {
+    setMeetings(readMeetings(slug));
+  }, [slug]);
 
   const stopAllRecordingTracks = useCallback(() => {
     try { displayStreamRef.current?.getTracks().forEach(t => t.stop()); } catch { /* noop */ }
@@ -148,7 +210,6 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
   const stopRecording = useCallback(() => {
     try {
       if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-        // onstop finalizes + downloads once the last chunk lands.
         recorderRef.current.stop();
       } else {
         finalizeAndDownload();
@@ -173,7 +234,6 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
         audio: true,
       });
     } catch {
-      // User cancelled the picker (or denied it) — return to idle silently.
       setRecState('idle');
       return;
     }
@@ -181,8 +241,6 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
     try {
       displayStreamRef.current = display;
 
-      // Best-effort microphone capture so the user's own voice is recorded
-      // too. If denied/unavailable, continue with display audio only.
       let mic: MediaStream | null = null;
       try {
         mic = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -226,8 +284,6 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
       const combined = new MediaStream(combinedTracks);
       mixedStreamRef.current = combined;
 
-      // Native "Stop sharing" from the browser's own UI ends the display
-      // track — treat that exactly like clicking "Arrêter".
       if (videoTrack) {
         videoTrack.addEventListener('ended', () => stopRecording());
       }
@@ -249,15 +305,12 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
       recTimerRef.current = setInterval(() => setRecElapsed(e => e + 1), 1000);
       setRecState('recording');
     } catch {
-      // Anything unexpected while wiring up the mix/recorder — clean up and
-      // go back to idle rather than leaving a half-open stream.
       stopAllRecordingTracks();
       recorderRef.current = null;
       setRecState('idle');
     }
   }, [recordingSupported, recState, finalizeAndDownload, stopAllRecordingTracks, stopRecording]);
 
-  // Clean up any live capture/recording on unmount.
   useEffect(() => {
     return () => {
       try {
@@ -270,15 +323,8 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
     };
   }, [stopAllRecordingTracks]);
 
-  // C4: Track the current load attempt so stale provision results (from a
-  // previous load() that resolved after the user cancelled or retried) don't
-  // clobber the current status. Each load() increments this counter; at the
-  // end we only apply the result if the counter hasn't changed.
+  // --- Live-room load flow (Meet iframe + IdP /prime auto-login) -----------
   const loadEpochRef = useRef(0);
-
-  // C4: Elapsed timer — starts when status === 'loading'. After 15s with no
-  // resolution, transitions to 'slow' so the user sees a message + retry/cancel
-  // instead of an indefinite spinner (the Meet backend cold start can take 50s).
   const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const SLOW_THRESHOLD_MS = 15_000;
 
@@ -293,81 +339,111 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
     clearSlowTimer();
     const epoch = loadEpochRef.current;
     slowTimerRef.current = setTimeout(() => {
-      // Only transition to 'slow' if we're still on the same load attempt
-      // and haven't already resolved to another status.
       if (loadEpochRef.current === epoch) {
-        setStatus(prev => prev === 'loading' ? 'slow' : prev);
+        setStatus(prev => (prev === 'loading' ? 'slow' : prev));
       }
     }, SLOW_THRESHOLD_MS);
   }, [clearSlowTimer]);
 
-  // Robust flow: provision the app, then iframe the IdP /prime loginUrl
-  // (preferred — stashes the bridge_code as a first-party cookie then redirects
-  // into Meet so OIDC auto-approves). WS17: when loginUrl is missing (IdP/Meet
-  // backend cold-start timeout, or CDZ_ZOOM_IDP_URL misconfigured), the old
-  // fallback appended ?bridge_code=... to the Meet frontend URL — but the
-  // backend documents that Meet's OIDC client drops our bridge_code, so the SPA
-  // showed a permanent "Login" screen with no error. Now we surface a retry
-  // banner instead of iframing the broken fallback.
-  const load = useCallback(async () => {
-    const epoch = ++loadEpochRef.current;
-    setStatus('loading');
-    startSlowTimer();
-    const p = await provisionApp('zoomplus');
-    clearSlowTimer();
-    // Ignore stale results from a previous load attempt (user clicked
-    // Réessayer or Annuler which started a new epoch).
-    if (loadEpochRef.current !== epoch) return;
-    if (!p) {
-      setStatus('error');
-      return;
-    }
-    if (!p.loginUrl) {
-      // No IdP login URL — the Meet backend/IdP bridge isn't ready. Don't iframe
-      // the dead bridge_code fallback; show a retry banner.
-      setStatus('no-login');
-      return;
-    }
-    setIframeSrc(p.loginUrl);
-    setStatus('ready');
-  }, [startSlowTimer, clearSlowTimer]);
+  // `room` lands the embedded Meet SPA directly in that LiveKit room after the
+  // OIDC auto-login (best-effort — see the backend provision branch). Defaults
+  // to the currently active room so a bare "↻ Vérifier" reuses it.
+  const load = useCallback(
+    async (room?: string) => {
+      const target = room ?? (activeMeeting ? activeMeeting.room : slug);
+      const epoch = ++loadEpochRef.current;
+      setStatus('loading');
+      startSlowTimer();
+      const p = await provisionApp('zoomplus', { room: target });
+      clearSlowTimer();
+      if (loadEpochRef.current !== epoch) return;
+      if (!p) {
+        setStatus('error');
+        return;
+      }
+      if (!p.loginUrl) {
+        setStatus('no-login');
+        return;
+      }
+      setIframeSrc(p.loginUrl);
+      setStatus('ready');
+    },
+    [startSlowTimer, clearSlowTimer, activeMeeting, slug]
+  );
 
-  // C4: Cancel the current load attempt — stops the timer and shows the error
-  // banner (which has its own Réessayer button). The in-flight provisionApp
-  // promise will resolve later but its result is ignored via the epoch guard.
   const cancelLoad = useCallback(() => {
-    ++loadEpochRef.current; // invalidate the in-flight load()
+    ++loadEpochRef.current;
     clearSlowTimer();
     setStatus('error');
   }, [clearSlowTimer]);
 
-  // Cleanup timer on unmount.
   useEffect(() => {
     return () => clearSlowTimer();
   }, [clearSlowTimer]);
 
-  useEffect(() => {
-    ensureShoperpResponsiveCss();
-    void load();
-  }, [slug, load]);
+  // --- Enter the live room for a meeting (or the personal room) ------------
+  const enterLiveRoom = useCallback(
+    async (meeting: Meeting | null, applyPolicy: boolean) => {
+      setActiveMeeting(meeting);
+      setTab('live');
+      setPolicyNote(null);
+      // Pre-apply the meeting's room policy (lock / mute-on-entry / auto-record)
+      // to the REAL LiveKit room before joining — best-effort, host-controls
+      // gated. Only when starting (not merely joining).
+      if (applyPolicy && meeting && caps?.hostControls) {
+        const applied = await applyRoomPolicy(meeting);
+        const done: string[] = [];
+        if (applied.muteOnEntry) done.push('micros coupés à l’entrée');
+        if (applied.locked) done.push('réunion verrouillée');
+        if (applied.recording) done.push('enregistrement démarré');
+        if (done.length) {
+          setPolicyNote(`Paramètres appliqués : ${done.join(', ')}.`);
+        }
+      }
+      // (Re)load the Meet iframe INTO this meeting's room (pass it explicitly —
+      // setActiveMeeting above hasn't flushed yet, so load() can't read it).
+      // The embedded SPA opens/joins the LiveKit room; the host panel
+      // administers the same room name.
+      const targetRoom = meeting ? meeting.room : slug;
+      void load(targetRoom);
+    },
+    [caps, load, slug]
+  );
+
+  // ---- Styles -------------------------------------------------------------
+  const tabBtn = (active: boolean): React.CSSProperties => ({
+    appearance: 'none',
+    background: active ? C.accentSoft : 'transparent',
+    border: 'none',
+    borderBottom: active ? `2px solid ${C.accent}` : '2px solid transparent',
+    color: active ? C.text : C.muted,
+    fontSize: 13,
+    fontWeight: 700,
+    padding: '10px 14px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  });
+
+  const showLocalRecBtn =
+    tab === 'live' && status === 'ready' && recordingSupported;
 
   return (
     <div data-cdz-surface="" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: `1px solid ${C.border}`, background: C.panel2, flexWrap: 'wrap' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', borderBottom: `1px solid ${C.border}`, background: C.panel2, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 20 }}>🎥</span>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 140 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: C.text }}>ZOOM+</div>
           <div style={{ fontSize: 11.5, color: C.muted }}>Visioconférence ZOOM+</div>
         </div>
-        {status === 'ready' && recordingSupported && recState === 'idle' && (
-          <span
-            style={{ fontSize: 11, color: C.muted, display: 'none' }}
-            className="cdz-zoomplus-rec-hint"
-          >
-            Enregistrement local — la vidéo reste sur votre appareil.
-          </span>
-        )}
-        {status === 'ready' && recordingSupported && recState !== 'recording' && (
+        {/* Tab strip */}
+        <div style={{ display: 'flex', gap: 2 }}>
+          <button style={tabBtn(tab === 'meetings')} onClick={() => setTab('meetings')}>📅 Réunions</button>
+          <button style={tabBtn(tab === 'live')} onClick={() => setTab('live')}>🔴 En direct</button>
+          <button style={tabBtn(tab === 'settings')} onClick={() => setTab('settings')}>⚙️ Paramètres</button>
+        </div>
+        {/* Live-room local recording controls (only on the live tab) */}
+        {showLocalRecBtn && recState !== 'recording' && (
           <button
             style={miniBtnStyle('secondary', recState === 'starting')}
             disabled={recState === 'starting'}
@@ -377,28 +453,7 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
             {recState === 'starting' ? <><Spinner /> Démarrage…</> : '⏺ Enregistrer'}
           </button>
         )}
-        {/* WAVE-G P5: capture-picker guidance — the #1 reason recordings come
-            out silent is the unchecked "share tab audio" box in Chrome's
-            picker. Shown only while the picker is open (recState 'starting'). */}
-        {status === 'ready' && recordingSupported && recState === 'starting' && (
-          <div
-            style={{
-              flexBasis: '100%',
-              fontSize: 12,
-              lineHeight: 1.5,
-              color: C.text,
-              background: 'rgba(37, 211, 102, 0.10)',
-              border: '1px solid rgba(37, 211, 102, 0.35)',
-              borderRadius: 8,
-              padding: '8px 12px',
-            }}
-          >
-            💡 Dans la fenêtre de partage : choisissez l’onglet de la réunion, cochez
-            {' '}<strong>« Partager l’audio de l’onglet »</strong>, puis validez. Votre micro est
-            ajouté automatiquement s’il est autorisé.
-          </div>
-        )}
-        {status === 'ready' && recordingSupported && recState === 'recording' && (
+        {showLocalRecBtn && recState === 'recording' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span
               aria-hidden="true"
@@ -417,14 +472,29 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
             <button style={miniBtnStyle('danger')} onClick={stopRecording}>⏹ Arrêter</button>
           </div>
         )}
-        {status === 'ready' && !recordingSupported && (
-          <span style={{ fontSize: 11, color: C.muted }}>
-            Enregistrement local indisponible sur ce navigateur.
-          </span>
+        {tab === 'live' && (
+          <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
         )}
-        <button style={miniBtnStyle('secondary')} onClick={() => void load()}>↻ Vérifier</button>
       </div>
-      <style>{'@keyframes cdz-zoomplus-pulse{0%,100%{opacity:1}50%{opacity:.25}}@media (min-width: 900px){.cdz-zoomplus-rec-hint{display:inline !important}}'}</style>
+      <style>{'@keyframes cdz-zoomplus-pulse{0%,100%{opacity:1}50%{opacity:.25}}'}</style>
+
+      {/* Capture-picker guidance (only while the picker is open) */}
+      {tab === 'live' && status === 'ready' && recordingSupported && recState === 'starting' && (
+        <div
+          style={{
+            fontSize: 12,
+            lineHeight: 1.5,
+            color: C.text,
+            background: 'rgba(37, 211, 102, 0.10)',
+            borderBottom: '1px solid rgba(37, 211, 102, 0.35)',
+            padding: '8px 16px',
+          }}
+        >
+          💡 Dans la fenêtre de partage : choisissez l’onglet de la réunion, cochez
+          {' '}<strong>« Partager l’audio de l’onglet »</strong>, puis validez. Votre micro est
+          ajouté automatiquement s’il est autorisé.
+        </div>
+      )}
       {micDenied && recState === 'recording' && (
         <div style={{ padding: '4px 16px', fontSize: 11.5, color: C.muted, background: C.panel2, borderBottom: `1px solid ${C.border}` }}>
           Microphone indisponible — seul le son de l’onglet partagé est enregistré.
@@ -435,81 +505,169 @@ export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
           {recNote}
         </div>
       )}
-      <div aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: status === 'ready' ? 'hidden' : 'auto', background: C.bg }}>
-        {status === 'loading' ? <div aria-busy="true" style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0 40px 20px' }}><Spinner /> Connexion à ZOOM+…</div>
-        : status === 'slow' ? (
-          // C4: The connection has been loading for >15s. The Meet backend cold
-          // start can take up to 50s — instead of leaving the user staring at a
-          // spinner, surface a message with retry/cancel actions.
-          <div style={{ padding: '24px 20px' }}>
-            <Banner tone="warn">La connexion prend plus de temps que prévu.
-              <br /><br />
-              <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button>
-              {' · '}
-              <button style={linkBtnStyle} onClick={cancelLoad}>Annuler</button>
-            </Banner>
-          </div>
-        ) : status === 'error' ? (
-          <div style={{ padding: '24px 20px' }}>
-            <Banner tone="error">Impossible de se connecter à ZOOM+ pour le moment. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
-          </div>
-        ) : status === 'no-login' ? (
-          // WS17: provisioning succeeded but no IdP loginUrl — the Meet backend /
-          // IdP bridge isn't ready (cold start or CDZ_ZOOM_IDP_URL misconfigured).
-          // Show a retry banner instead of the dead bridge_code iframe fallback.
-          <div style={{ padding: '24px 20px' }}>
-            <Banner tone="warn">Le service de connexion ZOOM+ n'est pas encore prêt. <button style={linkBtnStyle} onClick={() => void load()}>Réessayer</button></Banner>
-          </div>
-        ) : (
-          /* Full-bleed layout: the iframe flex-fills the entire remaining
-             viewport (no fixed heights, no max-width, no rounded/bordered
-             "browser window" chrome) so the embedded app fits the studio's
-             resolution exactly. The host-control + résumé panels mount as a
-             collapsible overlay drawer on top of the iframe (absolute, top-
-             right) so they never reduce the iframe area. Both panels probe
-             their /enabled endpoint on mount and render null when the flag
-             is off — mounting them is always safe. */
-          <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <iframe
-              src={iframeSrc}
-              style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', display: 'block' }}
-              title="ZOOM+"
-              /* Permissions Policy delegation — REQUIRED for a cross-origin
-                 iframe: without `allow`, getUserMedia / getDisplayMedia /
-                 navigator.clipboard are blocked silently (no permission
-                 prompt ever shows). NOTE: allow-camera/allow-microphone are
-                 NOT sandbox tokens — the old sandbox attr silently blocked
-                 mic, camera, screen share AND the copy-link clipboard. */
-              allow="camera *; microphone *; display-capture *; clipboard-read *; clipboard-write *; fullscreen *; autoplay *; speaker-selection *; screen-wake-lock *"
-              allowFullScreen
-            />
-            {/* Collapsible overlay drawer — host controls + résumé.
-                TODO: the real LiveKit room name should come from Meet's room
-                creation API (the iframe loads Meet which creates/joins a room
-                internally). For v1 we pass `slug` as the room identifier; the
-                backend can map it. When the real room name is available, pass
-                it here instead. */}
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                right: 0,
-                maxWidth: 360,
-                minWidth: 280,
-                zIndex: 10,
-                boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
-                borderBottomLeftRadius: 10,
-                overflow: 'hidden',
+
+      {/* Body */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: tab === 'live' && status === 'ready' ? 'hidden' : 'auto', background: C.bg }}>
+        {tab === 'meetings' && (
+          <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 960, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+            <ZoomPlusScheduler
+              slug={slug}
+              onCreated={(m, start) => {
+                refreshMeetings();
+                if (start) void enterLiveRoom(m, true);
               }}
-            >
-              {/* TODO: replace `slug` with the real LiveKit room name once
-                  Meet's room creation API exposes it. */}
-              <ZoomPlusHostPanel room={slug} />
-              <ZoomPlusSummaryPanel room={slug} />
-            </div>
+            />
+            <ZoomPlusMeetingsList
+              slug={slug}
+              meetings={meetings}
+              onChange={refreshMeetings}
+              onStart={m => void enterLiveRoom(m, true)}
+              onJoin={m => void enterLiveRoom(m, false)}
+            />
           </div>
+        )}
+
+        {tab === 'settings' && (
+          <div style={{ padding: '16px', maxWidth: 720, width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
+            <ZoomPlusDefaultsPanel slug={slug} caps={caps} />
+          </div>
+        )}
+
+        {tab === 'live' && (
+          <LiveRoomView
+            status={status}
+            iframeSrc={iframeSrc}
+            room={activeRoom}
+            activeMeeting={activeMeeting}
+            policyNote={policyNote}
+            recordingSupported={recordingSupported}
+            onLoad={() => void load()}
+            onCancel={cancelLoad}
+          />
         )}
       </div>
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Live-room view — the embedded Meet iframe + host/résumé overlay panels. Split
+// out so the shell stays readable. Preserves the exact provisioning states.
+// ---------------------------------------------------------------------------
+
+const LiveRoomView = ({
+  status,
+  iframeSrc,
+  room,
+  activeMeeting,
+  policyNote,
+  recordingSupported,
+  onLoad,
+  onCancel,
+}: {
+  status: 'idle' | 'loading' | 'ready' | 'error' | 'no-login' | 'slow';
+  iframeSrc: string;
+  room: string;
+  activeMeeting: Meeting | null;
+  policyNote: string | null;
+  recordingSupported: boolean;
+  onLoad: () => void;
+  onCancel: () => void;
+}) => {
+  // The room the host panel administers + the canonical join link for it.
+  const joinUrl = roomJoinUrl(room);
+
+  return (
+    <div aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* Context bar — which meeting/room is live + a copyable join link. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', borderBottom: `1px solid ${C.border}`, background: C.panel, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>
+          {activeMeeting ? activeMeeting.title : 'Salle personnelle'}
+        </span>
+        <span style={{ fontSize: 11, color: C.muted, fontFamily: 'monospace' }}>#{room}</span>
+        <span style={{ flex: 1 }} />
+        <button
+          style={miniBtnStyle('secondary')}
+          title="Copier le lien de la salle"
+          onClick={() => {
+            try { void navigator.clipboard.writeText(joinUrl); } catch { /* clipboard blocked */ }
+          }}
+        >
+          🔗 Copier le lien
+        </button>
+        {policyNote && (
+          <span style={{ flexBasis: '100%', fontSize: 11.5, color: C.okText }}>{policyNote}</span>
+        )}
+      </div>
+
+      {status === 'idle' ? (
+        <div style={{ padding: '24px 20px' }}>
+          <Banner tone="info">
+            Aucune réunion ouverte. Ouvrez l’onglet <strong>Réunions</strong> pour démarrer ou rejoindre une réunion, ou
+            {' '}<button style={linkBtnStyle} onClick={onLoad}>connecter la salle personnelle</button>.
+          </Banner>
+        </div>
+      ) : status === 'loading' ? (
+        <div aria-busy="true" style={{ display: 'flex', alignItems: 'center', gap: 10, color: C.muted, padding: '40px 0 40px 20px' }}>
+          <Spinner /> Connexion à ZOOM+…
+        </div>
+      ) : status === 'slow' ? (
+        <div style={{ padding: '24px 20px' }}>
+          <Banner tone="warn">La connexion prend plus de temps que prévu.
+            <br /><br />
+            <button style={linkBtnStyle} onClick={onLoad}>Réessayer</button>
+            {' · '}
+            <button style={linkBtnStyle} onClick={onCancel}>Annuler</button>
+          </Banner>
+        </div>
+      ) : status === 'error' ? (
+        <div style={{ padding: '24px 20px' }}>
+          <Banner tone="error">Impossible de se connecter à ZOOM+ pour le moment. <button style={linkBtnStyle} onClick={onLoad}>Réessayer</button></Banner>
+        </div>
+      ) : status === 'no-login' ? (
+        <div style={{ padding: '24px 20px' }}>
+          <Banner tone="warn">Le service de connexion ZOOM+ n'est pas encore prêt. <button style={linkBtnStyle} onClick={onLoad}>Réessayer</button></Banner>
+        </div>
+      ) : (
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <iframe
+            src={iframeSrc}
+            style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', display: 'block' }}
+            title="ZOOM+"
+            allow="camera *; microphone *; display-capture *; clipboard-read *; clipboard-write *; fullscreen *; autoplay *; speaker-selection *; screen-wake-lock *"
+            allowFullScreen
+          />
+          {/* Collapsible overlay drawer — host controls + résumé, both wired to
+              the REAL room name (the active meeting's LiveKit room, or the
+              workspace personal room). */}
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              right: 0,
+              maxWidth: 360,
+              minWidth: 280,
+              zIndex: 10,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.3)',
+              borderBottomLeftRadius: 10,
+              overflow: 'hidden',
+              maxHeight: '100%',
+              overflowY: 'auto',
+            }}
+          >
+            <ZoomPlusHostPanel room={room} />
+            <ZoomPlusSummaryPanel room={room} />
+          </div>
+          {!recordingSupported && (
+            <div style={{ position: 'absolute', bottom: 8, left: 8, fontSize: 11, color: C.muted, background: C.panel, padding: '4px 8px', borderRadius: 6, border: `1px solid ${C.border}` }}>
+              Enregistrement local indisponible sur ce navigateur.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Re-export so a self-hoster override path keeps compiling (unused by load()).
+export { zoomPlusInstanceUrl };
