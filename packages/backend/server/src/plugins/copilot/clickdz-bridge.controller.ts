@@ -225,6 +225,18 @@ const STUDIO_OWNED_COLLECTIONS = new Set(['creances']);
 // cap per-request cost. Floor of 1 keeps requests valid.
 const MAX_TOKENS_CEILING = 4096;
 const DEFAULT_MAX_TOKENS = 700;
+// REASONING TAX (2026-08-16, found on first live verification of WS14 chat):
+// zai/glm-4.6v-flash ALWAYS spends completion tokens on hidden reasoning
+// before emitting content — observed 300-1000 tokens even for trivial
+// prompts, and the Gateway's reasoning:{enabled:false} merely hides the
+// field (the tokens still burn; finish flips to 'length'). Every budget this
+// file clamps is an ANSWER budget, so without headroom small budgets return
+// content:"" — which is exactly how chat shipped empty responses. The
+// headroom is added INSIDE clampMaxTokens so all ~12 upstream call sites get
+// it uniformly. Trade-off: a client's max_tokens no longer caps TOTAL
+// completion tokens (OpenAI o-series semantics) — it caps the ANSWER, which
+// is what every caller in this codebase actually means by it.
+const REASONING_HEADROOM = 1600;
 
 /**
  * SECURITY: clamp a caller/requested max_tokens value to a sane range before
@@ -238,7 +250,10 @@ function clampMaxTokens(
 ): number {
   const n = Number(requested);
   const base = Number.isFinite(n) && n > 0 ? n : fallback;
-  return Math.max(1, Math.min(Math.floor(base), MAX_TOKENS_CEILING));
+  return (
+    Math.max(1, Math.min(Math.floor(base), MAX_TOKENS_CEILING)) +
+    REASONING_HEADROOM
+  );
 }
 
 /**
