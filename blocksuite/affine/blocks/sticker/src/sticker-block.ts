@@ -129,6 +129,6 @@ export class StickerBlockComponent extends GfxBlockComponent<StickerBlockModel> 
     if (this.isAnimated) {
       return html`<canvas></canvas>`;
     }
-    return html`<img src=${this.blobUrl || nothing} alt="sticker" />;
+    return html`<img src=${this.blobUrl || nothing} alt="sticker" />`;
   }
 }

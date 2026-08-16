@@ -24,7 +24,7 @@ import { css, html, LitElement, type TemplateResult } from 'lit';
 import { property, query, state } from 'lit/decorators.js';
 
 import { animateImageBlobToSticker } from './animate';
-import { generateStickerImage } from './generate';
+import { generateStickerImage, type StickerGenerateFail } from './generate';
 import {
   DEFAULT_STICKER_ANIM_PRESET,
   STICKER_ANIM_PRESET_LABELS,
@@ -34,6 +34,22 @@ import {
 import { addSticker, ingestStickerAsset } from './provider';
 
 const FLAG = 'enable_cdz_sticker_ai';
+
+/** Map a typed generation failure to a clear, user-facing French message. */
+function stickerFailMessage(fail: StickerGenerateFail | null): string {
+  switch (fail) {
+    case 'aiUnavailable':
+      return 'Service IA indisponible';
+    case 'timeout':
+      return 'La génération a expiré. Réessayez.';
+    case 'rateLimited':
+      return "Limite quotidienne d'images atteinte. Réessayez demain.";
+    case 'emptyPrompt':
+      return 'Décrivez le sticker à générer.';
+    default:
+      return 'Impossible de générer le sticker';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // <edgeless-cdz-sticker-button> — senior tool panel button
@@ -238,19 +254,16 @@ export class EdgelessCdzStickerButton extends WithDisposable(LitElement) {
     this._loading = true;
 
     toast(this.block.host, 'Génération du sticker…');
-    const { blob, fail } = await generateStickerImage({
-      prompt,
-      model: 'cdzimage-2.0',
-    });
+    // Use the module default tier (cdzimage-flux — Prodia Flux Schnell via the
+    // Vercel AI Gateway, ~$0.001/img). Do NOT hardcode cdzimage-2.0 here: that
+    // is the gpt-image-2 OpenAI engine, which 503s ("Service IA indisponible")
+    // whenever OPENAI_IMAGE_API_KEY is absent — the flux default only needs the
+    // Gateway key that chat already uses, so it works out of the box.
+    const { blob, fail } = await generateStickerImage({ prompt });
 
     if (!blob) {
       this._loading = false;
-      toast(
-        this.block.host,
-        fail === 'aiUnavailable'
-          ? 'Service IA indisponible'
-          : 'Impossible de générer le sticker'
-      );
+      toast(this.block.host, stickerFailMessage(fail));
       return;
     }
 

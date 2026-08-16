@@ -140,12 +140,15 @@ async function runGenerateSticker(ctx: ToolbarContext) {
   toast(ctx.host, 'Generating sticker…');
   const { blob, fail } = await generateStickerImage({ prompt: subject });
   if (!blob) {
-    toast(
-      ctx.host,
+    const msg =
       fail === 'aiUnavailable'
         ? 'AI image service is unavailable'
-        : "Couldn't generate the sticker"
-    );
+        : fail === 'timeout'
+          ? 'Sticker generation timed out. Please try again.'
+          : fail === 'rateLimited'
+            ? 'Daily image limit reached. Try again tomorrow.'
+            : "Couldn't generate the sticker";
+    toast(ctx.host, msg);
     return;
   }
   try {
