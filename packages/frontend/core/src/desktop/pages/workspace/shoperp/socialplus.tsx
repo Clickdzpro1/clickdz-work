@@ -6,12 +6,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { C, ensureShoperpResponsiveCss, miniBtnStyle, Banner } from './shoperp-shared';
-import { fetchAccounts, type SocialPost } from './social/api';
+import { fetchAccounts, fetchConfig, type SocialConfig, type SocialPost } from './social/api';
 import { ConnectionsView } from './social/connections';
 import { ComposerView } from './social/composer';
 import { CalendarView } from './social/calendar';
 import { QueueView } from './social/queue';
 import { LogView } from './social/log';
+import { SettingsView } from './social/settings';
 
 // ---------------------------------------------------------------------------
 // i18n dictionary — FR / AR / EN
@@ -47,7 +48,62 @@ const DICT: Record<Lang, Record<string, string>> = {
     view_calendar: 'Calendrier',
     view_queue: 'File d\'attente',
     view_log: 'Journal',
+    view_settings: 'Réglages',
     noNetworks: "Connectez au moins un réseau dans l'onglet Connexions pour composer et publier.",
+    // UP1 — Réglages avancés
+    settingsIntro: "Ces réglages s'appliquent automatiquement lors de la publication : hashtags par défaut, paramètres UTM sur les liens, premier commentaire, et règles de file d'attente.",
+    settingsSaved: 'Réglages enregistrés.',
+    settingsFail: "L'enregistrement a échoué. Réessayez.",
+    saveSettings: 'Enregistrer les réglages',
+    saving: 'Enregistrement…',
+    reset: 'Réinitialiser',
+    timezone: 'Fuseau horaire',
+    timezoneDesc: 'Utilisé pour les fenêtres de publication.',
+    networkDefaults: 'Réglages par réseau',
+    networkDefaultsDesc: 'Hashtags, premier commentaire et créneaux préférés par réseau.',
+    defaultHashtags: 'Hashtags par défaut',
+    addHashtag: 'Ajouter des hashtags (Entrée)',
+    noHashtags: 'Aucun',
+    firstComment: 'Premier commentaire',
+    firstCommentHint: 'Publié en commentaire juste après la publication (ex : lien en bio, hashtags additionnels)…',
+    charLimitLabel: 'Limite du réseau',
+    postingWindows: 'Créneaux de publication préférés',
+    suggestionLabel: 'Suggestions :',
+    suggestionHint: 'Suggestion (heuristique, pas des statistiques de votre compte)',
+    windowsShort: 'créneaux',
+    hasFirstComment: '1er comm.',
+    utmTitle: 'Paramètres UTM (liens)',
+    utmDesc: 'Ajoutés automatiquement au premier lien de chaque publication.',
+    utmEnable: 'Activer le marquage UTM',
+    utmMediumHint: '(réseau)',
+    queueRules: "Règles de file d'attente",
+    queueRulesDesc: 'Cadence, espacement et validation des publications.',
+    maxPerDay: 'Max publications / jour / réseau',
+    unlimited: 'illimité',
+    minGap: 'Écart minimum (minutes)',
+    autoRequeue: 'Re-programmer automatiquement en cas d\'échec (backoff exponentiel)',
+    autoRequeueMax: 'Nombre max de tentatives auto',
+    approvalRequired: 'Validation requise (brouillon → en attente → programmé)',
+    // UP1 — composer / queue / log additions
+    firstCommentField: 'Premier commentaire (optionnel)',
+    firstCommentFieldHint: 'Publié en commentaire après la publication principale.',
+    bestTime: 'Meilleur moment :',
+    bestTimeHint: 'Suggestion — remplit la date de programmation.',
+    submitApproval: 'Soumettre pour validation',
+    approve: 'Approuver',
+    approving: 'Approbation…',
+    approved: 'Approuvé.',
+    approveFail: "L'approbation a échoué.",
+    pendingApproval: 'En attente de validation',
+    variantTabMaster: 'Texte principal',
+    queueRuleBlocked: 'Bloqué par une règle de file d\'attente :',
+    connStatusActive: 'Actif',
+    connStatusPending: 'En attente…',
+    connStatusExpired: 'Expiré',
+    connStatusFailed: 'Échec',
+    errorDetail: 'Détail de l\'erreur',
+    attempts: 'tentatives',
+    action: 'Action',
     tab_compose: 'Écrire',
     tab_ai: 'IA',
     tab_media: 'Média',
@@ -94,6 +150,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     selectNetworksFirst: 'Sélectionnez des réseaux ci-dessus pour voir les aperçus.',
     status_all: 'Tous',
     status_draft: 'Brouillon',
+    'status_pending-approval': 'À valider',
     status_scheduled: 'Programmé',
     status_publishing: 'En cours',
     status_published: 'Publié',
@@ -152,7 +209,62 @@ const DICT: Record<Lang, Record<string, string>> = {
     view_calendar: 'التقويم',
     view_queue: 'قائمة الانتظار',
     view_log: 'السجل',
+    view_settings: 'الإعدادات',
     noNetworks: 'قم بتوصيل شبكة واحدة على الأقل من خلال تبويب الاتصالات للتحرير والنشر.',
+    // UP1 — إعدادات متقدمة
+    settingsIntro: 'تُطبَّق هذه الإعدادات تلقائياً عند النشر: الهاشتاقات الافتراضية، ومعاملات UTM على الروابط، والتعليق الأول، وقواعد قائمة الانتظار.',
+    settingsSaved: 'تم حفظ الإعدادات.',
+    settingsFail: 'فشل الحفظ. حاول مجدداً.',
+    saveSettings: 'حفظ الإعدادات',
+    saving: 'جارٍ الحفظ…',
+    reset: 'إعادة تعيين',
+    timezone: 'المنطقة الزمنية',
+    timezoneDesc: 'تُستخدم لنوافذ النشر.',
+    networkDefaults: 'إعدادات كل شبكة',
+    networkDefaultsDesc: 'الهاشتاقات والتعليق الأول والأوقات المفضلة لكل شبكة.',
+    defaultHashtags: 'الهاشتاقات الافتراضية',
+    addHashtag: 'أضف هاشتاقات (Enter)',
+    noHashtags: 'لا شيء',
+    firstComment: 'التعليق الأول',
+    firstCommentHint: 'يُنشر كتعليق مباشرةً بعد المنشور (مثل: الرابط في البايو، هاشتاقات إضافية)…',
+    charLimitLabel: 'حد الشبكة',
+    postingWindows: 'أوقات النشر المفضلة',
+    suggestionLabel: 'اقتراحات:',
+    suggestionHint: 'اقتراح (تقديري، وليس إحصاءات حسابك)',
+    windowsShort: 'أوقات',
+    hasFirstComment: 'تعليق',
+    utmTitle: 'معاملات UTM (الروابط)',
+    utmDesc: 'تُضاف تلقائياً إلى أول رابط في كل منشور.',
+    utmEnable: 'تفعيل وسم UTM',
+    utmMediumHint: '(الشبكة)',
+    queueRules: 'قواعد قائمة الانتظار',
+    queueRulesDesc: 'الوتيرة والتباعد والموافقة على المنشورات.',
+    maxPerDay: 'الحد الأقصى للمنشورات/يوم/شبكة',
+    unlimited: 'غير محدود',
+    minGap: 'الحد الأدنى للفارق (دقائق)',
+    autoRequeue: 'إعادة الجدولة تلقائياً عند الفشل (تراجع أسي)',
+    autoRequeueMax: 'أقصى عدد للمحاولات التلقائية',
+    approvalRequired: 'الموافقة مطلوبة (مسودة ← بانتظار ← مجدولة)',
+    // UP1 — إضافات المحرر / القائمة / السجل
+    firstCommentField: 'التعليق الأول (اختياري)',
+    firstCommentFieldHint: 'يُنشر كتعليق بعد المنشور الرئيسي.',
+    bestTime: 'أفضل وقت:',
+    bestTimeHint: 'اقتراح — يملأ تاريخ الجدولة.',
+    submitApproval: 'إرسال للموافقة',
+    approve: 'موافقة',
+    approving: 'جارٍ الموافقة…',
+    approved: 'تمت الموافقة.',
+    approveFail: 'فشلت الموافقة.',
+    pendingApproval: 'بانتظار الموافقة',
+    variantTabMaster: 'النص الرئيسي',
+    queueRuleBlocked: 'محظور بقاعدة قائمة الانتظار:',
+    connStatusActive: 'نشط',
+    connStatusPending: 'بانتظار…',
+    connStatusExpired: 'منتهٍ',
+    connStatusFailed: 'فشل',
+    errorDetail: 'تفاصيل الخطأ',
+    attempts: 'محاولات',
+    action: 'الإجراء',
     tab_compose: 'كتابة',
     tab_ai: 'ذكاء اصطناعي',
     tab_media: 'وسائط',
@@ -199,6 +311,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     selectNetworksFirst: 'اختر الشبكات أعلاه لرؤية المعاينات.',
     status_all: 'الكل',
     status_draft: 'مسودة',
+    'status_pending-approval': 'بانتظار الموافقة',
     status_scheduled: 'مجدولة',
     status_publishing: 'قيد النشر',
     status_published: 'منشور',
@@ -257,7 +370,62 @@ const DICT: Record<Lang, Record<string, string>> = {
     view_calendar: 'Calendar',
     view_queue: 'Queue',
     view_log: 'Log',
+    view_settings: 'Settings',
     noNetworks: 'Connect at least one network in the Connections tab to compose and publish.',
+    // UP1 — advanced settings
+    settingsIntro: 'These settings apply automatically at publish time: default hashtags, UTM link parameters, first comment, and queue rules.',
+    settingsSaved: 'Settings saved.',
+    settingsFail: 'Save failed. Try again.',
+    saveSettings: 'Save settings',
+    saving: 'Saving...',
+    reset: 'Reset',
+    timezone: 'Timezone',
+    timezoneDesc: 'Used for posting windows.',
+    networkDefaults: 'Per-network defaults',
+    networkDefaultsDesc: 'Hashtags, first comment and preferred windows per network.',
+    defaultHashtags: 'Default hashtags',
+    addHashtag: 'Add hashtags (Enter)',
+    noHashtags: 'None',
+    firstComment: 'First comment',
+    firstCommentHint: 'Posted as a comment right after the post (e.g. link in bio, extra hashtags)...',
+    charLimitLabel: 'Network limit',
+    postingWindows: 'Preferred posting windows',
+    suggestionLabel: 'Suggestions:',
+    suggestionHint: 'Suggestion (heuristic, not your account analytics)',
+    windowsShort: 'windows',
+    hasFirstComment: '1st comment',
+    utmTitle: 'UTM parameters (links)',
+    utmDesc: 'Appended automatically to the first link in each post.',
+    utmEnable: 'Enable UTM tagging',
+    utmMediumHint: '(network)',
+    queueRules: 'Queue rules',
+    queueRulesDesc: 'Cadence, spacing and approval of posts.',
+    maxPerDay: 'Max posts / day / network',
+    unlimited: 'unlimited',
+    minGap: 'Minimum gap (minutes)',
+    autoRequeue: 'Auto-requeue on failure (exponential backoff)',
+    autoRequeueMax: 'Max auto attempts',
+    approvalRequired: 'Approval required (draft → pending → scheduled)',
+    // UP1 — composer / queue / log additions
+    firstCommentField: 'First comment (optional)',
+    firstCommentFieldHint: 'Posted as a comment after the main post.',
+    bestTime: 'Best time:',
+    bestTimeHint: 'Suggestion — fills the schedule date.',
+    submitApproval: 'Submit for approval',
+    approve: 'Approve',
+    approving: 'Approving...',
+    approved: 'Approved.',
+    approveFail: 'Approval failed.',
+    pendingApproval: 'Pending approval',
+    variantTabMaster: 'Master text',
+    queueRuleBlocked: 'Blocked by a queue rule:',
+    connStatusActive: 'Active',
+    connStatusPending: 'Pending...',
+    connStatusExpired: 'Expired',
+    connStatusFailed: 'Failed',
+    errorDetail: 'Error detail',
+    attempts: 'attempts',
+    action: 'Action',
     tab_compose: 'Write',
     tab_ai: 'AI',
     tab_media: 'Media',
@@ -304,6 +472,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     selectNetworksFirst: 'Select networks above to see previews.',
     status_all: 'All',
     status_draft: 'Draft',
+    'status_pending-approval': 'Pending approval',
     status_scheduled: 'Scheduled',
     status_publishing: 'Publishing',
     status_published: 'Published',
@@ -343,9 +512,9 @@ const DICT: Record<Lang, Record<string, string>> = {
 // View types
 // ---------------------------------------------------------------------------
 
-type View = 'connections' | 'composer' | 'calendar' | 'queue' | 'log';
+type View = 'connections' | 'composer' | 'calendar' | 'queue' | 'log' | 'settings';
 
-const VIEWS: View[] = ['connections', 'composer', 'calendar', 'queue', 'log'];
+const VIEWS: View[] = ['connections', 'composer', 'calendar', 'queue', 'log', 'settings'];
 
 // ---------------------------------------------------------------------------
 // SocialPlusPanel — shell with view switcher.
@@ -362,6 +531,8 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
   const [lang, setLang] = useState<Lang>('fr');
   const [view, setView] = useState<View>('connections');
   const [connectedNetworks, setConnectedNetworks] = useState<string[]>([]);
+  // UP1 — active-mode config (composio configured? AI configured?)
+  const [config, setConfig] = useState<SocialConfig | null>(null);
   // editPost carries a post when the user clicks Edit in the Queue
   const [editPost, setEditPost] = useState<SocialPost | undefined>(undefined);
   // initialScheduledAt for when user clicks a calendar day
@@ -389,6 +560,8 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
   useEffect(() => {
     ensureShoperpResponsiveCss();
     void refreshConnected();
+    // UP1 — load the config once so the header can reflect the active mode.
+    void fetchConfig().then(setConfig).catch(() => setConfig(null));
   }, [slug, refreshConnected]);
 
   const handleSaved = useCallback((post: SocialPost) => {
@@ -483,6 +656,15 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
           </Banner>
         )}
 
+        {/* UP1 — active-mode banner. Composio drives posting; when it's absent
+            everything is dark, but the Réglages tab still works (settings persist
+            regardless). AI drives content generation independently. */}
+        {config && !config.composioConfigured && view !== 'settings' && (
+          <div style={{ marginBottom: 12 }}>
+            <Banner tone="error">{dict.notConfiguredBanner}</Banner>
+          </div>
+        )}
+
         {view === 'connections' && (
           <ConnectionsView lang={lang} dict={dict} />
         )}
@@ -522,6 +704,14 @@ export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: 
             lang={lang}
             dict={dict}
             refresh={refreshSignal}
+          />
+        )}
+
+        {view === 'settings' && (
+          <SettingsView
+            lang={lang}
+            dict={dict}
+            connectedNetworks={connectedNetworks}
           />
         )}
       </div>

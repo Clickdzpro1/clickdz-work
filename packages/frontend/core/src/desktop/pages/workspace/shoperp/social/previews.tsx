@@ -8,6 +8,8 @@ interface PreviewProps {
   network: string;
   text: string;
   media: SocialMedia[];
+  // UP1 — echo the first-comment as it will appear under the post.
+  firstComment?: string;
 }
 
 function truncate(s: string, n: number): string {
@@ -36,7 +38,7 @@ const mediaThumb = (m: SocialMedia) => (
   </div>
 );
 
-export const NetworkPreview = ({ network, text, media }: PreviewProps) => {
+export const NetworkPreview = ({ network, text, media, firstComment }: PreviewProps) => {
   const meta = getNetworkMeta(network);
   const label = meta?.label ?? network;
   const icon = meta?.icon ?? network[0].toUpperCase();
@@ -87,8 +89,20 @@ export const NetworkPreview = ({ network, text, media }: PreviewProps) => {
       <div style={{ fontSize: 12.5, color: over ? '#c8283a' : C.text, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 140, overflow: 'hidden' }}>
         {preview || <span style={{ color: C.muted, fontStyle: 'italic' }}>Pas encore de texte…</span>}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
-        <span style={{ fontSize: 10.5, color: over ? '#c8283a' : C.muted }}>
+      {/* UP1 — first-comment echo (shown as a threaded reply under the post). */}
+      {firstComment && firstComment.trim() && (
+        <div style={{ borderLeft: `2px solid ${C.border}`, paddingLeft: 8, marginLeft: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 9.5, color: C.muted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>1er commentaire</span>
+          <span style={{ fontSize: 11.5, color: C.muted, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 60, overflow: 'hidden' }}>{firstComment}</span>
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+        {over && (
+          <span style={{ fontSize: 10, color: '#c8283a', fontWeight: 700 }}>
+            {`Dépasse la limite de ${charLimit}`}
+          </span>
+        )}
+        <span style={{ fontSize: 10.5, color: over ? '#c8283a' : C.muted, marginLeft: 'auto' }}>
           {text.length}/{charLimit}
         </span>
       </div>
@@ -101,9 +115,11 @@ interface MultiPreviewProps {
   texts: Record<string, string>;
   baseText: string;
   media: SocialMedia[];
+  // UP1 — first-comment echoed on every network preview card.
+  firstComment?: string;
 }
 
-export const MultiNetworkPreview = ({ networks, texts, baseText, media }: MultiPreviewProps) => {
+export const MultiNetworkPreview = ({ networks, texts, baseText, media, firstComment }: MultiPreviewProps) => {
   if (networks.length === 0) return null;
   return (
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -113,6 +129,7 @@ export const MultiNetworkPreview = ({ networks, texts, baseText, media }: MultiP
           network={slug}
           text={texts[slug] ?? baseText}
           media={media}
+          firstComment={firstComment}
         />
       ))}
     </div>
