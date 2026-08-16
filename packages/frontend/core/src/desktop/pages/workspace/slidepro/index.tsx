@@ -1,37 +1,33 @@
+import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import {
   ViewBody,
   ViewHeader,
   ViewIcon,
   ViewTitle,
 } from '@affine/core/modules/workbench';
-import { AppAccessGate } from '@affine/core/modules/studio/app-access-gate';
 import { WorkspaceService } from '@affine/core/modules/workspace';
 import { useService } from '@toeverything/infra';
-import { useCallback } from 'react';
 
 import { C } from '../shoperp/shoperp-shared';
-import { SlideProPanel } from '../shoperp/slidepro';
+import { SlideProStudio } from './SlideProStudio';
 
 // ---------------------------------------------------------------------------
-// SlidePro — top-level sidebar entry (promoted out of the ERP dashboard's tab
-// strip; see modules/studio/registry.ts). The tab still exists inside
-// shoperp/dashboard.tsx too — both surfaces render the SAME panel component.
-// Header scaffold mirrors the other promoted-panel-style pages (Voice Studio,
-// DzOS): ViewTitle/ViewIcon/ViewHeader/ViewBody + inline styles, no i18n.
+// SlidePro — top-level sidebar entry (StudioId 'slidepro', route '/slidepro';
+// see modules/studio/registry.ts). This is the NATIVE in-house studio that
+// replaced the old iframed presenton fork: a full React presentation generator
+// + editor that reuses the app's OWN copilot AI gateway (POST /api/v1/slidepro/
+// outline + /deck) and image-generation route (POST /api/v1/images/generations).
 //
-// SlideProPanel's `slug` prop was designed for a shop-scoped context (it's
-// used only as a localStorage key suffix and to build a per-shop health-check
-// URL like `https://slidepro-${slug}.up.railway.app`). At this top level there
-// is no shop in scope, so we pass the current WORKSPACE id instead — it's
-// stable per workspace, which is the closest equivalent scope here.
+// Decks are persisted per-workspace in localStorage, keyed by the current
+// workspace id (the closest stable scope at this top level, matching how the
+// former panel keyed its state). Header scaffold mirrors the other studio pages
+// (ViewTitle/ViewIcon/ViewHeader/ViewBody + inline styles, no i18n — the studio
+// itself is fully French).
 // ---------------------------------------------------------------------------
 
 const SlideProPage = () => {
   const workspaceService = useService(WorkspaceService);
   const workspaceId = workspaceService.workspace.id;
-
-  const onWritesBlocked = useCallback(() => {}, []);
-  const onMutated = useCallback(() => {}, []);
 
   return (
     <>
@@ -52,32 +48,12 @@ const SlideProPage = () => {
         >
           <span style={{ fontSize: 16 }}>📽️</span>
           SlidePro
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              lineHeight: '15px',
-              padding: '0 6px',
-              borderRadius: 5,
-              letterSpacing: '0.05em',
-              color: C.muted,
-              backgroundColor:
-                'color-mix(in srgb, var(--affine-text-secondary-color, #9aa0a6) 16%, transparent)',
-            }}
-          >
-            béta
-          </span>
         </div>
       </ViewHeader>
       <ViewBody>
         <AppAccessGate app="SLIDE_PRO">
-          <div style={{ height: '100%', width: '100%', overflow: 'auto' }}>
-            <SlideProPanel
-              slug={workspaceId}
-              readOnly={false}
-              onWritesBlocked={onWritesBlocked}
-              onMutated={onMutated}
-            />
+          <div style={{ height: '100%', width: '100%' }}>
+            <SlideProStudio workspaceId={workspaceId} />
           </div>
         </AppAccessGate>
       </ViewBody>
