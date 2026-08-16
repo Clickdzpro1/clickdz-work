@@ -6,7 +6,7 @@
  *
  *   - `cdz-ai` (when CDZ_AI_GATEWAY_KEY is set): the Vercel AI Gateway,
  *     OpenAI-compatible, scoped to the single chat model
- *     `zai/glm-4.6v-flash` (9B vision-language, 128K ctx, streaming).
+ *     `alibaba/qwen3.7-flash` (9B vision-language, 128K ctx, streaming).
  *     Mirrors CDZ_CHAT_MODEL in clickdz-bridge.controller.ts so the native
  *     copilot and the REST bridge speak one model on one billing line.
  *   - `openai-images` (when OPENAI_IMAGE_API_KEY is set): scoped to
@@ -49,7 +49,7 @@ const IMAGE_KEY = process.env.OPENAI_IMAGE_API_KEY || '';
 // WS14 allowlist — the single chat model. Keep in sync with CDZ_CHAT_MODEL in
 // clickdz-bridge.controller.ts and CLICKDZ_PROVIDER_MODELS in
 // providers/provider-registry.ts.
-const CDZ_MODELS = ['zai/glm-4.6v-flash'];
+const CDZ_MODELS = ['alibaba/qwen3.7-flash'];
 
 const IMAGE_MODELS = ['gpt-image-1', 'gpt-image-2'];
 

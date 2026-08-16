@@ -114,7 +114,7 @@ const CDZ_AI_KEY =
   process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
 // WS14 default: the Gateway single chat model. NOTE: an explicit
 // CDZ_PLANNER_MODEL env override still wins — unset any legacy value.
-const CDZ_PLANNER_MODEL = process.env.CDZ_PLANNER_MODEL || 'zai/glm-4.6v-flash';
+const CDZ_PLANNER_MODEL = process.env.CDZ_PLANNER_MODEL || 'alibaba/qwen3.7-flash';
 // The single canonical OpenAI-compatible endpoint path — the SAME segment the
 // working cdz-flash callers hit: normalized `${CDZ_AI_BASE_URL}` + this. Kept as
 // consts so the resolved base+path is logged once and the URL is built in
@@ -1769,6 +1769,7 @@ export class ClickDzIntegrationsController {
           },
           body: JSON.stringify({
             model: CDZ_PLANNER_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages,
             max_tokens: PLANNER_MAX_TOKENS,
             temperature: 0.1,

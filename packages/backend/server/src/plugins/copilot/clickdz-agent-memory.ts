@@ -549,14 +549,18 @@ export function createMemoryTools(deps: MemoryToolDeps = {}): AgentToolDef[] {
 // --- CDZ_AI direct-path envs (mirrors compact.ts:31-35 / hermes:150-155). The
 // base is normalized to strip a trailing slash AND a trailing /v1 (operators set
 // it either way) before we append the single canonical path. ---
-const CDZ_AI_BASE_URL = (process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai')
+// WS14: the Vercel AI Gateway — the same env pair the bridge reads (the
+// legacy api.clickdz.ai pair is deliberately not read).
+const CDZ_AI_BASE_URL = (process.env.CDZ_AI_GATEWAY_BASE || 'https://ai-gateway.vercel.sh')
   .replace(/\/+$/, '')
   .replace(/\/v1$/, '')
   .replace(/\/+$/, '');
-const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
+const CDZ_AI_KEY =
+  process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
 // Reuse the SAME model env the hermes planner reads (default cdz-flash) so the
 // summary rides the same model config as the loop it summarizes.
-const CDZ_MEMORY_MODEL = process.env.CDZ_PLANNER_MODEL || 'cdz-flash';
+// WS15 default: the Gateway single chat model (env override still wins).
+const CDZ_MEMORY_MODEL = process.env.CDZ_PLANNER_MODEL || 'alibaba/qwen3.7-flash';
 const CDZ_MEMORY_URL = `${CDZ_AI_BASE_URL}/v1/chat/completions`;
 
 // Budgets: a one-liner needs almost nothing; keep the call cheap + fast.
@@ -622,6 +626,7 @@ async function summarizeRun(rec: AgentRunRecord): Promise<string | null> {
       },
       body: JSON.stringify({
         model: CDZ_MEMORY_MODEL,
+        reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
         messages: [
           { role: 'system', content: MEMORY_SUMMARY_INSTRUCTION },
           { role: 'user', content: transcript },

@@ -74,7 +74,7 @@ const CDZ_AI_KEY =
 // The fast model for a short script pass. Overridable via env.
 // WS14 default: the Gateway single chat model. NOTE: an explicit
 // CDZ_FAST_MODEL env override still wins — unset any legacy value.
-const VOICE_FAST_MODEL = process.env.CDZ_FAST_MODEL || 'zai/glm-4.6v-flash';
+const VOICE_FAST_MODEL = process.env.CDZ_FAST_MODEL || 'alibaba/qwen3.7-flash';
 
 // Output/response bounds. A narration script is short; keep the token budget
 // tight and the timeout well under the bridge's 240s so the panel fails fast.
@@ -170,6 +170,7 @@ export class ClickDzVoiceAiController {
         },
         body: JSON.stringify({
           model: VOICE_FAST_MODEL,
+          reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
           messages,
           max_tokens: VOICE_MODEL_MAX_TOKENS,
         }),
@@ -248,6 +249,7 @@ export class ClickDzVoiceAiController {
         },
         body: JSON.stringify({
           model: VOICE_FAST_MODEL,
+          reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
           messages,
           max_tokens: VOICE_MODEL_MAX_TOKENS,
         }),

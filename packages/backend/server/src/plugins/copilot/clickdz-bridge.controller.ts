@@ -226,7 +226,12 @@ const STUDIO_OWNED_COLLECTIONS = new Set(['creances']);
 const MAX_TOKENS_CEILING = 4096;
 const DEFAULT_MAX_TOKENS = 700;
 // REASONING TAX (2026-08-16, found on first live verification of WS14 chat):
-// zai/glm-4.6v-flash ALWAYS spends completion tokens on hidden reasoning
+// reasoning models spend completion tokens on hidden thinking. The original
+// zai/glm-4.6v-flash reasoned UNCONDITIONALLY; the current
+// alibaba/qwen3.7-flash honors reasoning:{enabled:false} — sent at every
+// upstream call site — so normally NO tax applies. The headroom stays as
+// defense in depth in case the toggle is ever dropped or ignored upstream.
+// Historical: the glm predecessor ALWAYS spent completion tokens on reasoning
 // before emitting content — observed 300-1000 tokens even for trivial
 // prompts, and the Gateway's reasoning:{enabled:false} merely hides the
 // field (the tokens still burn; finish flips to 'length'). Every budget this
@@ -332,7 +337,7 @@ function isSafePublicUrl(u: string): boolean {
 }
 
 // WS14: Make.com AI Agents retired. All chat flows now use a SINGLE model —
-// zai/glm-4.6v-flash (9B vision-language, 128K ctx, 1.5s latency, 126 TPS)
+// alibaba/qwen3.7-flash (9B vision-language, 128K ctx, 1.5s latency, 126 TPS)
 // via the SAME Vercel AI Gateway key the image pipeline and LLMs already use.
 // WS1 (CDZIMAGE): ONE unified OpenAI key for all image generation. Order:
 // the dedicated image key, then the app's canonical OPEN_AI (present on
@@ -514,9 +519,9 @@ const BULK_TTS_MAX_CHUNKS = 120;
 const MAKE_OCR_WEBHOOK_URL = process.env.MAKE_OCR_WEBHOOK_URL || '';
 // WS14: Make.com AI Agents + api.clickdz.ai retired. All LLM traffic now
 // flows through Vercel AI Gateway on the same key already used for images.
-// Single model: zai/glm-4.6v-flash (9B vision-language, 128K ctx, streaming).
+// Single model: alibaba/qwen3.7-flash (9B vision-language, 128K ctx, streaming).
 const CLICKDZ_BRIDGE_TOKEN = process.env.CLICKDZ_BRIDGE_TOKEN || '';
-const CDZ_CHAT_MODEL = 'zai/glm-4.6v-flash';
+const CDZ_CHAT_MODEL = 'alibaba/qwen3.7-flash';
 
 // Legacy alias preserved for downstream code that references these constants
 // by name (runFastPlanner, Hermes, vdz compose, etc.). All point at Gateway.
@@ -980,7 +985,7 @@ const IMAGE_ENHANCER_GUIDELINES = [
   '- output ONLY the final prompt text, no commentary, at most 180 words',
 ].join('\n');
 
-// WS14: Single model architecture — zai/glm-4.6v-flash for chat/vision/planning,
+// WS14: Single model architecture — alibaba/qwen3.7-flash for chat/vision/planning,
 // prodia/flux-fast-schnell for images. One Gateway key, one billing line.
 const MODELS = [CDZ_CHAT_MODEL, 'cdzimage-flux'];
 
@@ -2085,6 +2090,7 @@ export class ClickDzBridgeController {
           },
           body: JSON.stringify({
             model: CDZ_AGENT_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages,
             // SECURITY: clamp to the shared ceiling (<=4096, floor 1). Reuse the
             // existing clamp/DEFAULT machinery, requesting a roomier 2048 for
@@ -2180,6 +2186,7 @@ export class ClickDzBridgeController {
           },
           body: JSON.stringify({
             model: CDZ_CHAT_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages: [{ role: 'user', content: prompt }],
             // SECURITY: clamp to a sane ceiling (<=4096, floor 1) to cap
             // upstream cost. Keeps the existing 700 default.
@@ -2253,6 +2260,7 @@ export class ClickDzBridgeController {
         },
         body: JSON.stringify({
           model: CDZ_CHAT_MODEL,
+          reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
           messages: [{ role: 'user', content: summaryPrompt }],
           max_tokens: clampMaxTokens(60, 60),
         }),
@@ -2319,6 +2327,7 @@ export class ClickDzBridgeController {
         },
         body: JSON.stringify({
           model,
+          reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
           messages,
           stream: true,
           max_tokens: maxTokens,
@@ -2463,7 +2472,7 @@ export class ClickDzBridgeController {
   ) {
     this.assertBridgeToken(req);
     const id = `chatcmpl_${Date.now()}`;
-    // WS14: single model — zai/glm-4.6v-flash (9B vision-language, 128K ctx)
+    // WS14: single model — alibaba/qwen3.7-flash (9B vision-language, 128K ctx)
     const model = CDZ_CHAT_MODEL;
     const messages = normalizeMessages(body?.messages || []);
     const maxTokens = clampMaxTokens(body?.max_tokens, DEFAULT_MAX_TOKENS);
@@ -2475,7 +2484,7 @@ export class ClickDzBridgeController {
       );
     }
 
-    // Always stream — native SSE pass-through from GLM-4.6V-Flash.
+    // Always stream — native SSE pass-through from Qwen3.7-Flash.
     if (body?.stream !== false) {
       const clientAbort = new AbortController();
       res.on('close', () => clientAbort.abort());
@@ -2487,7 +2496,7 @@ export class ClickDzBridgeController {
     const resp = await fetch(`${CDZ_AI_GATEWAY_IMAGE_BASE}/v1/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${gatewayKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, max_tokens: maxTokens }),
+      body: JSON.stringify({ model, reasoning: { enabled: false } /* qwen: thinking OFF */, messages, max_tokens: maxTokens }),
       signal: AbortSignal.timeout(60000),
     });
     const data = (await resp.json().catch(() => null)) as any;
@@ -2520,7 +2529,7 @@ export class ClickDzBridgeController {
   }
 
   /**
-   * WS1 PR6 — image prompt clarifier (zai/glm-4.6v-flash, vision-capable).
+   * WS1 PR6 — image prompt clarifier (alibaba/qwen3.7-flash, vision-capable).
    */
   @Throttle('strict')
   @Post('/api/v1/images/clarify')
@@ -2579,6 +2588,7 @@ export class ClickDzBridgeController {
           },
           body: JSON.stringify({
             model: CDZ_CHAT_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages: [{ role: 'user', content: prompt }],
             max_tokens: clampMaxTokens(400, DEFAULT_MAX_TOKENS),
           }),
@@ -2667,6 +2677,7 @@ export class ClickDzBridgeController {
           },
           body: JSON.stringify({
             model: CDZ_CHAT_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages: [
               {
                 role: 'user',
@@ -2734,6 +2745,7 @@ export class ClickDzBridgeController {
           },
           body: JSON.stringify({
             model: CDZ_CHAT_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages: [{ role: 'user', content: enhancerInput }],
             // ~180-word prompt ceiling per the guidelines; clamp cost hard.
             max_tokens: clampMaxTokens(400, DEFAULT_MAX_TOKENS),
@@ -3823,6 +3835,7 @@ export class ClickDzBridgeController {
           },
           body: JSON.stringify({
             model: CDZ_CHAT_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages: [{ role: 'user', content }],
             stream: true,
             max_tokens: 16000,
@@ -10382,6 +10395,7 @@ export class ClickDzBridgeController {
         },
         body: JSON.stringify({
           model: CDZ_CHAT_MODEL,
+          reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
           messages: [{ role: 'user', content: prompt }],
           max_tokens: clampMaxTokens(500, 500),
         }),

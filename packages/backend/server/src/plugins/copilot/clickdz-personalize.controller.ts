@@ -38,7 +38,7 @@ const CDZ_AI_KEY =
   process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
 // WS14 default: the Gateway single chat model. NOTE: this is a bare literal
 // (no env-override on this route) — unset any legacy value elsewhere.
-const CDZ_FAST_MODEL = 'zai/glm-4.6v-flash';
+const CDZ_FAST_MODEL = 'alibaba/qwen3.7-flash';
 
 // ---------------------------------------------------------------------------
 // Bounds
@@ -436,6 +436,7 @@ export class ClickDzPersonalizeController {
         },
         body: JSON.stringify({
           model: CDZ_FAST_MODEL,
+          reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
           messages: [
             { role: 'system', content: buildPersonalizePrompt(profile) },
             {

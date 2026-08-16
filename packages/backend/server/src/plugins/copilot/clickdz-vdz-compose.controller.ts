@@ -19,10 +19,10 @@ import {
 
 // ---------------------------------------------------------------------------
 // WS14: VDZ Compose migrated to Vercel AI Gateway — same key as chat + images.
-// zai/glm-4.6v-flash (128K ctx, vision-capable) handles long HTML motion-graphics
+// alibaba/qwen3.7-flash (128K ctx, vision-capable) handles long HTML motion-graphics
 // composition better than the legacy Make.com agent.
 // ---------------------------------------------------------------------------
-const COMPOSE_MODEL = 'zai/glm-4.6v-flash';
+const COMPOSE_MODEL = 'alibaba/qwen3.7-flash';
 const COMPOSE_TIMEOUT_MS = 240_000;
 const MAX_OUTPUT_HTML_CHARS = 400_000;
 
@@ -106,6 +106,7 @@ export class ClickDzVdzComposeController {
           },
           body: JSON.stringify({
             model: COMPOSE_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages: [{ role: 'user', content }],
             max_tokens: 8000,
           }),

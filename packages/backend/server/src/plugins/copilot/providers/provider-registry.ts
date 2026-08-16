@@ -23,7 +23,7 @@ const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9-_]+$/;
 // The bootstrap remains the source of credentials and base URL. Keep in sync
 // with CDZ_MODELS in scripts/cdz-ai-config.mjs and CDZ_CHAT_MODEL in
 // clickdz-bridge.controller.ts.
-const CLICKDZ_PROVIDER_MODELS = ['zai/glm-4.6v-flash'] as const;
+const CLICKDZ_PROVIDER_MODELS = ['alibaba/qwen3.7-flash'] as const;
 
 const LEGACY_PROVIDER_ORDER: CopilotProviderType[] = [
   CopilotProviderType.OpenAI,

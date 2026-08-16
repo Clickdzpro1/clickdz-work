@@ -32,7 +32,7 @@ const CDZ_AI_BASE_URL = (
   process.env.CDZ_AI_BASE_URL || 'https://api.clickdz.ai'
 ).replace(/\/+$/, '');
 const CDZ_AI_KEY = process.env.CDZ_AI_KEY || '';
-const CDZ_COMPACT_MODEL = process.env.CDZ_COMPACT_MODEL || 'cdz-flash';
+const CDZ_COMPACT_MODEL = process.env.CDZ_COMPACT_MODEL || 'alibaba/qwen3.7-flash';
 
 // Budgets: ≤512-token summary, 8s hard timeout (contract WS2).
 const COMPACT_MAX_TOKENS = 512;
@@ -154,6 +154,7 @@ export class CompactSummaryService {
         },
         body: JSON.stringify({
           model: CDZ_COMPACT_MODEL,
+          reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
           messages: [
             { role: 'system', content: COMPACT_INSTRUCTION },
             { role: 'user', content: transcript },

@@ -80,7 +80,7 @@ const CDZ_AI_KEY =
   process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
 // Keep in sync with CDZ_CHAT_MODEL in clickdz-bridge.controller.ts and
 // CDZ_MODELS in scripts/cdz-ai-config.mjs (the WS14 single-model allowlist).
-const CDZ_CHAT_MODEL = 'zai/glm-4.6v-flash';
+const CDZ_CHAT_MODEL = 'alibaba/qwen3.7-flash';
 
 // ---------------------------------------------------------------------------
 // Transcription (captions) — OpenAI Whisper. There is NO Gemini API key on
@@ -549,6 +549,7 @@ export class ClickDzVdzController {
           },
           body: JSON.stringify({
             model: CDZ_CHAT_MODEL,
+            reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
             messages,
             max_tokens: VDZ_MODEL_MAX_TOKENS,
           }),

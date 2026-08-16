@@ -146,7 +146,7 @@ const WAMAX_AI_KEY =
   process.env.CDZ_AI_GATEWAY_KEY || process.env.CUSTOM_LLM_API_KEY || '';
 // WS14 default: the Gateway single chat model. NOTE: an explicit
 // CDZ_AGENT_MODEL env override still wins — unset any legacy value.
-const WAMAX_AI_MODEL = process.env.CDZ_AGENT_MODEL || 'zai/glm-4.6v-flash';
+const WAMAX_AI_MODEL = process.env.CDZ_AGENT_MODEL || 'alibaba/qwen3.7-flash';
 // Bounded timeout for the synchronous assist calls — these back a live UI
 // affordance (draft/summarize/translate button), so fail fast rather than hang.
 const WAMAX_AI_TIMEOUT_MS = 15_000;
@@ -2607,6 +2607,7 @@ export class ClickDzWhatsappMaxController {
         },
         body: JSON.stringify({
           model: WAMAX_AI_MODEL,
+          reasoning: { enabled: false }, // qwen3.7-flash: thinking OFF (12x faster, ~100x cheaper)
           messages,
           stream: false,
           max_tokens: Math.max(1, Math.min(4096, maxTokens || 500)),
