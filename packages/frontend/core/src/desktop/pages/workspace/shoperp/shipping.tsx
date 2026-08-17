@@ -1,4 +1,4 @@
-import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   assignCourier,
@@ -58,6 +58,25 @@ import {
   thStyle,
   updateCourier,
 } from './shoperp-shared';
+
+// DzOS Phase 1: offline-first local store. shipping is the 8th + final page
+// migrated. The split: courier API CALLS (Yalidine/Ecotrack/ZR/Procolis/Maystro
+// status fan-out, create-parcel, tracking sync) stay ONLINE-ONLY — they hit
+// external courier endpoints that can't be replayed offline. Rates + couriers
+// CRUD go LOCAL-FIRST (hydrate the local store, write via outbox). The
+// CourierOrders cockpit reads orders from the local store (already hydrated by
+// admin-orders) instead of refetching + silently slicing to 60. The
+// SyncStatusPill shows the sync state.
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
+
+// Phase 2: cache the courier status fan-out for 5 minutes per slug. Without
+// this, every tab open fires 5 parallel fetchCourierStatus calls to external
+// courier APIs — wasteful and slow on repeated tab switches.
+const COURIER_STATUS_TTL_MS = 5 * 60 * 1000;
+const courierStatusCache = new Map<
+  string,
+  { results: Array<{ id: string; connected: boolean }>; ts: number }
+>();
 
 // ---------------------------------------------------------------------------
 // LIVRAISON studio page (WSE-7, R3-c). The owner's shipping cockpit for one
@@ -123,13 +142,35 @@ export const ShippingPanel = ({
 
   const loadCouriers = useCallback(async () => {
     setCouriersPhase(couriers === null ? 'loading' : 'ready');
+    // DzOS Phase 1 END-STATE: read couriers from the LOCAL store first
+    // (instant, works offline). The /erp/changes pull keeps them fresh. Only
+    // on a cold start (local store empty) do we fetch + hydrate.
+    try {
+      const repo = await getErpRepo(slug);
+      const local = await repo.list<ShipCourier>('couriers');
+      if (local.length > 0) {
+        setCouriers(local.map((w) => w.data));
+        setCouriersPhase('ready');
+        return;
+      }
+    } catch {
+      /* fall through to cold-start fetch */
+    }
+    // Cold start: fetch + hydrate, then serve.
     const out = await fetchCouriers(slug);
     if (out.status === 'ok') {
       setCouriers(out.couriers);
       setCouriersPhase('ready');
+      void getErpRepo(slug).then((repo) =>
+        Promise.all(
+          out.couriers.map((c) => repo.upsert('couriers', String(c.id), c).catch(() => {}))
+        ).catch(() => {})
+      );
     } else {
-      setCouriersErr(out.message);
-      if (couriers === null) setCouriersPhase('error');
+      // Offline + empty local store → quiet empty state (the sync pill shows
+      // 'hors ligne'; courier API status probes are also skipped offline).
+      setCouriers([]);
+      setCouriersPhase('ready');
     }
   }, [slug, couriers]);
 
@@ -152,6 +193,13 @@ export const ShippingPanel = ({
         onWritesBlocked={onWritesBlocked}
         onMutated={onMutated}
       />
+
+      {/* DzOS Phase 1: the sync pill shows the outbox + online state. Courier
+          API calls (tracking/create-parcel) stay online-only; rates/couriers
+          CRUD is local-first. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <SyncStatusPill slug={slug} />
+      </div>
 
       {/* Sub-tabs */}
       <div
@@ -421,16 +469,34 @@ const TransporteursTab = ({
   // Resolve the active provider once on mount via a status fan-out. We never
   // surface an error here: a failed/dark probe just means "not this one" and we
   // fall back to the Yalidine default so the live path is always reachable.
+  // DzOS Phase 1: the fan-out hits external courier APIs (online-only). When
+  // offline, skip the probes + leave the provider on the Yalidine default with
+  // a 'ready' resolve (the cockpit shows a sync pill + "hors ligne" notice).
+  // Phase 2: the fan-out results are cached for 5 minutes (see
+  // courierStatusCache above) so repeated tab switches don't re-fire 5 probes.
   useEffect(() => {
     let alive = true;
     setResolvePhase('resolving');
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setResolvePhase('ready');
+      return;
+    }
     void (async () => {
-      const results = await Promise.all(
-        COURIER_PROVIDERS.map(async p => {
-          const out = await fetchCourierStatus(slug, p.id);
-          return { id: p.id, connected: out.status === 'ok' && out.connected };
-        })
-      );
+      // Check the 5-minute cache first.
+      const cached = courierStatusCache.get(slug);
+      const now = Date.now();
+      let results: Array<{ id: string; connected: boolean }>;
+      if (cached && now - cached.ts < COURIER_STATUS_TTL_MS) {
+        results = cached.results;
+      } else {
+        results = await Promise.all(
+          COURIER_PROVIDERS.map(async p => {
+            const out = await fetchCourierStatus(slug, p.id);
+            return { id: p.id, connected: out.status === 'ok' && out.connected };
+          })
+        );
+        courierStatusCache.set(slug, { results, ts: now });
+      }
       if (!alive) return;
       // Preserve the metadata order (Yalidine first) when picking the active one.
       const active = COURIER_PROVIDERS.find(p =>
@@ -1127,10 +1193,32 @@ const CourierOrders = ({
   // prop isn't flagged unused while it stays reserved.
   void settings;
 
+  // Phase 2: use a ref for the orders-is-null check so `load` doesn't depend
+  // on the `orders` state. The old dep array `[slug, orders]` caused a refetch
+  // loop: load → setOrders → orders changes → load gets a new identity → any
+  // effect or callback depending on `load` re-fires.
+  const ordersRef = useRef(orders);
+  ordersRef.current = orders;
+
   const load = useCallback(async () => {
-    setPhase(orders === null ? 'loading' : 'ready');
+    setPhase(ordersRef.current === null ? 'loading' : 'ready');
     try {
-      const all = await fetchErpCollection<ErpOrder>(slug, 'orders');
+      // DzOS Phase 1: read from the LOCAL store first (orders are hydrated by
+      // admin-orders + admin-clients + reports). Instant, no network, works
+      // offline. Only if the local store is empty (first-ever open) do we fall
+      // back to the bridge fetch + hydrate.
+      const repo = await getErpRepo(slug);
+      let local = await repo.list<ErpOrder>('orders').catch(() => []);
+      let all: ErpOrder[];
+      if (local.length > 0) {
+        all = local.map((w) => w.data);
+      } else {
+        all = await fetchErpCollection<ErpOrder>(slug, 'orders');
+        // Hydrate so the next open is instant.
+        void Promise.all(
+          all.map((o) => repo.upsert('orders', String(o.id || o.ref || ''), o).catch(() => {}))
+        ).catch(() => {});
+      }
       // Dedupe on the business ref (order-status replace = delete+recreate),
       // keeping the newest copy so a freshly-shipped order shows its tracking.
       const byRef = new Map<string, ErpOrder>();
@@ -1142,18 +1230,20 @@ const CourierOrders = ({
           byRef.set(key, o);
         }
       }
-      setOrders([...byRef.values()].slice(0, 60));
+      // DzOS Phase 1: removed the silent slice(0, 60) — show all shippable
+      // orders (the cockpit paginates via its own pager; truncating at 60 hid
+      // orders 61+ from the merchant).
+      setOrders([...byRef.values()]);
       setPhase('ready');
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : 'Chargement des commandes impossible.');
-      if (orders === null) setPhase('error');
+      if (ordersRef.current === null) setPhase('error');
     }
-  }, [slug, orders]);
+  }, [slug]);
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug]);
+  }, [load]);
 
   const { toShip, shipped } = useMemo(() => splitOrders(orders ?? []), [orders]);
 
@@ -1916,6 +2006,50 @@ const RatesTab = ({
       setLoading(true);
       setLoadErr('');
       setNotice(null);
+      // DzOS Phase 1: read the rate matrix from the local store first (the
+      // shipping-rates collection is hydrated on a successful fetch + on save).
+      // Fall back to the bridge fetch + hydrate if the local store has no rows
+      // for this courier. Works offline.
+      //
+      // DzOS Phase 4 FIX: the local store only holds rows that were explicitly
+      // written — it does NOT carry the full 69-wilaya projection. So we project
+      // the stored rows onto the wilaya reference table (the same dense matrix
+      // the bridge's exportMatrix returns), so the editor always shows all 69
+      // rows with nulls for gaps — not just the subset that has a stored rate.
+      const rateColl = 'shipping-rates';
+      try {
+        const repo = await getErpRepo(slug);
+        const local = await repo.list<ShipMatrixRow>(rateColl).catch(() => []);
+        const localForCourier = local
+          .map((w) => w.data)
+          .filter((r) => String(r.courierId || '') === cid);
+        if (localForCourier.length > 0) {
+          // Project onto the full wilaya table so the editor shows all rows.
+          const byWilaya = new Map<number, ShipMatrixRow>();
+          for (const r of localForCourier) {
+            const w = num(r.wilaya);
+            if (w >= 1 && w <= 69) byWilaya.set(w, r);
+          }
+          const projected: ShipMatrixRow[] = (wilayas.length > 0
+            ? wilayas
+            : Array.from({ length: 69 }, (_, i) => ({ code: i + 1, name: '' }))
+          ).map(w => {
+            const r = byWilaya.get(w.code);
+            return {
+              wilaya: w.code,
+              name: w.name || (r && typeof r.name === 'string' ? r.name : ''),
+              fee: r && r.fee != null ? num(r.fee) : null,
+              homeFee: r && r.homeFee != null ? num(r.homeFee) : null,
+              deskFee: r && r.deskFee != null ? num(r.deskFee) : null,
+            };
+          });
+          setRows(toEditRows(projected));
+          setLoading(false);
+          return;
+        }
+      } catch {
+        /* fall through to the bridge fetch */
+      }
       const out = await fetchShippingRates(slug, cid);
       if (out.status === 'ok') {
         const matrix =
@@ -1929,6 +2063,18 @@ const RatesTab = ({
                 deskFee: null,
               }));
         setRows(toEditRows(matrix));
+        // DzOS Phase 1: hydrate the rate matrix into the local store (one row
+        // per wilaya, keyed by <courierId>:<wilayaCode>) so the next open is
+        // instant + works offline. Best-effort.
+        void getErpRepo(slug).then((repo) =>
+          Promise.all(
+            matrix.map((r) =>
+              repo
+                .upsert('shipping-rates', `${cid}:${r.wilaya}`, { ...r, courierId: cid })
+                .catch(() => {})
+            )
+          ).catch(() => {})
+        );
       } else {
         setLoadErr(out.message);
         setRows(null);
@@ -1995,6 +2141,17 @@ const RatesTab = ({
         tone: 'ok',
         text: `${out.data?.written ?? inputs.length} tarif(s) enregistré(s).`,
       });
+      // DzOS Phase 1: mirror the saved rates into the local store so the
+      // matrix survives offline + updates instantly. Best-effort.
+      void getErpRepo(slug).then((repo) =>
+        Promise.all(
+          inputs.map((r) =>
+            repo
+              .upsert('shipping-rates', `${courierId}:${r.wilaya}`, { ...r, courierId: courierId })
+              .catch(() => {})
+          )
+        ).catch(() => {})
+      );
       await loadRates(courierId);
     } else if (out.status === 'unavailable') {
       onWritesBlocked();
@@ -2204,7 +2361,7 @@ const RatesTab = ({
         </button>
       </div>
 
-      {/* The 58-row matrix */}
+      {/* The 69-row matrix */}
       {loading ? (
         <LoadingRow label="Chargement de la grille…" />
       ) : loadErr ? (
@@ -2316,9 +2473,38 @@ const ShipmentsTab = ({
   const load = useCallback(async () => {
     setPhase(orders === null ? 'loading' : 'ready');
     try {
-      const all = await fetchErpCollection<ErpOrder>(slug, 'orders');
+      // DzOS Phase 4 FIX: read from the LOCAL store first (orders are hydrated
+      // by admin-orders + CourierOrders). Instant, no network, works offline.
+      // Only if the local store is empty (first-ever open) do we fall back to
+      // the bridge fetch + hydrate — the same pattern CourierOrders uses.
+      const repo = await getErpRepo(slug);
+      let local = await repo.list<ErpOrder>('orders').catch(() => []);
+      let all: ErpOrder[];
+      if (local.length > 0) {
+        all = local.map((w) => w.data);
+      } else {
+        all = await fetchErpCollection<ErpOrder>(slug, 'orders');
+        // Hydrate so the next open is instant.
+        void Promise.all(
+          all.map((o) => repo.upsert('orders', String(o.id || o.ref || ''), o).catch(() => {}))
+        ).catch(() => {});
+      }
+      // Dedupe on the business ref (order-status replace = delete+recreate),
+      // keeping the newest copy so a freshly-shipped order shows its tracking.
+      const byRef = new Map<string, ErpOrder>();
+      for (const o of all) {
+        const key = String(o?.ref || o?.id || '');
+        if (!key) continue;
+        const prev = byRef.get(key);
+        if (!prev || String(o.createdAt || '') > String(prev.createdAt || '')) {
+          byRef.set(key, o);
+        }
+      }
       // Newest-first, capped for a manageable "recent" view.
-      setOrders(all.slice(0, 40));
+      const list = [...byRef.values()].sort((a, b) =>
+        String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+      );
+      setOrders(list.slice(0, 40));
       setPhase('ready');
     } catch (e) {
       setErrMsg(e instanceof Error ? e.message : 'Chargement des commandes impossible.');
@@ -2331,7 +2517,12 @@ const ShipmentsTab = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
-  const activeCouriers = (couriers ?? []).filter(c => c.active);
+  // Phase 2: memoize activeCouriers so it doesn't re-allocate a new array on
+  // every render (it was `(couriers ?? []).filter(c => c.active)` inline).
+  const activeCouriers = useMemo(
+    () => (couriers ?? []).filter(c => c.active),
+    [couriers]
+  );
   const courierNameById = useMemo(() => {
     const m = new Map<string, string>();
     for (const c of couriers ?? []) m.set(c.id, c.name);

@@ -32,6 +32,14 @@ import {
   STATUS_COLORS,
 } from './shoperp-shared';
 
+// DzOS Phase 1: offline-first local store. reports is the 7th panel migrated —
+// and the highest-value perf win: it computes from the LOCAL store (orders +
+// products + couriers are already hydrated by the other migrated pages), so
+// there's no 4MB refetch on mount/refresh + it works offline. The caisse month
+// stays on the bridge (it's a server-aggregated total, not raw records). The
+// local store is hydrated on first open if empty (one-time fetch fallback).
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
+
 // ---------------------------------------------------------------------------
 // Rapports (WSE-11, R3-f) — the DEEP reporting surface for one store, sitting
 // alongside the dashboard's Aperçu KPI panel (which is a light live snapshot).
@@ -190,15 +198,41 @@ export const ReportsPanel = ({
       if (soft) setRefreshing(true);
       else setPhase('loading');
       setCopied(false);
-      // Orders + products drive everything and MUST load; couriers + caisse are
-      // additive and fail-soft (empty / quiet-gated) so the page never breaks.
+      // DzOS Phase 1: read from the LOCAL store first (instant, no 4MB
+      // refetch, works offline). The other migrated pages (admin-orders,
+      // admin-clients, invoicing) hydrate orders + products + couriers into
+      // the local store, so reports reuses that. Only if the local store is
+      // empty (first-ever open) do we fall back to the bridge fetch + hydrate.
       try {
-        const [os, ps] = await Promise.all([
-          fetchErpCollection<ErpOrder>(slug, 'orders'),
-          fetchErpCollection<ErpProduct>(slug, 'products'),
+        const repo = await getErpRepo(slug);
+        const [ordLocal, prodLocal, courLocal] = await Promise.all([
+          repo.list<ErpOrder>('orders').catch(() => []),
+          repo.list<ErpProduct>('products').catch(() => []),
+          repo.list<Record<string, unknown>>('couriers').catch(() => []),
         ]);
-        setOrders(Array.isArray(os) ? os : []);
-        setProducts(Array.isArray(ps) ? ps : []);
+        let ord = ordLocal.map((w) => w.data);
+        let ps = prodLocal.map((w) => w.data);
+        let cs = courLocal.map((w) => w.data);
+        // First-ever open (empty local store): hydrate from the bridge, then
+        // mirror into the local store so subsequent opens are instant.
+        if (ord.length === 0 && ps.length === 0) {
+          const [os, ps2, cs2] = await Promise.all([
+            fetchErpCollection<ErpOrder>(slug, 'orders'),
+            fetchErpCollection<ErpProduct>(slug, 'products'),
+            fetchErpCollection<Record<string, unknown>>(slug, 'couriers').catch(() => []),
+          ]);
+          ord = Array.isArray(os) ? os : [];
+          ps = Array.isArray(ps2) ? ps2 : [];
+          cs = Array.isArray(cs2) ? cs2 : [];
+          void Promise.all([
+            ...ord.map((o) => repo.upsert('orders', String(o.id || o.ref || ''), o).catch(() => {})),
+            ...ps.map((p) => repo.upsert('products', String(p.id || p.sku || ''), p).catch(() => {})),
+            ...cs.map((c) => repo.upsert('couriers', String(c.id || ''), c).catch(() => {})),
+          ]).catch(() => {});
+        }
+        setOrders(ord);
+        setProducts(ps);
+        setCouriers(cs);
         setPhase('ready');
       } catch (e) {
         if (!soft) {
@@ -209,16 +243,6 @@ export const ReportsPanel = ({
         }
         setRefreshing(false);
         return;
-      }
-      // Couriers (optional entity — a 404/empty just hides the Livraison card).
-      try {
-        const cs = await fetchErpCollection<Record<string, unknown>>(
-          slug,
-          'couriers'
-        );
-        setCouriers(Array.isArray(cs) ? cs : []);
-      } catch {
-        setCouriers([]);
       }
       setRefreshing(false);
     },
@@ -517,6 +541,8 @@ export const ReportsPanel = ({
           border: `1px solid ${C.border}`,
         }}
       >
+        {/* DzOS Phase 1: the sync pill shows the outbox + online state. */}
+        <SyncStatusPill slug={slug} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 220 }}>
           <span style={labelStyle}>Période</span>
           <div style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>

@@ -287,7 +287,7 @@ export const SHOP_FEATURES: FeatureDef[] = [
     id: 'delivery-matrix',
     nameFr: 'Frais de livraison par wilaya',
     nameAr: 'رسوم التوصيل حسب الولاية',
-    descFr: 'Un tarif de livraison distinct pour chacune des 58 wilayas.',
+    descFr: 'Un tarif de livraison distinct pour chacune des 69 wilayas.',
     category: 'logistics',
     scope: 'shop',
     runtime: true,

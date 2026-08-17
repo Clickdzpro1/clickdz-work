@@ -783,7 +783,7 @@ export const LocalBackupPanel = ({ slug }: { slug: string }) => {
                 ) : (
                   <Banner tone="error">{restoreResult.reason}</Banner>
                 )
-              ) : null
+              ) : null}
             </div>
           )
         ) : null}

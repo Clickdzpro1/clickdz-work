@@ -29,6 +29,14 @@ import {
   statusTargets,
 } from './shoperp-shared';
 
+// DzOS Phase 1: offline-first local store. admin-orders is the second panel
+// migrated (after caisse). Reads hydrate the local store (instant on tab
+// switch + offline); status advances mirror into the local store so the row
+// updates instantly and survives offline. The SyncStatusPill shows the sync
+// state. Hybrid: the fetch + postOrderStatus bridge calls stay (server
+// authoritative during transition).
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
+
 // ---------------------------------------------------------------------------
 // Orders admin — the full pipeline manager. Reads ALL orders straight from the
 // public per-slug data API (reads need no token), advances statuses through
@@ -84,29 +92,48 @@ export const OrdersAdmin = ({
   const load = useCallback(
     async (soft = false) => {
       if (!soft) setPhase('loading');
-      try {
-        const rows = await fetchErpCollection<ErpOrder>(slug, 'orders');
+      // DzOS Phase 1 END-STATE: read from the LOCAL store first (instant,
+      // works offline). The /erp/changes pull keeps it fresh. Only on a cold
+      // start (local store empty) do we fetch + hydrate.
+      const sortByDate = (a: ErpOrder, b: ErpOrder) =>
+        orderDate(b).localeCompare(orderDate(a)) ||
+        String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+      const dedupe = (rows: ErpOrder[]): ErpOrder[] => {
         // Replace = delete+recreate, so dedupe on the business key (ref) and
-        // keep the newest copy; sort by stable business date, newest first.
+        // keep the newest copy.
         const byRef = new Map<string, ErpOrder>();
         for (const o of rows) {
           const key = String(o?.ref || o?.id || '');
           if (!key) continue;
           const prev = byRef.get(key);
-          if (
-            !prev ||
-            String(o.createdAt || '') > String(prev.createdAt || '')
-          ) {
+          if (!prev || String(o.createdAt || '') > String(prev.createdAt || '')) {
             byRef.set(key, o);
           }
         }
-        const list = [...byRef.values()].sort(
-          (a, b) =>
-            orderDate(b).localeCompare(orderDate(a)) ||
-            String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
-        );
+        return [...byRef.values()].sort(sortByDate);
+      };
+      try {
+        const repo = await getErpRepo(slug);
+        const local = await repo.list<ErpOrder>('orders');
+        if (local.length > 0) {
+          setOrders(dedupe(local.map((w) => w.data)));
+          setPhase('ready');
+          return;
+        }
+      } catch {
+        /* fall through to cold-start fetch */
+      }
+      // Cold start: fetch + hydrate, then serve from the deduped fetch.
+      try {
+        const rows = await fetchErpCollection<ErpOrder>(slug, 'orders');
+        const list = dedupe(rows);
         setOrders(list);
         setPhase('ready');
+        void getErpRepo(slug).then((repo) =>
+          Promise.all(
+            list.map((o) => repo.upsert('orders', String(o.id || o.ref), o).catch(() => {}))
+          ).catch(() => {})
+        );
       } catch {
         if (!soft) setPhase('error');
       }
@@ -132,6 +159,14 @@ export const OrdersAdmin = ({
       const out = await postOrderStatus(slug, ref, to);
       if (out.status === 'ok') {
         setNotice({ tone: 'ok', text: `Commande ${ref} → ${to}` });
+        // DzOS Phase 1: mirror the status change into the local store so the
+        // row survives offline + updates instantly. Best-effort (the server
+        // write already succeeded).
+        void getErpRepo(slug).then((repo) =>
+          repo
+            .upsert('orders', String(order.id || order.ref), { ...order, status: to })
+            .catch(() => {})
+        );
         await load(true); // the replaced record has a fresh id/createdAt
         onMutated(); // parent refreshes the KPI summary
       } else {
@@ -264,7 +299,10 @@ export const OrdersAdmin = ({
         </Banner>
       ) : null}
 
-      <Panel title={`Commandes · ${visible.length}`}>
+      <Panel
+        title={`Commandes · ${visible.length}`}
+        action={<SyncStatusPill slug={slug} />}
+      >
         {/* Paginated order list (pageSize 10, column mode). The `key={filter}`
             remounts PagedList whenever the active status filter changes, which
             resets it to page 1 (a filtered view always starts at the top).

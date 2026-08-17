@@ -37,6 +37,13 @@ import {
   type Warehouse,
 } from './shoperp-shared';
 
+// DzOS Phase 1: offline-first local store. procurement (suppliers + POs) is
+// the 6th panel migrated. Reads hydrate the local store (instant on tab
+// switch + offline); supplier + PO writes mirror into the local store. Hybrid:
+// the bridge calls stay (server authoritative); offline writes queue. The
+// SyncStatusPill shows the sync state.
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
+
 // ---------------------------------------------------------------------------
 // Fournisseurs + Bons de commande (WSE-5, R2-b procurement) — the STUDIO
 // procurement surface for one store, on top of the authed owner-only bridge
@@ -141,6 +148,30 @@ export const ProcurementPanel = ({
   const load = useCallback(
     async (soft = false) => {
       if (!soft) setPhase('loading');
+      // DzOS Phase 1 END-STATE: read suppliers + POs from the LOCAL store
+      // first (instant, works offline). The /erp/changes pull keeps them
+      // fresh. Only on a cold start (both empty) do we fetch + hydrate.
+      // Warehouses stay on the bridge (small inventory summary, not a
+      // local-store collection).
+      try {
+        const repo = await getErpRepo(slug);
+        const [supLocal, poLocal] = await Promise.all([
+          repo.list<ProcSupplier>('suppliers').catch(() => []),
+          repo.list<ProcPurchaseOrder>('purchase-orders').catch(() => []),
+        ]);
+        if (supLocal.length > 0 || poLocal.length > 0) {
+          setSuppliers(supLocal.map((w) => w.data));
+          setOrders(poLocal.map((w) => w.data));
+          // Warehouses still from the bridge (best-effort).
+          const inv = await fetchErpInventory(slug).catch(() => null);
+          setWarehouses(inv?.status === 'ok' ? inv.inventory.warehouses : []);
+          setPhase('ready');
+          return;
+        }
+      } catch {
+        /* fall through to cold-start fetch */
+      }
+      // Cold start: fetch + hydrate, then serve.
       const [sup, pos, inv] = await Promise.all([
         fetchSuppliers(slug),
         fetchPurchaseOrders(slug),
@@ -176,13 +207,27 @@ export const ProcurementPanel = ({
       }
 
       setPhase('ready');
+      // Cold-start hydrate so the next open is local-first.
+      void getErpRepo(slug).then((repo) =>
+        Promise.all([
+          ...(sup.status === 'ok' ? sup.suppliers.map((s) => repo.upsert('suppliers', String(s.id), s).catch(() => {})) : []),
+          ...(pos.status === 'ok' ? pos.purchaseOrders.map((p) => repo.upsert('purchase-orders', String(p.id), p).catch(() => {})) : []),
+        ]).catch(() => {})
+      );
     },
     [slug, onWritesBlocked]
   );
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    // DzOS Phase 1 END-STATE: load is local-first; a throw (cold-start fetch
+    // failed offline) just degrades to empty + ready (the local store was
+    // already tried inside load).
+    void load().catch(() => {
+      setSuppliers([]);
+      setOrders([]);
+      setPhase('ready');
+    });
+  }, [load, slug]);
 
   const supplierById = useMemo(() => {
     const m = new Map<string, ProcSupplier>();
@@ -222,6 +267,10 @@ export const ProcurementPanel = ({
           tone: 'ok',
           text: `Fournisseur « ${out.supplier.name} » enregistré.`,
         });
+        // DzOS Phase 1: mirror the saved supplier into the local store.
+        void getErpRepo(slug).then((repo) =>
+          repo.upsert('suppliers', String(out.supplier.id), out.supplier).catch(() => {})
+        );
         await load(true);
         onMutated?.();
         return true;
@@ -257,6 +306,10 @@ export const ProcurementPanel = ({
           tone: 'ok',
           text: `Bon de commande ${out.purchaseOrder.id} créé.`,
         });
+        // DzOS Phase 1: mirror the new PO into the local store.
+        void getErpRepo(slug).then((repo) =>
+          repo.upsert('purchase-orders', String(out.purchaseOrder.id), out.purchaseOrder).catch(() => {})
+        );
         await load(true);
         onMutated?.();
         return true;
@@ -460,11 +513,14 @@ const SuppliersTablet = ({
     <Panel
       title={`Fournisseurs · ${suppliers.length}`}
       action={
-        !readOnly && formFor === null ? (
-          <button style={miniBtnStyle('primary', busy)} disabled={busy} onClick={() => setFormFor('')}>
-            + Nouveau fournisseur
-          </button>
-        ) : null
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <SyncStatusPill slug={slug} />
+          {!readOnly && formFor === null ? (
+            <button style={miniBtnStyle('primary', busy)} disabled={busy} onClick={() => setFormFor('')}>
+              + Nouveau fournisseur
+            </button>
+          ) : null}
+        </div>
       }
     >
       {formFor !== null && !readOnly ? (
@@ -876,16 +932,19 @@ const OrdersTablet = ({
       <Panel
         title={`Bons de commande · ${orders.length}`}
         action={
-          !readOnly && !creating ? (
-            <button
-              style={miniBtnStyle('primary', busy || suppliers.length === 0)}
-              disabled={busy || suppliers.length === 0}
-              title={suppliers.length === 0 ? "Ajoutez d'abord un fournisseur" : "Créer un bon de commande"}
-              onClick={() => setCreating(true)}
-            >
-              + Nouveau bon
-            </button>
-          ) : null
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <SyncStatusPill slug={slug} />
+            {!readOnly && !creating ? (
+              <button
+                style={miniBtnStyle('primary', busy || suppliers.length === 0)}
+                disabled={busy || suppliers.length === 0}
+                title={suppliers.length === 0 ? "Ajoutez d'abord un fournisseur" : "Créer un bon de commande"}
+                onClick={() => setCreating(true)}
+              >
+                + Nouveau bon
+              </button>
+            ) : null}
+          </div>
         }
       >
         {creating && !readOnly ? (

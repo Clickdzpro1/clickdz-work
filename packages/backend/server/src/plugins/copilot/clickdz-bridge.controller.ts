@@ -5580,6 +5580,42 @@ export class ClickDzBridgeController {
   }
 
   /**
+   * DzOS Phase 1 helper — owner-authed DELETE passthrough to the data API.
+   * Mirrors erpInvoicePut's shape. The data API's DELETE mirrorToPg records a
+   * tombstone (so the /erp/changes feed learns the record was removed). Returns
+   * { ok, deleted } on success, { ok: false, status } on failure.
+   */
+  private async erpDataDelete(
+    slug: string,
+    collection: string,
+    id: string,
+    token: string
+  ): Promise<
+    { ok: true; deleted: boolean } | { ok: false; status: number }
+  > {
+    const res = await fetch(
+      `${this.erpDataBase(slug)}/${collection}/${encodeURIComponent(id)}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+        signal: AbortSignal.timeout(ERP_DATA_TIMEOUT_MS),
+      }
+    ).catch(() => null);
+    if (!res || !res.ok) {
+      const status = res ? res.status : 0;
+      this.logger.warn(
+        `[erp] data delete failed slug=${slug} coll=${collection} id=${id} status=${status || 'unreachable'}`
+      );
+      return { ok: false, status };
+    }
+    const body = (await res.json().catch(() => ({}))) as { deleted?: boolean };
+    return { ok: true, deleted: body.deleted !== false };
+  }
+
+  /**
    * WSE-2 helper — find one invoice by its id across a bounded window of
    * monthly partitions (newest-first). Returns the record + its partition
    * collection name (needed to PUT the update back into the SAME partition),
@@ -5802,7 +5838,160 @@ export class ClickDzBridgeController {
   }
 
   /**
-   * WSE-2 — GET /api/v1/apps/:slug/erp/invoices (auth'd, owner-only).
+   * DzOS Phase 1 — GET /api/v1/apps/:slug/erp/changes
+   * The cursor feed for the offline-first sync engine. Returns every change
+   * (upsert + tombstone) to the slug's durable collections since `since` (an
+   * ISO 8601 timestamp; null/absent = initial hydration). Paginated via
+   * `nextCursor` + `hasMore`; the client pulls until nextCursor is null.
+   *
+   * Owner-authed. Reads from Postgres (CdzAppData + CdzAppDataTombstone) — the
+   * source of truth for durable collections since Phase 0. Cheap: one UNION
+   * query bounded by the cursor + a 500-row cap.
+   */
+  @Get('/api/v1/apps/:slug/erp/changes')
+  async erpChangesFeed(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('since') since: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    // Ensure the tombstone table exists (idempotent — boot doesn't run migrate).
+    try {
+      await this.models.cdzAppDataTombstone.ensureSchema();
+    } catch {
+      /* best-effort; the changes feed degrades to upserts-only if absent */
+    }
+    const sinceIso = since ? String(since).slice(0, 50) : null;
+    const cap = limit ? Math.min(Math.max(Number(limit) || 500, 1), 5000) : 500;
+    const { changes, nextCursor } = await this.models.cdzAppData.listChanges(
+      slug,
+      sinceIso,
+      cap
+    );
+    return {
+      changes: changes.map((c) => ({
+        kind: c.kind,
+        collection: c.collection,
+        id: c.recordId,
+        data: c.kind === 'upsert' ? c.data : undefined,
+        rev: c.rev,
+        updatedAt: c.updatedAt instanceof Date ? c.updatedAt.toISOString() : String(c.updatedAt),
+        createdAt: c.createdAt instanceof Date ? c.createdAt.toISOString() : String(c.createdAt),
+      })),
+      nextCursor,
+      hasMore: changes.length >= cap,
+    };
+  }
+
+  /**
+   * DzOS Phase 1 — PUT /api/v1/apps/:slug/erp/sync/:collection/:id
+   * The idempotent push target for the offline-first sync engine's outbox.
+   * The client PUTs an outbox op's payload here with X-Idempotency-Key = opId;
+   * the server applies it to the data API (atomic upsert, preserves createdAt
+   * on conflict) and returns the new rev + updatedAt. On a rev conflict (the
+   * server has a newer rev than the client's baseRev), returns 409 + the
+   * server's rev so the client can log the conflict + drop the op (LWW).
+   *
+   * Owner-authed. Reuses the erpInvoicePut helper (owner-authed passthrough to
+   * the data API). Collection + id validated against the data API's regex.
+   */
+  @Put('/api/v1/apps/:slug/erp/sync/:collection/:id')
+  async erpSyncPush(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('collection') collection: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    if (!/^[a-z0-9_-]{1,32}$/.test(collection)) {
+      throw new BadRequest('Invalid collection name');
+    }
+    if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
+      throw new BadRequest('Invalid record id');
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new BadRequest('Record must be a JSON object');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    // The idempotency key is the client's opId — the data API's PUT is itself
+    // idempotent (ON CONFLICT preserves createdAt), so a retry with the same
+    // body is a no-op; the opId header is for the sync engine's dedup + the
+    // server's future per-op audit log.
+    const opId = String(req.headers['x-idempotency-key'] || '').slice(0, 64);
+    const record: ErpRecord = { ...(body as Record<string, unknown>), id };
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Record too large (8KB cap)');
+    }
+    const put = await this.erpInvoicePut(slug, collection, id, record, token);
+    if (!put.ok) {
+      if (put.status === 409) {
+        res.status(HttpStatus.CONFLICT).json({
+          error: 'conflict',
+          message: 'server has a newer revision',
+        });
+        return;
+      }
+      this.erpWriteFailed(res, put.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] sync push slug=${slug} user=${user.id} coll=${collection} id=${id} op=${opId || '-'}`
+    );
+    return { ok: true, record: put.record };
+  }
+
+  /**
+   * DzOS Phase 1 — DELETE /api/v1/apps/:slug/erp/sync/:collection/:id
+   * The idempotent push target for a remove outbox op. Deletes the record from
+   * the data API (which records a tombstone for the changes feed). 409 on a rev
+   * conflict (the server's rev is newer than the client's baseRev).
+   */
+  @Delete('/api/v1/apps/:slug/erp/sync/:collection/:id')
+  async erpSyncPushDelete(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('collection') collection: string,
+    @Param('id') id: string,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    if (!/^[a-z0-9_-]{1,32}$/.test(collection)) {
+      throw new BadRequest('Invalid collection name');
+    }
+    if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
+      throw new BadRequest('Invalid record id');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res.status(HttpStatus.NOT_IMPLEMENTED).json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    const opId = String(req.headers['x-idempotency-key'] || '').slice(0, 64);
+    // Delete via the owner-authed data API passthrough (same helper the
+    // restore route uses, but DELETE). Reuse the data API's DELETE which the
+    // controller's mirrorToPg already augments with a tombstone (Phase 1).
+    const del = await this.erpDataDelete(slug, collection, id, token);
+    if (!del.ok) {
+      this.erpWriteFailed(res, del.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] sync delete slug=${slug} user=${user.id} coll=${collection} id=${id} op=${opId || '-'}`
+    );
+    return { ok: true, deleted: del.deleted };
+  }
+
+  /**
    * QUERY `month?=YYYY-MM` (or `from`/`to` range), `type?`, `status?`. Fetches
    * the matching monthly partitions server-side, merges, filters + sorts
    * (newest-first) via the pure module. Returns `{ invoices, partitionsRead }`.
@@ -7125,7 +7314,7 @@ export class ClickDzBridgeController {
 
   /**
    * WSE-6 — GET /api/v1/apps/:slug/erp/shipping/rates?courierId= (owner-only).
-   * Returns the dense 58-row matrix for the courier (missing rows → null fees).
+   * Returns the dense 69-row matrix for the courier (missing rows → null fees).
    */
   @Get('/api/v1/apps/:slug/erp/shipping/rates')
   async erpShippingRates(

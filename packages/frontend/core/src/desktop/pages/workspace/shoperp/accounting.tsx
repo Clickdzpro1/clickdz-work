@@ -254,6 +254,41 @@ async function comptaPost<T>(
 
 const selectStyle: CSSProperties = { ...inputStyle, appearance: 'auto' };
 
+// Phase 2: AccountSelect hoisted to module level. When it was declared inside
+// the AccountingPanel component, React unmounted and remounted the <select>
+// on every keystroke (new function identity each render), causing focus loss
+// and making it impossible to type an account code in the dropdown. As a
+// module-level component it has a stable identity; the groups are passed as a
+// prop so it re-renders only when the chart actually changes.
+const AccountSelect = ({
+  groups,
+  value,
+  onChange,
+  allowEmpty,
+}: {
+  groups: Array<[number, ChartAccount[]]>;
+  value: string;
+  onChange: (code: string) => void;
+  allowEmpty?: boolean;
+}) => (
+  <select
+    value={value}
+    onChange={e => onChange(e.target.value)}
+    style={selectStyle}
+  >
+    {allowEmpty ? <option value="">— Compte PCN —</option> : null}
+    {groups.map(([cls, accounts]) => (
+      <optgroup key={cls} label={CLASS_LABELS[cls] ?? `Classe ${cls}`}>
+        {accounts.map(a => (
+          <option key={a.code} value={a.code}>
+            {a.code} — {a.label}
+          </option>
+        ))}
+      </optgroup>
+    ))}
+  </select>
+);
+
 const numTd: CSSProperties = {
   ...tdStyle,
   textAlign: 'right',
@@ -356,32 +391,9 @@ export const AccountingPanel = ({
     [chart]
   );
 
-  const AccountSelect = ({
-    value,
-    onChange,
-    allowEmpty,
-  }: {
-    value: string;
-    onChange: (code: string) => void;
-    allowEmpty?: boolean;
-  }) => (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      style={selectStyle}
-    >
-      {allowEmpty ? <option value="">— Compte PCN —</option> : null}
-      {accountGroups.map(([cls, accounts]) => (
-        <optgroup key={cls} label={CLASS_LABELS[cls] ?? `Classe ${cls}`}>
-          {accounts.map(a => (
-            <option key={a.code} value={a.code}>
-              {a.code} — {a.label}
-            </option>
-          ))}
-        </optgroup>
-      ))}
-    </select>
-  );
+  // Phase 2: AccountSelect is now a module-level component (see above). It
+  // receives accountGroups as a prop instead of closing over it, so it has a
+  // stable identity across renders and doesn't lose focus on keystroke.
 
   // ------------------------------------------------------------------ journal
   const [month, setMonth] = useState(currentMonthInput());
@@ -804,6 +816,7 @@ export const AccountingPanel = ({
                 <div style={{ ...inputColStyle, flex: '2 1 260px' }}>
                   <Field label="Compte PCN" hint="Plan Comptable National (SCF 2010)">
                     <AccountSelect
+                      groups={accountGroups}
                       value={form.accountCode}
                       onChange={code => setForm(f => ({ ...f, accountCode: code }))}
                       allowEmpty
@@ -916,7 +929,7 @@ export const AccountingPanel = ({
               {reportKind === 'ledger' || reportKind === 'aged' ? (
                 <div style={{ ...inputColStyle, flex: '2 1 260px' }}>
                   <Field label="Compte">
-                    <AccountSelect value={reportAccount} onChange={setReportAccount} />
+                    <AccountSelect groups={accountGroups} value={reportAccount} onChange={setReportAccount} />
                   </Field>
                 </div>
               ) : null}

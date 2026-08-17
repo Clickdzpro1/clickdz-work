@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -41,6 +42,12 @@ import {
   thStyle,
   toggleErpModule,
 } from './shoperp-shared';
+
+// DzOS Phase 1: the offline-first local store. Caisse is the first panel
+// migrated — reads hydrate the local store (instant on tab switch + offline),
+// writes go through the outbox (work offline, sync when reconnected). The
+// SyncStatusPill in the header shows 「synchronisé · N en attente · hors ligne」.
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
 
 // ---------------------------------------------------------------------------
 // Caisse (cash register) studio page — WSE-9 (COMPTOIR). Three tools over the
@@ -279,6 +286,12 @@ function currentMonthYYYYMM(): string {
   return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+/** A YYYY-MM-DD date → its YYYYMM partition (caisse-YYYYMM). */
+function monthYYYYMM(date: string): string {
+  const m = /^(\d{4})-(\d{2})/.exec(date);
+  return m ? `${m[1]}${m[2]}` : currentMonthYYYYMM();
+}
+
 /** YYYYMM → the <input type=month> value YYYY-MM (and back). */
 function monthInputValue(yyyymm: string): string {
   return /^\d{6}$/.test(yyyymm)
@@ -309,15 +322,45 @@ const Journal = ({
   const [entries, setEntries] = useState<CaisseEntry[]>([]);
   const [couriers, setCouriers] = useState<CourierLite[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Phase 2: track the active month-load so a rapid month switch can't apply
+  // a stale response (the old code raced: switch Jan→Feb→Mar quickly and the
+  // Jan response could land last, overwriting Mar's entries).
+  const loadTokenRef = useRef(0);
 
   const load = useCallback(async () => {
+    const token = ++loadTokenRef.current;
     setPhase('loading');
+    // DzOS Phase 1 END-STATE: read from the LOCAL store first (instant, works
+    // offline). The /erp/changes pull keeps it fresh. Only on a cold start
+    // (local partition empty — first-ever open) do we fetch + hydrate.
+    const coll = `caisse-${month}`;
+    try {
+      const repo = await getErpRepo(slug);
+      const local = await repo.list<CaisseEntry>(coll);
+      if (local.length > 0) {
+        if (token !== loadTokenRef.current) return; // stale — a newer load won
+        setEntries(local.map((w) => w.data));
+        setPhase('ready');
+        return;
+      }
+    } catch {
+      /* fall through to cold-start fetch */
+    }
+    // Cold start: fetch + hydrate, then read back from the local store.
     const out = await fetchCaisse(slug, month);
+    if (token !== loadTokenRef.current) return; // stale — discard
     if (out.status === 'ok') {
       setEntries(out.entries);
       setPhase('ready');
+      void getErpRepo(slug).then((repo) =>
+        Promise.all(
+          out.entries.map((e) =>
+            repo.upsert(coll, e.id, e, { collectionOverride: coll }).catch(() => {})
+          )
+        ).catch(() => {})
+      );
     } else if (out.status === 'unavailable') {
-      // Route/data unreachable → quiet empty state (never crash).
+      // Offline + empty local store → quiet empty state (never crash).
       setEntries([]);
       setPhase('ready');
     } else {
@@ -381,14 +424,18 @@ const Journal = ({
       <Panel
         title={`Journal — ${monthLabel}`}
         action={
-          <input
-            type="month"
-            value={monthInputValue(month)}
-            max={monthInputValue(currentMonthYYYYMM())}
-            onChange={e => setMonth(monthInputToYYYYMM(e.target.value))}
-            style={{ ...inputStyle, width: 'auto', padding: '5px 9px' }}
-            aria-label="Mois"
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {/* DzOS Phase 1: the sync pill shows the outbox + online state. */}
+            <SyncStatusPill slug={slug} />
+            <input
+              type="month"
+              value={monthInputValue(month)}
+              max={monthInputValue(currentMonthYYYYMM())}
+              onChange={e => setMonth(monthInputToYYYYMM(e.target.value))}
+              style={{ ...inputStyle, width: 'auto', padding: '5px 9px' }}
+              aria-label="Mois"
+            />
+          </div>
         }
       >
         {phase === 'loading' ? (
@@ -640,15 +687,29 @@ const QuickAdd = ({
     }
     setErr(null);
     setSaving(true);
-    const out = await postCaisseEntry(slug, {
+    const entryBody = {
       kind: draft.kind,
       amount,
       method: draft.method,
       date: draft.date,
       note: draft.note.trim(),
       ...(draft.courierId ? { courierId: draft.courierId } : {}),
-    });
+    };
+    const out = await postCaisseEntry(slug, entryBody);
     if (out.status === 'ok') {
+      // DzOS Phase 1: mirror the successful write into the local store so the
+      // journal updates instantly (no refetch) and the entry survives offline.
+      // The returned entry has a server-assigned id; upsert it into the
+      // caisse-<month> partition. Best-effort — the server write already
+      // succeeded, so a local-store failure doesn't undo it.
+      const coll = `caisse-${monthYYYYMM(draft.date)}`;
+      if (out.entry?.id) {
+        void getErpRepo(slug).then((repo) =>
+          repo
+            .upsert(coll, out.entry.id, out.entry, { collectionOverride: coll })
+            .catch(() => {})
+        );
+      }
       setOk(true);
       setDraft(d => ({ ...emptyDraft(), method: d.method, date: d.date }));
       onAdded();

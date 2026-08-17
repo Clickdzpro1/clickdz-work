@@ -78,6 +78,17 @@ export const productionCacheGroups = {
     priority: 200,
     enforce: true,
   },
+  // Phase 2: recharts is heavy (~400KB) and only used by the DzOS overview
+  // tab. Splitting it into its own async chunk means it never loads unless the
+  // merchant opens the Aperçu tab — every other panel is recharts-free.
+  recharts: {
+    name: `npm-recharts`,
+    test: testPackageName(
+      /[\\/]node_modules[\\/](recharts|d3-[a-z-]+|victory-vendor|internmap|delaunator|robust-predicates)[\\/]/
+    ),
+    priority: 200,
+    enforce: true,
+  },
   vendor: {
     name: 'vendor',
     test: /[\\/]node_modules[\\/]/,

@@ -1586,12 +1586,33 @@ model CdzAppData {
   collection String   @map("collection") @db.VarChar
   recordId   String   @map("record_id") @db.VarChar
   data       Json     @default("{}") @map("data") @db.JsonB
+  rev        Int      @default(0) @map("rev")
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@id([slug, collection, recordId])
   @@index([slug, collection])
+  @@index([slug, updatedAt])
   @@map("cdz_app_data")
+}
+
+/// ClickDz ERP app-data tombstones (DzOS Phase 1 — the /erp/changes feed needs
+/// to tell clients which records were DELETED since their last pull). The data
+/// API hard-deletes rows from cdz_app_data, so without a tombstone track a
+/// client pulling /erp/changes?since=<cursor> would never learn a record was
+/// removed — its local copy would live on as a ghost. One row per delete; the
+/// (slug, collection, recordId) PK mirrors cdz_app_data. The cursor is
+/// deletedAt (the high-water mark for the next pull).
+model CdzAppDataTombstone {
+  slug       String   @map("slug") @db.VarChar
+  collection String   @map("collection") @db.VarChar
+  recordId   String   @map("record_id") @db.VarChar
+  rev        Int      @default(0) @map("rev")
+  deletedAt  DateTime @default(now()) @map("deleted_at") @db.Timestamptz(3)
+
+  @@id([slug, collection, recordId])
+  @@index([slug, deletedAt])
+  @@map("cdz_app_data_tombstone")
 }
 
 /// ClickDz ERP gap-less legal counters (R18 PR-B). One row per
