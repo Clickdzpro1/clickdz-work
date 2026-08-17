@@ -42,6 +42,12 @@ import {
   toggleErpModule,
 } from './shoperp-shared';
 
+// DzOS Phase 1: the offline-first local store. Caisse is the first panel
+// migrated — reads hydrate the local store (instant on tab switch + offline),
+// writes go through the outbox (work offline, sync when reconnected). The
+// SyncStatusPill in the header shows 「synchronisé · N en attente · hors ligne」.
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
+
 // ---------------------------------------------------------------------------
 // Caisse (cash register) studio page — WSE-9 (COMPTOIR). Three tools over the
 // R2-d caisse bridge routes (/api/v1/apps/:slug/erp/caisse*), all money INTEGER
@@ -279,6 +285,12 @@ function currentMonthYYYYMM(): string {
   return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+/** A YYYY-MM-DD date → its YYYYMM partition (caisse-YYYYMM). */
+function monthYYYYMM(date: string): string {
+  const m = /^(\d{4})-(\d{2})/.exec(date);
+  return m ? `${m[1]}${m[2]}` : currentMonthYYYYMM();
+}
+
 /** YYYYMM → the <input type=month> value YYYY-MM (and back). */
 function monthInputValue(yyyymm: string): string {
   return /^\d{6}$/.test(yyyymm)
@@ -316,9 +328,23 @@ const Journal = ({
     if (out.status === 'ok') {
       setEntries(out.entries);
       setPhase('ready');
+      // DzOS Phase 1: hydrate the local store so the next open is instant
+      // (from IDB) and works offline. Each fetched entry is upserted into the
+      // caisse-<month> partition; the repo's pending flag stays false (these
+      // are server-authoritative reads, not outbox writes). Best-effort — a
+      // hydration failure never blocks the panel (the fetch already succeeded).
+      const coll = `caisse-${month}`;
+      const repo = getErpRepo(slug);
+      void Promise.all(
+        out.entries.map((e) =>
+          repo.upsert(coll, e.id, e, { collectionOverride: coll }).catch(() => {})
+        )
+      ).catch(() => {});
     } else if (out.status === 'unavailable') {
-      // Route/data unreachable → quiet empty state (never crash).
-      setEntries([]);
+      // Route/data unreachable → try the local store (offline read), else empty.
+      const repo = getErpRepo(slug);
+      const local = await repo.list<CaisseEntry>(`caisse-${month}`).catch(() => []);
+      setEntries(local.map((w) => w.data));
       setPhase('ready');
     } else {
       setErrMsg(out.message);
@@ -381,14 +407,18 @@ const Journal = ({
       <Panel
         title={`Journal — ${monthLabel}`}
         action={
-          <input
-            type="month"
-            value={monthInputValue(month)}
-            max={monthInputValue(currentMonthYYYYMM())}
-            onChange={e => setMonth(monthInputToYYYYMM(e.target.value))}
-            style={{ ...inputStyle, width: 'auto', padding: '5px 9px' }}
-            aria-label="Mois"
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {/* DzOS Phase 1: the sync pill shows the outbox + online state. */}
+            <SyncStatusPill slug={slug} />
+            <input
+              type="month"
+              value={monthInputValue(month)}
+              max={monthInputValue(currentMonthYYYYMM())}
+              onChange={e => setMonth(monthInputToYYYYMM(e.target.value))}
+              style={{ ...inputStyle, width: 'auto', padding: '5px 9px' }}
+              aria-label="Mois"
+            />
+          </div>
         }
       >
         {phase === 'loading' ? (
@@ -640,15 +670,28 @@ const QuickAdd = ({
     }
     setErr(null);
     setSaving(true);
-    const out = await postCaisseEntry(slug, {
+    const entryBody = {
       kind: draft.kind,
       amount,
       method: draft.method,
       date: draft.date,
       note: draft.note.trim(),
       ...(draft.courierId ? { courierId: draft.courierId } : {}),
-    });
+    };
+    const out = await postCaisseEntry(slug, entryBody);
     if (out.status === 'ok') {
+      // DzOS Phase 1: mirror the successful write into the local store so the
+      // journal updates instantly (no refetch) and the entry survives offline.
+      // The returned entry has a server-assigned id; upsert it into the
+      // caisse-<month> partition. Best-effort — the server write already
+      // succeeded, so a local-store failure doesn't undo it.
+      const coll = `caisse-${monthYYYYMM(draft.date)}`;
+      const repo = getErpRepo(slug);
+      if (out.entry?.id) {
+        void repo
+          .upsert(coll, out.entry.id, out.entry, { collectionOverride: coll })
+          .catch(() => {});
+      }
       setOk(true);
       setDraft(d => ({ ...emptyDraft(), method: d.method, date: d.date }));
       onAdded();
