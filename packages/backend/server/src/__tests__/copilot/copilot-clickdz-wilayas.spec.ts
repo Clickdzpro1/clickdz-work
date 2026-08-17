@@ -74,9 +74,8 @@ test('isValidWilaya accepts 1..69 and rejects 0, 70, negatives, non-integers', t
   t.false(isValidWilaya(70));
   t.false(isValidWilaya(-1));
   t.false(isValidWilaya(58.5));
-  t.false(isValidWilaya('16')); // string form: Number() ok but isInteger fails on... actually Number('16')=16 int
-  // NOTE: isValidWilaya('16') → Number('16')=16, isInteger=true, has=true → valid.
-  // That's the existing tolerant behavior (string codes from wire). Keep it.
+  // String form: Number('16')=16, isInteger=true, has=true → valid. This is
+  // the existing tolerant behavior (string codes arrive from the wire). Keep.
   t.true(isValidWilaya('16'));
   t.false(isValidWilaya('abc'));
   t.false(isValidWilaya(null));

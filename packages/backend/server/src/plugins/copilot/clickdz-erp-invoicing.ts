@@ -141,8 +141,24 @@ export type InvoiceType = (typeof INVOICE_TYPES)[number];
 export const INVOICE_STATUSES = ['brouillon', 'valide', 'annule'] as const;
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
 
-/** Payment method carried on a facture (drives whether timbre applies). */
-export const INVOICE_PAYMENTS = ['cash', 'cod', 'chargily', 'virement'] as const;
+/**
+ * Payment method carried on a facture (drives whether timbre applies).
+ * LF2025: only `cash` and `cod` attract the timbre; ALL electronic methods
+ * (chargily/Edahabia/CIB, virement, chèque, CCP) are EXEMPT. Broadening the
+ * type lets a facture carry any of these so the timbre exemption applies
+ * correctly and the print sheet labels them; `computeTimbre` already treats
+ * every non-cash/non-cod method as exempt.
+ */
+export const INVOICE_PAYMENTS = [
+  'cash',
+  'cod',
+  'chargily',
+  'virement',
+  'cheque',
+  'ccp',
+  'edahabia',
+  'cib',
+] as const;
 export type InvoicePayment = (typeof INVOICE_PAYMENTS)[number];
 
 // ---------------------------------------------------------------------------
