@@ -599,10 +599,16 @@ export class ClickDzDataController {
     // Deletes also slide the window on ephemeral collections (durable ones
     // have no TTL; the delete is mirrored to PG below regardless).
     await this.touchTtl(key, collection);
-    // R15 Phase A: mirror the delete to PG (best-effort, never throws).
-    await this.mirrorToPg(() =>
-      this.models.cdzAppData.delete(slug, collection, id)
-    );
+    // R15 Phase A: mirror the delete to PG (best-effort, never throws). DzOS
+    // Phase 1: also record a tombstone so the /erp/changes feed can tell
+    // clients the record was removed (without it, a hard-delete leaves a ghost
+    // in every client's local store).
+    await this.mirrorToPg(async () => {
+      await this.models.cdzAppData.delete(slug, collection, id);
+      if (isDurableCollection(collection)) {
+        await this.models.cdzAppDataTombstone.record(slug, collection, id);
+      }
+    });
     return { deleted: removed > 0 };
   }
 

@@ -24,11 +24,15 @@ const CDZ_APP_DATA_DDL: readonly string[] = [
     "collection" VARCHAR NOT NULL,
     "record_id" VARCHAR NOT NULL,
     "data" JSONB NOT NULL DEFAULT '{}',
+    "rev" INTEGER NOT NULL DEFAULT 0,
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "cdz_app_data_pkey" PRIMARY KEY ("slug", "collection", "record_id")
   )`,
   `CREATE INDEX IF NOT EXISTS "cdz_app_data_slug_collection_idx" ON "cdz_app_data" ("slug", "collection")`,
+  `CREATE INDEX IF NOT EXISTS "cdz_app_data_slug_updated_at_idx" ON "cdz_app_data" ("slug", "updated_at")`,
+  // DzOS Phase 1: add the rev column to a pre-Phase-1 table (idempotent ALTER).
+  `ALTER TABLE "cdz_app_data" ADD COLUMN IF NOT EXISTS "rev" INTEGER NOT NULL DEFAULT 0`,
 ];
 
 export type CdzAppDataRow = {
@@ -36,6 +40,7 @@ export type CdzAppDataRow = {
   collection: string;
   recordId: string;
   data: Record<string, unknown>;
+  rev: number;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -53,17 +58,21 @@ export class CdzAppDataModel extends BaseModel {
     recordId: string,
     data: Record<string, unknown>
   ) {
+    // DzOS Phase 1: bump rev on every write (1 on insert, +1 on conflict) so
+    // the /erp/changes feed carries a monotonic per-record revision clients
+    // merge with (LWW on rev + updatedAt). created_at preserved on conflict.
     await this.db.$executeRaw`
       INSERT INTO cdz_app_data (
-        slug, collection, record_id, data, created_at, updated_at
+        slug, collection, record_id, data, rev, created_at, updated_at
       )
       VALUES (
         ${slug}, ${collection}, ${recordId},
-        ${JSON.stringify(data)}::jsonb, now(), now()
+        ${JSON.stringify(data)}::jsonb, 1, now(), now()
       )
       ON CONFLICT (slug, collection, record_id)
       DO UPDATE SET
         data = EXCLUDED.data,
+        rev = cdz_app_data.rev + 1,
         updated_at = now()
     `;
   }
@@ -250,5 +259,142 @@ export class CdzAppDataModel extends BaseModel {
       WHERE slug = ${slug} AND collection = ${collection}
       ORDER BY created_at DESC
     `;
+  }
+
+  // DzOS Phase 1: the /erp/changes cursor feed. Returns live rows + tombstones
+  // for a slug whose updatedAt/deletedAt is STRICTLY AFTER the since cursor
+  // (ISO 8601). Unioned + ordered by the change timestamp ascending, capped at
+  // `limit` (default 500). The caller treats each row as an upsert change and
+  // each tombstone as a delete change; nextCursor = the last row's timestamp.
+  // `since` null/empty = return everything (initial hydration).
+  async listChanges(
+    slug: string,
+    since: string | null,
+    limit = 500
+  ): Promise<{ changes: CdzAppDataChangeRow[]; nextCursor: string | null }> {
+    const cap = Math.min(Math.max(Number(limit) || 500, 1), 5000);
+    // Live rows updated after the cursor.
+    const liveRows = since
+      ? await this.db.$queryRaw<CdzAppDataChangeRow[]>`
+          SELECT
+            slug, collection, record_id AS "recordId", data,
+            created_at AS "createdAt", updated_at AS "updatedAt",
+            rev, 'upsert' AS "kind"
+          FROM cdz_app_data
+          WHERE slug = ${slug} AND updated_at > ${since}::timestamptz
+          ORDER BY updated_at ASC
+          LIMIT ${cap}::int
+        `
+      : await this.db.$queryRaw<CdzAppDataChangeRow[]>`
+          SELECT
+            slug, collection, record_id AS "recordId", data,
+            created_at AS "createdAt", updated_at AS "updatedAt",
+            0 AS rev, 'upsert' AS "kind"
+          FROM cdz_app_data
+          WHERE slug = ${slug}
+          ORDER BY updated_at ASC
+          LIMIT ${cap}::int
+        `;
+    // Tombstones deleted after the cursor.
+    const tombRows = since
+      ? await this.db.$queryRaw<CdzAppDataChangeRow[]>`
+          SELECT
+            slug, collection, record_id AS "recordId",
+            '{}'::jsonb AS data,
+            deleted_at AS "createdAt", deleted_at AS "updatedAt",
+            rev, 'tombstone' AS "kind"
+          FROM cdz_app_data_tombstone
+          WHERE slug = ${slug} AND deleted_at > ${since}::timestamptz
+          ORDER BY deleted_at ASC
+          LIMIT ${cap}::int
+        `
+      : await this.db.$queryRaw<CdzAppDataChangeRow[]>`
+          SELECT
+            slug, collection, record_id AS "recordId",
+            '{}'::jsonb AS data,
+            deleted_at AS "createdAt", deleted_at AS "updatedAt",
+            rev, 'tombstone' AS "kind"
+          FROM cdz_app_data_tombstone
+          WHERE slug = ${slug}
+          ORDER BY deleted_at ASC
+          LIMIT ${cap}::int
+        `;
+    // Merge + sort by the change timestamp; cap.
+    const merged = [...liveRows, ...tombRows].sort((a, b) =>
+      String(a.updatedAt).localeCompare(String(b.updatedAt))
+    );
+    const page = merged.slice(0, cap);
+    const last = page[page.length - 1];
+    const nextCursor = last ? String(last.updatedAt) : null;
+    return { changes: page, nextCursor };
+  }
+}
+
+// DzOS Phase 1: the tombstone track for the /erp/changes feed. The data API's
+// mirrorToPg delete path records a tombstone here so a later pull can tell
+// clients the record was removed (without it, a hard-deleted row would leave a
+// ghost in every client's local store).
+export type CdzAppDataChangeRow = {
+  slug: string;
+  collection: string;
+  recordId: string;
+  data: Record<string, unknown>;
+  createdAt: Date;
+  updatedAt: Date;
+  rev: number;
+  kind: 'upsert' | 'tombstone';
+};
+
+@Injectable()
+export class CdzAppDataTombstoneModel extends BaseModel {
+  // Record a tombstone (idempotent — re-inserting the same PK updates rev/deletedAt).
+  @Transactional()
+  async record(
+    slug: string,
+    collection: string,
+    recordId: string,
+    rev = 0
+  ) {
+    await this.db.$executeRaw`
+      INSERT INTO cdz_app_data_tombstone (
+        slug, collection, record_id, rev, deleted_at
+      )
+      VALUES (
+        ${slug}, ${collection}, ${recordId}, ${rev}, now()
+      )
+      ON CONFLICT (slug, collection, record_id)
+      DO UPDATE SET rev = EXCLUDED.rev, deleted_at = now()
+    `;
+  }
+
+  // Idempotent DDL for the tombstone table (mirrors ensureSchema's pattern —
+  // boot never runs prisma migrate deploy, so replay the migration in-app).
+  @Transactional()
+  async ensureSchema(): Promise<{ alreadyExisted: boolean; ranDdl: boolean }> {
+    await this.db.$executeRaw`
+      SELECT pg_advisory_xact_lock(hashtext('cdz_app_data_tombstone_migration'))
+    `;
+    const probe = await this.db.$queryRaw<{ reg: string | null }[]>`
+      SELECT to_regclass('public.cdz_app_data_tombstone')::text AS reg
+    `;
+    const alreadyExisted = !!probe[0]?.reg;
+    let ranDdl = false;
+    if (!alreadyExisted) {
+      await this.db.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "cdz_app_data_tombstone" (
+          "slug" VARCHAR NOT NULL,
+          "collection" VARCHAR NOT NULL,
+          "record_id" VARCHAR NOT NULL,
+          "rev" INTEGER NOT NULL DEFAULT 0,
+          "deleted_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT "cdz_app_data_tombstone_pkey" PRIMARY KEY ("slug", "collection", "record_id")
+        )
+      `);
+      await this.db.$executeRawUnsafe(
+        `CREATE INDEX IF NOT EXISTS "cdz_app_data_tombstone_slug_deleted_at_idx" ON "cdz_app_data_tombstone" ("slug", "deleted_at")`
+      );
+      ranDdl = true;
+    }
+    return { alreadyExisted, ranDdl };
   }
 }
