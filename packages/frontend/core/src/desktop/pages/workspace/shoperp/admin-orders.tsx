@@ -29,6 +29,14 @@ import {
   statusTargets,
 } from './shoperp-shared';
 
+// DzOS Phase 1: offline-first local store. admin-orders is the second panel
+// migrated (after caisse). Reads hydrate the local store (instant on tab
+// switch + offline); status advances mirror into the local store so the row
+// updates instantly and survives offline. The SyncStatusPill shows the sync
+// state. Hybrid: the fetch + postOrderStatus bridge calls stay (server
+// authoritative during transition).
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
+
 // ---------------------------------------------------------------------------
 // Orders admin — the full pipeline manager. Reads ALL orders straight from the
 // public per-slug data API (reads need no token), advances statuses through
@@ -107,8 +115,39 @@ export const OrdersAdmin = ({
         );
         setOrders(list);
         setPhase('ready');
+        // DzOS Phase 1: hydrate the local store so the next open is instant
+        // (from IDB/SQLite) and works offline. Each order upserted into the
+        // 'orders' collection keyed by its stable id. Best-effort — a
+        // hydration failure never blocks the panel (the fetch succeeded).
+        void getErpRepo(slug).then((repo) =>
+          Promise.all(
+            list.map((o) =>
+              repo.upsert('orders', String(o.id || o.ref), o).catch(() => {})
+            )
+          ).catch(() => {})
+        );
       } catch {
-        if (!soft) setPhase('error');
+        // DzOS Phase 1: offline-read fallback. If the fetch throws (network
+        // down), try the local store so the list still renders with the last
+        // known orders.
+        if (!soft) {
+          try {
+            const repo = await getErpRepo(slug);
+            const local = await repo.list<ErpOrder>('orders');
+            const list = local
+              .map((w) => w.data)
+              .sort(
+                (a, b) =>
+                  orderDate(b).localeCompare(orderDate(a)) ||
+                  String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+              );
+            setOrders(list);
+            setPhase('ready');
+            return;
+          } catch {
+            setPhase('error');
+          }
+        }
       }
     },
     [slug]
@@ -132,6 +171,14 @@ export const OrdersAdmin = ({
       const out = await postOrderStatus(slug, ref, to);
       if (out.status === 'ok') {
         setNotice({ tone: 'ok', text: `Commande ${ref} → ${to}` });
+        // DzOS Phase 1: mirror the status change into the local store so the
+        // row survives offline + updates instantly. Best-effort (the server
+        // write already succeeded).
+        void getErpRepo(slug).then((repo) =>
+          repo
+            .upsert('orders', String(order.id || order.ref), { ...order, status: to })
+            .catch(() => {})
+        );
         await load(true); // the replaced record has a fresh id/createdAt
         onMutated(); // parent refreshes the KPI summary
       } else {
@@ -264,7 +311,10 @@ export const OrdersAdmin = ({
         </Banner>
       ) : null}
 
-      <Panel title={`Commandes · ${visible.length}`}>
+      <Panel
+        title={`Commandes · ${visible.length}`}
+        action={<SyncStatusPill slug={slug} />}
+      >
         {/* Paginated order list (pageSize 10, column mode). The `key={filter}`
             remounts PagedList whenever the active status filter changes, which
             resets it to page 1 (a filtered view always starts at the top).
