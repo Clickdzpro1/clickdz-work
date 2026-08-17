@@ -51,6 +51,14 @@ import {
   voidInvoice,
 } from './shoperp-shared';
 
+// DzOS Phase 1: offline-first local store. Invoicing is the highest-value
+// offline flow — drafts created/edited freely offline, validate ops queue
+// « en attente de numérotation » (the legal number stays server-authoritative,
+// assigned on reconnect). Reads hydrate the local store (instant on tab
+// switch + offline). Hybrid: the bridge calls stay (server authoritative);
+// when offline, drafts save to the local store with a pending flag + a notice.
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
+
 // ---------------------------------------------------------------------------
 // FACTURATION studio (WSE-3, R3-a). The owner-facing invoicing surface for one
 // store: quotes (devis) → delivery notes (bon de livraison) → invoices
@@ -83,6 +91,12 @@ type StatusFilter = InvoiceStatus | 'all';
 function currentMonth(): string {
   const d = new Date();
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+/** A YYYY-MM-DD (or YYYY-MM) date → its YYYYMM partition (invoices-YYYYMM). */
+function monthYYYYMM(date: string): string {
+  const m = /^(\d{4})-(\d{2})/.exec(date);
+  return m ? `${m[1]}${m[2]}` : currentMonth().replace('-', '');
 }
 
 /** A blank editable line (label/qty/PU HT/TVA). Local editor state is strings. */
@@ -272,8 +286,31 @@ const InvoiceList = ({
     if (out.status === 'ok') {
       setRows(out.invoices);
       setPhase('ready');
+      // DzOS Phase 1: hydrate the local store (per-month partition) so the
+      // next open is instant + works offline. Best-effort.
+      const coll = `invoices-${month}`;
+      void getErpRepo(slug).then((repo) =>
+        Promise.all(
+          out.invoices.map((inv) =>
+            repo.upsert(coll, String(inv.id), inv, { collectionOverride: coll }).catch(() => {})
+          )
+        ).catch(() => {})
+      );
     } else if (out.status === 'not-found') {
       onFlagOff();
+    } else if (out.status === 'unavailable') {
+      // DzOS Phase 1: offline-read fallback — render the last known invoices
+      // for this month from the local store.
+      try {
+        const repo = await getErpRepo(slug);
+        const local = await repo.list<InvoiceView>(`invoices-${month}`);
+        const rows = local.map((w) => w.data);
+        setRows(rows);
+        setPhase('ready');
+      } catch {
+        setErrMsg(out.message);
+        setPhase('error');
+      }
     } else {
       setErrMsg(out.message);
       setPhase('error');
@@ -288,9 +325,12 @@ const InvoiceList = ({
     <Panel
       title="Factures"
       action={
-        <button style={miniBtnStyle('primary')} onClick={onCreate}>
-          + Nouveau document
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <SyncStatusPill slug={slug} />
+          <button style={miniBtnStyle('primary')} onClick={onCreate}>
+            + Nouveau document
+          </button>
+        </div>
       }
     >
       {/* Filters ---------------------------------------------------------- */}
@@ -651,16 +691,57 @@ const InvoiceEditor = ({
     // Only send labelled lines (blank rows are editor scaffolding).
     body.lines = (body.lines || []).filter(l => l.label);
     const out = await postInvoice(slug, body);
-    const inv = mapMutate(out, 'Brouillon enregistré.');
-    if (inv) {
+    if (out.status === 'ok') {
+      const inv = out.invoice;
       setSaved(inv);
       setLines(linesToDraft(inv));
       setCust(inv.customer);
       setType(inv.type);
       if (inv.payment) setPayment(inv.payment);
+      setNotice({ tone: 'ok', text: 'Brouillon enregistré.' });
+      // DzOS Phase 1: mirror the saved draft into the local store so it
+      // survives offline + tab switches. Best-effort.
+      const coll = `invoices-${monthYYYYMM(inv.date)}`;
+      void getErpRepo(slug).then((repo) =>
+        repo.upsert(coll, String(inv.id), inv, { collectionOverride: coll }).catch(() => {})
+      );
+    } else if (out.status === 'unavailable') {
+      // DzOS Phase 1: OFFLINE DRAFT SAVE. The server is unreachable; save the
+      // draft to the local store with a pending flag so it syncs when
+      // reconnected. The merchant can keep editing offline.
+      const draftInv: InvoiceView = {
+        ...(saved ?? {}),
+        ...body,
+        id: saved?.id ?? `draft-offline-${Date.now()}`,
+        seq: saved?.seq ?? 0,
+        year: saved?.year ?? new Date().getUTCFullYear(),
+        status: 'brouillon',
+        totalHT: 0,
+        totalTVA: 0,
+        timbre: 0,
+        totalTTC: 0,
+      };
+      const coll = `invoices-${monthYYYYMM(String(draftInv.date))}`;
+      try {
+        const repo = await getErpRepo(slug);
+        await repo.upsert(coll, String(draftInv.id), draftInv, { collectionOverride: coll });
+        setSaved(draftInv);
+        setNotice({
+          tone: 'warn',
+          text: 'Brouillon enregistré hors ligne — en attente de synchronisation. Il sera envoyé au serveur à la reconnexion.',
+        });
+      } catch {
+        onWritesBlocked();
+        setNotice({
+          tone: 'error',
+          text: 'Les écritures sont indisponibles sur ce serveur — réessayez plus tard.',
+        });
+      }
+    } else {
+      mapMutate(out, 'Brouillon enregistré.');
     }
     setBusy(null);
-  }, [editable, busy, preValidate, buildBody, slug, mapMutate]);
+  }, [editable, busy, preValidate, buildBody, slug, saved, mapMutate, onWritesBlocked]);
 
   const doValidate = useCallback(async () => {
     if (!saved || busy) return;
@@ -685,13 +766,44 @@ const InvoiceEditor = ({
     setNotice(null);
     setBusy('validate');
     const out = await validateInvoice(slug, saved.id);
-    const inv = mapMutate(out, 'Document validé — numéro légal attribué.');
-    if (inv) {
+    if (out.status === 'ok') {
+      const inv = out.invoice;
       setSaved(inv);
       setLines(linesToDraft(inv));
+      setNotice({ tone: 'ok', text: 'Document validé — numéro légal attribué.' });
+      // DzOS Phase 1: mirror the validated invoice into the local store.
+      const coll = `invoices-${monthYYYYMM(inv.date)}`;
+      void getErpRepo(slug).then((repo) =>
+        repo.upsert(coll, String(inv.id), inv, { collectionOverride: coll }).catch(() => {})
+      );
+    } else if (out.status === 'unavailable') {
+      // DzOS Phase 1: OFFLINE VALIDATION QUEUE. The legal number is
+      // server-authoritative (CdzErpSeq, R18); offline we can't assign it.
+      // Mark the draft « en attente de numérotation » in the local store; the
+      // sync engine will push the validate op when reconnected, the server
+      // assigns the number, and the next pull brings the numbered facture back.
+      try {
+        const repo = await getErpRepo(slug);
+        const queuedInv: InvoiceView = { ...saved, status: 'valide' as InvoiceStatus };
+        const coll = `invoices-${monthYYYYMM(String(saved.date))}`;
+        await repo.upsert(coll, String(saved.id), queuedInv, { collectionOverride: coll });
+        setSaved(queuedInv);
+        setNotice({
+          tone: 'warn',
+          text: 'Document marqué « en attente de numérotation » — hors ligne. Le numéro légal sera attribué automatiquement à la reconnexion.',
+        });
+      } catch {
+        onWritesBlocked();
+        setNotice({
+          tone: 'error',
+          text: 'Les écritures sont indisponibles sur ce serveur — réessayez plus tard.',
+        });
+      }
+    } else {
+      mapMutate(out, 'Document validé — numéro légal attribué.');
     }
     setBusy(null);
-  }, [saved, busy, slug, mapMutate]);
+  }, [saved, busy, slug, mapMutate, onWritesBlocked]);
 
   const doVoid = useCallback(async () => {
     if (!saved || busy) return;
@@ -1126,6 +1238,8 @@ const InvoiceEditor = ({
       <div
         style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}
       >
+        {/* DzOS Phase 1: the sync pill shows the outbox + online state. */}
+        <SyncStatusPill slug={slug} />
         {editable ? (
           <button
             style={btnStyle('primary', busy === 'save')}
