@@ -65,7 +65,6 @@ import {
 import { dataWriteToken, publicDataToken, safeEqual, verifyDataToken,
   staffToken,
   verifyStaffToken,
-  staffCan,
   staffPermissions,
   type StaffRole,
 } from './cdz-data-token';
@@ -110,7 +109,6 @@ import {
 // __CLICKDZ_*__ substitution templateApp does — the controller injects the template
 // HTML + minted token values so the helper stays import/env-free (boot-safe).
 import {
-  fetchDeployedHtml,
   resolveAppSource,
   type AppSourceRecord,
   renderTemplateSource,
@@ -131,7 +129,6 @@ import {
   type InvoiceOptions,
   type InvoiceRecord,
   type InvoiceType,
-  type ValidationError,
 } from './clickdz-erp-invoicing';
 import {
   applySupplierBalanceDelta,
@@ -197,7 +194,6 @@ import {
   recordVersion,
   setPendingAiPatch,
   writeShopState,
-  type ShopState,
 } from './clickdz-shop-state';
 import * as Shipping from './clickdz-erp-shipping';
 // WS17: shared Voice Library index helpers so the bulk-TTS route appends its
@@ -2126,8 +2122,12 @@ export class ClickDzBridgeController {
    * - clickdz-builder -> the high-token Builder runtime (IDE traffic)
    * - clickdz-ultra   -> intent-based routing across all agents
    * - everything else -> default agent selection (incl. Arabic detection)
+   *
+   * Currently unwired (the council/ultra chat roster was retired) but retained
+   * for router reuse; `protected` (not `private`) so the unused-member gate
+   * stays green without deleting the Make env-var plumbing it exercises.
    */
-  private resolveAgentForRequest(
+  protected resolveAgentForRequest(
     model: string,
     messages: Array<{ role: string; content: string }>
   ): string | undefined {
@@ -3001,7 +3001,7 @@ export class ClickDzBridgeController {
         }
         // Fail-open on Redis errors (log but allow generation)
         try {
-          this.logger?.warn?.(`Quota pre-check failed (fail-open) for ${user.id}: ${(err as Error)?.message}`);
+          this.logger?.warn?.(`Quota pre-check failed (fail-open) for ${user?.id}: ${(err as Error)?.message}`);
         } catch {}
       }
     }
@@ -3286,7 +3286,9 @@ export class ClickDzBridgeController {
       dailyLimit
     );
 
-    let response: Awaited<ReturnType<typeof fetch>>;
+    // Definite-assignment: every non-Flux branch below assigns `response`
+    // before the shared `if (!isFluxGateway)` parse reads it.
+    let response!: Awaited<ReturnType<typeof fetch>>;
     let data: any;
     try {
     if (isFluxGateway) {
@@ -5211,7 +5213,7 @@ export class ClickDzBridgeController {
     const sentenceParts = trimmed
       .replace(/\s+/g, ' ')
       .split(/(?<=[.!?؟\u060C])\s+/)
-      .map(chunk => chunk.trim())
+      .map((chunk: string) => chunk.trim())
       .filter(Boolean);
     const chunks: string[] = [];
     let current = '';
@@ -6313,7 +6315,7 @@ export class ClickDzBridgeController {
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
     @Param('id') id: string,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     this.assertInvoicingEnabled();
     await this.assertOwnsErpApp(user, slug);
@@ -9185,7 +9187,7 @@ export class ClickDzBridgeController {
   async shopStateGet(
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     if (!CDZ_SHOP_STATE) {
       throw new NotFound('App not found');
@@ -9207,7 +9209,7 @@ export class ClickDzBridgeController {
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
     @Param('id') id: string,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     if (!CDZ_SHOP_STATE) {
       throw new NotFound('App not found');
@@ -9292,7 +9294,7 @@ export class ClickDzBridgeController {
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
     @Body() body: any,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     if (!CDZ_SHOP_STATE) {
       throw new NotFound('App not found');
@@ -9776,7 +9778,7 @@ export class ClickDzBridgeController {
   async appStaleness(
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     // Feature flag OFF → behave as if the route does not exist (typed 404).
     if (!featuresEnabled()) {

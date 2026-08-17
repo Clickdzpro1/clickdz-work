@@ -134,8 +134,8 @@ import {
 // (CacheRedis).
 // ---------------------------------------------------------------------------
 
-// --- Config (read once at module load, same idiom as the sibling controllers).
-const CDZ_COURIERS_ENABLED = process.env.CDZ_COURIERS_ENABLED || '';
+// --- Config: the CDZ_COURIERS_ENABLED gate is read through envEnabled() inside
+// couriersEnabled() below (no module-load const needed).
 
 // E2 — tolerant env-flag helper. Matches the house idiom already used by the
 // app-provision controller (clickdz-app-provision.controller.ts:289) — accepts
@@ -435,9 +435,8 @@ export class ClickDzCourierController {
   private couriersEnabled(): boolean {
     // E2 — tolerant check: CDZ_COURIERS_ENABLED=true (Railway's existing value)
     // is accepted alongside the canonical '1'. envEnabled() applies
-    // /^(1|true|yes|on)$/i so any reasonable truthy string works. The module-
-    // level CDZ_COURIERS_ENABLED const (read at load) is reused for the read, but
-    // the comparison is now delegated to the tolerant helper.
+    // /^(1|true|yes|on)$/i so any reasonable truthy string works; it reads the
+    // env by name at call time (no module-load const involved).
     return envEnabled('CDZ_COURIERS_ENABLED') && secretBoxReady();
   }
 

@@ -990,7 +990,7 @@ export class ClickDzBuilderHome extends LitElement {
   }
 
   /** WS1 — debounce (900ms) the backend draft POST so autosave isn't chatty. */
-  private scheduleBackendDraftSave(app: CdzOpenApp) {
+  private scheduleBackendDraftSave(_app: CdzOpenApp) {
     if (this.draftSaveTimer) clearTimeout(this.draftSaveTimer);
     this.draftSaveTimer = setTimeout(() => {
       this.draftSaveTimer = null;

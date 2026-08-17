@@ -357,7 +357,7 @@ export async function composeContent(opts: {
   // before casting so a malformed error response can't throw a TypeError.
   return {
     ok: false,
-    error: r.data ? (r.data as Record<string, unknown>).error as string | undefined : undefined,
+    error: r.data?.error,
   };
 }
 
@@ -376,20 +376,18 @@ export async function createOrUpdatePost(body: {
   firstComment?: string;
   submitForApproval?: boolean;
 }): Promise<{ ok: boolean; post?: SocialPost; error?: string; message?: string; detail?: string }> {
-  const r = await apiFetch<SocialPost & { error?: string; message?: string }>(
-    '/api/v1/social/posts',
-    { method: 'POST', body: JSON.stringify(body) }
-  );
+  const r = await apiFetch<
+    SocialPost & { error?: string; message?: string; detail?: string }
+  >('/api/v1/social/posts', { method: 'POST', body: JSON.stringify(body) });
   if (r.ok) return { ok: true, post: r.data as SocialPost };
-  // WS17: r.data may be undefined for an empty/non-JSON body — guard before
-  // casting so a malformed error response can't throw a TypeError.
-  const errData = r.data as Record<string, unknown> | undefined;
+  // WS17: r.data may be undefined for an empty/non-JSON body — optional-chain
+  // so a malformed error response can't throw a TypeError.
   return {
     ok: false,
-    error: errData ? (errData.error as string | undefined) : undefined,
-    message: errData ? (errData.message as string | undefined) : undefined,
+    error: r.data?.error,
+    message: r.data?.message,
     // UP1 — queue-rule 409s carry a human `detail` (e.g. min-gap / max-per-day).
-    detail: errData ? (errData.detail as string | undefined) : undefined,
+    detail: r.data?.detail,
   };
 }
 
@@ -405,11 +403,10 @@ export async function approvePost(
     { method: 'POST', body: JSON.stringify({}) }
   );
   if (r.ok) return { ok: true, post: r.data as SocialPost };
-  const errData = r.data as Record<string, unknown> | undefined;
   return {
     ok: false,
-    error: errData ? (errData.error as string | undefined) : undefined,
-    detail: errData ? (errData.detail as string | undefined) : undefined,
+    error: r.data?.error,
+    detail: r.data?.detail,
   };
 }
 
@@ -482,9 +479,7 @@ export async function reschedulePost(
   if (r.ok) return { ok: true, post: r.data as SocialPost };
   return {
     ok: false,
-    error:
-      ((r.data as Record<string, unknown>).message as string | undefined) ||
-      ((r.data as Record<string, unknown>).error as string | undefined),
+    error: r.data?.message || r.data?.error,
   };
 }
 
@@ -498,9 +493,7 @@ export async function retryPost(
   if (r.ok) return { ok: true, post: r.data as SocialPost };
   return {
     ok: false,
-    error:
-      ((r.data as Record<string, unknown>).message as string | undefined) ||
-      ((r.data as Record<string, unknown>).error as string | undefined),
+    error: r.data?.message || r.data?.error,
   };
 }
 

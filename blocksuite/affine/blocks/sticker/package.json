@@ -1,6 +1,6 @@
 {
   "name": "@blocksuite/affine-block-sticker",
-  "description": "Sticker block for BlockSuite \u2014 emoji, static, and animated (Lottie).",
+  "description": "Sticker block for BlockSuite — emoji, static, and animated (Lottie).",
   "type": "module",
   "scripts": {
     "build": "tsc"

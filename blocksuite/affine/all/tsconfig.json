@@ -24,6 +24,7 @@
     { "path": "../blocks/note" },
     { "path": "../blocks/paragraph" },
     { "path": "../blocks/root" },
+    { "path": "../blocks/sticker" },
     { "path": "../blocks/surface" },
     { "path": "../blocks/surface-ref" },
     { "path": "../blocks/table" },

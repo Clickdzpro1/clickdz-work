@@ -26,33 +26,6 @@ const COMPOSE_MODEL = 'alibaba/qwen3.7-flash';
 const COMPOSE_TIMEOUT_MS = 240_000;
 const MAX_OUTPUT_HTML_CHARS = 400_000;
 
-/**
- * Pull the reply text out of whatever envelope the Make agent returns. Mirrors
- * the bridge controller's parseMakeAgentResponse so behaviour is identical.
- */
-function parseMakeAgentResponse(raw: unknown): string {
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      if (typeof parsed.reply === 'string') return parsed.reply;
-      if (typeof parsed.answer === 'string') return parsed.answer;
-      if (typeof parsed.content === 'string') return parsed.content;
-      if (typeof parsed.response === 'string') return parsed.response;
-      return raw;
-    } catch {
-      return raw;
-    }
-  }
-  if (raw && typeof raw === 'object') {
-    const obj = raw as Record<string, unknown>;
-    if (typeof obj.reply === 'string') return obj.reply;
-    if (typeof obj.answer === 'string') return obj.answer;
-    if (typeof obj.content === 'string') return obj.content;
-    if (typeof obj.response === 'string')
-      return parseMakeAgentResponse(obj.response);
-  }
-  return '';
-}
 
 /**
  * Extract the composition HTML from a model reply. Mirrors the bridge
@@ -134,17 +107,6 @@ export class ClickDzVdzComposeController {
             : 'Make.com agent request failed',
       });
     }
-
-    if (!response.ok) {
-      throw new CopilotProviderSideError({
-        provider: 'gateway',
-        kind: 'upstream_error',
-        message: `Make.com agent failed: ${response.status} ${response.statusText}`,
-      });
-    }
-
-    const data = (await response.json()) as Record<string, unknown>;
-    return parseMakeAgentResponse(data.response ?? data);
   }
 
   /**

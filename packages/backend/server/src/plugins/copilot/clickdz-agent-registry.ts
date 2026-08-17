@@ -79,9 +79,6 @@ const NAME_MAX = 40;
 const PERSONA_MAX = 2000;
 const EMOJI_MAX = 8;
 
-/** The two built-in archetypes a custom agent may clone. */
-const ARCHETYPES: readonly AgentName[] = ['hermes', 'openclaw'];
-
 /** Product-facing default names for the two built-ins (used by synthetic defs). */
 const BUILTIN_NAMES: Record<AgentName, string> = {
   hermes: 'Hermès',

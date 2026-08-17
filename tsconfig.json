@@ -67,6 +67,7 @@
     { "path": "./blocksuite/affine/blocks/note" },
     { "path": "./blocksuite/affine/blocks/paragraph" },
     { "path": "./blocksuite/affine/blocks/root" },
+    { "path": "./blocksuite/affine/blocks/sticker" },
     { "path": "./blocksuite/affine/blocks/surface" },
     { "path": "./blocksuite/affine/blocks/surface-ref" },
     { "path": "./blocksuite/affine/blocks/table" },

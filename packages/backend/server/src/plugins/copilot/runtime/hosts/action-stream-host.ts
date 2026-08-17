@@ -7,7 +7,10 @@ import type { PromptMessage } from '../../providers/types';
 import type { ChatSession } from '../../session';
 import { ChatQuerySchema } from '../../types';
 import { projectActionEventToChatEvent } from '../action-output-projector';
-import type { ActionRuntimeBridgeEvent } from '../action-runtime-bridge';
+import type {
+  ActionRuntimeBridgeEvent,
+  ActionRuntimeBridgeInput,
+} from '../action-runtime-bridge';
 import { ActionRuntimeBridge } from '../action-runtime-bridge';
 import { CdzModelHealthService } from '../cdz-model-health.service';
 import { isUpstreamScenarioFailed } from '../upstream-error-detector';
@@ -110,7 +113,9 @@ export class ActionStreamHost {
     );
     const originalModelId =
       typeof query.modelId === 'string' && query.modelId ? query.modelId : undefined;
-    const buildBridgeInput = (modelIdOverride?: string) => ({
+    const buildBridgeInput = (
+      modelIdOverride?: string
+    ): ActionRuntimeBridgeInput => ({
       userId,
       workspaceId: prepared.session.config.workspaceId,
       docId: prepared.session.config.docId,

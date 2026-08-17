@@ -22,6 +22,7 @@ export const PackageList = [
       'blocksuite/affine/blocks/note',
       'blocksuite/affine/blocks/paragraph',
       'blocksuite/affine/blocks/root',
+      'blocksuite/affine/blocks/sticker',
       'blocksuite/affine/blocks/surface',
       'blocksuite/affine/blocks/surface-ref',
       'blocksuite/affine/blocks/table',
@@ -372,6 +373,20 @@ export const PackageList = [
       'blocksuite/affine/shared',
       'blocksuite/affine/widgets/edgeless-toolbar',
       'blocksuite/affine/data-view',
+      'blocksuite/framework/global',
+      'blocksuite/framework/std',
+      'blocksuite/framework/store',
+    ],
+  },
+  {
+    location: 'blocksuite/affine/blocks/sticker',
+    name: '@blocksuite/affine-block-sticker',
+    workspaceDependencies: [
+      'blocksuite/affine/blocks/surface',
+      'blocksuite/affine/components',
+      'blocksuite/affine/ext-loader',
+      'blocksuite/affine/model',
+      'blocksuite/affine/shared',
       'blocksuite/framework/global',
       'blocksuite/framework/std',
       'blocksuite/framework/store',
@@ -1470,6 +1485,7 @@ export type PackageName =
   | '@blocksuite/affine-block-note'
   | '@blocksuite/affine-block-paragraph'
   | '@blocksuite/affine-block-root'
+  | '@blocksuite/affine-block-sticker'
   | '@blocksuite/affine-block-surface'
   | '@blocksuite/affine-block-surface-ref'
   | '@blocksuite/affine-block-table'

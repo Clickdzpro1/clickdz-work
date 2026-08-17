@@ -21,6 +21,7 @@ import {
   map,
   merge,
   Observable,
+  of,
   Subject,
   take,
   takeUntil,

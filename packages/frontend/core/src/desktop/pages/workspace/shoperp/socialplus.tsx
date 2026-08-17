@@ -522,7 +522,14 @@ const VIEWS: View[] = ['connections', 'composer', 'calendar', 'queue', 'log', 's
 // keep working without changes.
 // ---------------------------------------------------------------------------
 
-export const SocialPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
+export const SocialPlusPanel = ({
+  slug,
+  readOnly,
+  // Kept for the preserved panel signature; blocked writes surface via the
+  // studio's own read-only banner rather than this callback.
+  onWritesBlocked: _onWritesBlocked,
+  onMutated,
+}: {
   slug: string;
   readOnly: boolean;
   onWritesBlocked: () => void;

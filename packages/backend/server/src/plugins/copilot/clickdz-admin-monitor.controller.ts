@@ -395,9 +395,8 @@ export class ClickDzAdminMonitorController {
   ): Promise<PostHogDeployEvent[]> {
     // PostHog Events API: GET /api/projects/<id>/events
     // Filter for deploy_* events. The API returns paginated events.
-    const url = `${host}/api/projects/${projectId}/events?limit=50&event_deploy_build_started&event_deploy_build_succeeded&event_deploy_build_failed&event_deploy_boot`;
     // PostHog's events API doesn't support multi-event filtering in a single
-    // query param like that. Instead, we fetch recent events and filter
+    // query param. Instead, we fetch recent events and filter
     // client-side. Use a broader query and filter.
     const actualUrl = `${host}/api/projects/${projectId}/events?limit=100`;
 
@@ -417,7 +416,7 @@ export class ClickDzAdminMonitorController {
       throw new Error(`PostHog API ${resp.status}: ${body}`);
     }
 
-    const data = await resp.json();
+    const data = (await resp.json()) as any;
     const allEvents: PostHogDeployEvent[] = (data.results || [])
       .filter(
         (e: any) =>

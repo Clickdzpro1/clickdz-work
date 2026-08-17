@@ -247,7 +247,7 @@ export class ClickDzZoomPlusService {
         (x: ZoomPlusParticipant) => x.identity === identity
       );
       const micTrack = p?.tracks?.find(
-        t => t.type === 'audio' && t.source === 'mic'
+        (t: ZoomPlusTrackInfo) => t.type === 'audio' && t.source === 'mic'
       );
       if (!micTrack) {
         throw new Error(

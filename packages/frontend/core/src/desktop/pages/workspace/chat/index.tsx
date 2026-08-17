@@ -231,9 +231,9 @@ export const Component = () => {
       try {
         const ws = framework.get(WorkspaceService).workspace;
         const titles: string[] = [];
-        for (const doc of ws.docs.values()) {
-          const title =
-            typeof doc.meta?.title === 'string' ? doc.meta.title : '';
+        // DocsService exposes records via `list.docs$` (LiveData of DocRecord[]).
+        for (const doc of ws.docs.list.docs$.value) {
+          const title = doc.title$.value;
           if (title) titles.push(title);
           if (titles.length >= 6) break;
         }
@@ -341,7 +341,7 @@ export const Component = () => {
       </ViewHeader>
       <ViewBody>
         <AppAccessGate app="AI_CHAT">
-        <div className={styles.chatRoot} ref={onChatContainerRef} />
+          <div className={styles.chatRoot} ref={onChatContainerRef} />
         </AppAccessGate>
       </ViewBody>
     </>

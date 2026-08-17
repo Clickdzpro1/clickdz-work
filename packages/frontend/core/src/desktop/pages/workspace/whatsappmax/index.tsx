@@ -6052,7 +6052,7 @@ const WhatsappMaxPage = () => {
   return (
     <>
       <ViewTitle title="WhatsApp Max" />
-      <ViewIcon icon="chat" />
+      <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
           style={{

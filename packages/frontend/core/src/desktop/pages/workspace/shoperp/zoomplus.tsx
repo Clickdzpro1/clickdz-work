@@ -112,7 +112,14 @@ function recordingFilename(): string {
 
 type MainTab = 'meetings' | 'live' | 'settings';
 
-export const ZoomPlusPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
+export const ZoomPlusPanel = ({
+  slug,
+  // Part of the uniform shoperp app-panel contract (the parent passes these to
+  // every studio); this panel manages its own read-only + mutation signals.
+  readOnly: _readOnly,
+  onWritesBlocked: _onWritesBlocked,
+  onMutated: _onMutated,
+}: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
   // --- Top-level navigation ------------------------------------------------

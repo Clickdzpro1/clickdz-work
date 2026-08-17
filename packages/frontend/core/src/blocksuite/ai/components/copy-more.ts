@@ -232,9 +232,10 @@ export class ChatCopyMore extends WithDisposable(LitElement) {
   @state()
   private accessor _imageArtifact: CdzArtifact | null = null;
 
-  // ClickDz AI prompt enhancer — transforms simple prompts into high-quality image prompts
+  // ClickDz AI prompt enhancer — transforms simple prompts into high-quality
+  // image prompts. (An LLM-backed enhancer system prompt used to live here;
+  // the current implementation is rule-based only.)
   private _enhanceImagePrompt(userPrompt: string): string {
-    const enhancerBase = `You are a world-class prompt engineer for DALL-E 3 / GPT-4o image generation. Transform the user's simple description into a highly detailed, visually rich prompt that produces professional, stunning images. Add: artistic style, lighting, composition, mood, color palette, camera angle, and quality keywords. Keep it concise (under 400 chars). Output ONLY the enhanced prompt — no explanations, no markdown.`;
     // For now, use a simple rule-based enhancement + creative expansion
     const clean = userPrompt.trim().replace(/^(generate|create|make|draw|image of|picture of)\s*/i, '');
     if (!clean) return 'Abstract digital art, vibrant colors, flowing geometry, studio lighting, 8k render, professional quality';

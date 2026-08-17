@@ -3737,7 +3737,9 @@ export class AIChatInput extends SignalWatcher(
         this._planPortalRoot = createSimplePortal({
           container: this.portalContainer ?? document.body,
           shadowDom: false,
-          template: nothing,
+          // `null` renders nothing (lit child-expression semantics) — the
+          // Renderable union does not accept lit's `nothing` sentinel.
+          template: null,
         });
       }
       render(this._renderPlanReview(), this._planPortalRoot);

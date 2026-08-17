@@ -408,7 +408,7 @@ class MaystroProvider implements CourierProvider {
   // -------------------------------------------------------------------------
   async computeFees(
     creds: CourierCredentials,
-    fromWilaya: number,
+    _fromWilaya: number,
     toWilaya: number
   ): Promise<CourierResult<FeeResult>> {
     const to = n(toWilaya);

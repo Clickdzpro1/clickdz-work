@@ -26,7 +26,14 @@ function courseProInstanceUrl(): string {
   return COURSEPRO_INSTANCE_URL;
 }
 
-export const CourseProPanel = ({ slug, readOnly, onWritesBlocked, onMutated }: {
+export const CourseProPanel = ({
+  slug,
+  // Part of the uniform shoperp app-panel contract (the parent passes these to
+  // every studio); this panel manages its own state and mutation signals.
+  readOnly: _readOnly,
+  onWritesBlocked: _onWritesBlocked,
+  onMutated: _onMutated,
+}: {
   slug: string; readOnly: boolean; onWritesBlocked: () => void; onMutated: () => void;
 }) => {
   const [status, setStatus] = useState<'loading' | 'ready' | 'degraded' | 'error'>('loading');

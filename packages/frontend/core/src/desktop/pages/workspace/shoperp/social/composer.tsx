@@ -168,7 +168,9 @@ export const ComposerView = ({
     try {
       const res = await generateImage(p, imgModel);
       if (res.ok && res.url) {
-        setMedia(prev => [...prev, { kind: 'image', url: res.url!, alt: p }].slice(0, 4));
+        setMedia(prev =>
+          [...prev, { kind: 'image' as const, url: res.url!, alt: p }].slice(0, 4)
+        );
         setImgNote(dict.imgGenOk ?? 'Image générée et ajoutée.');
         setImgPrompt('');
       } else {

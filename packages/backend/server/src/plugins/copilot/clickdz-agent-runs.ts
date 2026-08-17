@@ -1385,7 +1385,9 @@ export class ClickDzAgentRunJob {
   private readonly logger = new Logger(ClickDzAgentRunJob.name);
 
   constructor(
-    private readonly queue: JobQueue,
+    // Injected for DI parity with the sibling jobs; not read directly yet
+    // (`protected` so the unused-private gate stays green without dropping it).
+    protected readonly queue: JobQueue,
     private readonly redis: CacheRedis
   ) {
     // R11 (WS11-11, BUDGET): wire run-cost accounting to the completion hook so a

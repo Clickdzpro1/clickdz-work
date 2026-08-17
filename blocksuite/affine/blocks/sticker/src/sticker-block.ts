@@ -1,10 +1,9 @@
 import { ResourceController } from '@blocksuite/affine-components/resource';
 import type { StickerBlockModel } from '@blocksuite/affine-model';
-import { GfxBlockComponent } from '@blocksuite/std/gfx';
+import { GfxBlockComponent } from '@blocksuite/std';
 import { computed } from '@preact/signals-core';
 import { css, html, nothing } from 'lit';
 import { query } from 'lit/decorators.js';
-import { styleMap } from 'lit/directives/style-map.js';
 
 export class StickerBlockComponent extends GfxBlockComponent<StickerBlockModel> {
   static override styles = css`
@@ -30,7 +29,9 @@ export class StickerBlockComponent extends GfxBlockComponent<StickerBlockModel> 
 
   resourceController = new ResourceController(
     computed(() => this.model.props.sourceId$.value),
-    'Sticker'
+    // Stickers are image resources — 'Image' is the closest ResourceKind
+    // ('Blob' | 'File' | 'Image'); it drives the loading/error placeholders.
+    'Image'
   );
 
   @query('canvas')
