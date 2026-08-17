@@ -5530,11 +5530,11 @@ export class ClickDzBridgeController {
 
   /** WSE-2: build InvoiceOptions from env (TVA/timbre rates + today). */
   private erpInvoiceOptions(): InvoiceOptions {
-    const { tvaRate, timbreRate } = resolveInvoiceRates(
+    const { tvaRate, timbreRate, timbreScale } = resolveInvoiceRates(
       process.env.CDZ_ERP_TVA_RATE,
       process.env.CDZ_ERP_TIMBRE_RATE
     );
-    return { tvaRate, timbreRate };
+    return { tvaRate, timbreRate, timbreScale };
   }
 
   /** WSE-2: a fresh temporary draft id (bridge has no randomUUID — use bytes). */
@@ -6014,7 +6014,7 @@ export class ClickDzBridgeController {
         return;
       }
     }
-    const { timbreRate } = this.erpInvoiceOptions();
+    const invoiceOpts = this.erpInvoiceOptions();
     // Reserve the gap-less number ONLY now, right before persisting. Routed
     // through erpReserveSeq: legacy Redis INCR when CDZ_ERPSEQ_PG is off,
     // PG-floored max-merge when on (same clamp semantics as reserveInvoiceSeq).
@@ -6024,7 +6024,7 @@ export class ClickDzBridgeController {
       String(draft.type),
       Number(draft.year)
     );
-    const validated = applyValidation(draft, seq, timbreRate);
+    const validated = applyValidation(draft, seq, invoiceOpts);
     if (!validated.ok) {
       this.erpInvoiceBadInput(res, validated.reason, validated.field);
       return;
