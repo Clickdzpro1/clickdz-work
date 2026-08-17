@@ -415,7 +415,7 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
       .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
   }
   // DzOS Phase 0 (WS-E): atomic upsert via the v2 PUT route. The body MUST
-  // carry a stable `id` (the path id); the server preserves createdAt on
+  // carry a stable id (the path id); the server preserves createdAt on
   // conflict and stamps updatedAt. Idempotency key (opId) makes retries safe.
   function putRec(coll, id, body, opId){
     var url = DATA_URL + "/" + coll + "/" + encodeURIComponent(id);

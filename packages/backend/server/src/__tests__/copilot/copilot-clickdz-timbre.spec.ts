@@ -12,7 +12,6 @@ import {
   type InvoicePayment,
   type InvoiceRecord,
   type InvoiceType,
-  type TimbreBracket,
 } from '../../plugins/copilot/clickdz-erp-invoicing';
 
 // ---------------------------------------------------------------------------
