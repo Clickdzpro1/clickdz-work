@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { cdzApiUrl } from '@affine/core/blocksuite/ai/provider/ai-provider';
+
 import {
   Banner,
   btnStyle,
@@ -18,10 +20,12 @@ import {
 // Local backup — "DzOS needs a local backup and can be running offline,
 // especially the ERP." This panel gives the owner a manual, dependency-free
 // export of the key ERP datasets to a single JSON file on their machine, plus
-// a silent 24h localStorage safety snapshot. Import is READ-ONLY in this
-// version: a bad automated restore on the money path (orders/caisse/invoices)
-// is worse than no restore, so the file is only validated and summarized —
-// applying it back requires support/owner-assisted restore (not shipped here).
+// a silent 24h localStorage safety snapshot. DzOS Phase 0 (backup v2) adds a
+// NON-DESTRUCTIVE restore: a dry-run diffs the backup against the current
+// server state and reports which records are missing; the apply then creates
+// ONLY the missing records (never overwrites a newer one) via the bridge's
+// restore route. Export now iterates ALL monthly partitions (invoices/caisse
+// for the last 36 months), not just the current month.
 // ---------------------------------------------------------------------------
 
 const AUTOBACKUP_PREFIX = 'cdz:erp-autobackup:';
@@ -82,6 +86,26 @@ async function collectDatasets(
   slug: string,
   onProgress?: (label: string, done: number, total: number) => void
 ): Promise<BackupDataset[]> {
+  // DzOS Phase 0 (backup v2): invoices/caisse/compta/movements are stored
+  // month-partitioned (invoices-YYYYMM, caisse-YYYYMM, …). The pre-Phase-0
+  // export only fetched the CURRENT month, silently losing every past month
+  // of legal invoices + caisse entries. Iterate the last BACKUP_MONTH_SPAN
+  // months and collect each non-empty partition as its own dataset so a
+  // restore can replay them per-month. 36 months covers ~3 years of DZ
+  // fiscal records (well beyond the fiscal-document retention requirement).
+  const BACKUP_MONTH_SPAN = 36;
+  const monthList = ((): string[] => {
+    const out: string[] = [];
+    const now = new Date();
+    for (let i = 0; i < BACKUP_MONTH_SPAN; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      out.push(`${y}${m}`);
+    }
+    return out;
+  })();
+
   const jobs: Array<{ label: string; key: string; load: () => Promise<unknown[]> }> = [
     {
       label: 'Produits & stock',
@@ -129,22 +153,27 @@ async function collectDatasets(
         return outcome.status === 'ok' ? outcome.purchaseOrders : [];
       },
     },
-    {
-      label: 'Factures',
-      key: 'invoices',
-      load: async () => {
-        const outcome = await fetchInvoices(slug);
-        return outcome.status === 'ok' ? outcome.invoices : [];
+    // Month-partitioned datasets — ALL months, not just the current one.
+    // Each non-empty month becomes its own dataset keyed `invoices-YYYYMM` /
+    // `caisse-YYYYMM` so a restore can replay it to the right partition.
+    ...monthList.flatMap((month) => [
+      {
+        label: `Factures ${month.slice(0, 4)}-${month.slice(4)}`,
+        key: `invoices-${month}`,
+        load: async () => {
+          const outcome = await fetchInvoices(slug, { month });
+          return outcome.status === 'ok' ? outcome.invoices : [];
+        },
       },
-    },
-    {
-      label: 'Caisse',
-      key: 'caisse',
-      load: async () => {
-        const outcome = await fetchCaisse(slug);
-        return outcome.status === 'ok' ? outcome.entries : [];
+      {
+        label: `Caisse ${month.slice(0, 4)}-${month.slice(4)}`,
+        key: `caisse-${month}`,
+        load: async () => {
+          const outcome = await fetchCaisse(slug, month);
+          return outcome.status === 'ok' ? outcome.entries : [];
+        },
       },
-    },
+    ]),
   ];
 
   const datasets: BackupDataset[] = [];
@@ -153,10 +182,19 @@ async function collectDatasets(
     onProgress?.(job.label, i, jobs.length);
     try {
       const records = await job.load();
+      // Skip empty month partitions — they add noise without value (a month
+      // with no invoices isn't a dataset to restore). Non-partition datasets
+      // are kept even when empty so the backup shows it tried.
+      if (records.length === 0 && job.key.includes('-')) {
+        // month partition with no records: skip
+        continue;
+      }
       datasets.push({ key: job.key, label: job.label, records });
     } catch {
       // One dataset failing (offline, flag off, route absent) must not abort
       // the whole export — record it as empty rather than losing the rest.
+      // (Month partitions that error are skipped like empty ones.)
+      if (job.key.includes('-')) continue;
       datasets.push({ key: job.key, label: job.label, records: [] });
     }
   }
@@ -234,6 +272,94 @@ function parseImportedFile(raw: string): ImportSummary {
   return { status: 'ok', file, totalRecords: totalRecords(file.datasets) };
 }
 
+// DzOS Phase 0 (backup v2): non-destructive restore. The restore ONLY creates
+// records that are MISSING on the server — it never overwrites a newer record.
+// This is the safe recovery path for the main restore use case (TTL expiry,
+// accidental deletion, bad sync) without the risk of clobbering orders/invoices
+// that were created AFTER the backup was taken. A full bidirectional merge is a
+// Phase 1 concern (needs the sync engine's LWW + conflict UI).
+//
+// The dry-run fetches the current server state for each dataset, diffs by id,
+// and reports exactly which records would be created. The apply then writes
+// each missing record via the public data API PUT (atomic upsert, idempotent —
+// a record that re-appears on the server mid-apply is a no-op on conflict).
+//
+// Dataset key → collection mapping: non-partition datasets use their key as the
+// collection name; month-partitioned datasets (invoices-YYYYMM, caisse-YYYYMM)
+// use the full key as the collection (the data API accepts partitioned names).
+type RestorePlanDataset = {
+  key: string;
+  label: string;
+  totalInBackup: number;
+  presentOnServer: number;
+  missing: number; // records that would be created
+};
+type RestorePlan =
+  | { status: 'planning' }
+  | { status: 'ready'; datasets: RestorePlanDataset[]; totalMissing: number }
+  | { status: 'error'; reason: string };
+
+/** Fetch the current server ids for one dataset (for the dry-run diff). */
+async function serverIdsForDataset(
+  slug: string,
+  dataset: BackupDataset
+): Promise<Set<string>> {
+  // Month-partitioned datasets (invoices-YYYYMM, caisse-YYYYMM) are fetched via
+  // their dedicated bridge routes; non-partition via the generic collection GET.
+  const isPartition = dataset.key.includes('-');
+  let records: unknown[];
+  try {
+    if (dataset.key.startsWith('invoices-')) {
+      const month = dataset.key.split('-')[1];
+      const outcome = await fetchInvoices(slug, { month });
+      records = outcome.status === 'ok' ? outcome.invoices : [];
+    } else if (dataset.key.startsWith('caisse-')) {
+      const month = dataset.key.split('-')[1];
+      const outcome = await fetchCaisse(slug, month);
+      records = outcome.status === 'ok' ? outcome.entries : [];
+    } else {
+      records = await fetchErpCollection(slug, dataset.key);
+    }
+  } catch {
+    return new Set();
+  }
+  return new Set(
+    records
+      .map((r) => String((r as { id?: unknown })?.id ?? ''))
+      .filter(Boolean)
+  );
+}
+
+/** Build a non-destructive restore plan (dry-run): which records are missing. */
+async function buildRestorePlan(
+  slug: string,
+  file: BackupFile,
+  onProgress?: (label: string, done: number, total: number) => void
+): Promise<RestorePlan> {
+  const datasets: RestorePlanDataset[] = [];
+  let totalMissing = 0;
+  for (let i = 0; i < file.datasets.length; i++) {
+    const d = file.datasets[i];
+    onProgress?.(d.label, i, file.datasets.length);
+    const backupIds = new Set(
+      d.records
+        .map((r) => String((r as { id?: unknown })?.id ?? ''))
+        .filter(Boolean)
+    );
+    const serverIds = await serverIdsForDataset(slug, d);
+    const missing = [...backupIds].filter((id) => !serverIds.has(id)).length;
+    datasets.push({
+      key: d.key,
+      label: d.label,
+      totalInBackup: d.records.length,
+      presentOnServer: backupIds.size - missing,
+      missing,
+    });
+    totalMissing += missing;
+  }
+  return { status: 'ready', datasets, totalMissing };
+}
+
 /**
  * "Sauvegarde locale" panel: manual JSON export of the key ERP datasets, a
  * read-only import/validation flow, and a silent 24h auto-snapshot kept in
@@ -254,6 +380,16 @@ export const LocalBackupPanel = ({ slug }: { slug: string }) => {
 
   const [importSummary, setImportSummary] = useState<ImportSummary | null>(null);
   const [importFileName, setImportFileName] = useState<string | null>(null);
+
+  // DzOS Phase 0 (backup v2): non-destructive restore state.
+  const [restorePlan, setRestorePlan] = useState<RestorePlan | null>(null);
+  const [planning, setPlanning] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [restoreResult, setRestoreResult] = useState<
+    | { status: 'done'; created: number; skipped: number; errors: number }
+    | { status: 'error'; reason: string }
+    | null
+  >(null);
 
   // Silent 24h auto-snapshot: on mount, if the last one is stale (or absent),
   // fetch the same datasets and stash them — no UI noise on success, the
@@ -329,6 +465,9 @@ export const LocalBackupPanel = ({ slug }: { slug: string }) => {
     const f = input.files?.[0];
     if (!f) return;
     setImportFileName(f.name);
+    // Reset the restore flow when a new file is loaded.
+    setRestorePlan(null);
+    setRestoreResult(null);
     const reader = new FileReader();
     reader.onload = () => {
       const text = typeof reader.result === 'string' ? reader.result : '';
@@ -344,6 +483,84 @@ export const LocalBackupPanel = ({ slug }: { slug: string }) => {
     // Allow re-selecting the same file later.
     input.value = '';
   }, []);
+
+  // DzOS Phase 0 (backup v2): dry-run — diff the backup against the current
+  // server state and report which records are missing (would be created).
+  const runRestoreDryRun = useCallback(async () => {
+    if (!importSummary || importSummary.status !== 'ok') return;
+    setPlanning(true);
+    setRestorePlan({ status: 'planning' });
+    setRestoreResult(null);
+    try {
+      const plan = await buildRestorePlan(slug, importSummary.file, (label, done, total) =>
+        setProgress({ label, done, total })
+      );
+      setRestorePlan(plan);
+    } catch {
+      setRestorePlan({
+        status: 'error',
+        reason: 'Erreur réseau — la comparaison avec le serveur a échoué.',
+      });
+    } finally {
+      setPlanning(false);
+      setProgress(null);
+    }
+  }, [importSummary, slug]);
+
+  // DzOS Phase 0 (backup v2): apply — create ONLY the missing records via the
+  // public data API PUT (atomic upsert, idempotent). Non-destructive: a record
+  // that re-appeared on the server mid-apply is a no-op on conflict. Each
+  // missing record is PUT at its backup id; the server preserves createdAt from
+  // the backup body and stamps updatedAt.
+  const applyRestore = useCallback(async () => {
+    if (!importSummary || importSummary.status !== 'ok') return;
+    if (!window.confirm(
+      'Confirmer la restauration ? Seuls les enregistrements manquants seront créés ' +
+      '(aucun enregistrement existant ne sera écrasé).'
+    )) return;
+    setRestoring(true);
+    setRestoreResult(null);
+    let created = 0;
+    let skipped = 0;
+    let errors = 0;
+    try {
+      for (const d of importSummary.file.datasets) {
+        const serverIds = await serverIdsForDataset(slug, d);
+        for (const rec of d.records) {
+          const id = String((rec as { id?: unknown })?.id ?? '');
+          if (!id) { skipped++; continue; }
+          if (serverIds.has(id)) { skipped++; continue; }
+          try {
+            // PUT to the public data API. The slug's dataWriteToken is
+            // attached by the bridge on the server side; the studio calls
+            // the bridge's restore-safe route OR the public PUT. The public
+            // PUT requires the Bearer token — fetch it from the bridge.
+            // For Phase 0 we use the bridge's owner-authed passthrough by
+            // POSTing to the owner-authed collection create route which
+            // re-derives the token server-side. Simpler + token-safe.
+            const url = cdzApiUrl(
+              `/api/v1/apps/${encodeURIComponent(slug)}/erp/restore/${encodeURIComponent(d.key)}/${encodeURIComponent(id)}`
+            );
+            const res = await fetch(url, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify(rec),
+            });
+            if (res.ok) created++;
+            else errors++;
+          } catch {
+            errors++;
+          }
+        }
+      }
+      setRestoreResult({ status: 'done', created, skipped, errors });
+    } catch {
+      setRestoreResult({ status: 'error', reason: 'Erreur réseau pendant la restauration.' });
+    } finally {
+      setRestoring(false);
+    }
+  }, [importSummary, slug]);
 
   return (
     <div
@@ -474,7 +691,7 @@ export const LocalBackupPanel = ({ slug }: { slug: string }) => {
         }}
       >
         <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>
-          Importer une sauvegarde (vérification uniquement)
+          Importer & restaurer une sauvegarde
         </div>
         <label
           style={{
@@ -510,16 +727,63 @@ export const LocalBackupPanel = ({ slug }: { slug: string }) => {
                   .join(', ')}
                 .
               </Banner>
-              <Banner tone="warn">
-                La restauration automatique n’est pas activée dans cette
-                version : réinjecter ces données pourrait écraser des
-                commandes, factures ou mouvements de caisse plus récents.
-                Contactez le support ou le propriétaire de la boutique pour
-                une restauration assistée.
-              </Banner>
-              <button style={btnStyle('secondary', true)} disabled title="Bientôt disponible">
-                Restauration assistée — bientôt disponible
-              </button>
+              {/* DzOS Phase 0 (backup v2): non-destructive restore.
+                  The restore ONLY creates records missing on the server —
+                  it never overwrites a newer record. Dry-run first. */}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  style={btnStyle('secondary', planning)}
+                  disabled={planning}
+                  onClick={() => void runRestoreDryRun()}
+                >
+                  {planning ? (<><Spinner dark /> Comparaison…</>) : 'Comparer au serveur'}
+                </button>
+                {restorePlan && restorePlan.status === 'ready' && restorePlan.totalMissing > 0 ? (
+                  <button
+                    style={btnStyle('primary', restoring)}
+                    disabled={restoring}
+                    onClick={() => void applyRestore()}
+                  >
+                    {restoring ? (<><Spinner dark /> Restauration…</>) : `Restaurer ${restorePlan.totalMissing} enregistrement(s) manquant(s)`}
+                  </button>
+                ) : null}
+              </div>
+              {restorePlan && restorePlan.status === 'planning' ? (
+                <div style={{ fontSize: 12, color: C.muted }}>
+                  {progress?.label ? `${progress.label}… (${progress.done + 1}/${progress.total})` : 'Analyse…'}
+                </div>
+              ) : null}
+              {restorePlan && restorePlan.status === 'ready' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontSize: 12.5, color: C.text }}>
+                    {restorePlan.totalMissing === 0
+                      ? '✓ Aucun enregistrement manquant — la boutique est déjà à jour par rapport à cette sauvegarde.'
+                      : `${restorePlan.totalMissing} enregistrement(s) manquant(s) seraient créés (aucun écrasement) :`}
+                  </div>
+                  {restorePlan.totalMissing > 0 ? (
+                    <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.6 }}>
+                      {restorePlan.datasets
+                        .filter(d => d.missing > 0)
+                        .map(d => `${d.label}: ${d.missing} manquant(s) / ${d.totalInBackup} dans la sauvegarde`)
+                        .join(' · ')}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {restorePlan && restorePlan.status === 'error' ? (
+                <Banner tone="error">{restorePlan.reason}</Banner>
+              ) : null}
+              {restoreResult ? (
+                restoreResult.status === 'done' ? (
+                  <Banner tone={restoreResult.errors > 0 ? 'warn' : 'ok'}>
+                    Restauration terminée : {restoreResult.created} créé(s),{' '}
+                    {restoreResult.skipped} déjà présent(s),{' '}
+                    {restoreResult.errors} erreur(s).
+                  </Banner>
+                ) : (
+                  <Banner tone="error">{restoreResult.reason}</Banner>
+                )
+              ) : null
             </div>
           )
         ) : null}
