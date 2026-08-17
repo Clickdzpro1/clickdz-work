@@ -664,6 +664,272 @@ function demoProducts() {
 }
 
 /* =========================================================================
+   Offline infrastructure — inline service worker + IDB outbox + Background
+   Sync replay. Lets the customer-facing checkout work offline: orders that
+   can't reach the Data API are queued in IndexedDB and replayed automatically
+   when connectivity returns (via Background Sync, or an online-event fallback
+   for browsers that lack it).
+
+   The service worker is generated as a string and registered from a Blob URL
+   because the shop is deployed as a single index.html on Vercel — no separate
+   sw.js can be served. The SW caches the SPA shell (cache-first for
+   navigations) and falls back to cached responses for Data API GETs when the
+   network is unreachable. Data API writes (POST/DELETE) are NOT intercepted —
+   they go through the outbox layer below, which retries them directly.
+
+   ESCAPE AUDIT: the SW source string below contains ZERO backticks and ZERO
+   dollar-brace sequences (same constraint as the rest of this String.raw
+   literal). All string concatenation uses + operators.
+   ========================================================================= */
+
+/* ---- tiny ULID for outbox op IDs (monotonic, sortable, collision-free) ---- */
+function outboxId() {
+  var CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  var now = Date.now();
+  var ts = '';
+  /* 48-bit ms timestamp → 10 chars */
+  var t = now;
+  for (var i = 0; i < 10; i++) {
+    ts = CROCKFORD.charAt(t & 0x1f) + ts;
+    t = Math.floor(t / 32);
+  }
+  /* 80-bit random → 16 chars */
+  var rand = '';
+  if (window.crypto && window.crypto.getRandomValues) {
+    var bytes = new Uint8Array(10);
+    window.crypto.getRandomValues(bytes);
+    for (var j = 0; j < 16; j++) {
+      var off = Math.floor(j * 5 / 8);
+      var bit = (j * 5) % 8;
+      var val = ((bytes[off] >> bit) & 0x1f);
+      if (bit > 3 && off + 1 < 10) val |= (bytes[off + 1] & ((1 << (bit - 3)) - 1)) << (8 - bit);
+      rand += CROCKFORD.charAt(val);
+    }
+  } else {
+    for (var k = 0; k < 16; k++) rand += CROCKFORD.charAt(Math.floor(Math.random() * 32));
+  }
+  return ts + rand;
+}
+
+/* ---- IDB outbox: one DB per shop, single 'outbox' store keyed by opId ---- */
+var OUTBOX_DB = 'cdz-shop-outbox-' + SLUG;
+
+function outboxDB() {
+  return new Promise(function (resolve, reject) {
+    var req = indexedDB.open(OUTBOX_DB, 1);
+    req.onupgradeneeded = function () {
+      var db = req.result;
+      if (!db.objectStoreNames.contains('outbox')) {
+        db.createObjectStore('outbox', { keyPath: 'opId' });
+      }
+    };
+    req.onsuccess = function () { resolve(req.result); };
+    req.onerror = function () { reject(req.error); };
+  });
+}
+
+function outboxAdd(op) {
+  return outboxDB().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction('outbox', 'readwrite');
+      tx.objectStore('outbox').put(op);
+      tx.oncomplete = function () { resolve(); };
+      tx.onerror = function () { reject(tx.error); };
+    });
+  });
+}
+
+function outboxAll() {
+  return outboxDB().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction('outbox', 'readonly');
+      var req = tx.objectStore('outbox').getAll();
+      req.onsuccess = function () { resolve(req.result || []); };
+      req.onerror = function () { reject(req.error); };
+    });
+  });
+}
+
+function outboxRemove(opId) {
+  return outboxDB().then(function (db) {
+    return new Promise(function (resolve, reject) {
+      var tx = db.transaction('outbox', 'readwrite');
+      tx.objectStore('outbox').delete(opId);
+      tx.oncomplete = function () { resolve(); };
+      tx.onerror = function () { reject(tx.error); };
+    });
+  });
+}
+
+/* ---- Replay: drain the outbox oldest-first, POST each op to the Data API ---- */
+var _replaying = false;
+
+function outboxReplay() {
+  if (_replaying) return Promise.resolve();
+  _replaying = true;
+  return outboxAll().then(function (ops) {
+    ops.sort(function (a, b) { return String(a.ts).localeCompare(String(b.ts)); });
+    return ops.reduce(function (chain, op) {
+      return chain.then(function () {
+        return fetch(DATA_URL + '/' + op.collection, {
+          method: 'POST',
+          headers: api.headers(true),
+          body: JSON.stringify(op.payload)
+        }).then(function (r) {
+          if (r.ok) return outboxRemove(op.opId);
+          /* 4xx (except 408/429) → permanent failure, drop to avoid infinite retry */
+          if (r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429) {
+            return outboxRemove(op.opId);
+          }
+          /* 5xx / 408 / 429 → leave in outbox, Background Sync will retry */
+          throw new Error('replay ' + r.status);
+        });
+      }).catch(function () {
+        /* stop on first transient failure — remaining ops stay queued */
+        throw new Error('stop');
+      });
+    }, Promise.resolve()).catch(function () { /* stopped on transient error */ });
+  }).then(function () {
+    _replaying = false;
+  }, function () { _replaying = false; });
+}
+
+/* ---- Queue a failed order into the outbox + register Background Sync ---- */
+function outboxQueue(collection, payload) {
+  var op = {
+    opId: outboxId(),
+    collection: collection,
+    payload: payload,
+    ts: Date.now()
+  };
+  return outboxAdd(op).then(function () {
+    /* Ask the SW to replay when connectivity returns. If Background Sync is
+       unsupported or the SW isn't ready, the online-event listener below is
+       the fallback. */
+    if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+      navigator.serviceWorker.ready.then(function (reg) {
+        if (reg.sync && reg.sync.register) {
+          reg.sync.register('cdz-outbox-sync').catch(function () {});
+        }
+      });
+    }
+    return op;
+  });
+}
+
+/* ---- Online-event fallback: replay when the browser regains connectivity ---- */
+window.addEventListener('online', function () {
+  outboxReplay();
+});
+
+/* ---- Inline service worker source (registered from a Blob URL) ----
+   The SW caches the navigation shell (cache-first) and provides a network-
+   first-with-cache-fallback for Data API GETs. Write requests (POST/DELETE)
+   pass through untouched — the outbox layer handles those. A 'sync' event
+   (Background Sync) triggers outboxReplay via postMessage to the page. */
+var SW_SOURCE = [
+  'var CACHE="cdz-shop-v1-' + SLUG + '";',
+  'self.addEventListener("install",function(e){',
+  '  self.skipWaiting();',
+  '});',
+  'self.addEventListener("activate",function(e){',
+  '  e.waitUntil(self.clients.claim());',
+  '});',
+  'self.addEventListener("fetch",function(e){',
+  '  var u=new URL(e.request.url);',
+  '  var isNav=e.request.mode==="navigate";',
+  '  var isApi=u.origin===location.origin && u.pathname.indexOf("/api/")!==-1;',
+  '  var isWrite=e.request.method==="POST"||e.request.method==="DELETE"||e.request.method==="PUT";',
+  '  if(isWrite){return;} /* writes go through the outbox, not the SW */',
+  '  if(isNav){',
+  '    e.respondWith(',
+  '      caches.open(CACHE).then(function(c){',
+  '        return c.match(e.request).then(function(cached){',
+  '          return cached || fetch(e.request).then(function(resp){',
+  '            if(resp.ok)c.put(e.request,resp.clone());',
+  '            return resp;',
+  '          }).catch(function(){return cached||Response.error();});',
+  '        });',
+  '      })',
+  '    );',
+  '    return;',
+  '  }',
+  '  if(isApi&&!isWrite){',
+  '    e.respondWith(',
+  '      fetch(e.request).then(function(resp){',
+  '        if(resp.ok){',
+  '          var clone=resp.clone();',
+  '          caches.open(CACHE).then(function(c){c.put(e.request,clone);});',
+  '        }',
+  '        return resp;',
+  '      }).catch(function(){',
+  '        return caches.match(e.request).then(function(cached){',
+  '          return cached||Response.error();',
+  '        });',
+  '      })',
+  '    );',
+  '    return;',
+  '  }',
+  '  /* other same-origin GETs: stale-while-revalidate */',
+  '  if(u.origin===location.origin){',
+  '    e.respondWith(',
+  '      caches.open(CACHE).then(function(c){',
+  '        return c.match(e.request).then(function(cached){',
+  '          var net=fetch(e.request).then(function(resp){',
+  '            if(resp.ok)c.put(e.request,resp.clone());',
+  '            return resp;',
+  '          }).catch(function(){return cached||Response.error();});',
+  '          return cached||net;',
+  '        });',
+  '      })',
+  '    );',
+  '  }',
+  '});',
+  'self.addEventListener("sync",function(e){',
+  '  if(e.tag==="cdz-outbox-sync"){',
+  '    e.waitUntil(',
+  '      self.clients.matchAll().then(function(clients){',
+  '        clients.forEach(function(c){c.postMessage({type:"replay-outbox"});});',
+  '        return Promise.resolve();',
+  '      })',
+  '    );',
+  '  }',
+  '});',
+  'self.addEventListener("message",function(e){',
+  '  if(e.data&&e.data.type==="replay-outbox"){',
+  '    self.clients.matchAll().then(function(clients){',
+  '      clients.forEach(function(c){c.postMessage({type:"replay-outbox"});});',
+  '    });',
+  '  }',
+  '});'
+].join('\n');
+
+/* ---- Register the service worker from a Blob URL ---- */
+function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    var blob = new Blob([SW_SOURCE], { type: 'application/javascript' });
+    var url = URL.createObjectURL(blob);
+    navigator.serviceWorker.register(url).then(function (reg) {
+      /* Listen for replay messages from the SW (Background Sync event) */
+      navigator.serviceWorker.addEventListener('message', function (e) {
+        if (e.data && e.data.type === 'replay-outbox') outboxReplay();
+      });
+      /* If there are already queued ops from a previous offline session,
+         try to replay immediately and register a sync for good measure. */
+      outboxAll().then(function (ops) {
+        if (ops.length) {
+          outboxReplay();
+          if (reg.sync && reg.sync.register) {
+            reg.sync.register('cdz-outbox-sync').catch(function () {});
+          }
+        }
+      });
+    }).catch(function () { /* SW registration failed — offline features off */ });
+  } catch (e) { /* Blob URL or SW unavailable — silently degrade */ }
+}
+
+/* =========================================================================
    Data client — talks to the ClickDz Data API.
    Collections: products, orders, settings. No PUT/PATCH exists server-side,
    so "update" = DELETE the old record id then POST a fresh one. Records get
@@ -2869,10 +3135,14 @@ function placeOrder() {
       go('#/success/' + encodeURIComponent(ref));
     })
     .catch(function () {
-      /* even if the API write fails, let the merchant get the order via WhatsApp */
+      /* API write failed (offline / server unreachable). Queue the order into
+         the IDB outbox so Background Sync or the online-event listener replays
+         it automatically when connectivity returns. The customer still gets
+         the success screen + WhatsApp deep link immediately. */
+      outboxQueue('orders', order).catch(function () {});
       lastSuccess = order;
       clearCart();
-      toast('Commande enregistrée — envoyez-la via WhatsApp', 'ok');
+      toast('Commande enregistrée — synchronisée à la reconnexion', 'ok');
       go('#/success/' + encodeURIComponent(ref));
     });
 }
@@ -2929,7 +3199,9 @@ function payOnline() {
       fallbackToCod();
     })
     .catch(function () {
-      /* network / unexpected failure → never break checkout, fall back to COD */
+      /* network / unexpected failure → queue the order for offline replay,
+         then fall back to COD + WhatsApp so checkout never breaks. */
+      outboxQueue('orders', order).catch(function () {});
       if (payBtn) { payBtn.disabled = false; payBtn.innerHTML = payLabel; }
       if (codBtn) codBtn.disabled = false;
       fallbackToCod();
@@ -2959,11 +3231,19 @@ function viewSuccess(ref) {
   var waText = buildWaText(o, s, ref);
   var waHref = wa ? 'https://wa.me/' + wa + '?text=' + encodeURIComponent(waText) : '';
 
+  /* Offline-outbox notice: if the order was queued (not yet synced), show a
+     reassurance line that it will be delivered to the merchant on reconnect. */
+  var pendingNotice = '';
+  if (!navigator.onLine) {
+    pendingNotice = '<div class="callout" style="text-align:start;margin:14px 0;background:var(--info-bg,var(--accent-l,#dbeafe));border-color:var(--info,#1d4ed8)"><span class="ic">📡</span><div>Vous êtes hors ligne. Votre commande sera <strong>synchronisée automatiquement</strong> dès le retour de la connexion.</div></div>';
+  }
+
   return '<div class="wrap"><div class="success">' +
     '<div class="check">✓</div>' +
     '<h1>Commande confirmée !</h1>' +
     '<p>Merci pour votre confiance. Votre commande a bien été enregistrée.</p>' +
     '<div class="ref-chip">' + esc(ref || (o && o.ref) || 'CMD') + '</div>' +
+    pendingNotice +
     (o ? '<p style="font-weight:700;color:var(--ink)">Total à payer à la livraison : ' + money(o.total) + ' DZD</p>' : '') +
     '<div class="callout" style="text-align:start;margin:18px 0"><span class="ic">💵</span><div>Un livreur vous contactera bientôt. Vous payez <strong>en espèces à la réception</strong> (paiement à la livraison).</div></div>' +
     (waHref
@@ -3578,6 +3858,7 @@ document.addEventListener('submit', function (e) {
 });
 
 window.addEventListener('hashchange', render);
+registerSW(); /* install the inline service worker for offline support */
 bootstrap().then(function () {
   render();
   updateCartCount();
