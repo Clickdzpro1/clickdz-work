@@ -664,6 +664,24 @@ const InvoiceEditor = ({
 
   const doValidate = useCallback(async () => {
     if (!saved || busy) return;
+    // DzOS Phase 0: LF2025 Art.207 cash-rule awareness. The law sets cash-
+    // transaction ceilings by category; a large cash/COD facture is a DGI
+    // risk surface. Warn (not block) when a cash facture crosses the top
+    // timbre bracket (100,000 DZD TTC) — the merchant should prefer an
+    // electronic payment method (virement/Edahabia/CIB) for large settlements.
+    const isCash = saved.payment === 'cash' || saved.payment === 'cod';
+    const ttc = saved.totalTTC ?? 0;
+    if (isCash && ttc >= 100_000) {
+      const ok = window.confirm(
+        `Attention — facture caisse de ${fmtDZD(ttc)}.\n\n` +
+          `La loi de finances 2025 (Art.207) encadre les paiements en espèces. ` +
+          `Pour un montant de cette ampleur, privilégiez un paiement électronique ` +
+          `(virement, Edahabia, carte CIB) — exonéré de timbre fiscal et conforme ` +
+          `aux plafonds de caisse.\n\n` +
+          `Valider quand même cette facture en espèces ?`
+      );
+      if (!ok) return;
+    }
     setNotice(null);
     setBusy('validate');
     const out = await validateInvoice(slug, saved.id);
@@ -677,6 +695,15 @@ const InvoiceEditor = ({
 
   const doVoid = useCallback(async () => {
     if (!saved || busy) return;
+    // DzOS Phase 0: confirm before voiding. A validated facture is a legal
+    // document with a gap-less number; voiding it is irreversible (the number
+    // stays accounted-for forever, the doc is marked annule). A misclick on
+    // "Annuler le document" must not void a real facture without consent.
+    const isValide = saved.status === 'valide';
+    const msg = isValide
+      ? `Annuler la facture ${saved.id} ?\n\nCette action est IRREVERSIBLE : le numéro ${saved.id} reste comptabilisé à jamais et le document est marqué « annulé ». Il ne peut plus être réactivé ni réutilisé.\n\nConfirmez-vous l'annulation ?`
+      : `Annuler ce brouillon ${saved.id} ?\n\nUn brouillon n'a pas de numéro légal ; l'annulation le marque « annulé » et libère son identifiant.`;
+    if (!window.confirm(msg)) return;
     setNotice(null);
     setBusy('void');
     const out = await voidInvoice(slug, saved.id);
