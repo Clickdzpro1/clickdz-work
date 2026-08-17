@@ -288,9 +288,28 @@ export const ClientsAdmin = ({
 
   const load = useCallback(async () => {
     setPhase('loading');
+    // DzOS Phase 1 END-STATE: read from the LOCAL store first (customers +
+    // orders + creances). The /erp/changes pull keeps it fresh. Only on a cold
+    // start (all three empty — first-ever open) do we fetch + hydrate.
     try {
-      // All reads are public GETs (no token). Customers / créances may
-      // legitimately be empty/absent — tolerate it and derive from orders.
+      const repo = await getErpRepo(slug);
+      const [custLocal, orderLocal, creanceLocal] = await Promise.all([
+        repo.list<CustomerRecord>('customers').catch(() => []),
+        repo.list<ErpOrder>('orders').catch(() => []),
+        repo.list<CreanceRecord>('creances').catch(() => []),
+      ]);
+      if (custLocal.length > 0 || orderLocal.length > 0 || creanceLocal.length > 0) {
+        setCustomers(custLocal.map((w) => w.data));
+        setOrders(orderLocal.map((w) => w.data));
+        setCreances(creanceLocal.map((w) => w.data));
+        setPhase('ready');
+        return;
+      }
+    } catch {
+      /* fall through to cold-start fetch */
+    }
+    // Cold start: fetch + hydrate, then serve.
+    try {
       const [custRows, orderRows, creanceRows] = await Promise.all([
         fetchErpCollection<CustomerRecord>(slug, 'customers').catch(() => []),
         fetchErpCollection<ErpOrder>(slug, 'orders').catch(() => []),
@@ -303,8 +322,6 @@ export const ClientsAdmin = ({
       setOrders(orders);
       setCreances(creances);
       setPhase('ready');
-      // DzOS Phase 1: hydrate the local store so the next open is instant
-      // (from IDB/SQLite) and works offline. Best-effort.
       void getErpRepo(slug).then((repo) =>
         Promise.all([
           ...customers.map((c) => repo.upsert('customers', String(c.id || c.custId || ''), c).catch(() => {})),
@@ -313,22 +330,7 @@ export const ClientsAdmin = ({
         ]).catch(() => {})
       );
     } catch {
-      // DzOS Phase 1: offline-read fallback. If the fetches throw (network
-      // down), try the local store so the roster + ledger still render.
-      try {
-        const repo = await getErpRepo(slug);
-        const [custLocal, orderLocal, creanceLocal] = await Promise.all([
-          repo.list<CustomerRecord>('customers').catch(() => []),
-          repo.list<ErpOrder>('orders').catch(() => []),
-          repo.list<CreanceRecord>('creances').catch(() => []),
-        ]);
-        setCustomers(custLocal.map((w) => w.data));
-        setOrders(orderLocal.map((w) => w.data));
-        setCreances(creanceLocal.map((w) => w.data));
-        setPhase('ready');
-      } catch {
-        setPhase('error');
-      }
+      setPhase('error');
     }
   }, [slug]);
 

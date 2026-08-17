@@ -318,6 +318,12 @@ async function makeStorage(slug: string): Promise<DzosStorage> {
  * on web it's IndexedDB. Both implement the same DzosStorage contract, so the
  * repo + sync engine are backend-agnostic. The first call for a slug hydrates
  * the store (async); subsequent calls return the cached repo synchronously.
+ *
+ * DzOS Phase 1 end-state: this ALSO starts the SyncEngine for the slug (so the
+ * /erp/changes pull keeps the local store fresh). Every page that touches the
+ * repo gets the pull running — no page needs to remember to start the engine.
+ * The engine is idempotent (getSyncEngine caches + reuses). Lazy-imported here
+ * to avoid a circular import (sync.ts imports getErpRepo).
  */
 export async function getErpRepo(slug: string): Promise<ErpRepo> {
   let repo = repoCache.get(slug);
@@ -325,6 +331,12 @@ export async function getErpRepo(slug: string): Promise<ErpRepo> {
     const storage = await makeStorage(slug);
     repo = new ErpRepo(slug, storage);
     repoCache.set(slug, repo);
+    // Start the sync engine so the /erp/changes pull keeps this repo's local
+    // store fresh. Fire-and-forget — the engine self-schedules; a failure
+    // (e.g. offline) degrades to 'offline' status, never throws.
+    void import('./sync')
+      .then(({ getSyncEngine }) => getSyncEngine(slug))
+      .catch(() => {});
   }
   return repo;
 }

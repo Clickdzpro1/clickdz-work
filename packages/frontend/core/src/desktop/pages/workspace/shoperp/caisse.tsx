@@ -324,16 +324,26 @@ const Journal = ({
 
   const load = useCallback(async () => {
     setPhase('loading');
+    // DzOS Phase 1 END-STATE: read from the LOCAL store first (instant, works
+    // offline). The /erp/changes pull keeps it fresh. Only on a cold start
+    // (local partition empty — first-ever open) do we fetch + hydrate.
+    const coll = `caisse-${month}`;
+    try {
+      const repo = await getErpRepo(slug);
+      const local = await repo.list<CaisseEntry>(coll);
+      if (local.length > 0) {
+        setEntries(local.map((w) => w.data));
+        setPhase('ready');
+        return;
+      }
+    } catch {
+      /* fall through to cold-start fetch */
+    }
+    // Cold start: fetch + hydrate, then read back from the local store.
     const out = await fetchCaisse(slug, month);
     if (out.status === 'ok') {
       setEntries(out.entries);
       setPhase('ready');
-      // DzOS Phase 1: hydrate the local store so the next open is instant
-      // (from IDB) and works offline. Each fetched entry is upserted into the
-      // caisse-<month> partition; the repo's pending flag stays false (these
-      // are server-authoritative reads, not outbox writes). Best-effort — a
-      // hydration failure never blocks the panel (the fetch already succeeded).
-      const coll = `caisse-${month}`;
       void getErpRepo(slug).then((repo) =>
         Promise.all(
           out.entries.map((e) =>
@@ -342,10 +352,8 @@ const Journal = ({
         ).catch(() => {})
       );
     } else if (out.status === 'unavailable') {
-      // Route/data unreachable → try the local store (offline read), else empty.
-      const repo = await getErpRepo(slug);
-      const local = await repo.list<CaisseEntry>(`caisse-${month}`).catch(() => []);
-      setEntries(local.map((w) => w.data));
+      // Offline + empty local store → quiet empty state (never crash).
+      setEntries([]);
       setPhase('ready');
     } else {
       setErrMsg(out.message);

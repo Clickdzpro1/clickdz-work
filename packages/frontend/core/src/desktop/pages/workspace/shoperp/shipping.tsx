@@ -133,33 +133,35 @@ export const ShippingPanel = ({
 
   const loadCouriers = useCallback(async () => {
     setCouriersPhase(couriers === null ? 'loading' : 'ready');
+    // DzOS Phase 1 END-STATE: read couriers from the LOCAL store first
+    // (instant, works offline). The /erp/changes pull keeps them fresh. Only
+    // on a cold start (local store empty) do we fetch + hydrate.
+    try {
+      const repo = await getErpRepo(slug);
+      const local = await repo.list<ShipCourier>('couriers');
+      if (local.length > 0) {
+        setCouriers(local.map((w) => w.data));
+        setCouriersPhase('ready');
+        return;
+      }
+    } catch {
+      /* fall through to cold-start fetch */
+    }
+    // Cold start: fetch + hydrate, then serve.
     const out = await fetchCouriers(slug);
     if (out.status === 'ok') {
       setCouriers(out.couriers);
       setCouriersPhase('ready');
-      // DzOS Phase 1: hydrate the local store so couriers render instantly on
-      // the next open + work offline. Best-effort.
       void getErpRepo(slug).then((repo) =>
         Promise.all(
           out.couriers.map((c) => repo.upsert('couriers', String(c.id), c).catch(() => {}))
         ).catch(() => {})
       );
     } else {
-      // DzOS Phase 1: offline-read fallback — render the last known couriers
-      // from the local store so the tabs stay usable when the server is down.
-      try {
-        const repo = await getErpRepo(slug);
-        const local = await repo.list<ShipCourier>('couriers');
-        if (local.length > 0) {
-          setCouriers(local.map((w) => w.data));
-          setCouriersPhase('ready');
-          return;
-        }
-      } catch {
-        /* fall through to the error state */
-      }
-      setCouriersErr(out.message);
-      if (couriers === null) setCouriersPhase('error');
+      // Offline + empty local store → quiet empty state (the sync pill shows
+      // 'hors ligne'; courier API status probes are also skipped offline).
+      setCouriers([]);
+      setCouriersPhase('ready');
     }
   }, [slug, couriers]);
 

@@ -148,6 +148,30 @@ export const ProcurementPanel = ({
   const load = useCallback(
     async (soft = false) => {
       if (!soft) setPhase('loading');
+      // DzOS Phase 1 END-STATE: read suppliers + POs from the LOCAL store
+      // first (instant, works offline). The /erp/changes pull keeps them
+      // fresh. Only on a cold start (both empty) do we fetch + hydrate.
+      // Warehouses stay on the bridge (small inventory summary, not a
+      // local-store collection).
+      try {
+        const repo = await getErpRepo(slug);
+        const [supLocal, poLocal] = await Promise.all([
+          repo.list<ProcSupplier>('suppliers').catch(() => []),
+          repo.list<ProcPurchaseOrder>('purchase-orders').catch(() => []),
+        ]);
+        if (supLocal.length > 0 || poLocal.length > 0) {
+          setSuppliers(supLocal.map((w) => w.data));
+          setOrders(poLocal.map((w) => w.data));
+          // Warehouses still from the bridge (best-effort).
+          const inv = await fetchErpInventory(slug).catch(() => null);
+          setWarehouses(inv?.status === 'ok' ? inv.inventory.warehouses : []);
+          setPhase('ready');
+          return;
+        }
+      } catch {
+        /* fall through to cold-start fetch */
+      }
+      // Cold start: fetch + hydrate, then serve.
       const [sup, pos, inv] = await Promise.all([
         fetchSuppliers(slug),
         fetchPurchaseOrders(slug),
@@ -183,8 +207,7 @@ export const ProcurementPanel = ({
       }
 
       setPhase('ready');
-      // DzOS Phase 1: hydrate the local store (suppliers + POs) so the next
-      // open is instant + works offline. Best-effort.
+      // Cold-start hydrate so the next open is local-first.
       void getErpRepo(slug).then((repo) =>
         Promise.all([
           ...(sup.status === 'ok' ? sup.suppliers.map((s) => repo.upsert('suppliers', String(s.id), s).catch(() => {})) : []),
@@ -196,21 +219,13 @@ export const ProcurementPanel = ({
   );
 
   useEffect(() => {
-    void load().catch(async () => {
-      // DzOS Phase 1: offline-read fallback. If the fetches throw (network
-      // down), try the local store so suppliers + POs still render.
-      try {
-        const repo = await getErpRepo(slug);
-        const [supLocal, poLocal] = await Promise.all([
-          repo.list<ProcSupplier>('suppliers').catch(() => []),
-          repo.list<ProcPurchaseOrder>('purchase-orders').catch(() => []),
-        ]);
-        setSuppliers(supLocal.map((w) => w.data));
-        setOrders(poLocal.map((w) => w.data));
-        setPhase('ready');
-      } catch {
-        setPhase('error');
-      }
+    // DzOS Phase 1 END-STATE: load is local-first; a throw (cold-start fetch
+    // failed offline) just degrades to empty + ready (the local store was
+    // already tried inside load).
+    void load().catch(() => {
+      setSuppliers([]);
+      setOrders([]);
+      setPhase('ready');
     });
   }, [load, slug]);
 

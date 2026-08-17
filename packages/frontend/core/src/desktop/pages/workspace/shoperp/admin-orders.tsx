@@ -92,62 +92,50 @@ export const OrdersAdmin = ({
   const load = useCallback(
     async (soft = false) => {
       if (!soft) setPhase('loading');
-      try {
-        const rows = await fetchErpCollection<ErpOrder>(slug, 'orders');
+      // DzOS Phase 1 END-STATE: read from the LOCAL store first (instant,
+      // works offline). The /erp/changes pull keeps it fresh. Only on a cold
+      // start (local store empty) do we fetch + hydrate.
+      const sortByDate = (a: ErpOrder, b: ErpOrder) =>
+        orderDate(b).localeCompare(orderDate(a)) ||
+        String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+      const dedupe = (rows: ErpOrder[]): ErpOrder[] => {
         // Replace = delete+recreate, so dedupe on the business key (ref) and
-        // keep the newest copy; sort by stable business date, newest first.
+        // keep the newest copy.
         const byRef = new Map<string, ErpOrder>();
         for (const o of rows) {
           const key = String(o?.ref || o?.id || '');
           if (!key) continue;
           const prev = byRef.get(key);
-          if (
-            !prev ||
-            String(o.createdAt || '') > String(prev.createdAt || '')
-          ) {
+          if (!prev || String(o.createdAt || '') > String(prev.createdAt || '')) {
             byRef.set(key, o);
           }
         }
-        const list = [...byRef.values()].sort(
-          (a, b) =>
-            orderDate(b).localeCompare(orderDate(a)) ||
-            String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
-        );
+        return [...byRef.values()].sort(sortByDate);
+      };
+      try {
+        const repo = await getErpRepo(slug);
+        const local = await repo.list<ErpOrder>('orders');
+        if (local.length > 0) {
+          setOrders(dedupe(local.map((w) => w.data)));
+          setPhase('ready');
+          return;
+        }
+      } catch {
+        /* fall through to cold-start fetch */
+      }
+      // Cold start: fetch + hydrate, then serve from the deduped fetch.
+      try {
+        const rows = await fetchErpCollection<ErpOrder>(slug, 'orders');
+        const list = dedupe(rows);
         setOrders(list);
         setPhase('ready');
-        // DzOS Phase 1: hydrate the local store so the next open is instant
-        // (from IDB/SQLite) and works offline. Each order upserted into the
-        // 'orders' collection keyed by its stable id. Best-effort — a
-        // hydration failure never blocks the panel (the fetch succeeded).
         void getErpRepo(slug).then((repo) =>
           Promise.all(
-            list.map((o) =>
-              repo.upsert('orders', String(o.id || o.ref), o).catch(() => {})
-            )
+            list.map((o) => repo.upsert('orders', String(o.id || o.ref), o).catch(() => {}))
           ).catch(() => {})
         );
       } catch {
-        // DzOS Phase 1: offline-read fallback. If the fetch throws (network
-        // down), try the local store so the list still renders with the last
-        // known orders.
-        if (!soft) {
-          try {
-            const repo = await getErpRepo(slug);
-            const local = await repo.list<ErpOrder>('orders');
-            const list = local
-              .map((w) => w.data)
-              .sort(
-                (a, b) =>
-                  orderDate(b).localeCompare(orderDate(a)) ||
-                  String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
-              );
-            setOrders(list);
-            setPhase('ready');
-            return;
-          } catch {
-            setPhase('error');
-          }
-        }
+        if (!soft) setPhase('error');
       }
     },
     [slug]

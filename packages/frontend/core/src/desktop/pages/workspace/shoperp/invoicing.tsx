@@ -278,17 +278,32 @@ const InvoiceList = ({
 
   const load = useCallback(async () => {
     setPhase('loading');
-    const out = await fetchInvoices(slug, {
-      month,
-      type: typeF === 'all' ? '' : typeF,
-      status: statusF === 'all' ? '' : statusF,
-    });
+    // DzOS Phase 1 END-STATE: read from the LOCAL store first (per-month
+    // partition). The /erp/changes pull keeps it fresh. Only on a cold start
+    // (local partition empty) do we fetch + hydrate. Filter by type/status
+    // client-side (the local store holds the whole month).
+    const coll = `invoices-${month}`;
+    const typeFilter = typeF === 'all' ? '' : typeF;
+    const statusFilter = statusF === 'all' ? '' : statusF;
+    const matchesFilters = (inv: InvoiceView) =>
+      (!typeFilter || inv.type === typeFilter) &&
+      (!statusFilter || inv.status === statusFilter);
+    try {
+      const repo = await getErpRepo(slug);
+      const local = await repo.list<InvoiceView>(coll);
+      if (local.length > 0) {
+        setRows(local.map((w) => w.data).filter(matchesFilters));
+        setPhase('ready');
+        return;
+      }
+    } catch {
+      /* fall through to cold-start fetch */
+    }
+    // Cold start: fetch + hydrate, then serve (filtered).
+    const out = await fetchInvoices(slug, { month, type: typeFilter, status: statusFilter });
     if (out.status === 'ok') {
       setRows(out.invoices);
       setPhase('ready');
-      // DzOS Phase 1: hydrate the local store (per-month partition) so the
-      // next open is instant + works offline. Best-effort.
-      const coll = `invoices-${month}`;
       void getErpRepo(slug).then((repo) =>
         Promise.all(
           out.invoices.map((inv) =>
@@ -299,18 +314,9 @@ const InvoiceList = ({
     } else if (out.status === 'not-found') {
       onFlagOff();
     } else if (out.status === 'unavailable') {
-      // DzOS Phase 1: offline-read fallback — render the last known invoices
-      // for this month from the local store.
-      try {
-        const repo = await getErpRepo(slug);
-        const local = await repo.list<InvoiceView>(`invoices-${month}`);
-        const rows = local.map((w) => w.data);
-        setRows(rows);
-        setPhase('ready');
-      } catch {
-        setErrMsg(out.message);
-        setPhase('error');
-      }
+      // Offline + empty local store → quiet empty state (never crash).
+      setRows([]);
+      setPhase('ready');
     } else {
       setErrMsg(out.message);
       setPhase('error');
