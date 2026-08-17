@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { C, miniBtnStyle, Spinner } from '../shoperp-shared';
 import {
+  approvePost,
   deletePost,
   getNetworkMeta,
   listPosts,
@@ -23,6 +24,7 @@ interface Props {
 const STATUS_TABS: Array<SocialStatus | 'all'> = [
   'all',
   'draft',
+  'pending-approval',
   'scheduled',
   'publishing',
   'published',
@@ -37,6 +39,7 @@ function fmtTime(ms?: number): string {
 
 const statusColor: Record<string, string> = {
   draft: '#9aa0a6',
+  'pending-approval': '#a855f7',
   scheduled: '#1e96eb',
   publishing: '#e8a33d',
   published: '#4cae4c',
@@ -49,7 +52,7 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
   const [filter, setFilter] = useState<SocialStatus | 'all'>('all');
   const [posts, setPosts] = useState<SocialPostSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<Record<string, 'retry' | 'delete'>>({});
+  const [busy, setBusy] = useState<Record<string, 'retry' | 'delete' | 'approve'>>({});
   const [note, setNote] = useState<{ id: string; text: string; tone: 'ok' | 'err' } | null>(null);
 
   const load = useCallback(async () => {
@@ -81,6 +84,25 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
       }
     } catch {
       setNote({ id, text: dict.retryFail ?? 'La nouvelle tentative a échoué.', tone: 'err' });
+    } finally {
+      setBusy(b => { const n = { ...b }; delete n[id]; return n; });
+    }
+  }, [dict, load]);
+
+  // UP1 — approve a pending-approval post (publish now or enqueue schedule).
+  const handleApprove = useCallback(async (id: string) => {
+    setBusy(b => ({ ...b, [id]: 'approve' }));
+    setNote(null);
+    try {
+      const res = await approvePost(id);
+      if (res.ok) {
+        setNote({ id, text: dict.approved ?? 'Approuvé.', tone: 'ok' });
+        await load();
+      } else {
+        setNote({ id, text: res.detail ?? res.error ?? dict.approveFail ?? "L'approbation a échoué.", tone: 'err' });
+      }
+    } catch {
+      setNote({ id, text: dict.approveFail ?? "L'approbation a échoué.", tone: 'err' });
     } finally {
       setBusy(b => { const n = { ...b }; delete n[id]; return n; });
     }
@@ -149,7 +171,8 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
             const myNote = note?.id === p.id ? note : null;
             const isBusy = !!busy[p.id];
             const canRetry = p.status === 'failed' || p.status === 'partial';
-            const canEdit = p.status === 'draft' || p.status === 'scheduled';
+            const canEdit = p.status === 'draft' || p.status === 'scheduled' || p.status === 'pending-approval';
+            const canApprove = p.status === 'pending-approval';
             return (
               <div
                 key={p.id}
@@ -201,6 +224,15 @@ export const QueueView = ({ lang, dict, onEdit, refresh }: Props) => {
                   )}
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {canApprove && (
+                    <button
+                      disabled={isBusy}
+                      onClick={() => void handleApprove(p.id)}
+                      style={{ ...miniBtnStyle('primary'), opacity: isBusy ? 0.5 : 1 }}
+                    >
+                      {busy[p.id] === 'approve' ? (dict.approving ?? 'Approbation…') : (dict.approve ?? 'Approuver')}
+                    </button>
+                  )}
                   {canEdit && (
                     <button
                       disabled={isBusy}

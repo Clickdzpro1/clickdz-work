@@ -4,6 +4,7 @@ export const sharedEffectElementTags = [
   'ai-answer-wrapper',
   'chat-content-images',
   'chat-content-pure-text',
+  'chat-content-reasoning',
   'chat-content-rich-text',
   'chat-content-stream-objects',
   'text-renderer',

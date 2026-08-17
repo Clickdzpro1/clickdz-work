@@ -138,9 +138,8 @@ const COMPOSIO_API_KEY = process.env.COMPOSIO_API_KEY || '';
 // every other CDZ env in this plugin (`process.env.CDZ_...`).
 const CDZ_AGENTS_ENABLED = process.env.CDZ_AGENTS_ENABLED === '1';
 // The first-party web tools (web_search/web_fetch) are gated INSIDE the shared
-// registry by CDZ_AGENT_WEB_ENABLED (+ exa key presence) — this controller only
-// reflects that gate when composing the planner prompt / known-slug set below.
-const CDZ_AGENT_WEB_ENABLED = process.env.CDZ_AGENT_WEB_ENABLED === '1';
+// registry by CDZ_AGENT_WEB_ENABLED (+ exa key presence) — this controller does
+// not read that env itself; the registry owns the gate end to end.
 
 // Composio public REST surface (plain fetch — NO SDK dependency). Same
 // endpoints the integrations controller uses for its /run orchestrator.
@@ -1331,7 +1330,7 @@ export class ClickDzHermesController {
     writer: { closed: boolean },
     userId: string,
     thread: AgentThread,
-    message: string,
+    _message: string,
     mode: 'auto' | 'ask' | 'dry'
   ): Promise<{ steps: AgentStep[]; answer: string; stopped: boolean }> {
     const dryRun = mode === 'dry';
@@ -2131,9 +2130,12 @@ export class ClickDzHermesController {
         inputSummary: t.argsHint,
         available: () => avail[slug](),
         run: async (args: Record<string, unknown>, ctx: AgentToolCtx) => {
+          // Hoist the cast to a narrowable reference: `typeof (x as T).p` does
+          // not narrow through a fresh cast expression, so read via `dctx`.
+          const dctx = ctx as HermesDispatchCtx;
           const rem =
-            typeof (ctx as HermesDispatchCtx).__remainingMs === 'number'
-              ? (ctx as HermesDispatchCtx).__remainingMs
+            typeof dctx.__remainingMs === 'number'
+              ? dctx.__remainingMs
               : this.toolTimeout(slug);
           const outcome = await this.executeTool(slug, args, ctx.userId, rem);
           return {
@@ -2599,8 +2601,12 @@ export class ClickDzHermesController {
       );
       const chatId = bind?.chatId;
       if (chatId == null) return;
+      // Global platform-bot token (documented above): absent ⇒ dark, no ping.
+      const token = process.env.CDZ_TG_TOKEN || '';
+      if (!token) return;
       const { TelegramClient } = await import('./clickdz-agent-telegram');
       await new TelegramClient().sendMessage(
+        token,
         chatId,
         `⏸ HERMES a différé une action (${toolSlug}) lors d'une exécution automatique non surveillée. Ouvrez l'agent pour l'approuver.`
       );

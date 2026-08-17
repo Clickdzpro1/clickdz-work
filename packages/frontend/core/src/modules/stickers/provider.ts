@@ -40,9 +40,13 @@ export function addSticker(
   } = {}
 ): string {
   const gfx = std.get(GfxControllerIdentifier);
-  const [x, y] = options.point
-    ? gfx.viewport.toModelCoord(...options.point)
-    : gfx.viewport.center;
+  // `viewport.center` is an IPoint OBJECT (not a tuple) — destructuring it as
+  // `[x, y]` threw a TypeError at runtime, so the no-point path (toolbar pick
+  // without a drop position) never placed a sticker. Use centerX/centerY.
+  const point = options.point;
+  const [x, y] = point
+    ? gfx.viewport.toModelCoord(point[0], point[1])
+    : [gfx.viewport.centerX, gfx.viewport.centerY];
   const w = options.width ?? 96;
   const h = options.height ?? 96;
 

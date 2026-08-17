@@ -484,8 +484,8 @@ export function buildBalanceSheet(entries: JournalEntry[], year: number): Balanc
   }
 
   // --- ACTIF ---
-  const imobGross = netDebit('20', '21', '218', '2183');
-  const amort = netCredit('28', '29');
+  // (Immobilisations nettes — netDebit('20','21','218','2183') minus
+  // netCredit('28','29') — are not yet surfaced as an ACTIF row.)
   const stockNet = netDebit('30', '31', '32', '35') - netCredit('39');
   const clientsNet = netDebit('41', '411') - netCredit('416');
   const banqueNet = netDebit('512', '514');

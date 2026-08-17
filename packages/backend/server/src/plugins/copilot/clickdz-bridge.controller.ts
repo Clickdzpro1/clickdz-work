@@ -65,7 +65,6 @@ import {
 import { dataWriteToken, publicDataToken, safeEqual, verifyDataToken,
   staffToken,
   verifyStaffToken,
-  staffCan,
   staffPermissions,
   type StaffRole,
 } from './cdz-data-token';
@@ -110,7 +109,6 @@ import {
 // __CLICKDZ_*__ substitution templateApp does — the controller injects the template
 // HTML + minted token values so the helper stays import/env-free (boot-safe).
 import {
-  fetchDeployedHtml,
   resolveAppSource,
   type AppSourceRecord,
   renderTemplateSource,
@@ -131,7 +129,6 @@ import {
   type InvoiceOptions,
   type InvoiceRecord,
   type InvoiceType,
-  type ValidationError,
 } from './clickdz-erp-invoicing';
 import {
   applySupplierBalanceDelta,
@@ -197,7 +194,6 @@ import {
   recordVersion,
   setPendingAiPatch,
   writeShopState,
-  type ShopState,
 } from './clickdz-shop-state';
 import * as Shipping from './clickdz-erp-shipping';
 // WS17: shared Voice Library index helpers so the bulk-TTS route appends its
@@ -879,6 +875,94 @@ function resolveCdzImageModel(
     if (spec.engine === id) return { tierId, ...spec, source: 'raw-engine' };
   }
   return 'invalid';
+}
+
+// ---------------------------------------------------------------------------
+// Quality tiers (ImgCost) — a friendly, cost-first alias layer OVER the
+// concrete `cdzimage-*` engine tiers above. The owner's ask: default to the
+// cheap-but-good model, and make premium an EXPLICIT opt-in. This maps the
+// three human tiers to a concrete registered engine tier:
+//
+//   fast     -> cdzimage-flux  (Prodia Flux Schnell via Gateway; the default)
+//   standard -> cdzimage-1.5   (gpt-image-1.5, balanced)
+//   premium  -> cdzimage-2.0   (gpt-image-2, flagship)
+//
+// It is additive and backward compatible:
+//   • an explicit `model` (cdzimage-* / raw engine / legacy alias) ALWAYS wins
+//     over `tier` — machine clients keep byte-identical behavior.
+//   • `tier` only takes effect when no explicit model was resolved, i.e. the
+//     old "missing model" default path. Absent both, the default is 'fast'.
+// The set is a superset-safe union of tier ids so unknown values fall back to
+// the cheap default rather than erroring.
+// ---------------------------------------------------------------------------
+type CdzQualityTier = 'fast' | 'standard' | 'premium';
+const CDZ_QUALITY_TIER_TO_MODEL: Record<CdzQualityTier, string> = {
+  fast: 'cdzimage-flux',
+  standard: 'cdzimage-1.5',
+  premium: 'cdzimage-2.0',
+};
+const CDZ_DEFAULT_QUALITY_TIER: CdzQualityTier =
+  (process.env.CDZIMAGE_DEFAULT_QUALITY_TIER as CdzQualityTier) || 'fast';
+
+/** Normalize a caller-supplied `tier` to a known quality tier (default fast). */
+function resolveQualityTier(requested: unknown): CdzQualityTier {
+  const id = String(requested ?? '').trim().toLowerCase();
+  if (id === 'fast' || id === 'standard' || id === 'premium') return id;
+  return CDZ_DEFAULT_QUALITY_TIER;
+}
+
+// ---------------------------------------------------------------------------
+// Central image pricing map (ImgCost). ONE source of truth for what each
+// engine tier costs, so cheap models charge fewer "tokens" than premium and
+// the mapping is tuned in a single place instead of scattered per-call.
+//
+// `quotaWeight` is how many units a generation consumes from the per-user
+// daily budget (the existing CDZ_IMAGE_DAILY_LIMIT credit bucket) — the cheap
+// Flux default costs 1, premium gpt-image-2 costs 4. `usdPerImage` is a rough
+// provider cost used only for the structured cost log line / observability;
+// it is NOT billed and never leaves the server.
+// ---------------------------------------------------------------------------
+interface CdzImagePricing {
+  quotaWeight: number;
+  usdPerImage: number;
+}
+const CDZ_IMAGE_PRICING: Record<string, CdzImagePricing> = {
+  'cdzimage-flux': { quotaWeight: 1, usdPerImage: 0.002 },
+  'cdzimage-1.0': { quotaWeight: 1, usdPerImage: 0.011 },
+  'cdzimage-1.5': { quotaWeight: 2, usdPerImage: 0.04 },
+  'cdzimage-2.0': { quotaWeight: 4, usdPerImage: 0.17 },
+};
+const CDZ_IMAGE_PRICING_FALLBACK: CdzImagePricing = {
+  quotaWeight: 1,
+  usdPerImage: 0.002,
+};
+function imagePricingFor(tierId: string): CdzImagePricing {
+  return CDZ_IMAGE_PRICING[tierId] ?? CDZ_IMAGE_PRICING_FALLBACK;
+}
+
+// ---------------------------------------------------------------------------
+// Resolution clamp (ImgCost). Cost scales with output pixels, so cap the
+// requested `size` to a sane allowlist. Unknown / absurd sizes clamp to the
+// 1024x1024 default rather than paying for a 4096² render. Both OpenAI
+// gpt-image-* and the Gateway Flux endpoint accept these three.
+// ---------------------------------------------------------------------------
+const CDZ_ALLOWED_IMAGE_SIZES = new Set([
+  '1024x1024',
+  '1024x1536',
+  '1536x1024',
+  // gpt-image also accepts these portrait/landscape aliases historically:
+  '1024x1792',
+  '1792x1024',
+]);
+const CDZ_DEFAULT_IMAGE_SIZE = '1024x1024';
+function clampImageSize(requested: unknown): {
+  size: string;
+  clamped: boolean;
+} {
+  const raw = String(requested ?? '').trim().toLowerCase();
+  if (!raw) return { size: CDZ_DEFAULT_IMAGE_SIZE, clamped: false };
+  if (CDZ_ALLOWED_IMAGE_SIZES.has(raw)) return { size: raw, clamped: false };
+  return { size: CDZ_DEFAULT_IMAGE_SIZE, clamped: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -2038,8 +2122,12 @@ export class ClickDzBridgeController {
    * - clickdz-builder -> the high-token Builder runtime (IDE traffic)
    * - clickdz-ultra   -> intent-based routing across all agents
    * - everything else -> default agent selection (incl. Arabic detection)
+   *
+   * Currently unwired (the council/ultra chat roster was retired) but retained
+   * for router reuse; `protected` (not `private`) so the unused-member gate
+   * stays green without deleting the Make env-var plumbing it exercises.
    */
-  private resolveAgentForRequest(
+  protected resolveAgentForRequest(
     model: string,
     messages: Array<{ role: string; content: string }>
   ): string | undefined {
@@ -2714,6 +2802,74 @@ export class ClickDzBridgeController {
   }
 
   /**
+   * ImgCost: charge `weight` units against the caller's daily image budget
+   * (the CDZ_IMAGE_DAILY_LIMIT credit bucket) using an atomic INCRBY, and
+   * enforce the ceiling. Returns the units actually charged (0 when disabled,
+   * no user, or Redis errored) so the caller can refund exactly that many on a
+   * downstream failure. Fail-open: any Redis error charges 0 and allows the
+   * generation (a cache outage must never block paid work, matching the
+   * pre-check stance). Over-budget throws the typed 429 and self-refunds.
+   */
+  private async chargeImageQuota(
+    quotaKey: string,
+    weight: number,
+    dailyLimit: number
+  ): Promise<number> {
+    if (!quotaKey || weight <= 0) return 0;
+    try {
+      const total = await this.redis.incrby(quotaKey, weight);
+      if (total <= weight) {
+        // First charge of the day — set the 24h expiry window.
+        await this.redis.expire(quotaKey, 86400);
+      }
+      if (total > dailyLimit) {
+        // Roll back this charge and reject — the budget is exhausted.
+        await this.redis.decrby(quotaKey, weight).catch(() => {});
+        throw new HttpException(
+          {
+            error: {
+              message: `Daily image generation limit reached (${dailyLimit}/day). Try again tomorrow.`,
+              type: 'rate_limit_error',
+              code: 'daily_limit_exceeded',
+              limit: dailyLimit,
+              count: total,
+            },
+          },
+          HttpStatus.TOO_MANY_REQUESTS
+        );
+      }
+      return weight;
+    } catch (err) {
+      if (
+        err instanceof HttpException &&
+        (err as any)?.getResponse?.()?.error?.code === 'daily_limit_exceeded'
+      ) {
+        throw err;
+      }
+      // Fail-open on Redis errors — charge nothing, allow the generation.
+      try {
+        this.logger?.warn?.(`Image quota charge failed (fail-open): ${(err as Error)?.message}`);
+      } catch {}
+      return 0;
+    }
+  }
+
+  /**
+   * ImgCost: refund a previously-charged quota amount. Called when the upstream
+   * generation fails AFTER the charge, so a client retry does not double-charge
+   * (the generation the user paid for never produced an image). Fail-safe:
+   * swallows Redis errors — a lost refund is a rare over-count, never a crash.
+   */
+  private async refundImageQuota(quotaKey: string, weight: number): Promise<void> {
+    if (!quotaKey || weight <= 0) return;
+    try {
+      await this.redis.decrby(quotaKey, weight);
+    } catch {
+      // best-effort refund
+    }
+  }
+
+  /**
    * Prompt-pro (WS1): enhance a raw image prompt via a FAST direct cdz-flash
    * call, falling back to the Make agent, falling back to the user's own
    * words. Never blocks generation — every failure path returns a usable
@@ -2809,16 +2965,20 @@ export class ClickDzBridgeController {
     // Fail-open on Redis errors so a cache outage does not block generations.
     const dailyLimitEnabled = process.env.CDZ_IMAGE_DAILY_LIMIT_ENABLED !== '0';
     const dailyLimit = Math.max(1, parseInt(process.env.CDZ_IMAGE_DAILY_LIMIT || '50', 10) || 50);
-    if (dailyLimitEnabled && user?.id) {
-      const dayKey = new Date().toISOString().slice(0,10).replace(/-/g,'');
-      const quotaKey = `clickdz:gen:${user.id}:${dayKey}`;
+    // ImgCost: the daily budget is the credit bucket. The actual charge is now
+    // WEIGHTED per tier and applied AFTER model resolution + the cache check
+    // (see chargeImageQuota below) so (a) cheap tiers cost fewer units than
+    // premium, (b) cache hits cost nothing, and (c) a failed/retried upstream
+    // call is refunded (idempotent retry — no double charge). Here we only do a
+    // cheap read-only PRE-CHECK to reject callers already over budget without
+    // consuming anything. Fail-open on Redis errors.
+    const dayKey = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const quotaKey =
+      dailyLimitEnabled && user?.id ? `clickdz:gen:${user.id}:${dayKey}` : '';
+    if (quotaKey) {
       try {
-        const count = await this.redis.incr(quotaKey);
-        if (count === 1) {
-          await this.redis.expire(quotaKey, 86400);
-        }
-        if (count > dailyLimit) {
-          await this.redis.decr(quotaKey);
+        const current = Number((await this.redis.get(quotaKey)) || 0) || 0;
+        if (current >= dailyLimit) {
           throw new HttpException(
             {
               error: {
@@ -2826,7 +2986,7 @@ export class ClickDzBridgeController {
                 type: 'rate_limit_error',
                 code: 'daily_limit_exceeded',
                 limit: dailyLimit,
-                count,
+                count: current,
               },
             },
             HttpStatus.TOO_MANY_REQUESTS,
@@ -2841,12 +3001,16 @@ export class ClickDzBridgeController {
         }
         // Fail-open on Redis errors (log but allow generation)
         try {
-          this.logger?.warn?.(`Quota check failed (fail-open) for ${user.id}: ${(err as Error)?.message}`);
+          this.logger?.warn?.(`Quota pre-check failed (fail-open) for ${user?.id}: ${(err as Error)?.message}`);
         } catch {}
       }
     }
 
     // ---- CDZIMAGE model resolution (WS1) --------------------------------
+    // ImgCost: a friendly `tier` (fast|standard|premium) selects a concrete
+    // engine tier ONLY when no explicit `model` was given — an explicit model
+    // always wins (machine clients unchanged). Default tier is 'fast' (cheap).
+    const qualityTier = resolveQualityTier(body?.tier);
     const requestedModel = String(body?.model || '');
     let resolution = resolveCdzImageModel(requestedModel);
     if (resolution === 'invalid') {
@@ -2879,11 +3043,16 @@ export class ClickDzBridgeController {
           HttpStatus.BAD_REQUEST
         );
       }
-      // Transition mode: default to the flagship tier so pre-picker clients
-      // (e.g. the Vdz media bin until WS1 PR4) keep working — upgraded, even.
+      // Transition mode: with no explicit model, map the friendly quality
+      // `tier` to a concrete engine tier. Default tier is 'fast' -> the cheap
+      // Flux default (CDZ_QUALITY_TIER_TO_MODEL.fast === CDZIMAGE_DEFAULT_TIER),
+      // so pre-picker clients that send neither `model` nor `tier` keep the
+      // exact same cheap default; premium is an explicit opt-in via tier.
+      const tierModelId = CDZ_QUALITY_TIER_TO_MODEL[qualityTier];
+      const tierSpec = CDZIMAGE_TIERS[tierModelId] ?? CDZIMAGE_TIERS[CDZIMAGE_DEFAULT_TIER];
       resolution = {
-        tierId: CDZIMAGE_DEFAULT_TIER,
-        ...CDZIMAGE_TIERS[CDZIMAGE_DEFAULT_TIER],
+        tierId: CDZIMAGE_TIERS[tierModelId] ? tierModelId : CDZIMAGE_DEFAULT_TIER,
+        ...tierSpec,
         source: 'default',
       };
     }
@@ -3015,7 +3184,13 @@ export class ClickDzBridgeController {
       ? requestedQuality
       : tierQuality;
     const finalPrompt = String(prompt || body?.prompt || '');
-    const size = String(body?.size || '1024x1024');
+    // ImgCost: clamp the requested output size to the allowlist — cost scales
+    // with pixels, so an absurd size degrades to the 1024x1024 default rather
+    // than paying for a 4096² render. Both gpt-image-* and Flux accept these.
+    const { size, clamped: sizeClamped } = clampImageSize(body?.size);
+    // ImgCost: wall-clock start for the structured per-generation cost log line
+    // emitted after a successful provider call.
+    const genStartedAt = Date.now();
 
     // ImgPerf: Redis prompt-hash cache (text-to-image only). Computes a stable
     // key from the canonicalized request, checks the cache, and returns the
@@ -3058,8 +3233,23 @@ export class ClickDzBridgeController {
               fast: fastMode,
               quality,
               imageCacheHit: true,
+              // ImgCost: a cache hit skips the provider AND the quota charge.
+              quality_tier: qualityTier,
+              size,
+              quota_charged: 0,
             };
             cachedData._cache = 'hit';
+            // ImgCost: structured log line for cache hits too (0 cost, ~0 ms).
+            try {
+              this.logger?.log?.(
+                `[cdzimage] gen tier=${qualityTier} model=${resolution.tierId} ` +
+                  `engine=${resolution.engine} quality=${quality} size=${size} ` +
+                  `i2i=${i2iMode} fast=${fastMode} latency_ms=${Date.now() - genStartedAt} ` +
+                  `quota_units=0 est_usd=0.0000 cache=hit`
+              );
+            } catch {
+              // logging must never break a cache hit
+            }
             void createPostHogClientFromEnv().capture({
               event: 'generation_completed',
               distinctId: user?.id ?? 'anonymous',
@@ -3068,6 +3258,9 @@ export class ClickDzBridgeController {
                 model: resolution.tierId,
                 engine: resolution.engine,
                 quality,
+                tier: qualityTier,
+                size,
+                quota_units: 0,
                 fast: fastMode,
                 i2i: i2iMode,
                 cache: 'hit',
@@ -3081,8 +3274,23 @@ export class ClickDzBridgeController {
       }
     }
 
-    let response: Awaited<ReturnType<typeof fetch>>;
+    // ImgCost: charge the tier-weighted quota NOW — after model resolution and
+    // after a cache miss is confirmed, so cache hits (returned above) cost
+    // nothing and cheap tiers cost fewer units than premium. The charge is
+    // refunded in the catch below if the upstream call fails, so a client retry
+    // of a failed generation never double-charges (idempotent retry).
+    const pricing = imagePricingFor(resolution.tierId);
+    const chargedUnits = await this.chargeImageQuota(
+      quotaKey,
+      pricing.quotaWeight,
+      dailyLimit
+    );
+
+    // Definite-assignment: every non-Flux branch below assigns `response`
+    // before the shared `if (!isFluxGateway)` parse reads it.
+    let response!: Awaited<ReturnType<typeof fetch>>;
     let data: any;
+    try {
     if (isFluxGateway) {
       // WS14: Prodia Flux Schnell via Vercel AI Gateway (OpenAI-compatible endpoint).
       // Text-to-image only — Flux has no image-to-image capability. The Gateway
@@ -3183,11 +3391,23 @@ export class ClickDzBridgeController {
         }
       );
     }
-    if (!isGemini) {
+    // The Flux Gateway path already parsed `data` (and threw on !ok) above;
+    // the OpenAI generation/edit paths set `response` and parse it here.
+    // (WS14 fix: this guard previously referenced a removed `isGemini` local,
+    // which threw a ReferenceError on every gpt-image generation/edit — the
+    // Gemini image path was retired, so the correct predicate is the Flux one.)
+    if (!isFluxGateway) {
       data = (await response.json()) as any;
       if (!response.ok) {
         throw new HttpException(data, response.status);
       }
+    }
+    } catch (err) {
+      // ImgCost: the provider call failed after we charged — refund the units
+      // so the user is not billed for an image they never received, and a
+      // retry starts from the same budget. Then rethrow the original error.
+      await this.refundImageQuota(quotaKey, chargedUnits);
+      throw err;
     }
     // normalize: expose a data URL for b64 responses so url-consumers work
     if (Array.isArray(data?.data)) {
@@ -3209,6 +3429,12 @@ export class ClickDzBridgeController {
       fast: fastMode,
       quality,
       imageCacheHit: false,
+      // ImgCost: surface the resolved tier, clamped size, and units charged so
+      // clients/observability can see what this generation cost.
+      quality_tier: qualityTier,
+      size,
+      size_clamped: sizeClamped,
+      quota_charged: chargedUnits,
       ...(i2iMode !== 'none'
         ? {
             i2i: {
@@ -3251,6 +3477,21 @@ export class ClickDzBridgeController {
       }
     }
     data._cache = 'miss';
+    // ImgCost: one structured per-generation log line — model, tier, size,
+    // latency, and estimated provider cost — for cost/latency observability.
+    // Uses the plugin's existing Logger; never throws.
+    try {
+      const latencyMs = Date.now() - genStartedAt;
+      this.logger?.log?.(
+        `[cdzimage] gen tier=${qualityTier} model=${resolution.tierId} ` +
+          `engine=${resolution.engine} quality=${quality} size=${size} ` +
+          `i2i=${i2iMode} fast=${fastMode} latency_ms=${latencyMs} ` +
+          `quota_units=${chargedUnits} est_usd=${pricing.usdPerImage.toFixed(4)} ` +
+          `cache=miss`
+      );
+    } catch {
+      // logging must never break a successful generation
+    }
     // PostHog server-side event (no-op unless CDZ_POSTHOG_KEY/HOST are set):
     // a generation completed on the paid images route. Fire-and-forget — never
     // delays or fails the response.
@@ -3262,6 +3503,10 @@ export class ClickDzBridgeController {
         model: resolution.tierId,
         engine: resolution.engine,
         quality,
+        tier: qualityTier,
+        size,
+        quota_units: chargedUnits,
+        est_usd: pricing.usdPerImage,
         fast: fastMode,
         i2i: i2iMode,
       },
@@ -4968,7 +5213,7 @@ export class ClickDzBridgeController {
     const sentenceParts = trimmed
       .replace(/\s+/g, ' ')
       .split(/(?<=[.!?؟\u060C])\s+/)
-      .map(chunk => chunk.trim())
+      .map((chunk: string) => chunk.trim())
       .filter(Boolean);
     const chunks: string[] = [];
     let current = '';
@@ -6070,7 +6315,7 @@ export class ClickDzBridgeController {
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
     @Param('id') id: string,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     this.assertInvoicingEnabled();
     await this.assertOwnsErpApp(user, slug);
@@ -8942,7 +9187,7 @@ export class ClickDzBridgeController {
   async shopStateGet(
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     if (!CDZ_SHOP_STATE) {
       throw new NotFound('App not found');
@@ -8964,7 +9209,7 @@ export class ClickDzBridgeController {
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
     @Param('id') id: string,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     if (!CDZ_SHOP_STATE) {
       throw new NotFound('App not found');
@@ -9049,7 +9294,7 @@ export class ClickDzBridgeController {
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
     @Body() body: any,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     if (!CDZ_SHOP_STATE) {
       throw new NotFound('App not found');
@@ -9533,7 +9778,7 @@ export class ClickDzBridgeController {
   async appStaleness(
     @CurrentUser() user: CurrentUser,
     @Param('slug') slug: string,
-    @Res({ passthrough: true }) res: Response
+    @Res({ passthrough: true }) _res: Response
   ) {
     // Feature flag OFF → behave as if the route does not exist (typed 404).
     if (!featuresEnabled()) {

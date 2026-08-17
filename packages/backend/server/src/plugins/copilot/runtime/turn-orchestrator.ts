@@ -90,7 +90,10 @@ export class TurnOrchestrator {
       'gpt-image-1.5': 'gpt-image-2',
       'gpt-image-1-mini': 'gpt-image-1',
       'cdzimage-2.0': 'gpt-image-2',
-      'cdzimage-1.5': 'gpt-image-2',
+      // ImgCost: the mid ("standard") tier maps to the cheaper gpt-image-1 so
+      // the native ladder stays cost-monotonic (economy/standard < premium);
+      // only the explicit premium tier pays for the flagship gpt-image-2.
+      'cdzimage-1.5': 'gpt-image-1',
       'cdzimage-1.0': 'gpt-image-1',
       'gemini-3-pro-image': 'gemini-2.5-flash-image',
       'gemini-3.1-flash-image': 'gemini-2.5-flash-image',

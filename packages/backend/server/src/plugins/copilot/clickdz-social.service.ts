@@ -37,6 +37,13 @@ const COMPOSIO_TOOLS_EXECUTE_URL =
 const COMPOSIO_TOOLS_URL = 'https://backend.composio.dev/api/v3/tools';
 const COMPOSIO_CONNECTED_ACCOUNTS_URL =
   'https://backend.composio.dev/api/v3/connected_accounts';
+// UP1 — single connected-account GET, used to poll one account's live OAuth
+// status (ACTIVE | INITIATED | INITIALIZING | EXPIRED | FAILED) after the user
+// returns from the hosted auth-link tab. The list endpoint above stays the
+// source of truth for the accounts grid; this is the cheap "did it connect?"
+// poll the Connections view fires while a card shows "Connexion…".
+const COMPOSIO_CONNECTED_ACCOUNT_ONE_URL =
+  'https://backend.composio.dev/api/v3/connected_accounts';
 
 // ---------------------------------------------------------------------------
 // Social post data types (P3 plan §2 — mirror exactly so service + controller
@@ -45,6 +52,10 @@ const COMPOSIO_CONNECTED_ACCOUNTS_URL =
 
 export type SocialStatus =
   | 'draft'
+  // UP1 — approval workflow: a draft the author submits for review sits in
+  // 'pending-approval' until an approver moves it to 'scheduled'/publishes it.
+  // Only surfaced when the workspace's queue rules set approvalRequired:true.
+  | 'pending-approval'
   | 'scheduled'
   | 'publishing'
   | 'published'
@@ -84,6 +95,12 @@ export interface SocialPost {
   updatedAt: number;
   publishedAt?: number;
   lastError?: string;
+  // UP1 — how many times the Plan-B/auto-requeue path has re-scheduled this
+  // post after a failed publish (bounded by queue.autoRequeueMaxAttempts).
+  autoRequeueAttempts?: number;
+  // UP1 — first-comment text captured at compose time (per queue/network
+  // defaults or explicit); posted as a follow-up after the main post succeeds.
+  firstComment?: string;
 }
 
 export interface SocialPostSummary {
@@ -100,7 +117,85 @@ export interface SocialPostSummary {
 export interface PublishedLogEntry {
   postId: string;
   publishedAt: number;
-  results: Array<{ network: string; ok: boolean; externalUrl?: string }>;
+  results: Array<{
+    network: string;
+    ok: boolean;
+    externalUrl?: string;
+    // UP1 — richer log rows so the Journal can show per-network error detail +
+    // the resolved action slug + attempt count (extends log.tsx). All optional
+    // so historical entries (written before UP1) still deserialize cleanly.
+    error?: string;
+    action?: string;
+    attempts?: number;
+  }>;
+}
+
+// ---------------------------------------------------------------------------
+// UP1 — Advanced per-workspace Social settings (persisted per-user through the
+// same JSON Cache as posts). Two layers:
+//   - defaults: per-network content defaults (hashtags, UTM, first-comment,
+//     posting windows) applied at publish time / suggested in the composer.
+//   - queue: workspace-wide posting rules (rate caps, min gap, backoff,
+//     approval gate) enforced by the controller when scheduling.
+// Everything is optional and fail-open: an absent settings blob means today's
+// behaviour byte-for-byte (no hashtags appended, no UTM, no approval gate).
+// ---------------------------------------------------------------------------
+
+/** One weekday+hour posting-window suggestion (0=Sunday..6=Saturday, 0..23h). */
+export interface PostingWindow {
+  day: number; // 0..6 (Sun..Sat)
+  hour: number; // 0..23 (local to `timezone`)
+}
+
+/** Per-network content defaults. Every field optional (fail-open). */
+export interface NetworkDefaults {
+  /** Hashtags appended to the caption when the post targets this network. */
+  hashtags?: string[];
+  /** First-comment text posted as a follow-up after the main post (best-effort). */
+  firstComment?: string;
+  /** Preferred posting windows (used for best-time suggestion chips + validation hints). */
+  windows?: PostingWindow[];
+}
+
+/** Workspace-wide UTM link parameters appended to the FIRST URL in a caption. */
+export interface UtmSettings {
+  enabled?: boolean;
+  source?: string; // utm_source (default 'social' when enabled + empty)
+  medium?: string; // utm_medium (default the network slug)
+  campaign?: string; // utm_campaign
+}
+
+/** Workspace-wide queue rules enforced when scheduling / publishing. */
+export interface QueueRules {
+  /** Max posts per network per rolling 24h. 0/absent = unlimited. */
+  maxPerDayPerNetwork?: number;
+  /** Minimum gap (minutes) between two scheduled posts. 0/absent = no gap. */
+  minGapMinutes?: number;
+  /** Auto-requeue a failed scheduled publish with exponential backoff. */
+  autoRequeueOnFailure?: boolean;
+  /** How many auto-requeue attempts before giving up (default 3, cap 6). */
+  autoRequeueMaxAttempts?: number;
+  /** Require approval: new posts land in 'pending-approval' before queueing. */
+  approvalRequired?: boolean;
+}
+
+export interface SocialSettings {
+  /** IANA timezone the posting windows are expressed in (e.g. 'Africa/Algiers'). */
+  timezone?: string;
+  /** Per-network content defaults, keyed by network slug. */
+  networks?: Record<string, NetworkDefaults>;
+  utm?: UtmSettings;
+  queue?: QueueRules;
+  updatedAt?: number;
+}
+
+/** Richer connected-account view for the Connections grid (UP1). */
+export interface DetailedAccount {
+  network: string;
+  connected: boolean;
+  status?: string; // Composio status: ACTIVE | INITIATED | INITIALIZING | EXPIRED | FAILED
+  accountId?: string;
+  createdAt?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,8 +213,36 @@ const SOCIAL_PUBLISH_TIMEOUT_MS = 25_000; // per-network execute budget
 const SOCIAL_RETRY_BASE_MS = 500;
 const SOCIAL_RETRY_CAP_MS = 8_000;
 
+// UP1 — advanced-settings caps + auto-requeue defaults. Bounds keep an
+// untrusted PUT /settings body well under the 8KB-ish record budget the sibling
+// controllers use for JSON singletons.
+export const SOCIAL_SETTINGS_TTL_MS = 365 * 24 * 60 * 60 * 1000; // 1 year
+export const SOCIAL_HASHTAGS_MAX = 15; // per network
+export const SOCIAL_HASHTAG_LEN_MAX = 60;
+export const SOCIAL_FIRST_COMMENT_MAX = 500;
+export const SOCIAL_WINDOWS_MAX = 12; // per network
+export const SOCIAL_UTM_FIELD_MAX = 80;
+export const SOCIAL_TIMEZONE_MAX = 64;
+export const SOCIAL_MAX_PER_DAY_CAP = 100; // clamp maxPerDayPerNetwork
+export const SOCIAL_MIN_GAP_CAP = 720; // clamp minGapMinutes (12h)
+export const SOCIAL_AUTO_REQUEUE_DEFAULT_ATTEMPTS = 3;
+export const SOCIAL_AUTO_REQUEUE_MAX_ATTEMPTS = 6;
+// Backoff between auto-requeue attempts grows 5min → 15min → 45min … capped.
+const SOCIAL_AUTO_REQUEUE_BASE_MS = 5 * 60 * 1000;
+const SOCIAL_AUTO_REQUEUE_CAP_MS = 6 * 60 * 60 * 1000; // 6h
+
 // Text truncation cap for summaries (mirrors truncatePreview in controller).
 const SUMMARY_TEXT_CAP = 120;
+
+/**
+ * UP1 — public backoff delay (ms) for the Nth (1-based) auto-requeue attempt of
+ * a failed scheduled publish: 5min * 3^(n-1), capped at 6h. Exposed so the job
+ * worker can compute the next scheduledAt when queue.autoRequeueOnFailure is on.
+ */
+export function autoRequeueDelayMs(attempt: number): number {
+  const exp = SOCIAL_AUTO_REQUEUE_BASE_MS * Math.pow(3, Math.max(0, attempt - 1));
+  return Math.min(exp, SOCIAL_AUTO_REQUEUE_CAP_MS);
+}
 
 // ---------------------------------------------------------------------------
 // Redis key builders (per-user, mirrors flowKey/flowIndexKey pattern exactly).
@@ -133,6 +256,10 @@ export const socialPostIndexKey = (userId: string) =>
 
 export const socialLogKey = (userId: string) =>
   `clickdz:social:log:${userId}`;
+
+// UP1 — per-user advanced Social settings singleton (mirrors hermesConfigKey).
+export const socialSettingsKey = (userId: string) =>
+  `clickdz:social:settings:${userId}`;
 
 // WS17: global index of userIds that have at least one scheduled post — the
 // Plan-B cron sweep iterates this to find past-due 'scheduled' posts whose
@@ -189,6 +316,19 @@ export const SOCIAL_ACTIONS: Record<string, NetworkActionDef> = {
   },
 };
 
+// UP1 — best-effort per-network "reply/comment" action slugs for the
+// first-comment feature. Only networks with a plausible comment action are
+// listed; a missing entry simply skips the follow-up comment (fail-open). These
+// mirror the static-map-first / discovery-fallback philosophy of SOCIAL_ACTIONS
+// but are intentionally conservative (the comment must never fail the post).
+export const SOCIAL_COMMENT_ACTIONS: Record<string, string> = {
+  twitter: 'TWITTER_CREATION_OF_A_POST', // reply = tweet with in_reply_to_tweet_id
+  linkedin: 'LINKEDIN_CREATE_LINKED_IN_POST',
+  instagram: 'INSTAGRAM_CREATE_COMMENT',
+  facebook: 'FACEBOOK_CREATE_COMMENT',
+  reddit: 'REDDIT_POST_COMMENT',
+};
+
 // The 10 social toolkit slugs we surface in the accounts list.
 export const SOCIAL_NETWORKS = Object.keys(SOCIAL_ACTIONS);
 
@@ -226,6 +366,208 @@ function buildSummary(post: SocialPost): SocialPostSummary {
     updatedAt: post.updatedAt,
     hasMedia: post.media.length > 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// UP1 — advanced-settings pure helpers (module-level, no I/O). Every one is
+// fail-open: malformed input is dropped, never thrown, so a bad PUT can only
+// narrow the effective settings, never break publishing.
+// ---------------------------------------------------------------------------
+
+function clampStr(v: unknown, max: number): string {
+  return typeof v === 'string' ? v.trim().slice(0, max) : '';
+}
+
+function clampInt(v: unknown, min: number, max: number): number | undefined {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+/** Normalize one hashtag: strip whitespace, ensure a single leading '#'. */
+function normalizeHashtag(raw: unknown): string | null {
+  let s = clampStr(raw, SOCIAL_HASHTAG_LEN_MAX);
+  if (!s) return null;
+  s = s.replace(/\s+/g, '');
+  if (!s) return null;
+  if (!s.startsWith('#')) s = `#${s.replace(/^#+/, '')}`;
+  return s.length > 1 ? s : null;
+}
+
+function normalizeWindows(raw: unknown): PostingWindow[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: PostingWindow[] = [];
+  const seen = new Set<string>();
+  for (const w of raw) {
+    const day = clampInt((w as any)?.day, 0, 6);
+    const hour = clampInt((w as any)?.hour, 0, 23);
+    if (day == null || hour == null) continue;
+    const key = `${day}:${hour}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ day, hour });
+    if (out.length >= SOCIAL_WINDOWS_MAX) break;
+  }
+  return out.length ? out : undefined;
+}
+
+function normalizeNetworkDefaults(raw: unknown): NetworkDefaults | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: NetworkDefaults = {};
+  if (Array.isArray(r.hashtags)) {
+    const tags: string[] = [];
+    for (const h of r.hashtags) {
+      const t = normalizeHashtag(h);
+      if (t && !tags.includes(t)) tags.push(t);
+      if (tags.length >= SOCIAL_HASHTAGS_MAX) break;
+    }
+    if (tags.length) out.hashtags = tags;
+  }
+  const fc = clampStr(r.firstComment, SOCIAL_FIRST_COMMENT_MAX);
+  if (fc) out.firstComment = fc;
+  const windows = normalizeWindows(r.windows);
+  if (windows) out.windows = windows;
+  return Object.keys(out).length ? out : undefined;
+}
+
+function normalizeUtm(raw: unknown): UtmSettings | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: UtmSettings = {};
+  if (typeof r.enabled === 'boolean') out.enabled = r.enabled;
+  const source = clampStr(r.source, SOCIAL_UTM_FIELD_MAX);
+  const medium = clampStr(r.medium, SOCIAL_UTM_FIELD_MAX);
+  const campaign = clampStr(r.campaign, SOCIAL_UTM_FIELD_MAX);
+  if (source) out.source = source;
+  if (medium) out.medium = medium;
+  if (campaign) out.campaign = campaign;
+  return Object.keys(out).length ? out : undefined;
+}
+
+function normalizeQueue(raw: unknown): QueueRules | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: QueueRules = {};
+  const maxDay = clampInt(r.maxPerDayPerNetwork, 0, SOCIAL_MAX_PER_DAY_CAP);
+  if (maxDay != null) out.maxPerDayPerNetwork = maxDay;
+  const gap = clampInt(r.minGapMinutes, 0, SOCIAL_MIN_GAP_CAP);
+  if (gap != null) out.minGapMinutes = gap;
+  if (typeof r.autoRequeueOnFailure === 'boolean')
+    out.autoRequeueOnFailure = r.autoRequeueOnFailure;
+  const maxAtt = clampInt(
+    r.autoRequeueMaxAttempts,
+    1,
+    SOCIAL_AUTO_REQUEUE_MAX_ATTEMPTS
+  );
+  if (maxAtt != null) out.autoRequeueMaxAttempts = maxAtt;
+  if (typeof r.approvalRequired === 'boolean')
+    out.approvalRequired = r.approvalRequired;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Canonicalize a (possibly partial / untrusted) settings blob. */
+export function normalizeSocialSettings(raw: unknown): SocialSettings {
+  if (!raw || typeof raw !== 'object') return {};
+  const r = raw as Record<string, unknown>;
+  const out: SocialSettings = {};
+  const tz = clampStr(r.timezone, SOCIAL_TIMEZONE_MAX);
+  if (tz) out.timezone = tz;
+  if (r.networks && typeof r.networks === 'object') {
+    const nets: Record<string, NetworkDefaults> = {};
+    for (const [slug, def] of Object.entries(r.networks as Record<string, unknown>)) {
+      const s = String(slug).trim().toLowerCase();
+      if (!SOCIAL_NETWORKS.includes(s)) continue;
+      const nd = normalizeNetworkDefaults(def);
+      if (nd) nets[s] = nd;
+    }
+    if (Object.keys(nets).length) out.networks = nets;
+  }
+  const utm = normalizeUtm(r.utm);
+  if (utm) out.utm = utm;
+  const queue = normalizeQueue(r.queue);
+  if (queue) out.queue = queue;
+  if (typeof r.updatedAt === 'number') out.updatedAt = r.updatedAt;
+  return out;
+}
+
+/**
+ * Merge an incoming (normalized) patch over the current settings. Shallow at
+ * the top level, but network defaults merge per-network so a PUT touching only
+ * twitter doesn't wipe linkedin. Passing an explicit empty object for a section
+ * clears it (PUT semantics the FE relies on for "remove all hashtags").
+ */
+export function mergeSocialSettings(
+  current: SocialSettings,
+  patch: unknown
+): SocialSettings {
+  const p = normalizeSocialSettings(patch);
+  const rawP = (patch && typeof patch === 'object' ? patch : {}) as Record<string, unknown>;
+  const out: SocialSettings = { ...current };
+  if ('timezone' in rawP) out.timezone = p.timezone;
+  if ('utm' in rawP) out.utm = p.utm;
+  if ('queue' in rawP) out.queue = p.queue;
+  if ('networks' in rawP) {
+    // Merge per-network so a partial patch is additive per slug.
+    const merged: Record<string, NetworkDefaults> = { ...(current.networks ?? {}) };
+    const rawNets = (rawP.networks && typeof rawP.networks === 'object'
+      ? rawP.networks
+      : {}) as Record<string, unknown>;
+    for (const slug of Object.keys(rawNets)) {
+      const s = slug.trim().toLowerCase();
+      if (!SOCIAL_NETWORKS.includes(s)) continue;
+      const nd = p.networks?.[s];
+      if (nd) merged[s] = nd;
+      else delete merged[s]; // explicit empty defaults clear the slug
+    }
+    out.networks = Object.keys(merged).length ? merged : undefined;
+  }
+  return out;
+}
+
+/**
+ * UP1 — append a network's default hashtags to a caption (deduped against tags
+ * already present in the text). Pure. Used at publish time and echoed to the
+ * composer preview. Never exceeds the network's char budget by more than the
+ * tags themselves — the caller/UI owns hard char-limit enforcement.
+ */
+export function applyHashtags(text: string, hashtags?: string[]): string {
+  if (!hashtags || !hashtags.length) return text;
+  const lower = text.toLowerCase();
+  const toAdd = hashtags.filter(h => !lower.includes(h.toLowerCase()));
+  if (!toAdd.length) return text;
+  const sep = text.trim().length ? '\n\n' : '';
+  return `${text}${sep}${toAdd.join(' ')}`;
+}
+
+/**
+ * UP1 — append UTM params to the FIRST http(s) URL in the caption. Pure, fail-
+ * open: no URL → text unchanged; a URL that already carries utm_* is left as-is
+ * (we don't double-tag). medium defaults to the network slug, source to
+ * 'social'. Only the first URL is tagged (link posts usually carry one link).
+ */
+export function applyUtm(
+  text: string,
+  network: string,
+  utm?: UtmSettings
+): string {
+  if (!utm?.enabled) return text;
+  const urlRe = /(https?:\/\/[^\s]+)/;
+  const m = urlRe.exec(text);
+  if (!m) return text;
+  const original = m[1];
+  if (/[?&]utm_/i.test(original)) return text; // already tagged
+  // Strip a trailing sentence punctuation so it isn't swallowed into the URL.
+  const trailing = /[.,;:!?)]+$/.exec(original);
+  const core = trailing ? original.slice(0, -trailing[0].length) : original;
+  const suffixPunct = trailing ? trailing[0] : '';
+  const params = new URLSearchParams();
+  params.set('utm_source', utm.source || 'social');
+  params.set('utm_medium', utm.medium || network);
+  if (utm.campaign) params.set('utm_campaign', utm.campaign);
+  const joiner = core.includes('?') ? '&' : '?';
+  const tagged = `${core}${joiner}${params.toString()}${suffixPunct}`;
+  return text.replace(original, tagged);
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +828,203 @@ export class ClickDzSocialService {
     }
   }
 
+  // ---- UP1: detailed accounts + single-account status poll ----------------
+
+  /**
+   * UP1 — list the caller's connected accounts for the 10 social toolkits with
+   * their live Composio status + account id + created time, so the Connections
+   * grid can show "ACTIVE / INITIATED / EXPIRED" not just a boolean. One list
+   * call (user-scoped) mapped to the newest account per network. Fail-soft: an
+   * unreachable Composio yields every network `{connected:false}` — the grid
+   * still renders and the boolean /accounts route is unaffected.
+   */
+  async fetchDetailedAccounts(userId: string): Promise<DetailedAccount[]> {
+    const base: DetailedAccount[] = SOCIAL_NETWORKS.map(network => ({
+      network,
+      connected: false,
+    }));
+    if (!COMPOSIO_API_KEY) return base;
+    try {
+      const params = new URLSearchParams({ user_ids: userId, limit: '200' });
+      const res = await this.fetchWithTimeout(
+        `${COMPOSIO_CONNECTED_ACCOUNTS_URL}?${params}`,
+        {
+          method: 'GET',
+          headers: { 'x-api-key': COMPOSIO_API_KEY, Accept: 'application/json' },
+        },
+        8_000
+      );
+      if (!res.ok) return base;
+      const data: any = await res.json().catch(() => null);
+      const list: any[] = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data)
+            ? data
+            : [];
+      const byNetwork = new Map<string, DetailedAccount>();
+      for (const acct of list) {
+        const uid = this.acctUserId(acct);
+        if (uid !== userId) continue; // defense-in-depth (see fetchConnectedSlugsForSocial)
+        const slug = this.acctToolkitSlug(acct);
+        if (!slug || !SOCIAL_NETWORKS.includes(slug)) continue;
+        const status =
+          typeof acct?.status === 'string'
+            ? acct.status
+            : typeof acct?.connectionStatus === 'string'
+              ? acct.connectionStatus
+              : undefined;
+        const accountId =
+          typeof acct?.id === 'string'
+            ? acct.id
+            : typeof acct?.connectedAccountId === 'string'
+              ? acct.connectedAccountId
+              : undefined;
+        const createdAt =
+          typeof acct?.created_at === 'string'
+            ? acct.created_at
+            : typeof acct?.createdAt === 'string'
+              ? acct.createdAt
+              : undefined;
+        // ACTIVE (or missing status = treat as connected) marks connected.
+        const connected =
+          status == null || /active|connected/i.test(String(status));
+        const prev = byNetwork.get(slug);
+        // Prefer an ACTIVE row; otherwise keep the first seen.
+        if (!prev || (connected && !prev.connected)) {
+          byNetwork.set(slug, { network: slug, connected, status, accountId, createdAt });
+        }
+      }
+      return base.map(b => byNetwork.get(b.network) ?? b);
+    } catch {
+      return base;
+    }
+  }
+
+  /**
+   * UP1 — poll ONE network's connection status for the caller (used by the
+   * Connections view while a card shows "Connexion…" after the OAuth tab opens).
+   * Returns the newest account's status or 'none' when the user has no account
+   * for that network yet. Fail-soft → {connected:false, status:'unknown'}.
+   */
+  async fetchAccountStatus(
+    userId: string,
+    network: string
+  ): Promise<{ connected: boolean; status: string; accountId?: string }> {
+    if (!COMPOSIO_API_KEY) return { connected: false, status: 'not_configured' };
+    try {
+      const params = new URLSearchParams({
+        user_ids: userId,
+        toolkit_slug: network,
+        limit: '10',
+      });
+      const res = await this.fetchWithTimeout(
+        `${COMPOSIO_CONNECTED_ACCOUNT_ONE_URL}?${params}`,
+        {
+          method: 'GET',
+          headers: { 'x-api-key': COMPOSIO_API_KEY, Accept: 'application/json' },
+        },
+        8_000
+      );
+      if (!res.ok) return { connected: false, status: 'unknown' };
+      const data: any = await res.json().catch(() => null);
+      const list: any[] = Array.isArray(data?.items)
+        ? data.items
+        : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data)
+            ? data
+            : [];
+      let best: { connected: boolean; status: string; accountId?: string } | null = null;
+      for (const acct of list) {
+        if (this.acctUserId(acct) !== userId) continue;
+        if (this.acctToolkitSlug(acct) !== network.toLowerCase()) continue;
+        const status =
+          typeof acct?.status === 'string'
+            ? acct.status
+            : typeof acct?.connectionStatus === 'string'
+              ? acct.connectionStatus
+              : 'unknown';
+        const accountId =
+          typeof acct?.id === 'string' ? acct.id : undefined;
+        const connected = /active|connected/i.test(String(status));
+        if (!best || (connected && !best.connected)) {
+          best = { connected, status, accountId };
+        }
+      }
+      return best ?? { connected: false, status: 'none' };
+    } catch {
+      return { connected: false, status: 'unknown' };
+    }
+  }
+
+  /** Defensive: the account's own user/entity id (field-name drift tolerant). */
+  private acctUserId(acct: any): string {
+    const raw =
+      typeof acct?.user_id === 'string'
+        ? acct.user_id
+        : typeof acct?.userId === 'string'
+          ? acct.userId
+          : typeof acct?.entity_id === 'string'
+            ? acct.entity_id
+            : typeof acct?.entityId === 'string'
+              ? acct.entityId
+              : typeof acct?.user?.id === 'string'
+                ? acct.user.id
+                : '';
+    return String(raw).trim();
+  }
+
+  /** Defensive: the account's toolkit slug, lower-cased (field-name drift tolerant). */
+  private acctToolkitSlug(acct: any): string {
+    const raw =
+      typeof acct?.toolkit_slug === 'string'
+        ? acct.toolkit_slug
+        : typeof acct?.toolkit?.slug === 'string'
+          ? acct.toolkit.slug
+          : typeof acct?.app_name === 'string'
+            ? acct.app_name
+            : typeof acct?.appName === 'string'
+              ? acct.appName
+              : typeof acct?.toolkit === 'string'
+                ? acct.toolkit
+                : '';
+    return String(raw).trim().toLowerCase();
+  }
+
+  // ---- UP1: advanced settings persistence + normalization -----------------
+
+  /** Read the caller's advanced Social settings (fail-soft → {} defaults). */
+  async readSettings(userId: string): Promise<SocialSettings> {
+    try {
+      const raw = await this.cache.get<SocialSettings>(socialSettingsKey(userId));
+      return normalizeSocialSettings(raw);
+    } catch {
+      return {};
+    }
+  }
+
+  /** Persist advanced Social settings (validated + normalized). Never throws. */
+  async writeSettings(
+    userId: string,
+    patch: unknown
+  ): Promise<SocialSettings> {
+    const current = await this.readSettings(userId);
+    const next = mergeSocialSettings(current, patch);
+    next.updatedAt = Date.now();
+    try {
+      await this.cache.set(socialSettingsKey(userId), next, {
+        ttl: SOCIAL_SETTINGS_TTL_MS,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[social] writeSettings failed: ${(err as Error)?.message ?? err}`
+      );
+    }
+    return next;
+  }
+
   // ---- Persistence helpers (fail-soft — mirror writeFlow/writeRun idiom) ---
 
   /** Read one persisted SocialPost or null. Never throws. */
@@ -656,7 +1195,10 @@ export class ClickDzSocialService {
   //  - idempotencyKey = postId:network (de-dupes retried or replayed runs).
   // =========================================================================
 
-  async publishPost(post: SocialPost): Promise<SocialPost> {
+  async publishPost(
+    post: SocialPost,
+    settings?: SocialSettings
+  ): Promise<SocialPost> {
     if (!COMPOSIO_API_KEY) {
       for (const t of post.targets) {
         t.status = 'failed';
@@ -686,8 +1228,12 @@ export class ClickDzSocialService {
       }
       target.action = actionSlug;
 
-      // Build Composio arguments for this network.
-      const text = target.text ?? post.text;
+      // Build Composio arguments for this network. UP1: apply the per-network
+      // content defaults (default hashtags) + workspace UTM link tagging to the
+      // effective caption before it goes to Composio. Both are pure + fail-open
+      // (absent settings ⇒ the raw caption, i.e. today's behaviour).
+      const rawText = target.text ?? post.text;
+      const text = this.applyContentDefaults(rawText, network, settings);
       const args = this.buildPublishArgs(network, text, post.media, post.scheduledAt);
 
       const idempotencyKey = `${post.id}:${network}`;
@@ -726,6 +1272,10 @@ export class ClickDzSocialService {
         } catch {
           /* no structured id */
         }
+        // UP1: post the first-comment as a follow-up (best-effort, never blocks
+        // or fails the post). Resolves the comment text from the post or the
+        // per-network default; skips networks with no comment action.
+        await this.postFirstComment(post, target, network, settings).catch(() => {});
       } else {
         target.status = 'failed';
         target.error = truncateText(last?.detail ?? 'execute_failed', 300);
@@ -750,6 +1300,75 @@ export class ClickDzSocialService {
     }
 
     return post;
+  }
+
+  /**
+   * UP1 — apply the per-network default hashtags + workspace UTM tagging to a
+   * caption. Pure wrapper over applyHashtags/applyUtm; both are fail-open so an
+   * absent/empty settings blob returns the caption unchanged.
+   */
+  applyContentDefaults(
+    text: string,
+    network: string,
+    settings?: SocialSettings
+  ): string {
+    if (!settings) return text;
+    let out = applyUtm(text, network, settings.utm);
+    out = applyHashtags(out, settings.networks?.[network]?.hashtags);
+    return out;
+  }
+
+  /**
+   * UP1 — post the first-comment follow-up after a successful main post
+   * (best-effort). The comment text is post.firstComment (captured at compose
+   * time) or the per-network default. Only networks with a known comment action
+   * are attempted; every failure is swallowed (the main post already succeeded,
+   * a missing comment must never flip the post to failed). No retry — one shot.
+   */
+  private async postFirstComment(
+    post: SocialPost,
+    target: SocialTarget,
+    network: string,
+    settings?: SocialSettings
+  ): Promise<void> {
+    const comment =
+      (post.firstComment && post.firstComment.trim()) ||
+      settings?.networks?.[network]?.firstComment?.trim() ||
+      '';
+    if (!comment) return;
+    const action = SOCIAL_COMMENT_ACTIONS[network];
+    if (!action) return; // network has no comment action wired
+    if (!target.externalId) return; // need the parent post id to attach a comment
+    const args = this.buildCommentArgs(network, comment, target.externalId);
+    await this.executeToolRaw(
+      action,
+      args,
+      post.userId,
+      `${post.id}:${network}:comment`
+    );
+  }
+
+  /** Build the comment action arguments per network (best-effort shapes). */
+  private buildCommentArgs(
+    network: string,
+    comment: string,
+    parentId: string
+  ): Record<string, unknown> {
+    switch (network) {
+      case 'twitter':
+        // Reply in-thread: a tweet with in_reply_to_tweet_id.
+        return { tweet_text: comment, in_reply_to_tweet_id: parentId, text: comment };
+      case 'linkedin':
+        return { message_text: comment, post_id: parentId, text: comment };
+      case 'instagram':
+        return { message: comment, media_id: parentId, text: comment };
+      case 'facebook':
+        return { message: comment, object_id: parentId, text: comment };
+      case 'reddit':
+        return { text: comment, thing_id: parentId };
+      default:
+        return { text: comment, parent_id: parentId };
+    }
   }
 
   /**
@@ -847,6 +1466,7 @@ export class ClickDzSocialService {
       media?: SocialMedia[];
       targets: SocialTarget[];
       scheduledAt?: number;
+      firstComment?: string;
     }
   ): SocialPost {
     const now = Date.now();
@@ -860,7 +1480,82 @@ export class ClickDzSocialService {
       scheduledAt: opts.scheduledAt,
       createdAt: now,
       updatedAt: now,
+      ...(opts.firstComment ? { firstComment: opts.firstComment } : {}),
     };
+  }
+
+  /**
+   * UP1 — enforce workspace queue rules for a NEW scheduled post. Reads the
+   * user's existing scheduled/published-today posts from the index and checks:
+   *   - maxPerDayPerNetwork: at most N posts per network in the rolling 24h
+   *     window around the requested time.
+   *   - minGapMinutes: no other scheduled post within ±gap of the requested time.
+   * Returns null when the post is allowed, or a machine reason + detail the
+   * controller maps to a typed 409. Fail-OPEN: any read error allows the post
+   * (rules are a convenience guardrail, not a security control). `excludeId`
+   * skips the post being rescheduled/edited so it doesn't conflict with itself.
+   */
+  async checkQueueRules(
+    userId: string,
+    opts: {
+      networks: string[];
+      scheduledAt: number;
+      rules?: QueueRules;
+      excludeId?: string;
+    }
+  ): Promise<{ reason: string; detail: string } | null> {
+    const rules = opts.rules;
+    if (!rules) return null;
+    const maxPerDay = rules.maxPerDayPerNetwork ?? 0;
+    const gapMin = rules.minGapMinutes ?? 0;
+    if (maxPerDay <= 0 && gapMin <= 0) return null;
+    let summaries: SocialPostSummary[];
+    try {
+      summaries = await this.listPostSummaries(userId);
+    } catch {
+      return null; // fail-open
+    }
+    const others = summaries.filter(
+      s =>
+        s.id !== opts.excludeId &&
+        (s.status === 'scheduled' ||
+          s.status === 'publishing' ||
+          s.status === 'published') &&
+        typeof s.scheduledAt === 'number'
+    );
+
+    // Min-gap: any other scheduled post within ±gap minutes.
+    if (gapMin > 0) {
+      const gapMs = gapMin * 60 * 1000;
+      const clash = others.find(
+        s => Math.abs((s.scheduledAt as number) - opts.scheduledAt) < gapMs
+      );
+      if (clash) {
+        return {
+          reason: 'min_gap_violation',
+          detail: `Un autre post est programmé à moins de ${gapMin} min de cet horaire.`,
+        };
+      }
+    }
+
+    // Max-per-day-per-network: count same-network posts in the ±24h window.
+    if (maxPerDay > 0) {
+      const dayMs = 24 * 60 * 60 * 1000;
+      for (const net of opts.networks) {
+        const count = others.filter(
+          s =>
+            s.networks.includes(net) &&
+            Math.abs((s.scheduledAt as number) - opts.scheduledAt) < dayMs
+        ).length;
+        if (count >= maxPerDay) {
+          return {
+            reason: 'max_per_day_violation',
+            detail: `Limite de ${maxPerDay} post(s)/jour atteinte pour ${net}.`,
+          };
+        }
+      }
+    }
+    return null;
   }
 
   /** Normalize a raw target array from the request body (fail-closed). */

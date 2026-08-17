@@ -228,6 +228,111 @@ export class ClickDzZoomPlusController {
   }
 
   // -------------------------------------------------------------------------
+  // Room state + lock + mute-on-entry (metadata-backed; real LiveKit ops).
+  // -------------------------------------------------------------------------
+
+  @Throttle('strict')
+  @Get('/api/v1/zoomplus/host/room-state')
+  async roomState(
+    @CurrentUser() _user: CurrentUser,
+    @Query('room') room: string
+  ) {
+    try {
+      return await this.svc.getRoomState(room);
+    } catch (err) {
+      if (this.isDisabledError(err)) throw new NotFound('ZOOM+ host controls disabled');
+      return { ok: false, message: (err as Error).message };
+    }
+  }
+
+  @Throttle('strict')
+  @Get('/api/v1/zoomplus/host/rooms')
+  async rooms(@CurrentUser() _user: CurrentUser) {
+    try {
+      return await this.svc.listRooms();
+    } catch (err) {
+      if (this.isDisabledError(err)) throw new NotFound('ZOOM+ host controls disabled');
+      return { ok: false, message: (err as Error).message };
+    }
+  }
+
+  @Throttle('strict')
+  @Post('/api/v1/zoomplus/host/lock')
+  async lock(
+    @CurrentUser() _user: CurrentUser,
+    @Body() body: { room: string; locked?: boolean }
+  ) {
+    try {
+      return await this.svc.setLocked(body.room, body.locked ?? true);
+    } catch (err) {
+      if (this.isDisabledError(err)) throw new NotFound('ZOOM+ host controls disabled');
+      return { ok: false, message: (err as Error).message };
+    }
+  }
+
+  @Throttle('strict')
+  @Post('/api/v1/zoomplus/host/mute-on-entry')
+  async muteOnEntry(
+    @CurrentUser() _user: CurrentUser,
+    @Body() body: { room: string; enabled?: boolean }
+  ) {
+    try {
+      return await this.svc.setMuteOnEntry(body.room, body.enabled ?? true);
+    } catch (err) {
+      if (this.isDisabledError(err)) throw new NotFound('ZOOM+ host controls disabled');
+      return { ok: false, message: (err as Error).message };
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Recording — LiveKit Egress. Start/stop return {ok} + egressId; list returns
+  // finished MP4 items. When egress is unconfigured the service throws and we
+  // surface {ok:false,message} so the frontend hides the control.
+  // -------------------------------------------------------------------------
+
+  @Throttle('strict')
+  @Post('/api/v1/zoomplus/host/recording/start')
+  async recordingStart(
+    @CurrentUser() _user: CurrentUser,
+    @Body() body: { room: string }
+  ) {
+    try {
+      return await this.svc.startRecording(body.room);
+    } catch (err) {
+      if (this.isDisabledError(err)) throw new NotFound('ZOOM+ host controls disabled');
+      return { ok: false, message: (err as Error).message };
+    }
+  }
+
+  @Throttle('strict')
+  @Post('/api/v1/zoomplus/host/recording/stop')
+  async recordingStop(
+    @CurrentUser() _user: CurrentUser,
+    @Body() body: { room: string; egressId?: string }
+  ) {
+    try {
+      return await this.svc.stopRecording(body.room, body.egressId);
+    } catch (err) {
+      if (this.isDisabledError(err)) throw new NotFound('ZOOM+ host controls disabled');
+      return { ok: false, message: (err as Error).message };
+    }
+  }
+
+  @Throttle('strict')
+  @Get('/api/v1/zoomplus/host/recordings')
+  async recordings(
+    @CurrentUser() _user: CurrentUser,
+    @Query('room') room: string
+  ) {
+    try {
+      return await this.svc.listRecordings(room);
+    } catch (err) {
+      if (this.isDisabledError(err)) throw new NotFound('ZOOM+ host controls disabled');
+      return { ok: false, message: (err as Error).message };
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Helpers
   // -------------------------------------------------------------------------
 

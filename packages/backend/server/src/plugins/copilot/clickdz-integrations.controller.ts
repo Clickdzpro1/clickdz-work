@@ -32,12 +32,16 @@ import {
   ClickDzSocialService,
   SOCIAL_TEXT_MAX,
   SOCIAL_TARGETS_MAX,
-  SOCIAL_MEDIA_MAX,
   SOCIAL_SCHEDULE_MAX_AHEAD_MS,
   SOCIAL_NETWORKS,
   SOCIAL_ACTIONS,
+  SOCIAL_FIRST_COMMENT_MAX,
 } from './clickdz-social.service';
-import type { SocialPost, PublishedLogEntry } from './clickdz-social.service';
+import type {
+  SocialPost,
+  PublishedLogEntry,
+  SocialSettings,
+} from './clickdz-social.service';
 import { ClickDzSocialJob } from './clickdz-social.job';
 import { CopilotStorage } from './storage';
 
@@ -2549,12 +2553,66 @@ export class ClickDzIntegrationsController {
   //   GET    /api/v1/social/analytics/:network         → {available:boolean, ...}
   // =========================================================================
 
+  // ---- UP1: Social config + advanced settings -----------------------------
+
+  /**
+   * GET /social/config — the single source of truth the Social studio polls to
+   * decide which mode is active + which capabilities to surface. Additive to
+   * the existing per-route {enabled} flags so the FE can branch once:
+   *   { composioConfigured, aiConfigured, networks:[...], mode }
+   * `mode` is 'composio' when the Composio key is set (posts route through
+   * connected accounts), else 'disabled' (dark — every write path 409s). AI
+   * (cdz-flash) drives /compose independently, so it is reported separately.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/social/config')
+  config(@CurrentUser() _user: CurrentUser, @Res() res: Response) {
+    res.status(200).json({
+      composioConfigured: !!COMPOSIO_API_KEY,
+      aiConfigured: !!CDZ_AI_KEY,
+      networks: SOCIAL_NETWORKS,
+      mode: COMPOSIO_API_KEY ? 'composio' : 'disabled',
+    });
+  }
+
+  /**
+   * GET /social/settings — the caller's advanced Social settings (per-network
+   * defaults, UTM, queue rules). Always available (settings persist regardless
+   * of the Composio key); defaults to {} when nothing is stored.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/social/settings')
+  async getSocialSettings(
+    @CurrentUser() user: CurrentUser
+  ): Promise<SocialSettings> {
+    return this.socialService.readSettings(user.id);
+  }
+
+  /**
+   * PUT /social/settings — upsert advanced settings (merged over the stored
+   * blob, validated + clamped in the service). Network defaults merge per-slug;
+   * passing an explicit empty section clears it. Returns the normalized result.
+   */
+  @Throttle('strict')
+  @Put('/api/v1/social/settings')
+  async putSocialSettings(
+    @CurrentUser() user: CurrentUser,
+    @Body() body: any
+  ): Promise<SocialSettings> {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new BadRequest('settings body must be an object');
+    }
+    return this.socialService.writeSettings(user.id, body);
+  }
+
   // ---- Accounts (connections) ---------------------------------------------
 
   /**
    * GET /social/accounts — per-user connections for the 10 social networks.
-   * One call replaces the FE's 10x toolkit-search fan-out. Returns
-   * [{network, connected}] for exactly the 10 social slugs.
+   * One call replaces the FE's 10x toolkit-search fan-out. UP1: each account now
+   * carries the live Composio `status` (ACTIVE | INITIATED | EXPIRED | …) plus
+   * the account id + created time so the grid can show a real connection state,
+   * not just a boolean. The `connected` boolean is preserved for back-compat.
    */
   @Throttle('strict')
   @Get('/api/v1/social/accounts')
@@ -2566,12 +2624,32 @@ export class ClickDzIntegrationsController {
       res.status(200).json({ enabled: false, accounts: [] });
       return;
     }
-    const connectedSlugs = await this.socialService.fetchConnectedSlugsForSocial(user.id);
-    const accounts = SOCIAL_NETWORKS.map(network => ({
-      network,
-      connected: connectedSlugs.has(network),
-    }));
+    const accounts = await this.socialService.fetchDetailedAccounts(user.id);
     res.status(200).json({ enabled: true, accounts });
+  }
+
+  /**
+   * GET /social/accounts/:network/status — poll ONE network's live connection
+   * status for the caller. Used by the Connections view while a card shows
+   * "Connexion…" after the OAuth tab opens — cheaper than re-listing all 10.
+   */
+  @Throttle('strict')
+  @Get('/api/v1/social/accounts/:network/status')
+  async socialAccountStatus(
+    @CurrentUser() user: CurrentUser,
+    @Param('network') network: string,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(200).json({ enabled: false, connected: false, status: 'not_configured' });
+      return;
+    }
+    const toolkit = network.trim().toLowerCase();
+    if (!SOCIAL_NETWORKS.includes(toolkit)) {
+      throw new BadRequest('unknown network');
+    }
+    const st = await this.socialService.fetchAccountStatus(user.id, toolkit);
+    res.status(200).json({ enabled: true, network: toolkit, ...st });
   }
 
   /**
@@ -2825,6 +2903,36 @@ export class ClickDzIntegrationsController {
 
     const publishNow = body?.publishNow === true;
 
+    // UP1: optional first-comment text captured at compose time (falls back to
+    // the per-network default at publish). Clamped to the same cap the settings
+    // normalizer uses. `saveDraftForApproval` submits a draft for review.
+    const firstComment =
+      typeof body?.firstComment === 'string'
+        ? body.firstComment.trim().slice(0, SOCIAL_FIRST_COMMENT_MAX) || undefined
+        : undefined;
+    const submitForApproval = body?.submitForApproval === true;
+
+    // UP1: load the caller's advanced settings once — drives the approval gate,
+    // queue rules, and the content defaults applied at publish. Fail-soft {}.
+    const settings = await this.socialService.readSettings(user.id);
+    const approvalRequired = settings.queue?.approvalRequired === true;
+
+    // UP1: queue rules for a SCHEDULED post (max/day/network + min gap). Enforced
+    // before we persist so a rejected post never lands in the queue. Skipped for
+    // publish-now (immediate) and drafts (no schedule yet). Fail-open in-service.
+    if (scheduledAt && !publishNow) {
+      const violation = await this.socialService.checkQueueRules(user.id, {
+        networks: targets.map(t => t.network),
+        scheduledAt,
+        rules: settings.queue,
+        excludeId: typeof body?.id === 'string' ? body.id.trim() : undefined,
+      });
+      if (violation) {
+        res.status(409).json({ error: violation.reason, detail: violation.detail });
+        return;
+      }
+    }
+
     // --- resolve existing post (upsert) ---
     const existingId = typeof body?.id === 'string' ? body.id.trim() : null;
     let post: SocialPost;
@@ -2841,38 +2949,56 @@ export class ClickDzIntegrationsController {
         existing.targets = targets;
         existing.scheduledAt = scheduledAt;
         existing.jobId = undefined;
+        existing.firstComment = firstComment;
         existing.status = scheduledAt ? 'scheduled' : publishNow ? 'publishing' : 'draft';
         post = existing;
       } else {
         // ID supplied but not found — mint fresh.
-        post = this.socialService.mintPost(user.id, { text, media, targets, scheduledAt });
+        post = this.socialService.mintPost(user.id, { text, media, targets, scheduledAt, firstComment });
       }
     } else {
-      post = this.socialService.mintPost(user.id, { text, media, targets, scheduledAt });
+      post = this.socialService.mintPost(user.id, { text, media, targets, scheduledAt, firstComment });
     }
 
     if (publishNow) {
+      // UP1: approval gate — when the workspace requires approval, a publish-now
+      // request from the author is captured as pending-approval instead (the
+      // approver publishes it via /approve). Skipped when the post is already
+      // approved (an approver replays publish-now on an approved post).
+      if (approvalRequired && post.status !== 'scheduled') {
+        post.status = 'pending-approval';
+        await this.socialService.writePost(user.id, post);
+        res.status(200).json(post);
+        return;
+      }
       // Inline publish: persist as publishing → run → update.
       post.status = 'publishing';
       await this.socialService.writePost(user.id, post);
-      const updated = await this.socialService.publishPost(post);
+      const updated = await this.socialService.publishPost(post, settings);
       await this.socialService.writePost(user.id, updated);
-      // Append to published log.
-      const logEntry: PublishedLogEntry = {
-        postId: updated.id,
-        publishedAt: updated.publishedAt ?? Date.now(),
-        results: updated.targets.map(t => ({
-          network: t.network,
-          ok: t.status === 'ok',
-          externalUrl: t.externalUrl,
-        })),
-      };
-      await this.socialService.appendPublishedLog(user.id, logEntry);
+      // Append to published log (UP1: carry per-network error/action/attempts).
+      await this.socialService.appendPublishedLog(user.id, this.buildLogEntry(updated));
       res.status(200).json(updated);
       return;
     }
 
+    if (submitForApproval && !scheduledAt) {
+      // UP1: author explicitly submits a draft for review.
+      post.status = 'pending-approval';
+      await this.socialService.writePost(user.id, post);
+      res.status(200).json(post);
+      return;
+    }
+
     if (scheduledAt) {
+      // UP1: approval gate for scheduled posts — hold as pending-approval; the
+      // approver's /approve re-enqueues at the stored scheduledAt.
+      if (approvalRequired) {
+        post.status = 'pending-approval';
+        await this.socialService.writePost(user.id, post);
+        res.status(200).json(post);
+        return;
+      }
       // Schedule: persist as scheduled + enqueue delayed job.
       post.status = 'scheduled';
       await this.socialService.writePost(user.id, post);
@@ -2889,6 +3015,27 @@ export class ClickDzIntegrationsController {
     post.status = 'draft';
     await this.socialService.writePost(user.id, post);
     res.status(200).json(post);
+  }
+
+  /**
+   * UP1 — build a PublishedLogEntry from a published post, carrying per-network
+   * error detail + resolved action + attempt count so the Journal can explain
+   * failures (used by publish-now, retry, and the scheduled job path shares its
+   * own copy). Kept DRY here for the two controller call sites.
+   */
+  private buildLogEntry(post: SocialPost): PublishedLogEntry {
+    return {
+      postId: post.id,
+      publishedAt: post.publishedAt ?? Date.now(),
+      results: post.targets.map(t => ({
+        network: t.network,
+        ok: t.status === 'ok',
+        externalUrl: t.externalUrl,
+        ...(t.error ? { error: t.error } : {}),
+        ...(t.action ? { action: t.action } : {}),
+        ...(typeof t.attempts === 'number' ? { attempts: t.attempts } : {}),
+      })),
+    };
   }
 
   /**
@@ -3023,20 +3170,77 @@ export class ClickDzIntegrationsController {
     post.status = 'publishing';
     await this.socialService.writePost(user.id, post);
 
-    const updated = await this.socialService.publishPost(post);
+    // UP1: apply the caller's content defaults on retry too (parity with the
+    // publish-now / scheduled paths).
+    const settings = await this.socialService.readSettings(user.id);
+    const updated = await this.socialService.publishPost(post, settings);
     await this.socialService.writePost(user.id, updated);
 
-    // Update published log.
-    const logEntry: PublishedLogEntry = {
-      postId: updated.id,
-      publishedAt: updated.publishedAt ?? Date.now(),
-      results: updated.targets.map(t => ({
-        network: t.network,
-        ok: t.status === 'ok',
-        externalUrl: t.externalUrl,
-      })),
-    };
-    await this.socialService.appendPublishedLog(user.id, logEntry);
+    // Update published log (UP1: per-network error/action/attempts).
+    await this.socialService.appendPublishedLog(user.id, this.buildLogEntry(updated));
+    res.status(200).json(updated);
+  }
+
+  /**
+   * UP1 — POST /social/posts/:id/approve — move a 'pending-approval' post into
+   * its target state: publish-now (immediate) when it has no schedule, or
+   * enqueue the delayed job when it carries a future scheduledAt. This is the
+   * approver's action in the approval workflow (approvalRequired queue rule).
+   * Returns the updated SocialPost. 409 when the post isn't awaiting approval.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/social/posts/:id/approve')
+  async approvePost(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Res() res: Response
+  ) {
+    if (!COMPOSIO_API_KEY) {
+      res.status(409).json({ error: 'not_configured' });
+      return;
+    }
+    const post = await this.socialService.readPost(user.id, id);
+    if (!post) {
+      res.status(404).json({ error: 'post_not_found' });
+      return;
+    }
+    if (post.status !== 'pending-approval') {
+      throw new BadRequest(
+        `"approve" only applies to pending-approval posts (current: ${post.status})`
+      );
+    }
+    const settings = await this.socialService.readSettings(user.id);
+    const now = Date.now();
+
+    // Future schedule → enqueue the delayed job (re-validate queue rules).
+    if (post.scheduledAt && post.scheduledAt > now) {
+      const violation = await this.socialService.checkQueueRules(user.id, {
+        networks: post.targets.map(t => t.network),
+        scheduledAt: post.scheduledAt,
+        rules: settings.queue,
+        excludeId: post.id,
+      });
+      if (violation) {
+        res.status(409).json({ error: violation.reason, detail: violation.detail });
+        return;
+      }
+      post.status = 'scheduled';
+      await this.socialService.writePost(user.id, post);
+      const jobId = await this.socialJob.enqueuePublish(user.id, post.id, post.scheduledAt);
+      if (jobId) {
+        post.jobId = jobId;
+        await this.socialService.writePost(user.id, post);
+      }
+      res.status(200).json(post);
+      return;
+    }
+
+    // No (or past) schedule → publish immediately.
+    post.status = 'publishing';
+    await this.socialService.writePost(user.id, post);
+    const updated = await this.socialService.publishPost(post, settings);
+    await this.socialService.writePost(user.id, updated);
+    await this.socialService.appendPublishedLog(user.id, this.buildLogEntry(updated));
     res.status(200).json(updated);
   }
 

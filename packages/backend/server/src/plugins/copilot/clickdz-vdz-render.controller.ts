@@ -324,12 +324,12 @@ export class ClickDzVdzRenderController {
     path: string,
     init: RequestInit,
     timeoutMs: number
-  ): Promise<Response> {
+  ): Promise<globalThis.Response> {
     try {
       return (await fetch(`${RENDER_URL}${path}`, {
         ...init,
         signal: AbortSignal.timeout(timeoutMs),
-      })) as unknown as Response;
+      })) as unknown as globalThis.Response;
     } catch (cause) {
       throw new CopilotProviderSideError({
         provider: 'render',
@@ -367,12 +367,12 @@ export class ClickDzVdzRenderController {
     path: string,
     init: RequestInit,
     timeoutMs: number
-  ): Promise<Response> {
+  ): Promise<globalThis.Response> {
     try {
       return (await fetch(`${REMOTION_URL}${path}`, {
         ...init,
         signal: AbortSignal.timeout(timeoutMs),
-      })) as unknown as Response;
+      })) as unknown as globalThis.Response;
     } catch (cause) {
       throw new CopilotProviderSideError({
         provider: 'render',
@@ -672,7 +672,7 @@ export class ClickDzVdzRenderController {
 
     // Pick the backend by the routed engine; the stream/relay below is
     // identical for both (a finished MP4 is a finished MP4).
-    let upstream: Response;
+    let upstream: globalThis.Response;
     if (route.engine === 'remotion') {
       if (!this.remotionConfigured()) {
         throw new BadRequest('Remotion render engine is not configured');

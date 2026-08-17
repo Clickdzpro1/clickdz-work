@@ -3,10 +3,7 @@ import type {
   AIDraftService,
   AIToolsConfigService,
 } from '@affine/core/modules/ai-button';
-import {
-  type AIModelService,
-  COUNCIL_MODEL_ID,
-} from '@affine/core/modules/ai-button/services/models';
+import { type AIModelService } from '@affine/core/modules/ai-button/services/models';
 import type {
   ServerService,
   SubscriptionService,
@@ -1722,16 +1719,6 @@ export class AIChatInput extends SignalWatcher(
       color: var(--affine-v2-text-primary);
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
     }
-    .chat-mode-option.council {
-      color: #8a6d1d;
-    }
-    .chat-mode-option.council.active {
-      color: #c99700;
-      background: color-mix(in srgb, #d6a700 18%, transparent);
-      box-shadow:
-        0 0 0 1px color-mix(in srgb, #d6a700 45%, transparent),
-        0 1px 4px color-mix(in srgb, #d6a700 22%, transparent);
-    }
     .chat-mode-option.plan {
       margin-left: 6px;
       border: 1px solid var(--affine-v2-layer-insideBorder-border);
@@ -1812,7 +1799,7 @@ export class AIChatInput extends SignalWatcher(
     }
 
     /* Narrow screens (e.g. 390px phones): the secondary action strip (Image,
-       Builder, Workers, Artifacts, Chat/Council, Plan, preferences, send) has
+       Builder, Workers, Artifacts, Plan, preferences, send) has
        too many wide, text-labelled buttons to wrap cleanly — wrapping just
        turns it into several still-cramped rows and pushes the textarea down.
        Let it scroll horizontally instead: one line, no layout shift, nothing
@@ -2653,25 +2640,12 @@ export class AIChatInput extends SignalWatcher(
     }
   }
 
-  // Council (a 3-vendor fan-out model) is mutually exclusive with the composer's
-  // one-off modes. Enabling council clears all three from here so the exclusion
-  // lives in one place; passed to `setCouncilMode` as its `onEnable` callback.
-  private _clearCouncilExclusiveModes() {
-    this.activeWorker = null;
-    this.imageMode = false;
-    this.appMode = false;
-  }
-
   private _selectWorker(
     categoryName: string,
     icon: string,
     recommendedModel: string,
     w: { id: string; name: string }
   ) {
-    // A worker is a single-persona directive; council fans out to 3 vendors —
-    // they conflict. Turn council OFF first (before setModel below) so the
-    // worker's recommended model wins over council's pre-council restore.
-    this.aiModelService.setCouncilMode(false);
     this.activeWorker = {
       id: w.id,
       name: w.name,
@@ -3763,7 +3737,9 @@ export class AIChatInput extends SignalWatcher(
         this._planPortalRoot = createSimplePortal({
           container: this.portalContainer ?? document.body,
           shadowDom: false,
-          template: nothing,
+          // `null` renders nothing (lit child-expression semantics) — the
+          // Renderable union does not accept lit's `nothing` sentinel.
+          template: null,
         });
       }
       render(this._renderPlanReview(), this._planPortalRoot);
@@ -4009,8 +3985,6 @@ export class AIChatInput extends SignalWatcher(
             this.imageMode = !this.imageMode;
             if (this.imageMode) {
               this.appMode = false;
-              // Image mode excludes council (a model selection) — turn it off.
-              this.aiModelService.setCouncilMode(false);
             }
           }}
         >
@@ -4024,8 +3998,6 @@ export class AIChatInput extends SignalWatcher(
             this.appMode = !this.appMode;
             if (this.appMode) {
               this.imageMode = false;
-              // Builder mode excludes council (a model selection) — turn it off.
-              this.aiModelService.setCouncilMode(false);
             }
           }}
         >
@@ -4049,31 +4021,6 @@ export class AIChatInput extends SignalWatcher(
           ${this.artifacts.length ? html`<span>${this.artifacts.length}</span>` : nothing}
         </button>
         <div class="chat-input-footer-spacer"></div>
-        <div class="chat-mode-toggle" data-testid="chat-mode-toggle">
-          <button
-            class="chat-mode-option ${this.aiModelService.modelId.value !==
-            COUNCIL_MODEL_ID
-              ? 'active'
-              : ''}"
-            @click=${() => this.aiModelService.setCouncilMode(false)}
-            title="Chat with a single model"
-          >
-            Chat
-          </button>
-          <button
-            class="chat-mode-option council ${this.aiModelService.modelId
-              .value === COUNCIL_MODEL_ID
-              ? 'active'
-              : ''}"
-            @click=${() =>
-              this.aiModelService.setCouncilMode(true, () =>
-                this._clearCouncilExclusiveModes()
-              )}
-            title="Three models answer together with a synthesis"
-          >
-            🏛️ Council
-          </button>
-        </div>
         <button
           class="chat-mode-option plan ${this.planMode ? 'active' : ''}"
           data-testid="clickdz-plan-mode"
@@ -4531,17 +4478,6 @@ export class AIChatInput extends SignalWatcher(
           ) + userInput;
       }
     }
-    // cdz-council is a real backend model: CDZ AI runs the 3-vendor fan-out
-    // and synthesis server-side, so the client sends the plain question — no
-    // prompt decoration needed (that was a workaround for the old single-model
-    // Make bridge). Track mode only for UI treatment.
-    const sessionKey = this.session?.sessionId ?? 'draft';
-    this.aiModelService.setSessionMode(
-      sessionKey,
-      this.aiModelService.modelId.value === COUNCIL_MODEL_ID
-        ? 'council'
-        : 'standard'
-    );
     const imageAttachments = await Promise.all(
       images?.map(image => readBlobAsURL(image))
     );

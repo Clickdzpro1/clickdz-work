@@ -35,12 +35,20 @@ function maxAttemptsFor(app: string): number {
   return PROVISION_MAX_ATTEMPTS_OVERRIDE[app] ?? PROVISION_MAX_ATTEMPTS;
 }
 
-async function provisionOnce(app: string): Promise<ProvisionedApp | null> {
+async function provisionOnce(
+  app: string,
+  opts?: ProvisionOpts
+): Promise<ProvisionedApp | null> {
   try {
+    // Additive body fields — the backend reads `room` ONLY for the zoomplus
+    // branch (to land the iframe directly in a specific Meet room). Omitted for
+    // every other app, so existing callers are unaffected.
+    const body: Record<string, unknown> = { app };
+    if (opts?.room) body.room = opts.room;
     const resp = await fetch('/api/v1/apps/provision', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(PROVISION_TIMEOUT_MS),
     });
     if (!resp.ok) return null;
@@ -57,6 +65,12 @@ async function provisionOnce(app: string): Promise<ProvisionedApp | null> {
   }
 }
 
+/** Optional provisioning hints. `room` is honored only by the zoomplus branch. */
+export interface ProvisionOpts {
+  /** ZOOM+: the LiveKit room name to open directly in the embedded Meet SPA. */
+  room?: string;
+}
+
 /**
  * Ask the backend for a one-time bridge code for `app`
  * ('slidepro' | 'socialplus' | 'coursepro' | 'zoomplus').
@@ -67,11 +81,17 @@ async function provisionOnce(app: string): Promise<ProvisionedApp | null> {
  * E1.1 changes vs original:
  *  - Timeout raised from 4 s → 25 s (backend chain can take up to ~30 s cold).
  *  - One automatic retry so a cold-start transient doesn't hard-fail the panel.
+ *
+ * ZOOM+ upgrade: pass `{ room }` to land the embedded Meet SPA directly in a
+ * specific room after auto-login (best-effort; ignored by the other apps).
  */
-export async function provisionApp(app: string): Promise<ProvisionedApp | null> {
+export async function provisionApp(
+  app: string,
+  opts?: ProvisionOpts
+): Promise<ProvisionedApp | null> {
   const maxAttempts = maxAttemptsFor(app);
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const result = await provisionOnce(app);
+    const result = await provisionOnce(app, opts);
     if (result !== null) {
       // PostHog key action (no-op unless CDZ_POSTHOG_KEY/HOST configured).
       trackCdzEvent('app_provisioned', { app });

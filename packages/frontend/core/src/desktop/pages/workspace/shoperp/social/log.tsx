@@ -114,35 +114,53 @@ export const LogView = ({ lang, dict, refresh }: Props) => {
                   <span style={{ fontSize: 11.5, color: C.accent, fontWeight: 700 }}>{fmtTime(entry.publishedAt)}</span>
                   <span style={{ fontSize: 11, color: C.muted }}>{dict.postId ?? 'ID de publication :'} {entry.postId.slice(0, 8)}…</span>
                 </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {entry.results.map(r => {
                     const meta = getNetworkMeta(r.network);
                     return (
-                      <div
-                        key={r.network}
-                        style={{
-                          fontSize: 11,
-                          padding: '2px 8px',
-                          borderRadius: 6,
-                          background: r.ok ? '#4cae4c22' : '#c8283a22',
-                          color: r.ok ? C.okText : '#c8283a',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 4,
-                        }}
-                      >
-                        <span>{meta?.icon ?? r.network[0]}</span>
-                        <span>{meta?.label ?? r.network}</span>
-                        <span>{r.ok ? '✓' : '✕'}</span>
-                        {r.ok && r.externalUrl && (
-                          <a
-                            href={r.externalUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            style={{ color: C.accent, textDecoration: 'none', fontSize: 10 }}
-                          >
-                            ↗
-                          </a>
+                      <div key={r.network} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            padding: '2px 8px',
+                            borderRadius: 6,
+                            background: r.ok ? '#4cae4c22' : '#c8283a22',
+                            color: r.ok ? C.okText : '#c8283a',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            alignSelf: 'flex-start',
+                          }}
+                        >
+                          <span>{meta?.icon ?? r.network[0]}</span>
+                          <span>{meta?.label ?? r.network}</span>
+                          <span>{r.ok ? '✓' : '✕'}</span>
+                          {/* UP1 — attempt count when the publish retried. */}
+                          {typeof r.attempts === 'number' && r.attempts > 1 && (
+                            <span style={{ opacity: 0.8 }}>· {r.attempts} {dict.attempts ?? 'tentatives'}</span>
+                          )}
+                          {r.ok && r.externalUrl && (
+                            <a
+                              href={r.externalUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ color: C.accent, textDecoration: 'none', fontSize: 10 }}
+                            >
+                              ↗
+                            </a>
+                          )}
+                        </div>
+                        {/* UP1 — per-network error detail for a failed target. */}
+                        {!r.ok && r.error && (
+                          <div style={{ fontSize: 10.5, color: '#c8283a', paddingLeft: 6, direction: rtl ? 'rtl' : undefined, wordBreak: 'break-word' }}>
+                            {dict.errorDetail ?? 'Détail de l’erreur'}: {r.error}
+                          </div>
+                        )}
+                        {/* UP1 — resolved Composio action slug (diagnostic). */}
+                        {r.action && (
+                          <div style={{ fontSize: 9.5, color: C.muted, paddingLeft: 6 }}>
+                            {dict.action ?? 'Action'}: {r.action}
+                          </div>
                         )}
                       </div>
                     );

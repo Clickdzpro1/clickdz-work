@@ -7,10 +7,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Banner, C, miniBtnStyle, Spinner } from '../shoperp-shared';
 import { CDZIM_DEFAULT, CDZIM_MODELS } from '../../../../../clickdz/cdzim';
 import {
+  bestTimes,
   composeContent,
   createOrUpdatePost,
   generateImage,
   getNetworkMeta,
+  nextDateForWindow,
   uploadMedia,
   type SocialMedia,
   type SocialPost,
@@ -57,6 +59,10 @@ export const ComposerView = ({
     editPost?.targets.map(t => t.network) ?? []
   );
   const [media, setMedia] = useState<SocialMedia[]>(editPost?.media ?? []);
+  // UP1 — first-comment text (posted as a follow-up after the main post).
+  const [firstComment, setFirstComment] = useState<string>(editPost?.firstComment ?? '');
+  // UP1 — active variant tab in the per-network editor ('master' = base caption).
+  const [variantTab, setVariantTab] = useState<string>('master');
   const [scheduledAt, setScheduledAt] = useState<string>(
     editPost?.scheduledAt
       ? new Date(editPost.scheduledAt).toISOString().slice(0, 16)
@@ -162,7 +168,9 @@ export const ComposerView = ({
     try {
       const res = await generateImage(p, imgModel);
       if (res.ok && res.url) {
-        setMedia(prev => [...prev, { kind: 'image', url: res.url!, alt: p }].slice(0, 4));
+        setMedia(prev =>
+          [...prev, { kind: 'image' as const, url: res.url!, alt: p }].slice(0, 4)
+        );
         setImgNote(dict.imgGenOk ?? 'Image générée et ajoutée.');
         setImgPrompt('');
       } else {
@@ -221,6 +229,7 @@ export const ComposerView = ({
         text,
         media,
         targets: buildTargets(),
+        firstComment: firstComment.trim() || undefined,
       });
       if (res.ok && res.post) {
         setSubmitTone('ok');
@@ -236,7 +245,38 @@ export const ComposerView = ({
     } finally {
       setSubmitting(false);
     }
-  }, [baseText, media, selectedNetworks, editPost, submitting, dict, onSaved, networkTexts]);
+  }, [baseText, media, selectedNetworks, editPost, submitting, dict, onSaved, networkTexts, firstComment]);
+
+  // UP1 — submit a draft for approval (approvalRequired workflow).
+  const handleSubmitApproval = useCallback(async () => {
+    const text = baseText.trim();
+    if (!text || selectedNetworks.length === 0 || submitting) return;
+    setSubmitting(true);
+    setSubmitNote(null);
+    try {
+      const res = await createOrUpdatePost({
+        id: editPost?.id,
+        text,
+        media,
+        targets: buildTargets(),
+        firstComment: firstComment.trim() || undefined,
+        submitForApproval: true,
+      });
+      if (res.ok && res.post) {
+        setSubmitTone('ok');
+        setSubmitNote(dict.pendingApproval ?? 'En attente de validation');
+        onSaved(res.post);
+      } else {
+        setSubmitTone('err');
+        setSubmitNote(res.message ?? res.error ?? dict.submitFail ?? 'Échec.');
+      }
+    } catch {
+      setSubmitTone('err');
+      setSubmitNote(dict.submitFail ?? 'Échec.');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [baseText, media, selectedNetworks, editPost, submitting, dict, onSaved, networkTexts, firstComment]);
 
   const handleSchedule = useCallback(async () => {
     const text = baseText.trim();
@@ -256,11 +296,15 @@ export const ComposerView = ({
         media,
         targets: buildTargets(),
         scheduledAt: epoch,
+        firstComment: firstComment.trim() || undefined,
       });
       if (res.ok && res.post) {
         setSubmitTone('ok');
-        setSubmitNote(dict.scheduled ?? 'Publication planifiée.');
+        setSubmitNote(res.post.status === 'pending-approval' ? (dict.pendingApproval ?? 'En attente de validation') : (dict.scheduled ?? 'Publication planifiée.'));
         onSaved(res.post);
+      } else if (res.error === 'min_gap_violation' || res.error === 'max_per_day_violation') {
+        setSubmitTone('err');
+        setSubmitNote(`${dict.queueRuleBlocked ?? 'Bloqué par une règle de file d\'attente :'} ${res.detail ?? ''}`);
       } else {
         setSubmitTone('err');
         setSubmitNote(res.message ?? res.error ?? dict.submitFail ?? 'La planification a échoué.');
@@ -271,7 +315,7 @@ export const ComposerView = ({
     } finally {
       setSubmitting(false);
     }
-  }, [baseText, media, selectedNetworks, scheduledAt, editPost, submitting, dict, onSaved, networkTexts]);
+  }, [baseText, media, selectedNetworks, scheduledAt, editPost, submitting, dict, onSaved, networkTexts, firstComment]);
 
   const handlePublishNow = useCallback(async () => {
     const text = baseText.trim();
@@ -290,10 +334,11 @@ export const ComposerView = ({
         media,
         targets: buildTargets(),
         publishNow: true,
+        firstComment: firstComment.trim() || undefined,
       });
       if (res.ok && res.post) {
         setSubmitTone('ok');
-        setSubmitNote(dict.published ?? 'Publié !');
+        setSubmitNote(res.post.status === 'pending-approval' ? (dict.pendingApproval ?? 'En attente de validation') : (dict.published ?? 'Publié !'));
         onSaved(res.post);
       } else {
         setSubmitTone('err');
@@ -305,7 +350,7 @@ export const ComposerView = ({
     } finally {
       setSubmitting(false);
     }
-  }, [baseText, media, selectedNetworks, mediaRequiredViolations, editPost, submitting, dict, onSaved, networkTexts]);
+  }, [baseText, media, selectedNetworks, mediaRequiredViolations, editPost, submitting, dict, onSaved, networkTexts, firstComment]);
 
   const tabStyle = (t: string) => ({
     fontSize: 12,
@@ -316,6 +361,19 @@ export const ComposerView = ({
     cursor: 'pointer',
     background: activeTab === t ? C.accent : 'transparent',
     color: activeTab === t ? '#fff' : C.muted,
+  });
+
+  // UP1 — variant sub-tab style (master + per-network override tabs).
+  const variantTabStyle = (on: boolean) => ({
+    fontSize: 11.5,
+    fontWeight: on ? 700 : 500,
+    padding: '4px 10px',
+    borderRadius: 8,
+    cursor: 'pointer',
+    border: `1px solid ${on ? C.accent : C.border}`,
+    background: on ? C.accentSoft : 'transparent',
+    color: on ? C.accent : C.muted,
+    whiteSpace: 'nowrap' as const,
   });
 
   if (connectedNetworks.length === 0) {
@@ -371,15 +429,121 @@ export const ComposerView = ({
       {/* Main tab content */}
       {activeTab === 'compose' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* UP1 — variant tabs: one master caption + a per-network override tab.
+              Empty network tabs fall back to the master text at publish. */}
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setVariantTab('master')}
+              style={variantTabStyle(variantTab === 'master')}
+            >
+              {dict.variantTabMaster ?? 'Texte principal'}
+            </button>
+            {selectedNetworks.map(slug => {
+              const meta = getNetworkMeta(slug);
+              const has = (networkTexts[slug] ?? '').trim().length > 0;
+              return (
+                <button
+                  key={slug}
+                  onClick={() => setVariantTab(slug)}
+                  style={variantTabStyle(variantTab === slug)}
+                  title={meta?.label ?? slug}
+                >
+                  {meta?.icon ?? slug[0].toUpperCase()} {meta?.label ?? slug}{has ? ' •' : ''}
+                </button>
+              );
+            })}
+          </div>
+
+          {variantTab === 'master' ? (
+            <div>
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 4, direction: rtl ? 'rtl' : undefined }}>
+                {dict.baseCaption ?? 'Légende de base'}
+              </div>
+              <textarea
+                value={baseText}
+                onChange={e => setBaseText(e.target.value)}
+                placeholder={dict.captionPlaceholder ?? 'Écrivez votre légende ici…'}
+                rows={5}
+                dir={rtl ? 'rtl' : undefined}
+                style={{
+                  width: '100%',
+                  resize: 'vertical',
+                  borderRadius: 10,
+                  border: `1px solid ${C.border}`,
+                  background: C.panel2,
+                  color: C.text,
+                  padding: '10px 12px',
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 2, textAlign: 'right' }}>{baseText.length} {dict.charsLabel ?? 'caractères'}</div>
+              {/* Emoji quick-insert (master only) */}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
+                <span style={{ fontSize: 11, color: C.muted }}>{dict.emoji ?? 'Emoji :'}</span>
+                {EMOJI_QUICK.map(e => (
+                  <button
+                    key={e}
+                    onClick={() => insertEmoji(e)}
+                    style={{ fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '1px 3px' }}
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            // Per-network override tab.
+            (() => {
+              const slug = variantTab;
+              const meta = getNetworkMeta(slug);
+              const val = networkTexts[slug] ?? '';
+              const effLen = (val || baseText).length;
+              const over = effLen > (meta?.charLimit ?? Infinity);
+              return (
+                <div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 4 }}>
+                    {meta?.label ?? slug} — {dict.perNetworkOverrides ?? 'Texte personnalisé (facultatif)'}
+                  </div>
+                  <textarea
+                    value={val}
+                    onChange={e => setNetworkText(slug, e.target.value)}
+                    placeholder={dict.overridePlaceholder ?? `Texte personnalisé pour ${meta?.label ?? slug} (laisser vide pour utiliser le texte principal)`}
+                    rows={5}
+                    dir={rtl ? 'rtl' : undefined}
+                    style={{
+                      width: '100%',
+                      resize: 'vertical',
+                      borderRadius: 10,
+                      border: `1px solid ${over ? '#c8283a' : C.border}`,
+                      background: C.panel2,
+                      color: C.text,
+                      padding: '10px 12px',
+                      fontSize: 13,
+                      fontFamily: 'inherit',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                  <div style={{ fontSize: 10.5, color: over ? '#c8283a' : C.muted, textAlign: 'right' }}>
+                    {effLen}/{meta?.charLimit ?? '?'} {val.trim() ? '' : `(${dict.usingMaster ?? 'texte principal'})`}
+                  </div>
+                </div>
+              );
+            })()
+          )}
+
+          {/* UP1 — first comment field */}
           <div>
             <div style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 4, direction: rtl ? 'rtl' : undefined }}>
-              {dict.baseCaption ?? 'Légende de base'}
+              {dict.firstCommentField ?? 'Premier commentaire (optionnel)'}
             </div>
             <textarea
-              value={baseText}
-              onChange={e => setBaseText(e.target.value)}
-              placeholder={dict.captionPlaceholder ?? 'Écrivez votre légende ici…'}
-              rows={5}
+              value={firstComment}
+              onChange={e => setFirstComment(e.target.value)}
+              placeholder={dict.firstCommentFieldHint ?? 'Publié en commentaire après la publication principale.'}
+              rows={2}
+              maxLength={500}
               dir={rtl ? 'rtl' : undefined}
               style={{
                 width: '100%',
@@ -388,71 +552,37 @@ export const ComposerView = ({
                 border: `1px solid ${C.border}`,
                 background: C.panel2,
                 color: C.text,
-                padding: '10px 12px',
-                fontSize: 13,
+                padding: '9px 12px',
+                fontSize: 12.5,
                 fontFamily: 'inherit',
                 boxSizing: 'border-box',
               }}
             />
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 2, textAlign: 'right' }}>{baseText.length} caractères</div>
           </div>
 
-          {/* Emoji quick-insert */}
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: C.muted }}>{dict.emoji ?? 'Emoji :'}</span>
-            {EMOJI_QUICK.map(e => (
-              <button
-                key={e}
-                onClick={() => insertEmoji(e)}
-                style={{ fontSize: 16, background: 'none', border: 'none', cursor: 'pointer', padding: '1px 3px' }}
-              >
-                {e}
-              </button>
-            ))}
-          </div>
-
-          {/* Per-network overrides */}
+          {/* UP1 — best-time suggestion chips (fills the schedule input) */}
           {selectedNetworks.length > 0 && (
-            <details style={{ marginTop: 4 }}>
-              <summary style={{ fontSize: 12, color: C.muted, cursor: 'pointer' }}>
-                {dict.perNetworkOverrides ?? 'Textes personnalisés par réseau (facultatif)'}
-              </summary>
-              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {selectedNetworks.map(slug => {
-                  const meta = getNetworkMeta(slug);
-                  const val = networkTexts[slug] ?? '';
-                  return (
-                    <div key={slug}>
-                      <div style={{ fontSize: 11.5, fontWeight: 600, color: C.muted, marginBottom: 2 }}>
-                        {meta?.label ?? slug} ({meta?.charLimit ?? '?'} caractères max)
-                      </div>
-                      <textarea
-                        value={val}
-                        onChange={e => setNetworkText(slug, e.target.value)}
-                        placeholder={dict.overridePlaceholder ?? `Texte personnalisé pour ${meta?.label ?? slug} (laisser vide pour utiliser la légende de base)`}
-                        rows={2}
-                        dir={rtl ? 'rtl' : undefined}
-                        style={{
-                          width: '100%',
-                          resize: 'vertical',
-                          borderRadius: 8,
-                          border: `1px solid ${C.border}`,
-                          background: C.panel2,
-                          color: C.text,
-                          padding: '8px 10px',
-                          fontSize: 12,
-                          fontFamily: 'inherit',
-                          boxSizing: 'border-box',
-                        }}
-                      />
-                      <div style={{ fontSize: 10, color: (val || baseText).length > (meta?.charLimit ?? Infinity) ? '#c8283a' : C.muted, textAlign: 'right' }}>
-                        {(val || baseText).length}/{meta?.charLimit ?? '?'}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </details>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: C.muted }}>{dict.bestTime ?? 'Meilleur moment :'}</span>
+              {bestTimes(selectedNetworks[0]).map(s => (
+                <button
+                  key={s.label}
+                  onClick={() => setScheduledAt(nextDateForWindow(s.day, s.hour))}
+                  title={dict.bestTimeHint ?? 'Suggestion — remplit la date de programmation.'}
+                  style={{
+                    fontSize: 10.5,
+                    padding: '3px 9px',
+                    borderRadius: 999,
+                    cursor: 'pointer',
+                    border: `1px solid ${C.border}`,
+                    background: C.panel2,
+                    color: C.accent,
+                  }}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
           )}
 
           {/* Scheduling */}
@@ -503,6 +633,14 @@ export const ComposerView = ({
               style={{ ...miniBtnStyle('secondary'), opacity: (submitting || !baseText.trim() || selectedNetworks.length === 0 || !scheduledAt) ? 0.5 : 1 }}
             >
               {submitting ? '…' : dict.schedule ?? 'Planifier'}
+            </button>
+            <button
+              onClick={() => void handleSubmitApproval()}
+              disabled={submitting || !baseText.trim() || selectedNetworks.length === 0}
+              style={{ ...miniBtnStyle('secondary'), opacity: (submitting || !baseText.trim() || selectedNetworks.length === 0) ? 0.5 : 1 }}
+              title={dict.submitApproval ?? 'Soumettre pour validation'}
+            >
+              {submitting ? '…' : dict.submitApproval ?? 'Soumettre pour validation'}
             </button>
             <button
               onClick={() => void handlePublishNow()}
@@ -673,6 +811,7 @@ export const ComposerView = ({
               texts={networkTexts}
               baseText={baseText}
               media={media}
+              firstComment={firstComment}
             />
           )}
         </div>

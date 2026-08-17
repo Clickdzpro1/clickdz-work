@@ -854,7 +854,7 @@ export function Toolbar({
                     : undefined
                 }
               >
-                {exportStageLabel(exportStage)}
+                {exportStage ? exportStageLabel(exportStage) : null}
                 {exportEtaSeconds != null ? (
                   <>
                     {' '}

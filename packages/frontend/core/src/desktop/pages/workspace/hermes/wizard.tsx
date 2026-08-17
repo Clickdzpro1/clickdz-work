@@ -713,7 +713,7 @@ const StepShell = ({
   children?: ReactNode;
 }) => (
   <div className="cdz-hermes-wiz-pop" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', flexDirection: 'column', gap: 6 }}>
       <div
         aria-hidden
         style={{

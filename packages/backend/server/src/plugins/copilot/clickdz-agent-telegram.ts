@@ -104,10 +104,10 @@ import { resolveAgentDef, resolveArchetype } from './clickdz-agent-registry';
 // --- Config (read once at module load, same idiom as the sibling controllers).
 // The '1' master gate for the ROUTES. Paired with secretBoxReady() below.
 const CDZ_AGENT_TELEGRAM_ENABLED = process.env.CDZ_AGENT_TELEGRAM_ENABLED || '';
-// LEGACY: the OLD single global bot token. Kept ONLY so a deployment that still
-// has it set does not error; the per-user BYOT path never reads it and the
-// per-user store always wins. New deployments leave this unset (no platform bot).
-const LEGACY_TG_TOKEN = process.env.CDZ_TG_TOKEN || '';
+// LEGACY: the OLD single global bot token (CDZ_TG_TOKEN) is deliberately NOT
+// read by this module anymore — the per-user BYOT store always wins and new
+// deployments leave it unset (no platform bot). A deployment that still sets it
+// is harmless; only Hermès' unattended-deferral ping still honors it.
 // The app's public origin — the exact env + fallback the bridge/triggers use
 // everywhere they need an absolute, externally-reachable URL (setWebhook target).
 const APP_EXTERNAL_URL = (

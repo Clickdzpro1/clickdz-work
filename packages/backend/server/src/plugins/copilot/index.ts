@@ -33,6 +33,7 @@ import { ClickDzReleasesController } from './clickdz-releases.controller';
 import { ClickDzAgentRunsController } from './clickdz-agent-runs.controller';
 import { ClickDzVdzController } from './clickdz-vdz.controller';
 import { ClickDzVdzComposeController } from './clickdz-vdz-compose.controller';
+import { ClickDzSlideProController } from './clickdz-slidepro.controller';
 import { ClickDzVdzRenderController } from './clickdz-vdz-render.controller';
 import { ClickDzVpicController } from './clickdz-vpic.controller';
 import { ClickDzVoiceAiController } from './clickdz-voice-ai.controller';
@@ -172,6 +173,12 @@ export class CopilotApiModule {}
     ClickDzAgentRunsController,
     ClickDzVdzController,
     ClickDzVdzComposeController,
+    // CDZ SlidePro — native AI presentation generator (POST /api/v1/slidepro/
+    // outline + /deck). Reuses the SAME Vercel AI Gateway key as chat/images
+    // (CDZ_AI_GATEWAY_KEY | CUSTOM_LLM_API_KEY); dark by default when the key is
+    // absent (typed CopilotProviderSideError, not a 500). Replaces the deleted
+    // presenton iframe integration.
+    ClickDzSlideProController,
     ClickDzVdzRenderController,
     ClickDzVpicController,
     // CDZ Voice AI script writer (POST /api/v1/voice/script). Additive +

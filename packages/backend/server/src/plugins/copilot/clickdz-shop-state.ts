@@ -292,9 +292,7 @@ export async function writeShopState(
         ? patch.featureSet.filter(f => typeof f === 'string')
         : current.featureSet,
     aiPatchHtml:
-      patch.aiPatchHtml !== undefined
-        ? patch.aiPatchHtml
-        : current.aiPatchHtml,
+      patch.aiPatchHtml !== undefined ? patch.aiPatchHtml : current.aiPatchHtml,
     versions:
       patch.versions !== undefined
         ? patch.versions.slice(0, SHOP_STATE_MAX_VERSIONS)
@@ -347,7 +345,11 @@ export async function recordVersion(
     ...current,
     versions: kept,
     log: [
-      { at: entry.at, kind: 'deploy', note: entry.note || 'version recorded' },
+      {
+        at: entry.at,
+        kind: 'deploy' as const,
+        note: entry.note || 'version recorded',
+      },
       ...current.log,
     ].slice(0, SHOP_STATE_MAX_LOG),
   };
@@ -407,7 +409,7 @@ export async function setPendingAiPatch(
     log: [
       {
         at: new Date().toISOString(),
-        kind: 'ai',
+        kind: 'ai' as const,
         note: 'ai patch staged',
       },
       ...current.log,
@@ -434,7 +436,7 @@ export async function clearPendingAiPatch(
     log: [
       {
         at: new Date().toISOString(),
-        kind: 'ai',
+        kind: 'ai' as const,
         note: 'ai patch cleared',
       },
       ...current.log,

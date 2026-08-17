@@ -7,7 +7,10 @@ import type { PromptMessage } from '../../providers/types';
 import type { ChatSession } from '../../session';
 import { ChatQuerySchema } from '../../types';
 import { projectActionEventToChatEvent } from '../action-output-projector';
-import type { ActionRuntimeBridgeEvent } from '../action-runtime-bridge';
+import type {
+  ActionRuntimeBridgeEvent,
+  ActionRuntimeBridgeInput,
+} from '../action-runtime-bridge';
 import { ActionRuntimeBridge } from '../action-runtime-bridge';
 import { CdzModelHealthService } from '../cdz-model-health.service';
 import { isUpstreamScenarioFailed } from '../upstream-error-detector';
@@ -110,7 +113,9 @@ export class ActionStreamHost {
     );
     const originalModelId =
       typeof query.modelId === 'string' && query.modelId ? query.modelId : undefined;
-    const buildBridgeInput = (modelIdOverride?: string) => ({
+    const buildBridgeInput = (
+      modelIdOverride?: string
+    ): ActionRuntimeBridgeInput => ({
       userId,
       workspaceId: prepared.session.config.workspaceId,
       docId: prepared.session.config.docId,
@@ -329,7 +334,10 @@ export class ActionStreamHost {
       'gpt-image-1.5': 'gpt-image-2',
       'gpt-image-1-mini': 'gpt-image-1',
       'cdzimage-2.0': 'gpt-image-2',
-      'cdzimage-1.5': 'gpt-image-2',
+      // ImgCost: the mid ("standard") tier maps to the cheaper gpt-image-1 so
+      // the native ladder stays cost-monotonic (economy/standard < premium);
+      // only the explicit premium tier pays for the flagship gpt-image-2.
+      'cdzimage-1.5': 'gpt-image-1',
       'cdzimage-1.0': 'gpt-image-1',
       'gemini-3-pro-image': 'gemini-2.5-flash-image',
       'gemini-3.1-flash-image': 'gemini-2.5-flash-image',

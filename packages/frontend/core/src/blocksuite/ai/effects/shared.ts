@@ -3,6 +3,7 @@ import { effects as tooltipEffects } from '@blocksuite/affine-components/tooltip
 import { ArtifactSkeleton } from '../components/ai-artifact-skeleton';
 import { ChatContentImages } from '../components/ai-message-content/images';
 import { ChatContentPureText } from '../components/ai-message-content/pure-text';
+import { ChatContentReasoning } from '../components/ai-message-content/reasoning';
 import { ChatContentRichText } from '../components/ai-message-content/rich-text';
 import { ChatContentStreamObjects } from '../components/ai-message-content/stream-objects';
 import { ArtifactPreviewPanel } from '../components/ai-tools/artifacts-preview-panel';
@@ -41,6 +42,7 @@ const sharedElements = {
   'ai-answer-wrapper': AIAnswerWrapper,
   'chat-content-images': ChatContentImages,
   'chat-content-pure-text': ChatContentPureText,
+  'chat-content-reasoning': ChatContentReasoning,
   'chat-content-rich-text': ChatContentRichText,
   'chat-content-stream-objects': ChatContentStreamObjects,
   'text-renderer': TextRenderer,

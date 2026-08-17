@@ -23,8 +23,16 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 
 import { JobQueue, OnJob } from '../../base';
 
-import { ClickDzSocialService } from './clickdz-social.service';
-import type { SocialPost, PublishedLogEntry } from './clickdz-social.service';
+import {
+  ClickDzSocialService,
+  autoRequeueDelayMs,
+  SOCIAL_AUTO_REQUEUE_DEFAULT_ATTEMPTS,
+} from './clickdz-social.service';
+import type {
+  SocialPost,
+  PublishedLogEntry,
+  SocialSettings,
+} from './clickdz-social.service';
 
 // ---------------------------------------------------------------------------
 // BullMQ job augmentation — mirrors cron.ts / clickdz-agent-runs.ts pattern.
@@ -94,13 +102,19 @@ export class ClickDzSocialJob {
       post.status = 'publishing';
       await this.social.writePost(userId, post);
 
+      // UP1: load the user's advanced settings so scheduled publishes apply the
+      // same content defaults (hashtags/UTM/first-comment) the publish-now path
+      // does. Fail-soft — readSettings returns {} on any error.
+      const settings = await this.social.readSettings(userId);
+
       // Run the shared publish routine (never throws).
-      const updated = await this.social.publishPost(post);
+      const updated = await this.social.publishPost(post, settings);
 
       // Write final state.
       await this.social.writePost(userId, updated);
 
-      // Append to published log (best-effort).
+      // Append to published log (best-effort). UP1: carry per-network error
+      // detail + resolved action + attempts so the Journal can explain failures.
       const logEntry: PublishedLogEntry = {
         postId: updated.id,
         publishedAt: updated.publishedAt ?? Date.now(),
@@ -108,9 +122,19 @@ export class ClickDzSocialJob {
           network: t.network,
           ok: t.status === 'ok',
           externalUrl: t.externalUrl,
+          ...(t.error ? { error: t.error } : {}),
+          ...(t.action ? { action: t.action } : {}),
+          ...(typeof t.attempts === 'number' ? { attempts: t.attempts } : {}),
         })),
       };
       await this.social.appendPublishedLog(userId, logEntry);
+
+      // UP1: auto-requeue-on-failure with exponential backoff. When the
+      // workspace enabled queue.autoRequeueOnFailure and the publish came back
+      // failed/partial, re-schedule the post (resetting failed targets) for a
+      // later attempt, up to autoRequeueMaxAttempts. Idempotent jobId means the
+      // re-enqueue simply replaces the (completed) job.
+      await this.maybeAutoRequeue(userId, updated, settings);
 
       this.logger.log(
         `[social-job] done postId=${postId} status=${updated.status} ` +
@@ -121,6 +145,61 @@ export class ClickDzSocialJob {
       // infinite auto-retry — we own retry via the manual /retry endpoint).
       this.logger.error(
         `[social-job] unexpected error postId=${postId}: ${(err as Error)?.message ?? err}`
+      );
+    }
+  }
+
+  /**
+   * UP1 — auto-requeue a failed/partial scheduled publish with exponential
+   * backoff, when the workspace enabled queue.autoRequeueOnFailure. Resets the
+   * failed targets to 'pending', bumps the attempt counter, sets the post back
+   * to 'scheduled' at now+backoff, and enqueues a fresh delayed job. Stops once
+   * autoRequeueMaxAttempts is reached (post stays failed/partial for manual
+   * retry). Fail-soft: any error just leaves the post in its terminal state.
+   */
+  private async maybeAutoRequeue(
+    userId: string,
+    post: SocialPost,
+    settings: SocialSettings
+  ): Promise<void> {
+    try {
+      const rules = settings.queue;
+      if (!rules?.autoRequeueOnFailure) return;
+      if (post.status !== 'failed' && post.status !== 'partial') return;
+      const maxAttempts =
+        rules.autoRequeueMaxAttempts ?? SOCIAL_AUTO_REQUEUE_DEFAULT_ATTEMPTS;
+      const attempts = post.autoRequeueAttempts ?? 0;
+      if (attempts >= maxAttempts) {
+        this.logger.log(
+          `[social-job] auto-requeue exhausted postId=${post.id} (${attempts}/${maxAttempts})`
+        );
+        return;
+      }
+      const nextAttempt = attempts + 1;
+      const delay = autoRequeueDelayMs(nextAttempt);
+      const nextAt = Date.now() + delay;
+      // Reset failed targets so the next run re-attempts only what failed.
+      for (const t of post.targets) {
+        if (t.status === 'failed') {
+          t.status = 'pending';
+          t.error = undefined;
+        }
+      }
+      post.status = 'scheduled';
+      post.scheduledAt = nextAt;
+      post.autoRequeueAttempts = nextAttempt;
+      await this.social.writePost(userId, post);
+      const jobId = await this.enqueuePublish(userId, post.id, nextAt);
+      if (jobId) {
+        post.jobId = jobId;
+        await this.social.writePost(userId, post);
+      }
+      this.logger.log(
+        `[social-job] auto-requeued postId=${post.id} attempt=${nextAttempt}/${maxAttempts} in ${Math.round(delay / 60000)}min`
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[social-job] auto-requeue failed postId=${post.id}: ${(err as Error)?.message ?? err}`
       );
     }
   }

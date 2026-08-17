@@ -10,37 +10,38 @@ import type { GraphQLService, SubscriptionService } from '../../cloud';
 import type { GlobalStateService } from '../../storage';
 
 const AI_MODEL_ID_KEY = 'AIModelId';
-const AI_PRE_COUNCIL_MODEL_KEY = 'AIPreCouncilModelId';
 
-// cdz-council is a REAL backend model: CDZ AI runs the 3-vendor fan-out +
-// synthesis server-side. Membership is fixed there, so the client only needs
-// to select the model id (no client-side member picker).
-export const COUNCIL_MODEL_ID = 'cdz-council';
-
-// WS16 (CHAT SPEED): default the chat to CDZ Flash — the fast model used as the
-// bridge/planner brain — so the common chat turn gets the lowest time-to-first
-// token. CDZ Ultra stays available for users who want depth (picked explicitly).
-// (Note: the backend can still dictate its own default via mergeClickDzModels if
-// a server model is flagged isDefault; this fallback + the merge fallback below
-// keep a fast default when the server does not.)
+// WS14: chat rides the Vercel AI Gateway and serves exactly ONE model today —
+// alibaba/qwen3.7-flash. The old multi-vendor roster (CDZ Ultra/Sage/Architect/
+// Scholar/Flash/Polyglot + raw Claude/Gemini/GPT ids + the `cdz-council`
+// fan-out) is gone: those ids no longer resolve through the Gateway allowlist
+// (see CLICKDZ_PROVIDER_MODELS in provider-registry.ts / CDZ_MODELS in
+// scripts/cdz-ai-config.mjs), so surfacing them only produced a picker full of
+// dead choices. Keep this list in lockstep with that backend allowlist — the
+// `id` MUST match verbatim what the Gateway serves.
+//
+// `category` doubles as the picker's group label (Rapide / Équilibré /
+// Puissant), so the single list still renders under a clean, tiered heading.
 const CLICKDZ_FALLBACK_MODELS: AIModel[] = [
-  { name: 'CDZ Ultra', id: 'cdz-ultra', category: 'CDZ', version: 'Ultra', isPro: false, isDefault: false },
-  { name: 'CDZ Council', id: 'cdz-council', category: 'CDZ', version: 'Council', isPro: false, isDefault: false },
-  { name: 'CDZ Sage', id: 'cdz-sage', category: 'CDZ', version: '4.8', isPro: false, isDefault: false },
-  { name: 'CDZ Architect', id: 'cdz-architect', category: 'CDZ', version: '5.5', isPro: false, isDefault: false },
-  { name: 'CDZ Scholar', id: 'cdz-scholar', category: 'CDZ', version: '3.1', isPro: false, isDefault: false },
-  { name: 'CDZ Flash', id: 'cdz-flash', category: 'CDZ', version: '3.5', isPro: false, isDefault: true },
-  { name: 'CDZ Polyglot', id: 'cdz-polyglot', category: 'CDZ', version: '5.4', isPro: false, isDefault: false },
-  // raw engine models served through the CDZ AI passthrough (Make engine)
-  { name: 'Claude Opus 4.8', id: 'claude-opus-4-8', category: 'Claude', version: 'Opus 4.8', isPro: false, isDefault: false },
-  { name: 'Gemini 3.1 Pro', id: 'gemini-3.1-pro-preview', category: 'Gemini', version: '3.1 Pro', isPro: false, isDefault: false },
-  { name: 'GPT 5.5', id: 'gpt-5.5', category: 'GPT', version: '5.5', isPro: false, isDefault: false },
-  { name: 'Claude Sonnet 4.6', id: 'claude-sonnet-4-6', category: 'Claude', version: 'Sonnet 4.6', isPro: false, isDefault: false },
-  { name: 'Gemini 3.5 Flash', id: 'gemini-3.5-flash', category: 'Gemini', version: '3.5 Flash', isPro: false, isDefault: false },
-  { name: 'GPT 5.4', id: 'gpt-5.4', category: 'GPT', version: '5.4', isPro: false, isDefault: false },
-  { name: 'Claude Haiku 4.5', id: 'claude-haiku-4-5', category: 'Claude', version: 'Haiku 4.5', isPro: false, isDefault: false },
-  { name: 'GPT 5.4 Mini', id: 'gpt-5.4-mini', category: 'GPT', version: '5.4 Mini', isPro: false, isDefault: false },
+  {
+    name: 'ClickDz Flash',
+    id: 'alibaba/qwen3.7-flash',
+    category: 'Rapide',
+    version: 'Flash',
+    isPro: false,
+    isDefault: true,
+  },
 ];
+
+// Frontend allowlist — the ONLY model ids the picker may show, regardless of
+// what a stale server prompt catalog returns from getPromptModelsQuery. The
+// backend prompt catalog (built-in.json) can still advertise the retired
+// roster (cdz-ultra/cdz-council/…); clamping here guarantees the picker never
+// surfaces a model the Gateway won't actually serve. Keep in lockstep with
+// CLICKDZ_FALLBACK_MODELS above and the backend Gateway allowlist.
+const CLICKDZ_ALLOWED_MODEL_IDS: ReadonlySet<string> = new Set(
+  CLICKDZ_FALLBACK_MODELS.map(model => model.id)
+);
 
 export interface AIModel {
   name: string;
@@ -64,9 +65,12 @@ export function mergeClickDzModels(serverModels: AIModel[]): AIModel[] {
     }
   }
   if (!merged.some(model => model.isDefault)) {
-    // WS16: prefer the fast CDZ Flash when nothing is flagged default.
-    const defaultId = merged.some(model => model.id === 'cdz-flash')
-      ? 'cdz-flash'
+    // Prefer the known chat model when nothing is flagged default; otherwise
+    // fall back to the first model so the picker never has an empty selection.
+    const defaultId = merged.some(
+      model => model.id === 'alibaba/qwen3.7-flash'
+    )
+      ? 'alibaba/qwen3.7-flash'
       : merged[0]?.id;
     return merged.map(model => ({
       ...model,
@@ -140,51 +144,6 @@ export class AIModelService extends Service {
     this.globalStateService.globalState.set(AI_MODEL_ID_KEY, undefined);
   };
 
-  // tracks whether each session is in council or standard mode (for UI only)
-  private readonly sessionModes = new Map<string, 'council' | 'standard'>();
-
-  getSessionMode = (sessionId: string) => this.sessionModes.get(sessionId);
-
-  setSessionMode = (sessionId: string, mode: 'council' | 'standard') => {
-    this.sessionModes.set(sessionId, mode);
-  };
-
-  /**
-   * Switch between normal chat and council mode, remembering the last model.
-   *
-   * Council is a model selection that is mutually exclusive with the composer's
-   * one-off modes (Workers / Image / Builder). Those modes live on the
-   * `AIChatInput` Lit component (a different module), so callers that enable
-   * council pass `onEnable` — invoked exactly once when council is switched ON —
-   * to clear them from a single place, keeping the exclusion co-located with the
-   * council-enable logic rather than scattered across UI click handlers.
-   */
-  setCouncilMode = (on: boolean, onEnable?: () => void) => {
-    const currentId = this.modelId.value;
-    if (on) {
-      if (currentId !== COUNCIL_MODEL_ID) {
-        this.globalStateService.globalState.set(
-          AI_PRE_COUNCIL_MODEL_KEY,
-          currentId
-        );
-      }
-      this.globalStateService.globalState.set(
-        AI_MODEL_ID_KEY,
-        COUNCIL_MODEL_ID
-      );
-      // Council excludes the composer's worker/image/app modes — clear them.
-      onEnable?.();
-    } else if (currentId === COUNCIL_MODEL_ID) {
-      const previous = this.globalStateService.globalState.get<string>(
-        AI_PRE_COUNCIL_MODEL_KEY
-      );
-      this.globalStateService.globalState.set(
-        AI_MODEL_ID_KEY,
-        previous && previous !== COUNCIL_MODEL_ID ? previous : undefined
-      );
-    }
-  };
-
   setModel = (modelId: string) => {
     const isSubscribed =
       this.subscriptionService.subscription.ai$.value?.status ===
@@ -232,18 +191,22 @@ export class AIModelService extends Service {
           providerModels.push(proModel);
         }
       }
-      const normalized = providerModels.map(model => {
-        const [category] = model.name.split(' ');
-        const version = model.name.slice(category.length + 1) || category;
-        return {
-          name: model.name,
-          id: model.id,
-          version,
-          category,
-          isPro: false,
-          isDefault: model.id === defaultModel,
-        };
-      });
+      const normalized = providerModels
+        // Clamp to the curated allowlist so a stale server prompt catalog can
+        // never re-introduce the retired multi-vendor roster into the picker.
+        .filter(model => CLICKDZ_ALLOWED_MODEL_IDS.has(model.id))
+        .map(model => {
+          const [category] = model.name.split(' ');
+          const version = model.name.slice(category.length + 1) || category;
+          return {
+            name: model.name,
+            id: model.id,
+            version,
+            category,
+            isPro: false,
+            isDefault: model.id === defaultModel,
+          };
+        });
       this.models.value = mergeClickDzModels(normalized);
     } else {
       this.models.value = mergeClickDzModels([]);

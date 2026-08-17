@@ -807,14 +807,23 @@ const QrPairing = ({
   }, []);
   const statusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const qrRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The gateway can briefly report 'disconnected' while it self-heals (watchdog
+  // recycle → reconnect backoff → fresh QR). Only surface a terminal error
+  // after the failure PERSISTS across consecutive polls, so a transient blip
+  // doesn't kill an otherwise-recovering pairing.
+  const failStreakRef = useRef(0);
   // In add-mode, /connect mints a new connId — we store it locally so the
   // status poll and QR refresh target the new connection (not the prop connId).
   const [pairConnId, setPairConnId] = useState<string | null>(null);
 
   const connected = status?.connected === true;
   const currentStatus = status?.status ?? '';
+  // A terminal error (set by the status poll on disconnected/logged_out, or by
+  // a failed /connect) takes precedence over the QR panel — otherwise the
+  // spinner would keep spinning behind the error.
   const showQr =
-    connecting || currentStatus === 'qr' || currentStatus === 'connecting' || currentStatus === 'created';
+    !err &&
+    (connecting || currentStatus === 'qr' || currentStatus === 'connecting' || currentStatus === 'created');
 
   // Use the locally-minted connId (add-mode) if available, else the prop connId
   const activeConnId = pairConnId ?? connId;
@@ -832,6 +841,9 @@ const QrPairing = ({
 
   const startPolls = useCallback(() => {
     stopPolls();
+    // Fresh pairing attempt — clear any stale terminal-failure streak so a
+    // prior disconnected run doesn't immediately trip the error on retry.
+    failStreakRef.current = 0;
     // QR refresh: 3s while the QR hasn't loaded yet (to pick up the 202→200
     // transition quickly), then 15s once loaded (to catch WhatsApp's ~20s QR
     // regeneration without flicker). The old fixed 2s interval caused rapid
@@ -869,6 +881,7 @@ const QrPairing = ({
         if (s) {
           onStatus(s);
           if (s.connected) {
+            failStreakRef.current = 0;
             stopPolls();
             setConnecting(false);
             setQrTs(null);
@@ -877,6 +890,28 @@ const QrPairing = ({
             } else {
               onConnected();
             }
+            return;
+          }
+          // logged_out is immediately terminal (the session was invalidated).
+          // disconnected may be a transient self-heal step, so require it to
+          // persist for 2 consecutive polls (~5s) before surfacing the error;
+          // any non-terminal status resets the streak.
+          const terminal = s.status === 'disconnected' || s.status === 'logged_out';
+          if (terminal) {
+            failStreakRef.current += 1;
+          } else {
+            failStreakRef.current = 0;
+          }
+          if (s.status === 'logged_out' || failStreakRef.current >= 2) {
+            stopPolls();
+            setConnecting(false);
+            setQrTs(null);
+            failStreakRef.current = 0;
+            setErr(
+              s.status === 'logged_out'
+                ? 'Session WhatsApp déconnectée. Relancez la liaison.'
+                : 'La liaison a échoué (connexion interrompue). Réessayez.'
+            );
           }
         }
       })();
@@ -1101,7 +1136,21 @@ const QrPairing = ({
             onChange={(e: ChangeEvent<HTMLInputElement>) => setPhone(e.target.value)}
           />
           {err ? (
-            <div style={{ fontSize: 12, color: C.danger }}>{err}</div>
+            <div
+              style={{
+                fontSize: 12.5,
+                color: C.danger,
+                background: `${C.danger}14`,
+                border: `1px solid ${C.danger}55`,
+                borderRadius: 10,
+                padding: '10px 12px',
+                textAlign: 'center',
+                lineHeight: 1.5,
+                width: '100%',
+              }}
+            >
+              {err}
+            </div>
           ) : null}
           <button
             style={{
@@ -1114,7 +1163,13 @@ const QrPairing = ({
             disabled={busy}
             onClick={() => void connect()}
           >
-            {busy ? 'Connexion…' : mode === 'add' ? 'Lier un autre numéro' : 'Lier via QR'}
+            {busy
+              ? 'Connexion…'
+              : err
+                ? 'Réessayer'
+                : mode === 'add'
+                  ? 'Lier un autre numéro'
+                  : 'Lier via QR'}
           </button>
           <div style={{ fontSize: 11.5, color: C.muted, textAlign: 'center' }}>
             Le numéro est optionnel — la liaison QR fonctionne sans le renseigner.
@@ -5997,7 +6052,7 @@ const WhatsappMaxPage = () => {
   return (
     <>
       <ViewTitle title="WhatsApp Max" />
-      <ViewIcon icon="chat" />
+      <ViewIcon icon="edgeless" />
       <ViewHeader>
         <div
           style={{

@@ -227,7 +227,8 @@ test('ConversationHost should delegate empty no-message stream access', async t 
     } as any,
     {} as any,
     {} as any,
-    { resolveTurnRouteAccess } as any
+    { resolveTurnRouteAccess } as any,
+    {} as any
   );
 
   await t.throwsAsync(host.prepareTurn('user-1', 'session-1', {}), {
@@ -252,7 +253,8 @@ test('ConversationHost should return access decision for empty no-message stream
     } as any,
     {} as any,
     {} as any,
-    { resolveTurnRouteAccess } as any
+    { resolveTurnRouteAccess } as any,
+    {} as any
   );
 
   const prepared = await host.prepareTurn('user-1', 'session-1', {});
@@ -293,7 +295,8 @@ test('ConversationHost should replay accepted tokens without rechecking quota', 
       }),
     } as any,
     {} as any,
-    { resolveTurnRouteAccess } as any
+    { resolveTurnRouteAccess } as any,
+    {} as any
   );
 
   const prepared = await host.prepareTurn('user-1', 'session-1', {
@@ -341,7 +344,8 @@ test('ConversationHost should replay durable tokens without rechecking quota', a
         [Symbol.asyncDispose]: Sinon.stub().resolves(undefined),
       }),
     } as any,
-    { resolveTurnRouteAccess } as any
+    { resolveTurnRouteAccess } as any,
+    {} as any
   );
 
   const prepared = await host.prepareTurn('user-1', 'session-1', {
@@ -1555,6 +1559,7 @@ test('ActionStreamHost should prepare action turn and bridge native stream', asy
     conversations as any,
     bridge as unknown as ActionRuntimeBridge,
     prompts as any,
+    {} as any,
     {} as any
   );
 
@@ -1671,7 +1676,8 @@ test('ActionStreamHost should prepare image action routes and persist native att
     conversations as any,
     bridge as unknown as ActionRuntimeBridge,
     prompts as any,
-    imageResults as any
+    imageResults as any,
+    {} as any
   );
 
   const prepared = await host.stream('user-1', 'session-1', {
