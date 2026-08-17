@@ -6,6 +6,9 @@
  * pending count. Never a blocking error — it's informational.
  *
  * Styled to match the DzOS dark palette (mirrors shoperp-shared's C tokens).
+ * Bilingual FR/AR labels follow the user's global language via the <html lang>
+ * attribute (same lightweight approach as dzos-i18n.ts — no react-i18next
+ * dependency here either).
  */
 
 import { useEffect, useState } from 'react';
@@ -13,14 +16,31 @@ import { useEffect, useState } from 'react';
 import { getSyncEngine } from './sync';
 import type { SyncStatus } from './types';
 
-const PILL_STYLES: Record<SyncStatus['state'], { bg: string; border: string; color: string; label: string; dot: string }> = {
-  synced: { bg: 'rgba(34,197,94,0.14)', border: 'rgba(34,197,94,0.35)', color: '#bbf7d0', label: 'Synchronisé', dot: '#22c55e' },
-  pending: { bg: 'rgba(234,179,8,0.14)', border: 'rgba(234,179,8,0.35)', color: '#fde68a', label: 'en attente', dot: '#eab308' },
-  pushing: { bg: 'rgba(59,130,246,0.14)', border: 'rgba(59,130,246,0.35)', color: '#bfdbfe', label: 'Envoi…', dot: '#3b82f6' },
-  pulling: { bg: 'rgba(59,130,246,0.14)', border: 'rgba(59,130,246,0.35)', color: '#bfdbfe', label: 'Sync…', dot: '#3b82f6' },
-  offline: { bg: 'rgba(148,163,184,0.14)', border: 'rgba(148,163,184,0.35)', color: '#cbd5e1', label: 'Hors ligne', dot: '#94a3b8' },
-  error: { bg: 'rgba(239,68,68,0.14)', border: 'rgba(239,68,68,0.35)', color: '#fecaca', label: 'Erreur sync', dot: '#ef4444' },
+// Bilingual labels for each sync state. Resolved at render time based on the
+// current document language (ar* → AR, everything else → FR).
+const PILL_LABELS: Record<SyncStatus['state'], { fr: string; ar: string }> = {
+  synced: { fr: 'Synchronisé', ar: 'مُزامَن' },
+  pending: { fr: 'en attente', ar: 'في الانتظار' },
+  pushing: { fr: 'Envoi…', ar: 'إرسال…' },
+  pulling: { fr: 'Sync…', ar: 'مزامنة…' },
+  offline: { fr: 'Hors ligne', ar: 'غير متصل' },
+  error: { fr: 'Erreur sync', ar: 'خطأ المزامنة' },
 };
+
+const PILL_STYLES: Record<SyncStatus['state'], { bg: string; border: string; color: string; dot: string }> = {
+  synced: { bg: 'rgba(34,197,94,0.14)', border: 'rgba(34,197,94,0.35)', color: '#bbf7d0', dot: '#22c55e' },
+  pending: { bg: 'rgba(234,179,8,0.14)', border: 'rgba(234,179,8,0.35)', color: '#fde68a', dot: '#eab308' },
+  pushing: { bg: 'rgba(59,130,246,0.14)', border: 'rgba(59,130,246,0.35)', color: '#bfdbfe', dot: '#3b82f6' },
+  pulling: { bg: 'rgba(59,130,246,0.14)', border: 'rgba(59,130,246,0.35)', color: '#bfdbfe', dot: '#3b82f6' },
+  offline: { bg: 'rgba(148,163,184,0.14)', border: 'rgba(148,163,184,0.35)', color: '#cbd5e1', dot: '#94a3b8' },
+  error: { bg: 'rgba(239,68,68,0.14)', border: 'rgba(239,68,68,0.35)', color: '#fecaca', dot: '#ef4444' },
+};
+
+/** Read the current DzOS language from the <html lang> attribute. */
+function dzosPillLang(): 'fr' | 'ar' {
+  if (typeof document === 'undefined') return 'fr';
+  return document.documentElement.lang?.startsWith('ar') ? 'ar' : 'fr';
+}
 
 /**
  * The sync pill. Mount once per open shop (the dashboard header). Reads the
@@ -54,13 +74,15 @@ export const SyncStatusPill = ({ slug }: { slug: string }) => {
   // (shouldn't happen with the typed SyncStatus, but defense-in-depth), fall
   // back to the 'synced' style so the pill always renders.
   const style = PILL_STYLES[status.state] ?? PILL_STYLES.synced;
+  const lang = dzosPillLang();
   const count = status.state === 'pending' ? status.count : 0;
+  const baseLabel = PILL_LABELS[status.state][lang];
   const label =
     status.state === 'pending'
-      ? `${count} en attente`
+      ? `${count} ${baseLabel}`
       : status.state === 'error'
-        ? `${style.label}${status.message ? ` · ${status.message}` : ''}`
-        : style.label;
+        ? `${baseLabel}${status.message ? ` · ${status.message}` : ''}`
+        : baseLabel;
 
   return (
     <span

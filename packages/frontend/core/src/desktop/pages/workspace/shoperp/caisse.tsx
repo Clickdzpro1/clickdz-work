@@ -49,6 +49,17 @@ import {
 // SyncStatusPill in the header shows 「synchronisé · N en attente · hors ligne」.
 import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
 
+// Bilingual FR/AR i18n for the DzOS surface (ticket print sheet + RTL layout).
+import {
+  type DzosLang,
+  dzosCaisseMethodLabels,
+  dzosDir,
+  dzosFmtDZD,
+  dzosT,
+  isRTL,
+  useDzosLang,
+} from './dzos-i18n';
+
 // ---------------------------------------------------------------------------
 // Caisse (cash register) studio page — WSE-9 (COMPTOIR). Three tools over the
 // R2-d caisse bridge routes (/api/v1/apps/:slug/erp/caisse*), all money INTEGER
@@ -75,11 +86,21 @@ import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
 
 type Tab = 'journal' | 'reconcile' | 'dayclose';
 
+// Tab labels are resolved via dzosT at render time (see CaissePanel below) so
+// they follow the user's language preference. The static TABS array keeps the
+// ids + icons; labels are filled in the component body.
 const TABS: Array<{ id: Tab; label: string; icon: string }> = [
   { id: 'journal', label: 'Journal', icon: '📒' },
   { id: 'reconcile', label: 'Rapprochement COD', icon: '🔁' },
   { id: 'dayclose', label: 'Clôture du jour', icon: '🧾' },
 ];
+
+// DzOS i18n key for each tab id (used by CaissePanel to resolve bilingual labels).
+const TAB_I18N_KEYS: Record<Tab, string> = {
+  journal: 'caisse.tab.journal',
+  reconcile: 'caisse.tab.reconcile',
+  dayclose: 'caisse.tab.dayclose',
+};
 
 export const CaissePanel = ({
   slug,
@@ -98,6 +119,8 @@ export const CaissePanel = ({
   onMutated: () => void;
 }) => {
   const [tab, setTab] = useState<Tab>('journal');
+  // Bilingual label resolution — follows the user's global language preference.
+  const lang = useDzosLang();
   // A prefill handed from the reconcile "Encaisser" action to the Journal form.
   const [prefill, setPrefill] = useState<QuickAddPrefill | null>(null);
 
@@ -142,7 +165,7 @@ export const CaissePanel = ({
             style={subTabStyle(tab === t.id)}
             onClick={() => setTab(t.id)}
           >
-            <span aria-hidden>{t.icon}</span> {t.label}
+            <span aria-hidden>{t.icon}</span> {dzosT(TAB_I18N_KEYS[t.id], lang)}
           </button>
         ))}
       </div>
@@ -185,6 +208,7 @@ const ShowInAppToggle = ({
 }) => {
   const on = hasErpModule(settings.erpBackends, 'caisse');
   const [saving, setSaving] = useState(false);
+  const lang = useDzosLang();
   const [notice, setNotice] = useState<{
     tone: 'ok' | 'error';
     text: string;
@@ -255,12 +279,12 @@ const ShowInAppToggle = ({
         disabled={readOnly || saving}
         onClick={() => void toggle()}
         style={switchStyle(on, readOnly || saving)}
-        title={on ? 'Masquer dans l’app' : 'Afficher dans l’app'}
+        title={on ? dzosT('invoice.editor.hideInAppToggle', lang) : dzosT('invoice.editor.showInAppToggle', lang)}
       >
         {saving ? <Spinner /> : null}
         <span style={switchKnobStyle(on)} aria-hidden />
         <span style={{ fontSize: 12, fontWeight: 700 }}>
-          {on ? 'Affiché' : 'Masqué'}
+          {on ? dzosT('invoice.editor.showInAppToggle', lang) : dzosT('invoice.editor.hideInAppToggle', lang)}
         </span>
       </button>
     </div>
@@ -1306,6 +1330,8 @@ const DayClose = ({ slug }: { slug: string }) => {
   const [errMsg, setErrMsg] = useState('');
   const [summary, setSummary] = useState<CaisseDayClose | null>(null);
   const [copied, setCopied] = useState(false);
+  // Bilingual label resolution — follows the user's global language preference.
+  const lang = useDzosLang();
 
   const load = useCallback(async () => {
     setPhase('loading');
@@ -1342,7 +1368,7 @@ const DayClose = ({ slug }: { slug: string }) => {
 
   return (
     <Panel
-      title="Clôture du jour"
+      title={dzosT('caisse.dayclose.title', lang)}
       action={
         <input
           type="date"
@@ -1376,15 +1402,15 @@ const DayClose = ({ slug }: { slug: string }) => {
               gap: 12,
             }}
           >
-            <BigStat label="Entrées" value={fmtDZD(num(summary.inTotal))} color={C.okText} />
+            <BigStat label={dzosT('caisse.journal.kind.in', lang)} value={dzosFmtDZD(num(summary.inTotal), lang)} color={C.okText} />
             <BigStat
-              label="Sorties"
-              value={fmtDZD(num(summary.outTotal))}
+              label={dzosT('caisse.journal.kind.out', lang)}
+              value={dzosFmtDZD(num(summary.outTotal), lang)}
               color="var(--affine-error-color, #eb4b4b)"
             />
             <BigStat
-              label="Net"
-              value={fmtDZD(num(summary.net))}
+              label={dzosT('caisse.dayclose.net', lang)}
+              value={dzosFmtDZD(num(summary.net), lang)}
               color={num(summary.net) >= 0 ? C.okText : 'var(--affine-error-color, #eb4b4b)'}
             />
           </div>
@@ -1396,8 +1422,8 @@ const DayClose = ({ slug }: { slug: string }) => {
               gap: 12,
             }}
           >
-            <MethodTable title="Entrées par méthode" bd={summary.inByMethod} />
-            <MethodTable title="Sorties par méthode" bd={summary.outByMethod} />
+            <MethodTable title={dzosT('caisse.dayclose.inByMethod', lang)} bd={summary.inByMethod} lang={lang} />
+            <MethodTable title={dzosT('caisse.dayclose.outByMethod', lang)} bd={summary.outByMethod} lang={lang} />
           </div>
 
           {num(summary.pendingCodTotal) > 0 ? (
@@ -1410,19 +1436,30 @@ const DayClose = ({ slug }: { slug: string }) => {
 
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <button style={btnStyle('secondary')} onClick={() => void copySummary()}>
-              📋 Copier le résumé
+              📋 {dzosT('caisse.dayclose.copySummary', lang)}
+            </button>
+            <button
+              style={btnStyle('secondary')}
+              onClick={() => window.print()}
+              title={dzosT('invoice.editor.printTitle', lang)}
+            >
+              🖨️ {dzosT('invoice.editor.printBtn', lang)}
             </button>
             {copied ? (
               <span style={{ fontSize: 12, fontWeight: 600, color: C.okText }}>
-                Copié ✓
+                {dzosT('caisse.dayclose.copied', lang)}
               </span>
             ) : (
               <span style={{ ...hintStyle }}>
-                Pour WhatsApp / le cahier. {num(summary.entryCount)} écriture
-                {num(summary.entryCount) > 1 ? 's' : ''}.
+                {num(summary.entryCount)} écriture{num(summary.entryCount) > 1 ? 's' : ''}.
               </span>
             )}
           </div>
+
+          {/* Hidden bilingual ticket print sheet — printed by window.print() via
+              @media print. Renders a professional daily Z-report (ticket de
+              caisse) from the day-close summary, in FR or AR with RTL layout. */}
+          <TicketPrintSheet summary={summary} date={date} lang={lang} />
         </div>
       )}
     </Panel>
@@ -1432,9 +1469,11 @@ const DayClose = ({ slug }: { slug: string }) => {
 const MethodTable = ({
   title,
   bd,
+  lang = 'fr',
 }: {
   title: string;
   bd: CaisseDayClose['inByMethod'];
+  lang?: DzosLang;
 }) => {
   const rows: Array<[CaisseMethod, number]> = [
     ['cash', num(bd?.cash)],
@@ -1468,7 +1507,7 @@ const MethodTable = ({
           {rows.map(([m, v]) => (
             <tr key={m}>
               <td style={{ ...tdStyle, borderTop: 'none' }}>
-                {CAISSE_METHOD_LABELS[m]}
+                {dzosCaisseMethodLabels[m](lang)}
               </td>
               <td
                 style={{
@@ -1479,7 +1518,7 @@ const MethodTable = ({
                   color: v > 0 ? C.text : C.muted,
                 }}
               >
-                {fmtDZD(v)}
+                {dzosFmtDZD(v, lang)}
               </td>
             </tr>
           ))}
@@ -1491,10 +1530,10 @@ const MethodTable = ({
                 color: C.text,
               }}
             >
-              Total
+              {dzosT('common.total', lang)}
             </td>
             <td style={{ ...tdStyle, textAlign: 'right', fontWeight: 800 }}>
-              {fmtDZD(total)}
+              {dzosFmtDZD(total, lang)}
             </td>
           </tr>
         </tbody>
@@ -1602,3 +1641,171 @@ function switchKnobStyle(on: boolean): CSSProperties {
     boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
   };
 }
+
+// ===========================================================================
+// TICKET PRINT SHEET — a hidden, print-only bilingual daily Z-report (ticket
+// de caisse / إيصال صندوق). The inline <style> tag scopes @media print so ONLY
+// this sheet prints (everything else in the app is hidden), mirroring the
+// invoice print sheet pattern in invoicing.tsx. window.print() (the "Imprimer
+// / PDF" button in the DayClose panel) drives it.
+//
+// The ticket is a compact thermal-receipt-style layout: header (store name +
+// ticket title + date), in/out by method table, net total, and a footer. In
+// Arabic the sheet flips to RTL with an Arabic-capable font stack. CSS uses
+// logical properties (text-align: start/end) so the same rules work in both
+// directions.
+// ===========================================================================
+const TicketPrintSheet = ({
+  summary,
+  date,
+  lang,
+}: {
+  summary: CaisseDayClose;
+  date: string;
+  lang: DzosLang;
+}) => {
+  const rtl = isRTL(lang);
+  const dir = dzosDir(lang);
+  const fontStack = rtl
+    ? "'Noto Sans Arabic','Noto Naskh Arabic',Arial,sans-serif"
+    : "Arial,'Helvetica Neue',sans-serif";
+  const methodRows: Array<[CaisseMethod, number]> = [
+    ['cash', num(summary.inByMethod?.cash)],
+    ['cod', num(summary.inByMethod?.cod)],
+    ['chargily', num(summary.inByMethod?.chargily)],
+  ];
+  const outRows: Array<[CaisseMethod, number]> = [
+    ['cash', num(summary.outByMethod?.cash)],
+    ['cod', num(summary.outByMethod?.cod)],
+    ['chargily', num(summary.outByMethod?.chargily)],
+  ];
+  return (
+    <div className="cdz-tkt-print-root" aria-hidden>
+      <style>{TICKET_PRINT_CSS}</style>
+      <div className="cdz-tkt-sheet" dir={dir} style={{ fontFamily: fontStack }}>
+        {/* Header ------------------------------------------------------- */}
+        <div className="cdz-tkt-header">
+          <div className="cdz-tkt-title">
+            {dzosT('print.ticket.title', lang)}
+          </div>
+          <div className="cdz-tkt-date">
+            {dzosT('print.ticket.date', lang)} : {date}
+          </div>
+        </div>
+
+        <div className="cdz-tkt-sep" />
+
+        {/* In by method ------------------------------------------------- */}
+        <div className="cdz-tkt-section-label">
+          {dzosT('caisse.dayclose.inByMethod', lang)}
+        </div>
+        <table className="cdz-tkt-table">
+          <tbody>
+            {methodRows.map(([m, v]) => (
+              <tr key={`in-${m}`}>
+                <td className="cdz-tkt-td-label">
+                  {dzosCaisseMethodLabels[m](lang)}
+                </td>
+                <td className="cdz-tkt-td-val">{dzosFmtDZD(v, lang)}</td>
+              </tr>
+            ))}
+            <tr className="cdz-tkt-subtotal">
+              <td className="cdz-tkt-td-label">
+                {dzosT('caisse.journal.kind.in', lang)}
+              </td>
+              <td className="cdz-tkt-td-val">
+                {dzosFmtDZD(num(summary.inTotal), lang)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        {/* Out by method ------------------------------------------------ */}
+        <div className="cdz-tkt-section-label">
+          {dzosT('caisse.dayclose.outByMethod', lang)}
+        </div>
+        <table className="cdz-tkt-table">
+          <tbody>
+            {outRows.map(([m, v]) => (
+              <tr key={`out-${m}`}>
+                <td className="cdz-tkt-td-label">
+                  {dzosCaisseMethodLabels[m](lang)}
+                </td>
+                <td className="cdz-tkt-td-val">{dzosFmtDZD(v, lang)}</td>
+              </tr>
+            ))}
+            <tr className="cdz-tkt-subtotal">
+              <td className="cdz-tkt-td-label">
+                {dzosT('caisse.journal.kind.out', lang)}
+              </td>
+              <td className="cdz-tkt-td-val">
+                {dzosFmtDZD(num(summary.outTotal), lang)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div className="cdz-tkt-sep" />
+
+        {/* Net total ---------------------------------------------------- */}
+        <div className="cdz-tkt-net">
+          <span className="cdz-tkt-net-label">
+            {dzosT('caisse.dayclose.net', lang)}
+          </span>
+          <span className="cdz-tkt-net-val">
+            {dzosFmtDZD(num(summary.net), lang)}
+          </span>
+        </div>
+
+        {num(summary.pendingCodTotal) > 0 ? (
+          <div className="cdz-tkt-pending">
+            COD ({dzosT('caisse.journal.pending', lang)}) :{' '}
+            {dzosFmtDZD(num(summary.pendingCodTotal), lang)}
+          </div>
+        ) : null}
+
+        {/* Footer ------------------------------------------------------- */}
+        <div className="cdz-tkt-foot">
+          {dzosT('print.ticket.thanks', lang)}
+        </div>
+        <div className="cdz-tkt-printed-on">
+          {dzosT('print.invoice.printedOn', lang)}{' '}
+          {new Date().toLocaleString(rtl ? 'ar-DZ' : 'fr-DZ')}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// The ticket print CSS: thermal-receipt-style narrow column, invisible on
+// screen (0 size, off-canvas); at print time we HIDE the app body and reveal
+// ONLY the ticket. Uses `visibility` so the print-root can escape overflow-
+// clipped ancestors. Logical properties (text-align: start/end) make the same
+// rules work in both LTR and RTL.
+const TICKET_PRINT_CSS = `
+.cdz-tkt-print-root{position:absolute;width:0;height:0;overflow:hidden;left:-9999px;top:0;}
+@media print{
+  @page{size:80mm auto;margin:4mm;}
+  html,body{background:#fff !important;}
+  body *{visibility:hidden !important;}
+  .cdz-tkt-print-root,.cdz-tkt-print-root *{visibility:visible !important;}
+  .cdz-tkt-print-root{position:absolute !important;left:0 !important;top:0 !important;width:100% !important;height:auto !important;overflow:visible !important;}
+  .cdz-tkt-sheet{width:100%;max-width:72mm;margin:0 auto;color:#111;font-size:9pt;line-height:1.4;}
+  .cdz-tkt-header{text-align:center;margin-bottom:6px;}
+  .cdz-tkt-title{font-size:12pt;font-weight:800;text-transform:uppercase;letter-spacing:0.03em;}
+  .cdz-tkt-date{font-size:8.5pt;color:#444;margin-top:2px;}
+  .cdz-tkt-sep{border-top:1px dashed #999;margin:6px 0;}
+  .cdz-tkt-section-label{font-size:8pt;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;color:#666;margin-bottom:3px;}
+  .cdz-tkt-table{width:100%;border-collapse:collapse;margin-bottom:6px;}
+  .cdz-tkt-td-label{padding:2px 0;font-size:9pt;text-align:start;}
+  .cdz-tkt-td-val{padding:2px 0;font-size:9pt;text-align:end;white-space:nowrap;font-weight:600;}
+  .cdz-tkt-subtotal .cdz-tkt-td-label{font-weight:700;border-top:1px solid #ccc;padding-top:4px;}
+  .cdz-tkt-subtotal .cdz-tkt-td-val{font-weight:700;border-top:1px solid #ccc;padding-top:4px;}
+  .cdz-tkt-net{display:flex;justify-content:space-between;align-items:center;padding:6px 0 4px;border-top:2px solid #111;border-bottom:2px solid #111;margin-bottom:6px;}
+  .cdz-tkt-net-label{font-size:11pt;font-weight:800;}
+  .cdz-tkt-net-val{font-size:12pt;font-weight:800;white-space:nowrap;}
+  .cdz-tkt-pending{font-size:8pt;color:#666;margin-bottom:6px;text-align:start;}
+  .cdz-tkt-foot{text-align:center;font-size:9pt;font-weight:600;margin-top:8px;margin-bottom:4px;}
+  .cdz-tkt-printed-on{text-align:center;font-size:7.5pt;color:#999;}
+}
+`;

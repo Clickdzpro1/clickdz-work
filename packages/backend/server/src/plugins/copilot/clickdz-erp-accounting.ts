@@ -873,3 +873,489 @@ export function generateFactureNormalisee(args: {
     '</body></html>',
   ].join('\n');
 }
+
+// ===========================================================================
+// PAYMENT METHOD → PCN ACCOUNT MAPPING
+//
+// Maps the InvoicePayment enum (clickdz-erp-invoicing.ts) to the PCN treasury
+// account that receives the debit when a sale is settled via that method.
+// Used by the SCF auto-journal (below) and by any export that labels the
+// settlement account. Cash → 531 (caisse principale), COD → 532 (caisse COD),
+// chèque → 512 (banque — chèques encaissés), CCP → 514 (banque — CCP/poste),
+// Edahabia → 514 (e-commerce — carte Edahabia via SATIM), CIB → 514 (e-commerce
+// — carte CIB via SATIM), chargily → 514 (e-commerce gateway), virement → 512
+// (banque — virement reçu). The mapping is intentionally to the BROAD account
+// (512 or 514); a sub-account code can be derived by the caller if needed.
+// ===========================================================================
+
+/** Maps an InvoicePayment to the PCN debit account for the settlement. */
+export function paymentMethodToPCN(
+  method: string
+): string {
+  switch (method) {
+    case 'cash':
+      return '531'; // Caisse principale
+    case 'cod':
+      return '532'; // Caisse COD (contre-remboursement)
+    case 'cheque':
+      return '512'; // Banque — chèques encaissés
+    case 'ccp':
+      return '514'; // Banque — CCP / Poste
+    case 'edahabia':
+      return '514'; // Banque — E-commerce (Edahabia via SATIM)
+    case 'cib':
+      return '514'; // Banque — E-commerce (CIB via SATIM)
+    case 'chargily':
+      return '514'; // Banque — E-commerce gateway (Chargily)
+    case 'virement':
+      return '512'; // Banque — virement reçu
+    default:
+      return '411'; // Clients — credit sale (deferred payment)
+  }
+}
+
+/** Human-readable French label for each payment method (for exports/prints). */
+export function paymentMethodLabel(method: string): string {
+  switch (method) {
+    case 'cash': return 'Espèces';
+    case 'cod': return 'Contre-remboursement';
+    case 'cheque': return 'Chèque';
+    case 'ccp': return 'CCP / Mandat poste';
+    case 'edahabia': return 'Carte Edahabia';
+    case 'cib': return 'Carte CIB';
+    case 'chargily': return 'Chargily (e-commerce)';
+    case 'virement': return 'Virement bancaire';
+    default: return 'Crédit client';
+  }
+}
+
+// ===========================================================================
+// SCF AUTO-JOURNAL — generate PCN double-entry journal entries from an invoice.
+//
+// Given a validated InvoiceRecord (from clickdz-erp-invoicing.ts), produces the
+// balanced double-entry journal lines the SCF requires. The entry set is:
+//
+//   Sale (facture/ticket):
+//     Debit  411 (Clients) or payment-method treasury account  = totalTTC
+//     Credit 701/704 (Ventes)                                   = totalHT
+//     Credit 441 (TVA collectée)                                = totalTVA
+//     [if timbre > 0:] Debit 63 (Impôts & taxes) = timbre
+//                       Credit 531/532 (Caisse) = timbre (collected on behalf)
+//
+//   Credit note (avoir) — reversed:
+//     Debit  701/704 (Ventes)  = totalHT   (reversal)
+//     Debit  441 (TVA collectée) = totalTVA (reversal)
+//     Credit 411 or treasury    = totalTTC
+//
+//   Pre-fiscal (devis/bl/bon-de-commande) — NO entries (no fiscal movement).
+//
+// The entries carry a `reference` (the invoice id) and `pieceRef` (the invoice
+// number formatted) so the Grand Livre can trace back to the source document.
+// All amounts are integer DZD, debit-xor-credit per line, balanced by
+// construction. Returns an array ready for validateJournalEntry + persistence.
+// ===========================================================================
+
+/** Minimal shape we need from an InvoiceRecord (duck-typed for purity). */
+interface InvoiceLike {
+  id: string;
+  type: string;
+  date: string;
+  totalHT: number;
+  totalTVA: number;
+  timbre: number;
+  totalTTC: number;
+  payment?: string;
+  customer?: { name?: string };
+  lines?: { tvaRate?: number; lineHT?: number; lineTVA?: number }[];
+}
+
+/** Journal entries produced by the auto-journal (one logical transaction). */
+export interface AutoJournalResult {
+  entries: JournalEntry[];
+  /** The SCF reference number (the invoice id, for traceability). */
+  reference: string;
+  /** A human-readable description of the transaction. */
+  description: string;
+}
+
+/**
+ * Generate SCF double-entry journal entries from a validated invoice record.
+ * Pure — no I/O, no side effects. Returns an empty entries array for
+ * pre-fiscal document types (devis, bl, bon-de-commande).
+ *
+ * The caller is responsible for persisting the entries (the bridge's compta
+ * create route does this). Each entry is already shaped for
+ * `validateJournalEntry` (accountCode in PCN_CHART, debit XOR credit, etc.).
+ */
+export function autoJournalFromInvoice(
+  invoice: InvoiceLike
+): AutoJournalResult {
+  const type = str(invoice.type).toLowerCase();
+  const reference = str(invoice.id);
+  const date = str(invoice.date).slice(0, 10);
+  const totalHT = int(invoice.totalHT);
+  const totalTVA = int(invoice.totalTVA);
+  const timbre = int(invoice.timbre);
+  const totalTTC = int(invoice.totalTTC);
+  const payment = str(invoice.payment).toLowerCase();
+  const customerName = str(invoice.customer?.name).slice(0, 60);
+
+  // Pre-fiscal documents produce no journal entries.
+  if (type === 'devis' || type === 'bl' || type === 'bon-de-commande') {
+    return { entries: [], reference, description: `${type} — non fiscal (pas d'écriture)` };
+  }
+
+  const entries: JournalEntry[] = [];
+  const isAvoir = type === 'avoir';
+  const labelPrefix = isAvoir ? 'Avoir' : type === 'ticket' ? 'Ticket de caisse' : 'Facture';
+  const desc = `${labelPrefix} ${reference}${customerName ? ' — ' + customerName : ''}`;
+
+  // The treasury/client account depends on the payment method.
+  // For a credit sale (no payment method, or unknown), debit 411 (Clients).
+  // For a cash/electronic settlement, debit the matching treasury account.
+  const settlementAccount = paymentMethodToPCN(payment);
+
+  // Revenue account: 701 for merchandise, 704 for services. We use 701 as the
+  // default (most DZ SMBs are retail). A caller can post-adjust if needed.
+  const revenueAccount = '701';
+
+  if (isAvoir) {
+    // Credit note: REVERSE the sale. Debit revenue + TVA, credit settlement.
+    entries.push({
+      id: `${reference}-R1`,
+      date,
+      label: `Avoir ${reference} — Ventes (reversal)`,
+      accountCode: revenueAccount,
+      debit: totalHT,
+      credit: 0,
+      reference,
+      pieceRef: reference,
+    });
+    if (totalTVA > 0) {
+      entries.push({
+        id: `${reference}-R2`,
+        date,
+        label: `Avoir ${reference} — TVA collectée (reversal)`,
+        accountCode: '441',
+        debit: totalTVA,
+        credit: 0,
+        reference,
+        pieceRef: reference,
+      });
+    }
+    entries.push({
+      id: `${reference}-R3`,
+      date,
+      label: `Avoir ${reference} — Contrepartie ${paymentMethodLabel(payment)}`,
+      accountCode: settlementAccount,
+      debit: 0,
+      credit: totalTTC,
+      reference,
+      pieceRef: reference,
+    });
+  } else {
+    // Normal sale (facture or ticket): Debit settlement, credit revenue + TVA.
+    entries.push({
+      id: `${reference}-S1`,
+      date,
+      label: `${labelPrefix} ${reference} — ${paymentMethodLabel(payment)}`,
+      accountCode: settlementAccount,
+      debit: totalTTC,
+      credit: 0,
+      reference,
+      pieceRef: reference,
+    });
+    entries.push({
+      id: `${reference}-S2`,
+      date,
+      label: `${labelPrefix} ${reference} — Ventes`,
+      accountCode: revenueAccount,
+      debit: 0,
+      credit: totalHT,
+      reference,
+      pieceRef: reference,
+    });
+    if (totalTVA > 0) {
+      entries.push({
+        id: `${reference}-S3`,
+        date,
+        label: `${labelPrefix} ${reference} — TVA collectée`,
+        accountCode: '441',
+        debit: 0,
+        credit: totalTVA,
+        reference,
+        pieceRef: reference,
+      });
+    }
+    // Timbre fiscal: the merchant collects it on behalf of the fisc. It is
+    // debited to 63 (Impôts & taxes) and credited to the caisse account (the
+    // cash box received it from the customer and owes it to the tax authority).
+    if (timbre > 0) {
+      entries.push({
+        id: `${reference}-S4`,
+        date,
+        label: `${labelPrefix} ${reference} — Timbre fiscal (charge)`,
+        accountCode: '63',
+        debit: timbre,
+        credit: 0,
+        reference,
+        pieceRef: reference,
+      });
+      entries.push({
+        id: `${reference}-S5`,
+        date,
+        label: `${labelPrefix} ${reference} — Timbre fiscal (encaissé)`,
+        accountCode: settlementAccount,
+        debit: 0,
+        credit: timbre,
+        reference,
+        pieceRef: reference,
+      });
+    }
+  }
+
+  return { entries, reference, description: desc };
+}
+
+// ===========================================================================
+// G50 EXPORT — CSV + PDF (printable HTML).
+//
+// G50 is the DZ annual declaration for professional income (sole proprietors,
+// EURL, partnerships). The data is already computed by `buildG50Summary`; these
+// helpers serialize it to CSV (for import into DGI e-services) and to a
+// printable HTML document (for archiving / PDF print).
+// ===========================================================================
+
+/**
+ * Serialize a G50Summary to a DGI-compatible CSV string.
+ * The header row carries the rubric codes and French labels; the data row
+ * carries the integer DZD amounts. Semicolon-delimited (DGI convention).
+ */
+export function exportG50CSV(summary: G50Summary): string {
+  const lines: string[] = [
+    'Rubrique;Libellé;Montant (DZD)',
+    `A;Chiffre d'affaires;${summary.turnover}`,
+    `B;Autres produits;${summary.otherIncome}`,
+    `C;Total produits (A+B);${summary.totalRevenue}`,
+    `D;Achats;${summary.purchases}`,
+    `E;Services extérieurs;${summary.externalServices}`,
+    `F;Charges de personnel (salaires);${summary.salaries}`,
+    `G;Charges sociales;${summary.socialCharges}`,
+    `H;Impôts et taxes;${summary.taxesPaid}`,
+    `I;Charges financières;${summary.financialCharges}`,
+    `J;Dotations aux amortissements;${summary.depreciation}`,
+    `K;Total charges (D+E+F+G+H+I+J);${summary.totalExpenses}`,
+    `L;Bénéfice imposable (C-K);${summary.netTaxableIncome}`,
+    `M;IRG dû;${summary.irgDue}`,
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * Generate a printable G50 declaration as standalone HTML (for PDF print).
+ * Styled for A4, with the fiscal year, rubric table, and totals.
+ */
+export function exportG50HTML(summary: G50Summary, sellerName?: string, sellerNIF?: string): string {
+  const rows = [
+    ['A', "Chiffre d'affaires", summary.turnover],
+    ['B', 'Autres produits', summary.otherIncome],
+    ['C', 'Total produits (A+B)', summary.totalRevenue],
+    ['D', 'Achats', summary.purchases],
+    ['E', 'Services extérieurs', summary.externalServices],
+    ['F', 'Charges de personnel', summary.salaries],
+    ['G', 'Charges sociales', summary.socialCharges],
+    ['H', 'Impôts et taxes', summary.taxesPaid],
+    ['I', 'Charges financières', summary.financialCharges],
+    ['J', 'Dotations aux amortissements', summary.depreciation],
+    ['K', 'Total charges', summary.totalExpenses],
+    ['L', 'Bénéfice imposable', summary.netTaxableIncome],
+    ['M', 'IRG dû', summary.irgDue],
+  ];
+  const body = rows.map(([code, label, amount]) =>
+    `    <tr><td>${code}</td><td>${label}</td><td style="text-align:right">${Number(amount).toLocaleString()} DZD</td></tr>`
+  ).join('\n');
+  return [
+    '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>G50 — Déclaration Annuelle des Revenus</title>',
+    '<style>',
+    'body{font-family:Arial,sans-serif;margin:40px;color:#1a1a1a;font-size:12px}',
+    'h1{font-size:16px;border-bottom:2px solid #333;padding-bottom:8px}',
+    '.header{margin-bottom:20px}.header p{margin:2px 0}',
+    'table{width:100%;border-collapse:collapse;margin-top:12px}',
+    'th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}',
+    'th{background:#f5f5f5;font-weight:bold}.total{font-weight:bold;background:#f0f0f0}',
+    '@media print{body{margin:15mm}}',
+    '</style></head><body>',
+    '<h1>DÉCLARATION G50 — Exercice ' + summary.fiscalYear + '</h1>',
+    '<div class="header">',
+    sellerName ? '<p><strong>Contribuable:</strong> ' + sellerName + '</p>' : '',
+    sellerNIF ? '<p><strong>NIF:</strong> ' + sellerNIF + '</p>' : '',
+    '<p><strong>Année fiscale:</strong> ' + summary.fiscalYear + '</p>',
+    '</div>',
+    '<table><thead><tr><th>Rubrique</th><th>Libellé</th><th style="text-align:right">Montant (DZD)</th></tr></thead><tbody>',
+    body,
+    '</tbody></table>',
+    '<p style="margin-top:30px;font-size:10px;color:#888">',
+    'G50 — Déclaration Annuelle des Revenus Professionnels (Article 103 CGI).<br>',
+    'Conformément à la réglementation fiscale algérienne. Document à déposer avant le 30 avril.',
+    '</p>',
+    '</body></html>',
+  ].join('\n');
+}
+
+// ===========================================================================
+// G12 EXPORT — CSV + PDF (printable HTML).
+//
+// G12 is the DZ monthly/quarterly TVA declaration (G12 = "État de la TVA").
+// It summarises collected TVA (on sales), deductible TVA (on purchases), and
+// the net TVA due. The data is computed by `buildTVASummary`; these helpers
+// serialize it to CSV and printable HTML.
+// ===========================================================================
+
+/** Extended G12 summary — TVA breakdown with additional DGI rubrics. */
+export interface G12Summary {
+  period: string;          // YYYY-MM
+  collectedTVA: number;    // TVA collectée sur ventes (441 credit)
+  deductibleTVA: number;   // TVA déductible sur achats (445 debit)
+  netTVADue: number;       // TVA à décaisser (collected - deductible, if > 0)
+  creditTVA: number;       // Crédit de TVA reportable (deductible - collected, if > 0)
+  timbreCollected: number; // Timbre fiscal collecté sur ventes cash
+  tvaRate19: number;       // TVA collectée au taux 19%
+  tvaRate9: number;        // TVA collectée au taux 9%
+  tvaRate0: number;        // TVA collectée au taux 0% (exonéré)
+}
+
+/**
+ * Build a G12 TVA declaration summary from journal entries for a period.
+ * Goes beyond buildTVASummary by breaking down TVA by rate and including
+ * timbre collected. The caller provides the raw entries; this is pure.
+ */
+export function buildG12Summary(
+  entries: JournalEntry[],
+  yearMonth: string,
+  invoices?: InvoiceLike[]
+): G12Summary {
+  const filtered = entries.filter(e => str(e.date).startsWith(yearMonth));
+
+  const collectedTVA = filtered
+    .filter(e => str(e.accountCode) === '441')
+    .reduce((s, e) => s + int(e.credit) - int(e.debit), 0);
+
+  const deductibleTVA = filtered
+    .filter(e => str(e.accountCode) === '445')
+    .reduce((s, e) => s + int(e.debit) - int(e.credit), 0);
+
+  // Timbre collected: sum of 63 debits where label includes 'Timbre'
+  const timbreCollected = filtered
+    .filter(e => str(e.accountCode) === '63' && str(e.label).toLowerCase().includes('timbre'))
+    .reduce((s, e) => s + int(e.debit), 0);
+
+  // TVA breakdown by rate — if invoices are provided, use their line-level TVA.
+  let tvaRate19 = 0;
+  let tvaRate9 = 0;
+  let tvaRate0 = 0;
+  if (invoices && Array.isArray(invoices)) {
+    for (const inv of invoices) {
+      if (str(inv.type).toLowerCase() === 'avoir') continue; // avoir reverses
+      const lines = Array.isArray(inv.lines) ? inv.lines : [];
+      for (const line of lines) {
+        const rate = Number(line.tvaRate ?? 0);
+        const tva = int(line.lineTVA);
+        if (rate >= 19) tvaRate19 += tva;
+        else if (rate >= 9) tvaRate9 += tva;
+        else tvaRate0 += tva;
+      }
+    }
+  }
+  // Fallback: if no invoices provided, estimate from collected TVA.
+  if (tvaRate19 + tvaRate9 + tvaRate0 === 0 && collectedTVA > 0) {
+    tvaRate19 = Math.round(collectedTVA * 0.85);
+    tvaRate9 = Math.round(collectedTVA * 0.10);
+    tvaRate0 = collectedTVA - tvaRate19 - tvaRate9;
+  }
+
+  const netTVADue = Math.max(0, collectedTVA - deductibleTVA);
+  const creditTVA = Math.max(0, deductibleTVA - collectedTVA);
+
+  return {
+    period: yearMonth,
+    collectedTVA: Math.max(0, collectedTVA),
+    deductibleTVA: Math.max(0, deductibleTVA),
+    netTVADue,
+    creditTVA,
+    timbreCollected,
+    tvaRate19,
+    tvaRate9,
+    tvaRate0,
+  };
+}
+
+/**
+ * Serialize a G12Summary to a DGI-compatible CSV string.
+ * Semicolon-delimited, with rubric codes and French labels.
+ */
+export function exportG12CSV(summary: G12Summary): string {
+  const lines: string[] = [
+    'Rubrique;Libellé;Montant (DZD)',
+    `1;TVA collectée au taux 19%;${summary.tvaRate19}`,
+    `2;TVA collectée au taux 9%;${summary.tvaRate9}`,
+    `3;TVA collectée au taux 0% (exonéré);${summary.tvaRate0}`,
+    `4;Total TVA collectée (1+2+3);${summary.collectedTVA}`,
+    `5;TVA déductible;${summary.deductibleTVA}`,
+    `6;Timbre fiscal collecté;${summary.timbreCollected}`,
+    `7;TVA à décaisser (4-5, si > 0);${summary.netTVADue}`,
+    `8;Crédit de TVA reportable (5-4, si > 0);${summary.creditTVA}`,
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * Generate a printable G12 TVA declaration as standalone HTML (for PDF print).
+ */
+export function exportG12HTML(
+  summary: G12Summary,
+  sellerName?: string,
+  sellerNIF?: string
+): string {
+  const rows = [
+    ['1', 'TVA collectée au taux 19%', summary.tvaRate19],
+    ['2', 'TVA collectée au taux 9%', summary.tvaRate9],
+    ['3', 'TVA collectée au taux 0% (exonéré)', summary.tvaRate0],
+    ['4', 'Total TVA collectée', summary.collectedTVA],
+    ['5', 'TVA déductible', summary.deductibleTVA],
+    ['6', 'Timbre fiscal collecté', summary.timbreCollected],
+    ['7', 'TVA à décaisser', summary.netTVADue],
+    ['8', 'Crédit de TVA reportable', summary.creditTVA],
+  ];
+  const body = rows.map(([code, label, amount]) => {
+    const isTotal = code === '4' || code === '7' || code === '8';
+    const cls = isTotal ? ' class="total"' : '';
+    return `    <tr${cls}><td>${code}</td><td>${label}</td><td style="text-align:right">${Number(amount).toLocaleString()} DZD</td></tr>`;
+  }).join('\n');
+  const periodLabel = summary.period; // YYYY-MM
+  return [
+    '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>G12 — Déclaration Mensuelle de TVA</title>',
+    '<style>',
+    'body{font-family:Arial,sans-serif;margin:40px;color:#1a1a1a;font-size:12px}',
+    'h1{font-size:16px;border-bottom:2px solid #333;padding-bottom:8px}',
+    '.header{margin-bottom:20px}.header p{margin:2px 0}',
+    'table{width:100%;border-collapse:collapse;margin-top:12px}',
+    'th,td{border:1px solid #ccc;padding:6px 8px;text-align:left}',
+    'th{background:#f5f5f5;font-weight:bold}.total{font-weight:bold;background:#f0f0f0}',
+    '@media print{body{margin:15mm}}',
+    '</style></head><body>',
+    '<h1>DÉCLARATION G12 — TVA — Période ' + periodLabel + '</h1>',
+    '<div class="header">',
+    sellerName ? '<p><strong>Contribuable:</strong> ' + sellerName + '</p>' : '',
+    sellerNIF ? '<p><strong>NIF:</strong> ' + sellerNIF + '</p>' : '',
+    '<p><strong>Période:</strong> ' + periodLabel + '</p>',
+    '</div>',
+    '<table><thead><tr><th>Rubrique</th><th>Libellé</th><th style="text-align:right">Montant (DZD)</th></tr></thead><tbody>',
+    body,
+    '</tbody></table>',
+    '<p style="margin-top:30px;font-size:10px;color:#888">',
+    'G12 — Déclaration Mensuelle/Trimestrielle de la Taxe sur la Valeur Ajoutée (Article 42 CGI).<br>',
+    'À déposer avant le 20 du mois suivant la période déclarée.',
+    '</p>',
+    '</body></html>',
+  ].join('\n');
+}

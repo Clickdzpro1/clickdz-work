@@ -473,7 +473,7 @@ export const ERP_FEATURES: FeatureDef[] = [
     id: 'factures',
     nameFr: 'Facturation',
     nameAr: 'الفواتير',
-    descFr: 'Devis, bons de livraison et factures conformes DZ (TVA, timbre fiscal).',
+    descFr: 'Devis, BL, factures, avoirs, tickets et bons de commande conformes DZ (TVA, timbre fiscal). G50/G12, journal SCF auto.',
     category: 'erp-module',
     scope: 'erp',
     runtime: true,

@@ -167,16 +167,22 @@ import {
   buildAgedReceivables,
   buildBalanceSheet,
   buildCashFlowStatement,
+  buildG12Summary,
   buildG50Summary,
   buildIncomeStatement,
   buildTrialBalance,
   buildTVASummary,
   entriesCollectionFor,
   entriesCollectionForDate,
+  exportG12CSV,
+  exportG12HTML,
+  exportG50CSV,
+  exportG50HTML,
   generateFactureNormalisee,
   PCN_CHART,
   validateJournalEntry,
   validateNIF,
+  autoJournalFromInvoice,
   type JournalEntry,
 } from './clickdz-erp-accounting';
 import {
@@ -1302,12 +1308,12 @@ const CDZ_SHOP_STATE = process.env.CDZ_SHOP_STATE === '1';
 // INCR, byte-identical behaviour. '1' = Postgres cdz_erp_seq becomes the
 // monotonic floor via max-merge (see CdzErpSeqModel.reserve + erpReserveSeq).
 const CDZ_ERPSEQ_PG = process.env.CDZ_ERPSEQ_PG === '1';
-// SEC-5 — refuse to legally number a FACTURE while the seller's fiscal
+// SEC-5 — refuse to legally number a FACTURE or AVOIR while the seller's fiscal
 // identity (sellerName + RC/NIF/NIS/ART, "obligatoire légalement" on the
 // printed sheet) is blank in the settings singleton. Default ON; set
 // CDZ_ERP_SELLER_ID_ENFORCE=0 to restore the old permissive behaviour (e.g.
 // while migrating merchants who validated factures before this gate existed).
-// Devis/BL are NOT gated — they are not fiscal invoices.
+// Devis/BL/bon-de-commande/ticket are NOT gated — they are not full fiscal invoices.
 const CDZ_ERP_SELLER_ID_ENFORCE =
   process.env.CDZ_ERP_SELLER_ID_ENFORCE !== '0';
 // Bound the PG hop on the validation path; past this the reserve fails soft to
@@ -6249,12 +6255,17 @@ export class ClickDzBridgeController {
         .json({ error: 'invoice_not_draft', status: draft.status });
       return;
     }
-    // SEC-5: a facture must not receive a legal number while the seller's
+    // SEC-5: a facture or avoir must not receive a legal number while the seller's
     // mandatory identity fields are blank. Checked BEFORE the seq reservation
     // so a refusal never burns a gap-less number. Settings unreadable (data
     // API down) ⇒ typed 502, same contract as the settings routes — never a
     // silent pass. Same typed 400 body shape as every other invoice refusal.
-    if (CDZ_ERP_SELLER_ID_ENFORCE && draft.type === 'facture') {
+    // Avoir (credit note) is also a numbered fiscal doc requiring seller identity.
+    // Ticket is a simplified cash sale — the gate is relaxed (no NIF/RC needed).
+    if (
+      CDZ_ERP_SELLER_ID_ENFORCE &&
+      (draft.type === 'facture' || draft.type === 'avoir')
+    ) {
       const settingsRows = await this.erpList(slug, 'settings');
       if (!settingsRows) {
         res
@@ -8073,7 +8084,8 @@ export class ClickDzBridgeController {
       kind === 'income' ||
       kind === 'bilan' ||
       kind === 'cashflow' ||
-      kind === 'g50'
+      kind === 'g50' ||
+      kind === 'g12'
     ) {
       const entries = await this.comptaReadPartitions(
         slug,
@@ -8088,6 +8100,21 @@ export class ClickDzBridgeController {
       }
       if (kind === 'g50') {
         return { type: kind, report: buildG50Summary(entries, fiscalYear) };
+      }
+      if (kind === 'g12') {
+        // G12 is monthly/quarterly; use the `month` param to pick the period.
+        const raw = caisseStr(month).trim();
+        const ym = /^\d{6}$/.test(raw)
+          ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}`
+          : /^\d{4}-\d{2}$/.test(raw)
+            ? raw
+            : new Date().toISOString().slice(0, 7);
+        // Re-read just the one month's partition for G12.
+        const monthEntries = await this.comptaReadPartitions(slug, [
+          `compta-entries-${ym.replace('-', '')}`,
+        ]);
+        if (!monthEntries) return fail502();
+        return { type: kind, report: buildG12Summary(monthEntries, ym) };
       }
       const opening = Math.round(Number(caisseStr(openingCash).trim()) || 0);
       return {
@@ -8227,6 +8254,202 @@ export class ClickDzBridgeController {
       `[erp] compta-facture slug=${slug} user=${user.id} items=${items.length}`
     );
     return { html };
+  }
+
+  /**
+   * COMPTA — GET /api/v1/apps/:slug/erp/compta/export/g50 (auth'd, owner-only).
+   * G50 annual declaration export. ?year=YYYY (default current year).
+   * ?format=csv (default) or ?format=pdf (printable HTML).
+   * Reads the fiscal year's partitions, builds the G50 summary, serializes.
+   */
+  @Throttle('default', { limit: 30, ttl: 60_000 })
+  @Get('/api/v1/apps/:slug/erp/compta/export/g50')
+  async erpExportG50(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('year') year: string | undefined,
+    @Query('format') format: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const yStr = caisseStr(year).trim();
+    const fiscalYear = /^\d{4}$/.test(yStr)
+      ? parseInt(yStr, 10)
+      : new Date().getUTCFullYear();
+    const entries = await this.comptaReadPartitions(
+      slug,
+      this.comptaPartitionsInRange(`${fiscalYear}-01-01`, `${fiscalYear}-12-31`)
+    );
+    if (!entries) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const summary = buildG50Summary(entries, fiscalYear);
+    // Best-effort: pull seller name + NIF from settings for the PDF header.
+    let sellerName: string | undefined;
+    let sellerNIF: string | undefined;
+    const settingsRows = await this.erpList(slug, 'settings');
+    if (settingsRows) {
+      const settingsRow =
+        settingsRows.find(r => caisseStr(r.key) === 'settings') ?? settingsRows[0];
+      sellerName = caisseStr(settingsRow?.sellerName).slice(0, 200) || undefined;
+      sellerNIF = caisseStr(settingsRow?.sellerNif).replace(/\s/g, '') || undefined;
+    }
+    const fmt = caisseStr(format).trim().toLowerCase();
+    if (fmt === 'pdf' || fmt === 'html') {
+      const html = exportG50HTML(summary, sellerName, sellerNIF);
+      this.logger.log(
+        `[erp] g50-export slug=${slug} user=${user.id} year=${fiscalYear} fmt=pdf`
+      );
+      return { format: 'pdf', html, summary };
+    }
+    const csv = exportG50CSV(summary);
+    this.logger.log(
+      `[erp] g50-export slug=${slug} user=${user.id} year=${fiscalYear} fmt=csv`
+    );
+    return { format: 'csv', csv, summary };
+  }
+
+  /**
+   * COMPTA — GET /api/v1/apps/:slug/erp/compta/export/g12 (auth'd, owner-only).
+   * G12 monthly TVA declaration export. ?month=YYYY-MM or YYYYMM (default current
+   * month). ?format=csv (default) or ?format=pdf (printable HTML).
+   * Reads the month's partition, builds the G12 summary, serializes.
+   */
+  @Throttle('default', { limit: 30, ttl: 60_000 })
+  @Get('/api/v1/apps/:slug/erp/compta/export/g12')
+  async erpExportG12(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Query('month') month: string | undefined,
+    @Query('format') format: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const raw = caisseStr(month).trim();
+    const ym = /^\d{6}$/.test(raw)
+      ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}`
+      : /^\d{4}-\d{2}$/.test(raw)
+        ? raw
+        : new Date().toISOString().slice(0, 7);
+    const entries = await this.comptaReadPartitions(slug, [
+      `compta-entries-${ym.replace('-', '')}`,
+    ]);
+    if (!entries) {
+      res.status(HttpStatus.BAD_GATEWAY).json({ error: 'data_api_unavailable' });
+      return;
+    }
+    const summary = buildG12Summary(entries, ym);
+    // Best-effort: pull seller name + NIF from settings for the PDF header.
+    let sellerName: string | undefined;
+    let sellerNIF: string | undefined;
+    const settingsRows = await this.erpList(slug, 'settings');
+    if (settingsRows) {
+      const settingsRow =
+        settingsRows.find(r => caisseStr(r.key) === 'settings') ?? settingsRows[0];
+      sellerName = caisseStr(settingsRow?.sellerName).slice(0, 200) || undefined;
+      sellerNIF = caisseStr(settingsRow?.sellerNif).replace(/\s/g, '') || undefined;
+    }
+    const fmt = caisseStr(format).trim().toLowerCase();
+    if (fmt === 'pdf' || fmt === 'html') {
+      const html = exportG12HTML(summary, sellerName, sellerNIF);
+      this.logger.log(
+        `[erp] g12-export slug=${slug} user=${user.id} period=${ym} fmt=pdf`
+      );
+      return { format: 'pdf', html, summary };
+    }
+    const csv = exportG12CSV(summary);
+    this.logger.log(
+      `[erp] g12-export slug=${slug} user=${user.id} period=${ym} fmt=csv`
+    );
+    return { format: 'csv', csv, summary };
+  }
+
+  /**
+   * COMPTA — POST /api/v1/apps/:slug/erp/compta/auto-journal (auth'd, owner-only).
+   * SCF auto-journal: generate PCN double-entry journal entries from a validated
+   * invoice record. BODY = { invoice: InvoiceRecord } (the validated facture/
+   * avoir/ticket). Returns the generated entries (balanced, debit-xor-credit per
+   * line). The caller may then persist them via the compta create route.
+   *
+   * Optionally writes the entries directly when ?persist=1 is passed — each entry
+   * is validated and created in the monthly partition derived from its date.
+   */
+  @Throttle('strict')
+  @Post('/api/v1/apps/:slug/erp/compta/auto-journal')
+  async erpAutoJournal(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Body() body: any,
+    @Query('persist') persist: string | undefined,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    const invoice = body?.invoice;
+    if (!invoice || typeof invoice !== 'object') {
+      res
+        .status(HttpStatus.BAD_REQUEST)
+        .json({ error: 'invalid_input', message: 'Body must contain { invoice: ... }' });
+      return;
+    }
+    const result = autoJournalFromInvoice(invoice);
+    if (result.entries.length === 0) {
+      return { ok: true, entries: [], reference: result.reference, description: result.description };
+    }
+    // Validate every entry before persisting (belt-and-braces).
+    for (const entry of result.entries) {
+      const invalid = validateJournalEntry(entry);
+      if (invalid) {
+        res
+          .status(HttpStatus.INTERNAL_SERVER_ERROR)
+          .json({ error: 'auto_journal_invalid', message: invalid, entry });
+        return;
+      }
+    }
+    // If persist=1, write each entry to its monthly partition.
+    if (caisseStr(persist).trim() === '1') {
+      const token = dataWriteToken(slug);
+      if (!token) {
+        res
+          .status(HttpStatus.NOT_IMPLEMENTED)
+          .json({ error: 'admin_writes_unavailable' });
+        return;
+      }
+      const written: JournalEntry[] = [];
+      for (const entry of result.entries) {
+        const created = await this.erpCreateRecord(
+          slug,
+          entriesCollectionForDate(caisseStr(entry.date)),
+          entry as unknown as ErpRecord,
+          token
+        );
+        if (!created.ok) {
+          this.erpWriteFailed(res, created.status);
+          return;
+        }
+        written.push(created.record as JournalEntry);
+      }
+      this.logger.log(
+        `[erp] auto-journal slug=${slug} user=${user.id} ref=${result.reference} entries=${written.length} persisted`
+      );
+      return {
+        ok: true,
+        entries: written,
+        reference: result.reference,
+        description: result.description,
+        persisted: true,
+      };
+    }
+    this.logger.log(
+      `[erp] auto-journal slug=${slug} user=${user.id} ref=${result.reference} entries=${result.entries.length} dry-run`
+    );
+    return {
+      ok: true,
+      entries: result.entries,
+      reference: result.reference,
+      description: result.description,
+      persisted: false,
+    };
   }
 
   /**
