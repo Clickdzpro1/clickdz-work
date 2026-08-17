@@ -594,7 +594,7 @@ export const ShopAppearance = ({
                 style={inputStyle}
                 value={heroLine}
                 maxLength={200}
-                placeholder="Livraison 58 wilayas &middot; paiement &agrave; la livraison"
+                placeholder="Livraison 69 wilayas &middot; paiement &agrave; la livraison"
                 disabled={disabled}
                 onChange={e => setHeroLine(e.target.value.slice(0, 200))}
               />
@@ -976,7 +976,7 @@ const MockPreview = ({
               marginTop: 4,
             }}
           >
-            Livraison 58 wilayas · commande via WhatsApp
+            Livraison 69 wilayas · commande via WhatsApp
           </div>
         </div>
       ) : null}

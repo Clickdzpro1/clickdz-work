@@ -1778,7 +1778,7 @@ export interface ShipWilaya {
   name: string;
 }
 
-/** A dense matrix row for the 58-wilaya grid (missing rows → null fees). */
+/** A dense matrix row for the 69-wilaya grid (missing rows → null fees). */
 export interface ShipMatrixRow {
   wilaya: number;
   name: string;
@@ -1833,7 +1833,7 @@ function shipReadMessage(status: number, fallback: string): string {
         : fallback;
 }
 
-/** GET /erp/shipping/wilayas — the canonical 58-wilaya table (reference data). */
+/** GET /erp/shipping/wilayas — the canonical 69-wilaya table (reference data). */
 export async function fetchWilayas(slug: string): Promise<WilayasOutcome> {
   let res: Response;
   try {
