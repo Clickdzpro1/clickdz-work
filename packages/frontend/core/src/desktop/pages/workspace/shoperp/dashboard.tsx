@@ -634,7 +634,7 @@ const FiveSteps = ({
     {
       id: 'shipping',
       label: 'Configurez la livraison',
-      hint: 'Tarifs des 58 wilayas et transporteurs.',
+      hint: 'Tarifs des 69 wilayas et transporteurs.',
       section: 'shipping',
       // This one cannot be derived from the summary: the server normalizes
       // `deliveryFee` to a default of 500 whenever it is unset, so the field

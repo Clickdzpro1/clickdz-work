@@ -56,12 +56,82 @@ export const INVOICE_UNIT_HT_MAX = 1_000_000_000; // 1e9 DZD/unit ceiling
 /** TVA rate clamp (percent). 0 = exonéré is legal; cap well above 19. */
 export const INVOICE_TVA_RATE_MAX = 100;
 
-// DZ timbre fiscal (fiscal stamp) constants — the legal defaults. Overridable
-// by the caller via `opts.timbreRate` (env `CDZ_ERP_TIMBRE_RATE`, percent).
-/** Minimum timbre per cash invoice (DZD). */
+// DZ timbre fiscal (fiscal stamp) — LF2025 (Loi de Finances 2025, Art.100/258
+// quinquies). The pre-2025 rule was a flat 1% capped at 10,000 DZD; LF2025
+// replaced it with a PROGRESSIVE scale by cash-transaction amount, kept the
+// 5 DZD floor, and DROPPED the cap. Electronic payments are EXEMPT entirely
+// (the law's stated policy goal: disincentivize large cash settlements).
+//
+// The scale is encoded as a config table so a future LF change is a data edit,
+// not a code change. The 2026 defaults below match the law in force at Aug 2026.
+// Overridable wholesale via `opts.timbreScale` (env CDZ_ERP_TIMBRE_SCALE as
+// JSON); env CDZ_ERP_TIMBRE_RATE is honored ONLY as a flat-rate fallback for
+// ops that deliberately want the legacy single-rate behavior (default OFF).
+/** Minimum timbre per cash invoice (DZD) — LF2025 unchanged floor. */
 export const TIMBRE_MIN_DZD = 5;
-/** Maximum timbre per cash invoice (DZD). */
-export const TIMBRE_MAX_DZD = 10_000;
+
+/**
+ * One bracket of the LF2025 progressive timbre scale.
+ * `rate` is a percent; `upTo` is the inclusive TTC-before-timbre ceiling in
+ * DZD, or `null` for the top (open-ended) bracket. Brackets are evaluated in
+ * order; the FIRST whose `upTo` is >= baseTTC applies, and the rate hits the
+ * WHOLE base (single-bracket marginal, not a true marginal stack) — this
+ * matches how the DGI timbre is computed in practice on a cash invoice.
+ */
+export interface TimbreBracket {
+  upTo: number | null;
+  rate: number;
+}
+
+/** LF2025 progressive scale (2026 defaults). */
+export const TIMBRE_SCALE_LF2025: readonly TimbreBracket[] = Object.freeze([
+  { upTo: 30_000, rate: 1 }, // 1% on ≤ 30,000 DZD
+  { upTo: 100_000, rate: 1.5 }, // 1.5% on 30,000–100,000 DZD
+  { upTo: null, rate: 2 }, // 2% above 100,000 DZD
+]);
+
+/**
+ * Resolve the active timbre scale from env. CDZ_ERP_TIMBRE_SCALE (JSON array
+ * of {upTo, rate}) wins; otherwise the LF2025 default. A flat legacy
+ * CDZ_ERP_TIMBRE_RATE is folded into a synthetic one-bracket scale ONLY when
+ * CDZ_ERP_TIMBRE_LEGACY_FLAT='1' is also set (opt-in legacy behavior).
+ */
+export function resolveTimbreScale(
+  scaleEnv: string | undefined,
+  legacyFlatRateEnv: string | undefined,
+  legacyFlatFlag: string | undefined
+): readonly TimbreBracket[] {
+  if (scaleEnv && scaleEnv.trim()) {
+    try {
+      const parsed = JSON.parse(scaleEnv) as unknown;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const brackets = parsed
+          .map((b) => {
+            if (!b || typeof b !== 'object') return null;
+            const rate = Number((b as { rate?: unknown }).rate);
+            const upToRaw = (b as { upTo?: unknown }).upTo;
+            const upTo =
+              upToRaw == null ? null : Number(upToRaw);
+            if (!Number.isFinite(rate) || rate < 0 || rate > 100) return null;
+            if (upTo !== null && (!Number.isFinite(upTo) || upTo < 0))
+              return null;
+            return { upTo, rate } as TimbreBracket;
+          })
+          .filter((b): b is TimbreBracket => b !== null);
+        if (brackets.length > 0) return Object.freeze(brackets);
+      }
+    } catch {
+      /* fall through to default */
+    }
+  }
+  if (legacyFlatFlag === '1' && legacyFlatRateEnv) {
+    const rate = Number(legacyFlatRateEnv);
+    if (Number.isFinite(rate) && rate >= 0 && rate <= 100) {
+      return Object.freeze([{ upTo: null, rate }]);
+    }
+  }
+  return TIMBRE_SCALE_LF2025;
+}
 
 /** The three fiscal document kinds, in their legal conversion order. */
 export const INVOICE_TYPES = ['devis', 'bl', 'facture'] as const;
@@ -71,8 +141,24 @@ export type InvoiceType = (typeof INVOICE_TYPES)[number];
 export const INVOICE_STATUSES = ['brouillon', 'valide', 'annule'] as const;
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
 
-/** Payment method carried on a facture (drives whether timbre applies). */
-export const INVOICE_PAYMENTS = ['cash', 'cod', 'chargily', 'virement'] as const;
+/**
+ * Payment method carried on a facture (drives whether timbre applies).
+ * LF2025: only `cash` and `cod` attract the timbre; ALL electronic methods
+ * (chargily/Edahabia/CIB, virement, chèque, CCP) are EXEMPT. Broadening the
+ * type lets a facture carry any of these so the timbre exemption applies
+ * correctly and the print sheet labels them; `computeTimbre` already treats
+ * every non-cash/non-cod method as exempt.
+ */
+export const INVOICE_PAYMENTS = [
+  'cash',
+  'cod',
+  'chargily',
+  'virement',
+  'cheque',
+  'ccp',
+  'edahabia',
+  'cib',
+] as const;
 export type InvoicePayment = (typeof INVOICE_PAYMENTS)[number];
 
 // ---------------------------------------------------------------------------
@@ -130,8 +216,20 @@ export interface InvoiceRecord {
 export interface InvoiceOptions {
   /** TVA percent when a line omits its own rate (env CDZ_ERP_TVA_RATE, def 19). */
   tvaRate: number;
-  /** Timbre percent of TTC on cash sales (env CDZ_ERP_TIMBRE_RATE, def 1). */
+  /**
+   * Timbre percent of TTC on cash sales — LEGACY flat rate (env
+   * CDZ_ERP_TIMBRE_RATE, def 1). Kept for back-compat with callers that still
+   * read a single rate; the ACTIVE rule is `timbreScale` (LF2025 progressive).
+   * Only consulted when `timbreScale` is absent.
+   * @deprecated use `timbreScale` instead.
+   */
   timbreRate: number;
+  /**
+   * LF2025 progressive timbre scale (brackets by cash-amount). When present
+   * this OVERRIDES `timbreRate`. Resolved from env CDZ_ERP_TIMBRE_SCALE (JSON)
+   * or the LF2025 default; see `resolveTimbreScale`.
+   */
+  timbreScale?: readonly TimbreBracket[];
   /** Business date override (YYYY-MM-DD); defaults to today (UTC). */
   today?: string;
 }
@@ -157,11 +255,17 @@ export function invoiceTodayISO(): string {
  * Parse the TVA/timbre env values the way the bridge reads other CDZ_ envs:
  * `Number(process.env.X ?? default)`, clamped to a sane range. Exposed so the
  * controller can build InvoiceOptions from `process.env` in one line.
+ *
+ * The timbre is resolved as a PROGRESSIVE scale (LF2025): env
+ * CDZ_ERP_TIMBRE_SCALE (JSON array of {upTo, rate}) wins, else the LF2025
+ * default. The legacy flat CDZ_ERP_TIMBRE_RATE is still returned as
+ * `timbreRate` for back-compat, and is folded into a synthetic one-bracket
+ * scale ONLY when CDZ_ERP_TIMBRE_LEGACY_FLAT='1' is also set.
  */
 export function resolveInvoiceRates(
   tvaEnv: string | undefined,
   timbreEnv: string | undefined
-): { tvaRate: number; timbreRate: number } {
+): { tvaRate: number; timbreRate: number; timbreScale: readonly TimbreBracket[] } {
   const tvaRaw = Number(tvaEnv ?? '19');
   const timbreRaw = Number(timbreEnv ?? '1');
   const tvaRate = Number.isFinite(tvaRaw)
@@ -170,7 +274,12 @@ export function resolveInvoiceRates(
   const timbreRate = Number.isFinite(timbreRaw)
     ? Math.max(0, Math.min(100, timbreRaw))
     : 1;
-  return { tvaRate, timbreRate };
+  const timbreScale = resolveTimbreScale(
+    process.env.CDZ_ERP_TIMBRE_SCALE,
+    timbreEnv,
+    process.env.CDZ_ERP_TIMBRE_LEGACY_FLAT
+  );
+  return { tvaRate, timbreRate, timbreScale };
 }
 
 // ===========================================================================
@@ -302,42 +411,58 @@ export function computeLineTotals(
 }
 
 /**
- * DZ timbre fiscal. Legal rule (encoded per R2-CONTRACT):
+ * DZ timbre fiscal. Legal rule (LF2025, Art.100/258 quinquies):
  *   • applies ONLY to a `facture` (never devis/bl) PAID IN CASH,
- *   • = `timbreRate`% of the TTC-before-timbre (HT + TVA),
+ *   • base = TTC-before-timbre (HT + TVA),
+ *   • rate is PROGRESSIVE by base amount: 1% ≤30,000 · 1.5% 30,000–100,000 ·
+ *     2% >100,000 (LF2025 default scale; the active scale is resolved from env
+ *     so a future LF change is a config edit, not a code change),
  *   • rounded to the nearest integer dinar,
- *   • then floored at TIMBRE_MIN_DZD (5) and capped at TIMBRE_MAX_DZD (10 000).
- * The min/cap apply only when there is a taxable base (base > 0) — a zero-value
- * cash facture carries no timbre. Every other case returns 0.
+ *   • floored at TIMBRE_MIN_DZD (5); the pre-2025 10,000 cap was REMOVED,
+ *   • only when the base is positive — a zero-value cash facture carries none.
+ * Electronic payments (virement, chargily/Edahabia/CIB, chèque, CCP) are
+ * EXEMPT — the law's explicit policy goal. Only `cash` and `cod` (physical
+ * cash collected at the door) attract timbre.
  *
- * NOTE on "cash": DZ timbre attaches to cash-settled sales. We treat method
- * `cash` as cash; `cod` (cash-on-delivery, the dominant DZ channel) is ALSO
- * physical cash collected at the door, so it counts as cash for timbre. Bank
- * transfer (`virement`) and Chargily (card/EDAHABIA electronic) do NOT.
+ * Single-bracket marginal: the FIRST bracket whose `upTo` is >= base applies,
+ * and its rate hits the WHOLE base. This matches DGI practice on a cash
+ * invoice (the timbre is one line, not a stacked marginal computation).
  */
 export function computeTimbre(
   type: InvoiceType,
   payment: InvoicePayment | undefined,
   baseTTC: number,
-  timbreRate: number
+  scale: readonly TimbreBracket[] = TIMBRE_SCALE_LF2025
 ): number {
   if (type !== 'facture') return 0;
   const isCash = payment === 'cash' || payment === 'cod';
   if (!isCash) return 0;
   if (!(baseTTC > 0)) return 0;
-  const raw = Math.round((baseTTC * timbreRate) / 100);
-  return Math.max(TIMBRE_MIN_DZD, Math.min(TIMBRE_MAX_DZD, raw));
+  const bracket =
+    scale.find((b) => b.upTo == null || baseTTC <= b.upTo) ??
+    scale[scale.length - 1];
+  const raw = Math.round((baseTTC * bracket.rate) / 100);
+  return Math.max(TIMBRE_MIN_DZD, raw);
 }
 
 /**
  * Roll a set of normalized lines + a doc kind/payment into the document totals,
  * applying the round-then-sum rule and the timbre rule. Pure; no side effects.
  */
+/**
+ * Roll a set of normalized lines + a doc kind/payment into the document totals,
+ * applying the round-then-sum rule and the timbre rule. Pure; no side effects.
+ *
+ * The 4th arg is the timbre config: pass an LF2025 progressive scale
+ * (`readonly TimbreBracket[]`, preferred) OR a legacy flat rate (number). A
+ * number is folded into a synthetic one-bracket scale so both paths share one
+ * `computeTimbre` implementation.
+ */
 export function computeInvoiceTotals(
   type: InvoiceType,
   lines: InvoiceLine[],
   payment: InvoicePayment | undefined,
-  timbreRate: number
+  timbre: number | readonly TimbreBracket[]
 ): { totalHT: number; totalTVA: number; timbre: number; totalTTC: number } {
   let totalHT = 0;
   let totalTVA = 0;
@@ -346,8 +471,11 @@ export function computeInvoiceTotals(
     totalTVA += l.lineTVA;
   }
   const baseTTC = totalHT + totalTVA;
-  const timbre = computeTimbre(type, payment, baseTTC, timbreRate);
-  return { totalHT, totalTVA, timbre, totalTTC: baseTTC + timbre };
+  const scale = Array.isArray(timbre)
+    ? timbre
+    : [{ upTo: null, rate: timbre }];
+  const timbreAmt = computeTimbre(type, payment, baseTTC, scale);
+  return { totalHT, totalTVA, timbre: timbreAmt, totalTTC: baseTTC + timbreAmt };
 }
 
 // ===========================================================================
@@ -482,7 +610,7 @@ export function buildDraftInvoice(
     : opts.today || invoiceTodayISO();
   const year = Number(date.slice(0, 4));
 
-  const totals = computeInvoiceTotals(docType, lines, payment, opts.timbreRate);
+  const totals = computeInvoiceTotals(docType, lines, payment, opts.timbreScale ?? opts.timbreRate);
 
   const record: InvoiceRecord = {
     id: draftId,
@@ -561,18 +689,20 @@ export function checkSellerIdentity(
 export function applyValidation(
   draft: InvoiceRecord,
   seq: number,
-  timbreRate: number
+  opts: InvoiceOptions
 ): { ok: true; record: InvoiceRecord } | ValidationError {
   if (draft.status !== 'brouillon') {
     return { ok: false, reason: 'not_a_draft', field: 'status' };
   }
   const s = Math.max(1, Math.floor(seq));
   const lines = Array.isArray(draft.lines) ? draft.lines : [];
+  const timbreConfig: number | readonly TimbreBracket[] =
+    opts.timbreScale ?? opts.timbreRate;
   const totals = computeInvoiceTotals(
     draft.type,
     lines,
     normalizePayment(draft.payment),
-    timbreRate
+    timbreConfig
   );
   const record: InvoiceRecord = {
     ...draft,
@@ -675,7 +805,7 @@ export function buildConversion(
   const payment = normalizePayment(source.payment);
   const date = opts.today || invoiceTodayISO();
   const year = Number(date.slice(0, 4));
-  const totals = computeInvoiceTotals(toType, lines, payment, opts.timbreRate);
+  const totals = computeInvoiceTotals(toType, lines, payment, opts.timbreScale ?? opts.timbreRate);
   const orderRef = str(source.orderRef).trim().slice(0, INVOICE_ORDER_REF_MAX);
 
   const record: InvoiceRecord = {
@@ -798,7 +928,7 @@ export function buildInvoiceFromOrder(
   const orderRef = str(order.ref).trim().slice(0, INVOICE_ORDER_REF_MAX);
   const date = opts.today || invoiceTodayISO();
   const year = Number(date.slice(0, 4));
-  const totals = computeInvoiceTotals(docType, lines, payment, opts.timbreRate);
+  const totals = computeInvoiceTotals(docType, lines, payment, opts.timbreScale ?? opts.timbreRate);
 
   const record: InvoiceRecord = {
     id: draftId,

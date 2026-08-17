@@ -206,9 +206,9 @@ export const DEFAULT_SHOP_TOUR_STEPS: ShopTourStep[] = [
   {
     section: 'shipping',
     title: 'Livraison',
-    body: 'Configurez vos transporteurs et vos tarifs pour les 58 wilayas.',
+    body: 'Configurez vos transporteurs et vos tarifs pour les 69 wilayas.',
     titleEn: 'Shipping',
-    bodyEn: 'Set up your delivery partners and rates for all 58 wilayas.',
+    bodyEn: 'Set up your delivery partners and rates for all 69 wilayas.',
     titleAr: 'التوصيل',
     bodyAr: 'هيّئ شركات التوصيل وأسعارها لجميع الـ58 ولاية.',
     darja: '58 ولاية — حضّر التوصيل و الأثمنة تاعهم.',

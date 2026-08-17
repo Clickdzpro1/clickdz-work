@@ -70,7 +70,7 @@ import {
 //                  → a calm "bientôt disponible", never an error.
 //   • Livreurs   — courier list / create / edit (name, phone, codFee, active)
 //                  + a wa.me tap link (open WhatsApp to the courier).
-//   • Tarifs     — per-courier 58-wilaya rate matrix editor (fee/homeFee/
+//   • Tarifs     — per-courier 69-wilaya rate matrix editor (fee/homeFee/
 //                  deskFee), CSV paste import, "remplir tout" quick-fill,
 //                  and a copy-to-clipboard matrix export.
 //   • Expéditions — recent orders with a courier-assignment select + a tracking
@@ -1838,8 +1838,8 @@ const CourierForm = ({
 };
 
 // ===========================================================================
-// TARIFS tab — per-courier 58-wilaya matrix editor. Sticky header + compact
-// inputs so the 58 rows collapse gracefully on mobile. Bulk paste CSV import,
+// TARIFS tab — per-courier 69-wilaya matrix editor. Sticky header + compact
+// inputs so the 69 rows collapse gracefully on mobile. Bulk paste CSV import,
 // "remplir tout" quick-fill (one fee → all rows, client-side, then one bulk
 // POST), and a copy-to-clipboard matrix export.
 // ===========================================================================
@@ -2187,7 +2187,7 @@ const RatesTab = ({
         </button>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11.5, color: C.muted, alignSelf: 'center' }}>
-          {filledCount}/58 renseignées
+          {filledCount}/{rows ? rows.length : 69} renseignées
         </span>
         <button
           style={btnStyle('primary', readOnly || saving || !rows)}
@@ -2723,7 +2723,7 @@ const ActiveBadge = ({ active }: { active: boolean }) => {
   );
 };
 
-// ---- Rate-matrix table styles: sticky header + compact inputs so the 58 rows
+// ---- Rate-matrix table styles: sticky header + compact inputs so the 69 rows
 // collapse gracefully on mobile (the table lives in a capped-height scroller). --
 
 const matrixWrapStyle: CSSProperties = {

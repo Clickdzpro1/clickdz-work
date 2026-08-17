@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// WSE-6 (R2-c) — LIVRAISON: couriers + the canonical 58-wilaya shipping matrix.
+// WSE-6 (R2-c) — LIVRAISON: couriers + the canonical 69-wilaya shipping matrix.
 //
 // This is a PURE logic module (types + validation + tiny pure helpers only) —
 // NO Nest decorators, NO framework error classes, NO fetch, NO Node imports —
@@ -47,9 +47,15 @@ export interface Wilaya {
 }
 
 /**
- * The definitive 58 Algerian wilayas (official 2019+ numbering incl. the 10 new
- * southern wilayas 49-58). Names are byte-identical to the shop template's
- * checkout options. Frozen so no consumer can mutate the shared source.
+ * The definitive 69 Algerian wilayas. The original 58 (official 2019+ numbering
+ * incl. the 10 southern wilayas 49-58) PLUS the 11 new wilayas 59-69 created by
+ * Law n° 26-06 of 4 April 2026 (Journal Officiel n°25) and named/numbered by
+ * Presidential Decree n° 26-206 of 25 May 2026 (Journal Officiel n°40):
+ *   59 Aflou, 60 Barika, 61 El Kantara, 62 Bir El Ater, 63 El Aricha,
+ *   64 Ksar Chellala, 65 Aïn Oussara, 66 Messaad, 67 Ksar El Boukhari,
+ *   68 Bou Saâda, 69 El Abiodh Sidi Cheikh.
+ * Names are byte-identical to the shop template's checkout options. Frozen so
+ * no consumer can mutate the shared source.
  */
 export const WILAYAS: readonly Wilaya[] = Object.freeze([
   { code: 1, name: 'Adrar' },
@@ -110,17 +116,29 @@ export const WILAYAS: readonly Wilaya[] = Object.freeze([
   { code: 56, name: 'Djanet' },
   { code: 57, name: "El M'Ghair" },
   { code: 58, name: 'El Meniaa' },
+  // 11 new wilayas (Law 26-06 / Decree 26-206, JO n°40, 25 May 2026).
+  { code: 59, name: 'Aflou' },
+  { code: 60, name: 'Barika' },
+  { code: 61, name: 'El Kantara' },
+  { code: 62, name: 'Bir El Ater' },
+  { code: 63, name: 'El Aricha' },
+  { code: 64, name: 'Ksar Chellala' },
+  { code: 65, name: 'Aïn Oussara' },
+  { code: 66, name: 'Messaad' },
+  { code: 67, name: 'Ksar El Boukhari' },
+  { code: 68, name: 'Bou Saâda' },
+  { code: 69, name: 'El Abiodh Sidi Cheikh' },
 ]);
 
 /** Total number of wilayas — the matrix always has exactly this many rows. */
-export const WILAYA_COUNT = WILAYAS.length; // 58
+export const WILAYA_COUNT = WILAYAS.length; // 69
 
 /** Fast code→name map for O(1) validation / label rendering. */
-const WILAYA_NAME_BY_CODE: ReadonlyMap<number, string> = new Map(
+export const WILAYA_NAME_BY_CODE: ReadonlyMap<number, string> = new Map(
   WILAYAS.map(w => [w.code, w.name])
 );
 
-/** A wilaya code is valid iff it is an integer in the canonical [1,58] set. */
+/** A wilaya code is valid iff it is an integer in the canonical [1,69] set. */
 export function isValidWilaya(code: unknown): boolean {
   const n = Number(code);
   return Number.isInteger(n) && WILAYA_NAME_BY_CODE.has(n);
@@ -525,9 +543,9 @@ export interface MatrixRow {
 }
 
 /**
- * Project stored rate rows for `courierId` onto the full 58-wilaya table.
+ * Project stored rate rows for `courierId` onto the full 69-wilaya table.
  * `rows` may include other couriers (filtered out). Rows are ordered by
- * canonical code 1..58; a wilaya with no stored rate has null fees.
+ * canonical code 1..69; a wilaya with no stored rate has null fees.
  */
 export function exportMatrix(
   rows: readonly Rec[],

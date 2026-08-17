@@ -40,7 +40,7 @@
 // `products`, `orders`, `settings` (singleton). "Update" = DELETE + re-create
 // (the client tracks each record's server-assigned id). Caps: 8KB/record,
 // 500/collection — images are stored as URLs only. Checkout = cash-on-delivery
-// + a wa.me WhatsApp deep link. All 58 Algerian wilayas are embedded.
+// + a wa.me WhatsApp deep link. All 69 Algerian wilayas are embedded.
 //
 // C7 — Appearance (theme / layout / font) is driven entirely by the settings
 // singleton at runtime (never baked into :root as raw CSS — only ids are stored,
@@ -583,7 +583,8 @@ var NEXT_STATUS = { 'Nouvelle': 'Confirmée', 'Confirmée': 'Expédiée', 'Expé
 var CART_KEY = 'clickdz.shop.cart.' + SLUG;
 var ADMIN_KEY = 'clickdz.shop.admin.' + SLUG;
 
-/* The 58 Algerian wilayas (official numbering). */
+/* The 69 Algerian wilayas (official numbering incl. the 11 new wilayas 59-69
+   created by Law 26-06 / Decree 26-206, JO n°40, 25 May 2026). */
 var WILAYAS = [
   '01 - Adrar', '02 - Chlef', '03 - Laghouat', '04 - Oum El Bouaghi', '05 - Batna',
   '06 - Béjaïa', '07 - Biskra', '08 - Béchar', '09 - Blida', '10 - Bouira',
@@ -596,7 +597,10 @@ var WILAYAS = [
   '41 - Souk Ahras', '42 - Tipaza', '43 - Mila', '44 - Aïn Defla', '45 - Naâma',
   '46 - Aïn Témouchent', '47 - Ghardaïa', '48 - Relizane', '49 - Timimoun', '50 - Bordj Badji Mokhtar',
   '51 - Ouled Djellal', '52 - Béni Abbès', '53 - In Salah', '54 - In Guezzam', '55 - Touggourt',
-  '56 - Djanet', '57 - El M\'Ghair', '58 - El Meniaa'
+  '56 - Djanet', '57 - El M\'Ghair', '58 - El Meniaa',
+  '59 - Aflou', '60 - Barika', '61 - El Kantara', '62 - Bir El Ater', '63 - El Aricha',
+  '64 - Ksar Chellala', '65 - Aïn Oussara', '66 - Messaad', '67 - Ksar El Boukhari',
+  '68 - Bou Saâda', '69 - El Abiodh Sidi Cheikh'
 ];
 
 /* ---- default settings singleton ----
@@ -2176,7 +2180,7 @@ function footer() {
   return '' +
     '<footer><div class="wrap"><div class="f-inner">' +
       '<div class="f-brand">🛍️ ' + esc(s.shopName) + ' <span class="ar">متجر</span></div>' +
-      '<div class="f-cod">💵 Paiement à la livraison · الدفع عند الاستلام · Livraison 58 wilayas</div>' +
+      '<div class="f-cod">💵 Paiement à la livraison · الدفع عند الاستلام · Livraison 69 wilayas</div>' +
       '<div class="f-links">' +
         '<a href="#/">Accueil</a>' +
         '<a href="#/cart">Panier</a>' +
@@ -2237,7 +2241,7 @@ function viewHome() {
     '<div class="trust"><div class="wrap"><div class="trust-inner">' +
       trustLead() +
       '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
-      '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
+      '<span class="trust-item"><span class="ic">🚚</span> Livraison 69 wilayas</span>' +
       '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +
       '<span class="trust-item"><span class="ic">📞</span> Support WhatsApp</span>' +
       '<span class="trust-item"><span class="ic">✅</span> Produits garantis</span>' +
@@ -2316,7 +2320,7 @@ function viewHomeLanding() {
     '<div class="trust"><div class="wrap"><div class="trust-inner">' +
       trustLead() +
       '<span class="trust-item"><span class="ic">DZD</span> Paiement a la livraison</span>' +
-      '<span class="trust-item"><span class="ic">TRK</span> Livraison 58 wilayas</span>' +
+      '<span class="trust-item"><span class="ic">TRK</span> Livraison 69 wilayas</span>' +
       '<span class="trust-item"><span class="ic">RET</span> Retour facile</span>' +
       '<span class="trust-item"><span class="ic">TEL</span> Support WhatsApp</span>' +
     '</div></div></div>') : '';
@@ -2374,7 +2378,7 @@ function viewHomeBoutique() {
         '<a class="btn light lg" href="#products">Explorer la collection</a>' +
         (wa ? '<a class="btn ghost lg" href="https://wa.me/' + wa + '" target="_blank" rel="noopener noreferrer">💬 Nous contacter</a>' : '') +
       '</div>' +
-      '<span class="cod-pill" style="background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.3)">💵 Paiement à la livraison · 58 wilayas</span>' +
+      '<span class="cod-pill" style="background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.3)">💵 Paiement à la livraison · 69 wilayas</span>' +
     '</div></div></section>') : '';
 
   var prods = activeProducts();
@@ -2465,7 +2469,7 @@ function viewHomeGridDense() {
     '<div class="trust"><div class="wrap"><div class="trust-inner">' +
       trustLead() +
       '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
-      '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
+      '<span class="trust-item"><span class="ic">🚚</span> Livraison 69 wilayas</span>' +
       '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +
       '<span class="trust-item"><span class="ic">📞</span> Support WhatsApp</span>' +
       '<span class="trust-item"><span class="ic">✅</span> Produits garantis</span>' +
@@ -2548,7 +2552,7 @@ function viewHomeEditorial() {
     '<div class="trust"><div class="wrap"><div class="trust-inner">' +
       trustLead() +
       '<span class="trust-item"><span class="ic">💵</span> Paiement à la livraison</span>' +
-      '<span class="trust-item"><span class="ic">🚚</span> Livraison 58 wilayas</span>' +
+      '<span class="trust-item"><span class="ic">🚚</span> Livraison 69 wilayas</span>' +
       '<span class="trust-item"><span class="ic">🔄</span> Retour facile</span>' +
       '<span class="trust-item"><span class="ic">📞</span> Support WhatsApp</span>' +
       '<span class="trust-item"><span class="ic">✅</span> Produits garantis</span>' +
@@ -2610,7 +2614,7 @@ function viewProduct(id) {
         (featureOn('reviews') ? reviewsBlock(p) : '') +
         '<div class="meta-list">' +
           '<div class="row"><span class="ic">💵</span> Paiement à la livraison (COD)</div>' +
-          '<div class="row"><span class="ic">🚚</span> Livraison dans les 58 wilayas · frais ' + money(s.deliveryFee) + ' DZD</div>' +
+          '<div class="row"><span class="ic">🚚</span> Livraison dans les 69 wilayas · frais ' + money(s.deliveryFee) + ' DZD</div>' +
           '<div class="row"><span class="ic">🔄</span> Retour possible à la réception</div>' +
         '</div>' +
       '</div>' +

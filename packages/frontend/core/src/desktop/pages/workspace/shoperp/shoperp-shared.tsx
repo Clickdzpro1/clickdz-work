@@ -778,8 +778,21 @@ export type InvoiceType = (typeof INVOICE_TYPES)[number];
 export const INVOICE_STATUSES = ['brouillon', 'valide', 'annule'] as const;
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number];
 
-/** Payment method carried on a facture (drives whether timbre applies). */
-export const INVOICE_PAYMENTS = ['cash', 'cod', 'chargily', 'virement'] as const;
+/**
+ * Payment method carried on a facture (drives whether timbre applies).
+ * LF2025: only `cash` and `cod` attract the timbre; ALL electronic methods
+ * (chargily/Edahabia/CIB, virement, chèque, CCP) are EXEMPT.
+ */
+export const INVOICE_PAYMENTS = [
+  'cash',
+  'cod',
+  'chargily',
+  'virement',
+  'cheque',
+  'ccp',
+  'edahabia',
+  'cib',
+] as const;
 export type InvoicePayment = (typeof INVOICE_PAYMENTS)[number];
 
 /** FR labels for the doc kinds (this surface is French where the shop is). */
@@ -809,7 +822,20 @@ export const INVOICE_PAYMENT_LABELS: Record<InvoicePayment, string> = {
   cod: 'Paiement à la livraison',
   chargily: 'En ligne (Chargily)',
   virement: 'Virement bancaire',
+  cheque: 'Chèque',
+  ccp: 'CCP / Mandat',
+  edahabia: 'Edahabia',
+  cib: 'Carte CIB',
 };
+
+/** True when a payment method is electronic (LF2025 timbre-exempt). */
+export const isElectronicPayment = (p: InvoicePayment | undefined): boolean =>
+  p === 'chargily' ||
+  p === 'virement' ||
+  p === 'cheque' ||
+  p === 'ccp' ||
+  p === 'edahabia' ||
+  p === 'cib';
 
 /** Fiscal client block — RC/NIF/NIS/ART are the DZ legal identifiers. */
 export interface InvoiceCustomer {
@@ -856,9 +882,37 @@ export interface InvoiceView {
 
 /** Default TVA rate (percent) — DZ standard 19% unless a line overrides it. */
 export const INVOICE_DEFAULT_TVA = 19;
-/** Timbre fiscal defaults (percent + floor/cap in DZD) — mirror the backend. */
-export const INVOICE_TIMBRE_RATE = 1;
+
+/**
+ * LF2025 progressive timbre scale (Loi de Finances 2025, Art.100/258 quinquies).
+ * Replaces the pre-2025 flat 1% capped at 10,000 DZD. Brackets by cash-amount:
+ *   • 1%   on TTC ≤ 30,000 DZD
+ *   • 1.5% on 30,000 < TTC ≤ 100,000 DZD
+ *   • 2%   on TTC > 100,000 DZD
+ * Floor 5 DZD retained; the 10,000 cap was REMOVED. Electronic payments are
+ * EXEMPT (virement, chargily/Edahabia/CIB, chèque, CCP) — only cash + COD pay.
+ * The scale is a config table so a future LF change is a data edit, not code.
+ */
+export interface TimbreBracket {
+  upTo: number | null; // inclusive ceiling in DZD, or null = open-ended top
+  rate: number; // percent
+}
+export const TIMBRE_SCALE_LF2025: readonly TimbreBracket[] = Object.freeze([
+  { upTo: 30_000, rate: 1 },
+  { upTo: 100_000, rate: 1.5 },
+  { upTo: null, rate: 2 },
+]);
+/** Minimum timbre per cash invoice (DZD) — LF2025 unchanged floor. */
 export const INVOICE_TIMBRE_MIN = 5;
+/**
+ * @deprecated legacy flat rate (pre-LF2025). Kept only for back-compat with
+ * code that still reads a single rate; the ACTIVE rule is TIMBRE_SCALE_LF2025.
+ */
+export const INVOICE_TIMBRE_RATE = 1;
+/**
+ * @deprecated legacy cap (pre-LF2025, removed by LF2025). Kept as a no-op
+ * reference; computeInvoiceDoc no longer applies it.
+ */
 export const INVOICE_TIMBRE_MAX = 10_000;
 /** Belt-and-braces cap matching the server INVOICE_MAX_LINES (8KB record). */
 export const INVOICE_MAX_LINES = 60;
@@ -883,14 +937,16 @@ export function computeInvoiceLine(
 
 /**
  * CLIENT-SIDE mirror of the backend document math (computeInvoiceTotals +
- * computeTimbre): sum the ALREADY-ROUNDED line figures, then apply the timbre
- * rule (facture + cash/cod only, rate% of HT+TVA, floored at MIN, capped at
- * MAX, only when the base is positive). FOR DISPLAY ONLY.
+ * computeTimbre): sum the ALREADY-ROUNDED line figures, then apply the LF2025
+ * progressive timbre rule (facture + cash/cod only, bracket rate by base TTC,
+ * floored at INVOICE_TIMBRE_MIN, NO cap, only when the base is positive).
+ * Electronic payments are exempt. FOR DISPLAY ONLY — the server recomputes.
  */
 export function computeInvoiceDoc(
   type: InvoiceType,
   lines: Array<{ qty: number; unitHT: number; tvaRate: number }>,
-  payment: InvoicePayment | undefined
+  payment: InvoicePayment | undefined,
+  scale: readonly TimbreBracket[] = TIMBRE_SCALE_LF2025
 ): { totalHT: number; totalTVA: number; timbre: number; totalTTC: number } {
   let totalHT = 0;
   let totalTVA = 0;
@@ -903,8 +959,11 @@ export function computeInvoiceDoc(
   let timbre = 0;
   const isCash = payment === 'cash' || payment === 'cod';
   if (type === 'facture' && isCash && baseTTC > 0) {
-    const raw = Math.round((baseTTC * INVOICE_TIMBRE_RATE) / 100);
-    timbre = Math.max(INVOICE_TIMBRE_MIN, Math.min(INVOICE_TIMBRE_MAX, raw));
+    const bracket =
+      scale.find((b) => b.upTo == null || baseTTC <= b.upTo) ??
+      scale[scale.length - 1];
+    const raw = Math.round((baseTTC * bracket.rate) / 100);
+    timbre = Math.max(INVOICE_TIMBRE_MIN, raw);
   }
   return { totalHT, totalTVA, timbre, totalTTC: baseTTC + timbre };
 }
@@ -1719,7 +1778,7 @@ export interface ShipWilaya {
   name: string;
 }
 
-/** A dense matrix row for the 58-wilaya grid (missing rows → null fees). */
+/** A dense matrix row for the 69-wilaya grid (missing rows → null fees). */
 export interface ShipMatrixRow {
   wilaya: number;
   name: string;
@@ -1774,7 +1833,7 @@ function shipReadMessage(status: number, fallback: string): string {
         : fallback;
 }
 
-/** GET /erp/shipping/wilayas — the canonical 58-wilaya table (reference data). */
+/** GET /erp/shipping/wilayas — the canonical 69-wilaya table (reference data). */
 export async function fetchWilayas(slug: string): Promise<WilayasOutcome> {
   let res: Response;
   try {

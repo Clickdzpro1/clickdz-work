@@ -578,7 +578,7 @@ const StartChecklist = ({
       label: 'Livraison configurée',
       section: 'shipping' as DashboardSection,
       done: deliveryConfigured,
-      hint: 'Transporteurs et tarifs des 58 wilayas.',
+      hint: 'Transporteurs et tarifs des 69 wilayas.',
     },
     {
       id: 'team',

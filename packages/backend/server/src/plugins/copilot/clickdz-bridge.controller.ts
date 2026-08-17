@@ -5530,11 +5530,11 @@ export class ClickDzBridgeController {
 
   /** WSE-2: build InvoiceOptions from env (TVA/timbre rates + today). */
   private erpInvoiceOptions(): InvoiceOptions {
-    const { tvaRate, timbreRate } = resolveInvoiceRates(
+    const { tvaRate, timbreRate, timbreScale } = resolveInvoiceRates(
       process.env.CDZ_ERP_TVA_RATE,
       process.env.CDZ_ERP_TIMBRE_RATE
     );
-    return { tvaRate, timbreRate };
+    return { tvaRate, timbreRate, timbreScale };
   }
 
   /** WSE-2: a fresh temporary draft id (bridge has no randomUUID — use bytes). */
@@ -5732,6 +5732,73 @@ export class ClickDzBridgeController {
       `[erp] invoice draft slug=${slug} user=${user.id} type=${record.type} coll=${collection}${orderRef ? ` order=${orderRef.slice(0, 40)}` : ''}`
     );
     return { ok: true, invoice: put.record };
+  }
+
+  /**
+   * DzOS Phase 0 (backup v2) — PUT /api/v1/apps/:slug/erp/restore/:collection/:id
+   * Owner-authed, non-destructive record restore. The studio's backup-restore
+   * flow calls this with one record from a backup JSON file; the route PUTs it
+   * to the data API at the same (collection, id) — an atomic upsert that
+   * preserves createdAt on conflict (so re-applying a backup is idempotent and
+   * never clobbers a newer record's createdAt). The studio's dry-run already
+   * filtered to MISSING records, so in practice this creates; but the upsert
+   * semantics make it safe even if the dry-run raced a concurrent write.
+   *
+   * The collection name is validated against the same regex the data API uses
+   * (COLLECTION_RE = ^[a-z0-9_-]{1,32}$) so a crafted path can't reach an
+   * arbitrary Redis key. Month-partitioned collections (invoices-YYYYMM,
+   * caisse-YYYYMM) are valid under that regex and accepted.
+   */
+  @Put('/api/v1/apps/:slug/erp/restore/:collection/:id')
+  async erpRestoreRecord(
+    @CurrentUser() user: CurrentUser,
+    @Param('slug') slug: string,
+    @Param('collection') collection: string,
+    @Param('id') id: string,
+    @Body() body: any,
+    @Res({ passthrough: true }) res: Response
+  ) {
+    await this.assertOwnsErpApp(user, slug);
+    // Validate collection + id (same rules as the data API; prevent path
+    // injection into arbitrary Redis keys).
+    if (!/^[a-z0-9_-]{1,32}$/.test(collection)) {
+      throw new BadRequest('Invalid collection name');
+    }
+    if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
+      throw new BadRequest('Invalid record id');
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new BadRequest('Record must be a JSON object');
+    }
+    const token = dataWriteToken(slug);
+    if (!token) {
+      res
+        .status(HttpStatus.NOT_IMPLEMENTED)
+        .json({ error: 'admin_writes_unavailable' });
+      return;
+    }
+    // Force the path id as the record id (URL is authoritative, mirroring the
+    // data API's PUT contract); strip any server-managed id/createdAt conflict
+    // by letting the data API's upsert preserve createdAt on conflict.
+    const record: ErpRecord = { ...(body as Record<string, unknown>), id };
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > ERP_MAX_WRITE_BYTES) {
+      throw new BadRequest('Record too large (8KB cap)');
+    }
+    const put = await this.erpInvoicePut(
+      slug,
+      collection,
+      id,
+      record,
+      token
+    );
+    if (!put.ok) {
+      this.erpWriteFailed(res, put.status);
+      return;
+    }
+    this.logger.log(
+      `[erp] restore slug=${slug} user=${user.id} coll=${collection} id=${id}`
+    );
+    return { ok: true, record: put.record };
   }
 
   /**
@@ -6014,7 +6081,7 @@ export class ClickDzBridgeController {
         return;
       }
     }
-    const { timbreRate } = this.erpInvoiceOptions();
+    const invoiceOpts = this.erpInvoiceOptions();
     // Reserve the gap-less number ONLY now, right before persisting. Routed
     // through erpReserveSeq: legacy Redis INCR when CDZ_ERPSEQ_PG is off,
     // PG-floored max-merge when on (same clamp semantics as reserveInvoiceSeq).
@@ -6024,7 +6091,7 @@ export class ClickDzBridgeController {
       String(draft.type),
       Number(draft.year)
     );
-    const validated = applyValidation(draft, seq, timbreRate);
+    const validated = applyValidation(draft, seq, invoiceOpts);
     if (!validated.ok) {
       this.erpInvoiceBadInput(res, validated.reason, validated.field);
       return;
