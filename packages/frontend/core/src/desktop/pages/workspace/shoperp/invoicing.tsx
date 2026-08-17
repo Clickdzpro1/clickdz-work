@@ -60,6 +60,19 @@ import {
 // when offline, drafts save to the local store with a pending flag + a notice.
 import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
 
+// Bilingual FR/AR i18n for the DzOS surface (print sheet labels + RTL layout).
+import {
+  type DzosLang,
+  dzosDir,
+  dzosFmtDZD,
+  dzosInvoicePaymentLabels,
+  dzosInvoiceTypeLabels,
+  dzosInvoiceStatusLabels,
+  dzosT,
+  isRTL,
+  useDzosLang,
+} from './dzos-i18n';
+
 // ---------------------------------------------------------------------------
 // FACTURATION studio (WSE-3, R3-a). The owner-facing invoicing surface for one
 // store: quotes (devis) → delivery notes (bon de livraison) → invoices
@@ -552,6 +565,8 @@ const InvoiceEditor = ({
   // The live server-persisted record (null until a draft is saved). When set,
   // the lifecycle buttons (valider/annuler/convertir) act on it.
   const [saved, setSaved] = useState<InvoiceView | null>(initial);
+  // Bilingual label resolution — follows the user's global language preference.
+  const lang = useDzosLang();
 
   const [type, setType] = useState<InvoiceType>(initial?.type ?? 'facture');
   const [payment, setPayment] = useState<InvoicePayment>(
@@ -926,19 +941,19 @@ const InvoiceEditor = ({
         style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
       >
         <button style={{ ...linkish, fontWeight: 700 }} onClick={onBack}>
-          ← Factures
+          ← {dzosT('invoice.editor.title', lang)}
         </button>
         <div style={{ flex: 1, minWidth: 160 }}>
           <div style={{ fontSize: 16, fontWeight: 800, color: C.text }}>
             {saved
-              ? `${INVOICE_TYPE_LABELS[headingType]} ${
-                  saved.status === 'brouillon' ? '(brouillon)' : invoiceNumber(saved)
+              ? `${dzosInvoiceTypeLabels[headingType](lang)} ${
+                  saved.status === 'brouillon' ? dzosT('invoice.editor.draftSuffix', lang) : invoiceNumber(saved)
                 }`
-              : 'Nouveau document'}
+              : dzosT('invoice.editor.newDoc', lang)}
           </div>
           {saved ? (
             <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-              {INVOICE_STATUS_LABELS[saved.status]} · {saved.date}
+              {dzosInvoiceStatusLabels[saved.status](lang)} · {saved.date}
             </div>
           ) : null}
         </div>
@@ -946,9 +961,9 @@ const InvoiceEditor = ({
           <button
             style={miniBtnStyle('secondary')}
             onClick={() => window.print()}
-            title="Imprimer ou enregistrer en PDF (format A4)"
+            title={dzosT('invoice.editor.printTitle', lang)}
           >
-            🖨️ Imprimer / PDF
+            {dzosT('invoice.editor.printBtn', lang)}
           </button>
         ) : null}
       </div>
@@ -1795,9 +1810,14 @@ const ShowInAppPanel = ({
 };
 
 // ===========================================================================
-// A4 PRINT SHEET — a hidden, print-only professional French facture. The inline
-// <style> tag scopes @media print so ONLY this sheet prints (everything else in
-// the app is hidden). window.print() (the "Imprimer / PDF" button) drives it.
+// A4 PRINT SHEET — a hidden, print-only professional bilingual facture. The
+// inline <style> tag scopes @media print so ONLY this sheet prints (everything
+// else in the app is hidden). window.print() (the "Imprimer / PDF" button)
+// drives it. Labels follow the user's DzOS language (FR or AR); when AR, the
+// sheet flips to RTL with an Arabic-capable font stack and right-aligned
+// numeric columns. The layout uses logical CSS properties (margin-inline,
+// text-align: start/end) so the same stylesheet renders correctly in both
+// directions without duplicate rules.
 // ===========================================================================
 const InvoicePrintSheet = ({
   seller,
@@ -1822,54 +1842,94 @@ const InvoicePrintSheet = ({
   totals: { totalHT: number; totalTVA: number; timbre: number; totalTTC: number };
   tvaBreakdown: Array<{ rate: number; base: number; tva: number }>;
 }) => {
+  const lang = useDzosLang();
+  const rtl = isRTL(lang);
+  const dir = dzosDir(lang);
   const printable = lines.filter(l => l.label.trim());
+  // Arabic-capable font stack — 'Noto Sans Arabic' covers the glyphs Arial
+  // lacks; the sans-serif fallback keeps Latin text crisp in mixed content.
+  const fontStack = rtl
+    ? "'Noto Sans Arabic','Noto Naskh Arabic',Arial,sans-serif"
+    : "Arial,'Helvetica Neue',sans-serif";
   return (
     <div className="cdz-inv-print-root" aria-hidden>
       <style>{PRINT_CSS}</style>
-      <div className="cdz-inv-sheet">
-        {/* Header: seller identity (left) + document title/number (right) --- */}
+      <div className="cdz-inv-sheet" dir={dir} style={{ fontFamily: fontStack }}>
+        {/* Header: seller identity (start) + document title/number (end) ------ */}
         <div className="cdz-inv-head">
           <div className="cdz-inv-seller">
             <div className="cdz-inv-seller-name">
-              {seller.name || 'Votre entreprise'}
+              {seller.name || dzosT('print.invoice.yourCompany', lang)}
             </div>
             {seller.address ? (
               <div className="cdz-inv-line">{seller.address}</div>
             ) : null}
             {seller.phone ? (
-              <div className="cdz-inv-line">Tél : {seller.phone}</div>
+              <div className="cdz-inv-line">
+                {dzosT('print.invoice.tel', lang)} : {seller.phone}
+              </div>
             ) : null}
             <div className="cdz-inv-fiscal">
-              {seller.rc ? <span>RC : {seller.rc}</span> : null}
-              {seller.nif ? <span>NIF : {seller.nif}</span> : null}
-              {seller.nis ? <span>NIS : {seller.nis}</span> : null}
-              {seller.art ? <span>Art. : {seller.art}</span> : null}
+              {seller.rc ? (
+                <span>{dzosT('print.invoice.rc', lang)} : {seller.rc}</span>
+              ) : null}
+              {seller.nif ? (
+                <span>{dzosT('print.invoice.nif', lang)} : {seller.nif}</span>
+              ) : null}
+              {seller.nis ? (
+                <span>{dzosT('print.invoice.nis', lang)} : {seller.nis}</span>
+              ) : null}
+              {seller.art ? (
+                <span>{dzosT('print.invoice.art', lang)} : {seller.art}</span>
+              ) : null}
             </div>
           </div>
           <div className="cdz-inv-doc">
-            <div className="cdz-inv-doc-type">{INVOICE_TYPE_LABELS[type]}</div>
-            {number ? <div className="cdz-inv-doc-no">N° {number}</div> : null}
-            <div className="cdz-inv-line">Date : {date}</div>
+            <div className="cdz-inv-doc-type">
+              {dzosInvoiceTypeLabels[type](lang)}
+            </div>
+            {number ? (
+              <div className="cdz-inv-doc-no">
+                {dzosT('print.invoice.number', lang)} {number}
+              </div>
+            ) : null}
+            <div className="cdz-inv-line">
+              {dzosT('print.invoice.date', lang)} : {date}
+            </div>
             {status === 'annule' ? (
-              <div className="cdz-inv-void">ANNULÉ</div>
+              <div className="cdz-inv-void">
+                {dzosT('print.invoice.void', lang)}
+              </div>
             ) : status === 'brouillon' ? (
-              <div className="cdz-inv-draft">BROUILLON</div>
+              <div className="cdz-inv-draft">
+                {dzosT('print.invoice.draft', lang)}
+              </div>
             ) : null}
           </div>
         </div>
 
         {/* Client block ---------------------------------------------------- */}
         <div className="cdz-inv-client">
-          <div className="cdz-inv-client-title">Client</div>
+          <div className="cdz-inv-client-title">
+            {dzosT('print.invoice.client', lang)}
+          </div>
           <div className="cdz-inv-client-name">{customer.name || '—'}</div>
           {customer.address ? (
             <div className="cdz-inv-line">{customer.address}</div>
           ) : null}
           <div className="cdz-inv-fiscal">
-            {customer.rc ? <span>RC : {customer.rc}</span> : null}
-            {customer.nif ? <span>NIF : {customer.nif}</span> : null}
-            {customer.nis ? <span>NIS : {customer.nis}</span> : null}
-            {customer.art ? <span>Art. : {customer.art}</span> : null}
+            {customer.rc ? (
+              <span>{dzosT('print.invoice.rc', lang)} : {customer.rc}</span>
+            ) : null}
+            {customer.nif ? (
+              <span>{dzosT('print.invoice.nif', lang)} : {customer.nif}</span>
+            ) : null}
+            {customer.nis ? (
+              <span>{dzosT('print.invoice.nis', lang)} : {customer.nis}</span>
+            ) : null}
+            {customer.art ? (
+              <span>{dzosT('print.invoice.art', lang)} : {customer.art}</span>
+            ) : null}
           </div>
         </div>
 
@@ -1877,11 +1937,21 @@ const InvoicePrintSheet = ({
         <table className="cdz-inv-table">
           <thead>
             <tr>
-              <th className="cdz-inv-th cdz-inv-th-label">Désignation</th>
-              <th className="cdz-inv-th cdz-inv-th-num">Qté</th>
-              <th className="cdz-inv-th cdz-inv-th-num">PU HT</th>
-              <th className="cdz-inv-th cdz-inv-th-num">TVA %</th>
-              <th className="cdz-inv-th cdz-inv-th-num">Total HT</th>
+              <th className="cdz-inv-th cdz-inv-th-label">
+                {dzosT('print.invoice.designation', lang)}
+              </th>
+              <th className="cdz-inv-th cdz-inv-th-num">
+                {dzosT('print.invoice.qty', lang)}
+              </th>
+              <th className="cdz-inv-th cdz-inv-th-num">
+                {dzosT('print.invoice.unitHT', lang)}
+              </th>
+              <th className="cdz-inv-th cdz-inv-th-num">
+                {dzosT('print.invoice.tvaRate', lang)}
+              </th>
+              <th className="cdz-inv-th cdz-inv-th-num">
+                {dzosT('print.invoice.totalHT', lang)}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -1908,10 +1978,12 @@ const InvoicePrintSheet = ({
                     </td>
                     <td className="cdz-inv-td cdz-inv-num">{num(l.qty)}</td>
                     <td className="cdz-inv-td cdz-inv-num">
-                      {fmtDZD(num(l.unitHT))}
+                      {dzosFmtDZD(num(l.unitHT), lang)}
                     </td>
                     <td className="cdz-inv-td cdz-inv-num">{num(l.tvaRate)}%</td>
-                    <td className="cdz-inv-td cdz-inv-num">{fmtDZD(lineHT)}</td>
+                    <td className="cdz-inv-td cdz-inv-num">
+                      {dzosFmtDZD(lineHT, lang)}
+                    </td>
                   </tr>
                 );
               })
@@ -1924,34 +1996,52 @@ const InvoicePrintSheet = ({
           <table className="cdz-inv-totals">
             <tbody>
               <tr>
-                <td className="cdz-inv-tot-label">Total HT</td>
-                <td className="cdz-inv-tot-val">{fmtDZD(totals.totalHT)}</td>
+                <td className="cdz-inv-tot-label">
+                  {dzosT('print.invoice.totalHT', lang)}
+                </td>
+                <td className="cdz-inv-tot-val">
+                  {dzosFmtDZD(totals.totalHT, lang)}
+                </td>
               </tr>
               {tvaBreakdown
                 .filter(b => b.rate > 0)
                 .map(b => (
                   <tr key={b.rate}>
                     <td className="cdz-inv-tot-label cdz-inv-tot-sub">
-                      dont TVA {b.rate}% (base {fmtDZD(b.base)})
+                      {dzosT('print.invoice.dontTVA', lang)} {b.rate}% (
+                      {dzosT('print.invoice.base', lang)}{' '}
+                      {dzosFmtDZD(b.base, lang)})
                     </td>
                     <td className="cdz-inv-tot-val cdz-inv-tot-sub">
-                      {fmtDZD(b.tva)}
+                      {dzosFmtDZD(b.tva, lang)}
                     </td>
                   </tr>
                 ))}
               <tr>
-                <td className="cdz-inv-tot-label">Total TVA</td>
-                <td className="cdz-inv-tot-val">{fmtDZD(totals.totalTVA)}</td>
+                <td className="cdz-inv-tot-label">
+                  {dzosT('print.invoice.totalTVA', lang)}
+                </td>
+                <td className="cdz-inv-tot-val">
+                  {dzosFmtDZD(totals.totalTVA, lang)}
+                </td>
               </tr>
               {totals.timbre > 0 ? (
                 <tr>
-                  <td className="cdz-inv-tot-label">Timbre fiscal</td>
-                  <td className="cdz-inv-tot-val">{fmtDZD(totals.timbre)}</td>
+                  <td className="cdz-inv-tot-label">
+                    {dzosT('print.invoice.timbre', lang)}
+                  </td>
+                  <td className="cdz-inv-tot-val">
+                    {dzosFmtDZD(totals.timbre, lang)}
+                  </td>
                 </tr>
               ) : null}
               <tr className="cdz-inv-tot-grand">
-                <td className="cdz-inv-tot-label">Total TTC</td>
-                <td className="cdz-inv-tot-val">{fmtDZD(totals.totalTTC)}</td>
+                <td className="cdz-inv-tot-label">
+                  {dzosT('print.invoice.totalTTC', lang)}
+                </td>
+                <td className="cdz-inv-tot-val">
+                  {dzosFmtDZD(totals.totalTTC, lang)}
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1959,12 +2049,17 @@ const InvoicePrintSheet = ({
 
         {/* Payment + legal footer ------------------------------------------ */}
         <div className="cdz-inv-pay">
-          Mode de règlement : {INVOICE_PAYMENT_LABELS[payment]}
+          {dzosT('print.invoice.paymentMode', lang)} :{' '}
+          {dzosInvoicePaymentLabels[payment](lang)}
         </div>
         <div className="cdz-inv-foot">
-          {seller.name || 'Votre entreprise'}
-          {seller.rc ? ` — RC ${seller.rc}` : ''}
-          {seller.nif ? ` — NIF ${seller.nif}` : ''}
+          {seller.name || dzosT('print.invoice.yourCompany', lang)}
+          {seller.rc
+            ? ` — ${dzosT('print.invoice.rc', lang)} ${seller.rc}`
+            : ''}
+          {seller.nif
+            ? ` — ${dzosT('print.invoice.nif', lang)} ${seller.nif}`
+            : ''}
           {seller.address ? ` — ${seller.address}` : ''}
         </div>
       </div>
@@ -1975,6 +2070,11 @@ const InvoicePrintSheet = ({
 // The print CSS: the sheet is invisible on screen (0 size, off-canvas); at print
 // time we HIDE the app body and reveal ONLY the sheet at A4 with proper margins.
 // Uses `visibility` so the print-root can escape overflow-clipped ancestors.
+// RTL note: the sheet's `dir` attribute is set by the component; CSS uses logical
+// properties where possible (text-align: start/end via .cdz-inv-doc/.cdz-inv-num)
+// so the same rules work in both LTR and RTL without [dir="rtl"] overrides. The
+// few physical properties that remain (flex-direction, justify-content) are
+// direction-agnostic or automatically mirrored by the browser in RTL context.
 const PRINT_CSS = `
 .cdz-inv-print-root{position:absolute;width:0;height:0;overflow:hidden;left:-9999px;top:0;}
 @media print{
@@ -1983,12 +2083,12 @@ const PRINT_CSS = `
   body *{visibility:hidden !important;}
   .cdz-inv-print-root,.cdz-inv-print-root *{visibility:visible !important;}
   .cdz-inv-print-root{position:absolute !important;left:0 !important;top:0 !important;width:100% !important;height:auto !important;overflow:visible !important;}
-  .cdz-inv-sheet{width:100%;color:#111;font-family:Arial,'Helvetica Neue',sans-serif;font-size:11pt;line-height:1.45;}
+  .cdz-inv-sheet{width:100%;color:#111;font-size:11pt;line-height:1.45;}
   .cdz-inv-head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px;}
   .cdz-inv-seller-name{font-size:15pt;font-weight:800;margin-bottom:3px;}
   .cdz-inv-line{font-size:9.5pt;color:#222;}
   .cdz-inv-fiscal{margin-top:4px;font-size:9pt;color:#333;display:flex;flex-wrap:wrap;gap:2px 10px;}
-  .cdz-inv-doc{text-align:right;}
+  .cdz-inv-doc{text-align:end;}
   .cdz-inv-doc-type{font-size:16pt;font-weight:800;text-transform:uppercase;letter-spacing:0.04em;}
   .cdz-inv-doc-no{font-size:11pt;font-weight:700;margin-top:2px;font-family:monospace;}
   .cdz-inv-void{margin-top:6px;display:inline-block;border:2px solid #c00;color:#c00;font-weight:800;padding:2px 8px;transform:rotate(-4deg);}
@@ -1997,15 +2097,15 @@ const PRINT_CSS = `
   .cdz-inv-client-title{font-size:8pt;text-transform:uppercase;letter-spacing:0.06em;color:#666;margin-bottom:2px;}
   .cdz-inv-client-name{font-size:11.5pt;font-weight:700;}
   .cdz-inv-table{width:100%;border-collapse:collapse;margin-bottom:12px;}
-  .cdz-inv-th{background:#f2f2f2;border:1px solid #bbb;padding:6px 8px;font-size:9pt;text-transform:uppercase;letter-spacing:0.03em;text-align:left;}
-  .cdz-inv-th-num{text-align:right;white-space:nowrap;}
+  .cdz-inv-th{background:#f2f2f2;border:1px solid #bbb;padding:6px 8px;font-size:9pt;text-transform:uppercase;letter-spacing:0.03em;text-align:start;}
+  .cdz-inv-th-num{text-align:end;white-space:nowrap;}
   .cdz-inv-td{border:1px solid #ccc;padding:5px 8px;font-size:10pt;vertical-align:top;}
-  .cdz-inv-num{text-align:right;white-space:nowrap;}
+  .cdz-inv-num{text-align:end;white-space:nowrap;}
   .cdz-inv-ref{color:#666;font-family:monospace;font-size:9pt;}
   .cdz-inv-totals-wrap{display:flex;justify-content:flex-end;margin-bottom:12px;}
   .cdz-inv-totals{border-collapse:collapse;min-width:52%;}
-  .cdz-inv-tot-label{padding:4px 10px;font-size:10pt;text-align:left;}
-  .cdz-inv-tot-val{padding:4px 10px;font-size:10pt;text-align:right;white-space:nowrap;font-weight:700;border-bottom:1px solid #eee;}
+  .cdz-inv-tot-label{padding:4px 10px;font-size:10pt;text-align:start;}
+  .cdz-inv-tot-val{padding:4px 10px;font-size:10pt;text-align:end;white-space:nowrap;font-weight:700;border-bottom:1px solid #eee;}
   .cdz-inv-tot-sub .cdz-inv-tot-label,.cdz-inv-tot-sub.cdz-inv-tot-val,.cdz-inv-tot-sub{font-size:8.5pt;color:#666;font-weight:400;}
   .cdz-inv-tot-grand .cdz-inv-tot-label,.cdz-inv-tot-grand .cdz-inv-tot-val{font-size:12pt;font-weight:800;border-top:2px solid #111;border-bottom:none;padding-top:6px;}
   .cdz-inv-pay{font-size:9.5pt;margin-bottom:18px;}

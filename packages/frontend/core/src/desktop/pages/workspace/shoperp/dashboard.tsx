@@ -108,6 +108,9 @@ import {
   thStyle,
 } from './shoperp-shared';
 
+// Bilingual FR/AR i18n for the DzOS surface (dashboard tab labels).
+import { dzosT, useDzosLang } from './dzos-i18n';
+
 // ---------------------------------------------------------------------------
 // In-app ERP dashboard for one store — the managed STUDIO HOME for the owner's
 // shop. Reads the LIVE data the deployed shop writes, via the authed owner-only
@@ -152,26 +155,31 @@ export type DashboardSection =
 // fixes the tour AND the interface, rather than making a French tour speak
 // English. Ids are untouched, so routing, the tour's data-cdz-tour anchors and
 // every deep link keep working.
-const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string }> = [
-  { id: 'overview', label: 'Aperçu', icon: '📊' },
-  { id: 'orders', label: 'Commandes', icon: '📦' },
-  { id: 'stock', label: 'Produits', icon: '🏷️' },
-  { id: 'inventory', label: 'Entrepôts', icon: '🏬' },
-  { id: 'clients', label: 'Clients', icon: '👥' },
-  { id: 'appearance', label: 'Apparence', icon: '🎨' },
-  { id: 'features', label: 'Fonctionnalités', icon: '🧩' },
-  { id: 'ai-edit', label: "Modifier avec l'IA", icon: '✨' },
-  { id: 'invoicing', label: 'Facturation', icon: '🧾' },
-  { id: 'procurement', label: 'Fournisseurs', icon: '📦' },
-  { id: 'shipping', label: 'Livraison', icon: '🚚' },
-  { id: 'caisse', label: 'Caisse', icon: '💰' },
-  { id: 'reports', label: 'Rapports', icon: '📈' },
-  { id: 'comptabilite', label: 'Comptabilité', icon: '📒' },
-  { id: 'team', label: 'Équipe', icon: '👥' },
+//
+// Bilingual i18n: each section carries an `i18nKey` resolved at render time via
+// dzosT(key, lang) so tab labels follow the user's global language preference
+// (FR or AR). The static `label` is kept as a FR fallback for any code that
+// still reads it directly.
+const SECTIONS: Array<{ id: DashboardSection; label: string; icon: string; i18nKey: string }> = [
+  { id: 'overview', label: 'Aperçu', icon: '📊', i18nKey: 'tab.overview' },
+  { id: 'orders', label: 'Commandes', icon: '📦', i18nKey: 'tab.orders' },
+  { id: 'stock', label: 'Produits', icon: '🏷️', i18nKey: 'tab.stock' },
+  { id: 'inventory', label: 'Entrepôts', icon: '🏬', i18nKey: 'tab.inventory' },
+  { id: 'clients', label: 'Clients', icon: '👥', i18nKey: 'tab.clients' },
+  { id: 'appearance', label: 'Apparence', icon: '🎨', i18nKey: 'tab.appearance' },
+  { id: 'features', label: 'Fonctionnalités', icon: '🧩', i18nKey: 'tab.features' },
+  { id: 'ai-edit', label: "Modifier avec l'IA", icon: '✨', i18nKey: 'tab.aiEdit' },
+  { id: 'invoicing', label: 'Facturation', icon: '🧾', i18nKey: 'tab.invoicing' },
+  { id: 'procurement', label: 'Fournisseurs', icon: '📦', i18nKey: 'tab.procurement' },
+  { id: 'shipping', label: 'Livraison', icon: '🚚', i18nKey: 'tab.shipping' },
+  { id: 'caisse', label: 'Caisse', icon: '💰', i18nKey: 'tab.caisse' },
+  { id: 'reports', label: 'Rapports', icon: '📈', i18nKey: 'tab.reports' },
+  { id: 'comptabilite', label: 'Comptabilité', icon: '📒', i18nKey: 'tab.comptabilite' },
+  { id: 'team', label: 'Équipe', icon: '👥', i18nKey: 'tab.team' },
   // WS12: SlidePro/CoursePro removed from the DzOS tab strip (reachable via
   // their standalone routes + the global sidebar). WS11 removed Social/ZOOM+.
   // Companion apps last before Réglages — brand names, so untranslated.
-  { id: 'settings', label: 'Réglages', icon: '⚙️' },
+  { id: 'settings', label: 'Réglages', icon: '⚙️', i18nKey: 'tab.settings' },
 ];
 
 const tabStyle = (active: boolean): CSSProperties => ({
@@ -207,6 +215,8 @@ export const ErpDashboard = ({
   onBack: () => void;
 }) => {
   const [section, setSection] = useState<DashboardSection>(initialSection);
+  // Bilingual label resolution — follows the user's global language preference.
+  const lang = useDzosLang();
   // On narrow viewports the tab bar becomes a horizontal scroll strip, so the
   // active tab can sit off-screen after a section change or a deep link. Pull
   // it into view. Guarded so it is a no-op on the desktop wrapped layout.
@@ -416,7 +426,7 @@ export const ErpDashboard = ({
             onClick={() => setSection(s.id)}
           >
             <span aria-hidden>{s.icon}</span>
-            {s.label}
+            {dzosT(s.i18nKey, lang)}
           </button>
         ))}
       </div>

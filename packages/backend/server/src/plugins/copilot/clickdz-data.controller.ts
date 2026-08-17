@@ -89,6 +89,7 @@ const SENSITIVE_COLLECTIONS = new Set([
   'depenses',
   'caisse',
   'creances',
+  'compta-entries', // accounting journal entries — PII / financial
 ]);
 
 // Money documents are stored month-partitioned as `<prefix>-YYYYMM` (a ':' is

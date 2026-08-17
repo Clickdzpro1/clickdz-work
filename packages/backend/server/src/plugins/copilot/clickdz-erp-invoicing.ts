@@ -133,8 +133,27 @@ export function resolveTimbreScale(
   return TIMBRE_SCALE_LF2025;
 }
 
-/** The three fiscal document kinds, in their legal conversion order. */
-export const INVOICE_TYPES = ['devis', 'bl', 'facture'] as const;
+/**
+ * Fiscal document kinds. The original three (devis → bl → facture) form the
+ * legal conversion chain. Three more DZ-specific kinds extend it:
+ *   • `avoir` — credit note (facture d'avoir): a reversal/return document.
+ *     Legally it must carry its own number series and references the original
+ *     facture via `convertedFrom`. It can also originate from a returned ticket.
+ *   • `ticket` — simplified sales ticket (ticket de caisse): used for small
+ *     retail/B2C cash sales under the DZ threshold (Art.23 LF 2022 exempts
+ *     micro-transactions from the full facture normalisée). Still a fiscal doc.
+ *   • `bon-de-commande` — purchase order / order confirmation (bon de commande):
+ *     precedes devis in some flows (a customer order form → quote → delivery).
+ *     It is pre-fiscal (no timbre, no legal numbering), like devis.
+ */
+export const INVOICE_TYPES = [
+  'bon-de-commande',
+  'devis',
+  'bl',
+  'facture',
+  'avoir',
+  'ticket',
+] as const;
 export type InvoiceType = (typeof INVOICE_TYPES)[number];
 
 /** Document lifecycle. Numbering is assigned at VALIDATION, never at draft. */
@@ -412,7 +431,9 @@ export function computeLineTotals(
 
 /**
  * DZ timbre fiscal. Legal rule (LF2025, Art.100/258 quinquies):
- *   • applies ONLY to a `facture` (never devis/bl) PAID IN CASH,
+ *   • applies ONLY to fiscal documents PAID IN CASH — `facture`, `avoir` (a
+ *     credit note is a fiscal doc), and `ticket` (a simplified cash sale),
+ *     NEVER to `devis`, `bl`, or `bon-de-commande` (pre-fiscal / non-fiscal),
  *   • base = TTC-before-timbre (HT + TVA),
  *   • rate is PROGRESSIVE by base amount: 1% ≤30,000 · 1.5% 30,000–100,000 ·
  *     2% >100,000 (LF2025 default scale; the active scale is resolved from env
@@ -434,7 +455,9 @@ export function computeTimbre(
   baseTTC: number,
   scale: readonly TimbreBracket[] = TIMBRE_SCALE_LF2025
 ): number {
-  if (type !== 'facture') return 0;
+  // Pre-fiscal / non-fiscal documents never carry timbre.
+  if (type === 'devis' || type === 'bl' || type === 'bon-de-commande') return 0;
+  // facture, avoir, ticket — all fiscal docs that attract timbre on cash.
   const isCash = payment === 'cash' || payment === 'cod';
   if (!isCash) return 0;
   if (!(baseTTC > 0)) return 0;
@@ -744,9 +767,12 @@ export function applyVoid(
 // ===========================================================================
 /** Allowed one-step forward conversions (strict legal order). */
 const CONVERSION_NEXT: Record<InvoiceType, InvoiceType | null> = {
+  'bon-de-commande': 'devis',
   devis: 'bl',
   bl: 'facture',
-  facture: null,
+  facture: 'avoir', // a facture can be partially/fully reversed into an avoir
+  avoir: null,
+  ticket: 'facture', // a ticket can be upgraded to a full facture (B2B)
 };
 
 /** Is `to` a legal next step from `from`? (devis→bl, bl→facture, or a skip). */
@@ -756,6 +782,10 @@ export function canConvert(from: InvoiceType, to: InvoiceType): boolean {
   // quote is common when no separate BL is issued). Never backwards.
   if (CONVERSION_NEXT[from] === to) return true;
   if (from === 'devis' && to === 'facture') return true;
+  // bon-de-commande can skip directly to bl or facture (the order IS the quote).
+  if (from === 'bon-de-commande' && (to === 'bl' || to === 'facture')) return true;
+  // A ticket can convert to an avoir for a return/refund of a retail sale.
+  if (from === 'ticket' && to === 'avoir') return true;
   return false;
 }
 
@@ -845,7 +875,7 @@ export interface ConvertFromOrderInput {
 }
 
 /** Map an order's payment method string to our InvoicePayment vocabulary. */
-function orderPaymentToInvoice(order: Record<string, unknown>): InvoicePayment {
+export function orderPaymentToInvoice(order: Record<string, unknown>): InvoicePayment {
   const raw = str(order.paymentMethod || order.payment || order.method)
     .trim()
     .toLowerCase();
@@ -854,6 +884,12 @@ function orderPaymentToInvoice(order: Record<string, unknown>): InvoicePayment {
   }
   if (raw.includes('virement') || raw.includes('transfer') || raw.includes('bank')) {
     return 'virement';
+  }
+  if (raw.includes('cheque') || raw.includes('chèque')) {
+    return 'cheque';
+  }
+  if (raw.includes('ccp') || raw.includes('mandat') || raw.includes('poste')) {
+    return 'ccp';
   }
   // COD is the DZ default and what an untagged order almost always is.
   return 'cod';
