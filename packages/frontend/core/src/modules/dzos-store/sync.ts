@@ -126,12 +126,26 @@ export class SyncEngine {
     this.pushing = true;
     try {
       const storage = this.repo.getStorage();
-      const ops = await storage.listOutbox();
+      // Phase 5 error-shield: listOutbox can throw on a corrupted/evicted
+      // storage backend. Degrade to 'synced' (nothing to push) rather than
+      // crashing the push loop.
+      let ops: Awaited<ReturnType<typeof storage.listOutbox>>;
+      try {
+        ops = await storage.listOutbox();
+      } catch (err) {
+        console.error('[dzos-store] push: listOutbox failed', err);
+        this.setStatus({ state: 'error', message: 'lecture outbox' });
+        return;
+      }
       if (ops.length === 0) {
         // Outbox empty — if we just drained it, record the push time.
-        const meta = await storage.getMeta(this.slug);
-        if (meta && meta.lastPushAt) {
-          this.setStatus({ state: 'synced' });
+        try {
+          const meta = await storage.getMeta(this.slug);
+          if (meta && meta.lastPushAt) {
+            this.setStatus({ state: 'synced' });
+          }
+        } catch (err) {
+          console.error('[dzos-store] push: getMeta failed', err);
         }
         return;
       }
@@ -139,28 +153,56 @@ export class SyncEngine {
       for (const op of ops) {
         const ok = await this.pushOne(op);
         if (ok) {
-          await storage.removeOutbox(op.opId);
+          try {
+            await storage.removeOutbox(op.opId);
+          } catch (err) {
+            // Phase 5 error-shield: removeOutbox failure means the op
+            // stays in the queue and will be re-pushed (idempotent on
+            // opId). Log and continue — don't break the whole pass.
+            console.error('[dzos-store] push: removeOutbox failed (op will retry)', op.opId, err);
+          }
         } else {
           // Backoff: stop the pass on the first failure (head-of-line). The
           // next interval (or online event) retries from the oldest.
-          await storage.updateOutbox(op.opId, op.attempts + 1, op.lastError);
+          try {
+            await storage.updateOutbox(op.opId, op.attempts + 1, op.lastError);
+          } catch (err) {
+            console.error('[dzos-store] push: updateOutbox failed', op.opId, err);
+          }
+          // Schedule a backoff retry so we don't wait the full interval on
+          // a transient failure (Phase 5: use the backoffMs helper).
+          const delay = this.backoffMs(op.attempts + 1);
+          setTimeout(() => void this.push(), delay);
           break;
         }
       }
       // Re-check: if drained, mark synced + record push time.
-      const remaining = await storage.listOutbox();
+      let remaining: Awaited<ReturnType<typeof storage.listOutbox>>;
+      try {
+        remaining = await storage.listOutbox();
+      } catch (err) {
+        console.error('[dzos-store] push: re-listOutbox failed', err);
+        return;
+      }
       if (remaining.length === 0) {
-        const meta = (await storage.getMeta(this.slug)) ?? {
-          slug: this.slug,
-          pullCursor: null,
-          lastPullAt: null,
-          lastPushAt: null,
-        };
+        let meta: ErpSyncMeta | null;
+        try {
+          meta = await storage.getMeta(this.slug);
+        } catch (err) {
+          console.error('[dzos-store] push: getMeta (2) failed', err);
+          meta = null;
+        }
         const updated: ErpSyncMeta = {
-          ...meta,
+          slug: this.slug,
+          pullCursor: meta?.pullCursor ?? null,
+          lastPullAt: meta?.lastPullAt ?? null,
           lastPushAt: new Date().toISOString(),
         };
-        await storage.putMeta(updated);
+        try {
+          await storage.putMeta(updated);
+        } catch (err) {
+          console.error('[dzos-store] push: putMeta failed', err);
+        }
         this.setStatus({ state: 'synced' });
       } else {
         this.setStatus({ state: 'pending', count: remaining.length });
@@ -175,6 +217,28 @@ export class SyncEngine {
     try {
       const url = `${this.apiBase}/api/v1/apps/${encodeURIComponent(this.slug)}/erp/sync/${encodeURIComponent(op.collection)}/${encodeURIComponent(op.recordId)}`;
       const method = op.op === 'remove' ? 'DELETE' : 'PUT';
+      // Phase 5 error-shield: JSON.stringify can throw on circular references
+      // or non-serializable values in the payload. Guard it so a bad payload
+      // drops the op (logged as a conflict) rather than crashing the push loop.
+      let body: string | undefined;
+      if (op.op !== 'remove') {
+        try {
+          body = JSON.stringify(op.payload ?? {});
+        } catch (err) {
+          console.error('[dzos-store] pushOne: JSON.stringify failed — dropping op', op.opId, err);
+          this.conflicts.push({
+            opId: op.opId,
+            collection: op.collection,
+            recordId: op.recordId,
+            baseRev: 0,
+            serverRev: 0,
+            ts: new Date().toISOString(),
+            message: 'payload non-sérialisable — op abandonnée',
+          });
+          this.emitConflicts();
+          return true; // drop the poisoned op
+        }
+      }
       const res = await fetch(url, {
         method,
         headers: {
@@ -183,7 +247,7 @@ export class SyncEngine {
           'X-Idempotency-Key': op.opId,
         },
         credentials: 'include',
-        body: op.op === 'remove' ? undefined : JSON.stringify(op.payload ?? {}),
+        body,
       });
       if (res.status === 409) {
         // Conflict: server has a newer rev. Log it + drop the op (LWW: server
@@ -240,7 +304,14 @@ export class SyncEngine {
     this.pulling = true;
     try {
       const storage = this.repo.getStorage();
-      const meta = await storage.getMeta(this.slug);
+      // Phase 5 error-shield: getMeta can throw on a corrupted storage backend.
+      let meta: ErpSyncMeta | null;
+      try {
+        meta = await storage.getMeta(this.slug);
+      } catch (err) {
+        console.error('[dzos-store] pull: getMeta failed', err);
+        meta = null;
+      }
       let cursor = meta?.pullCursor ?? null;
       let hasMore = true;
       let appliedAny = false;
@@ -268,10 +339,32 @@ export class SyncEngine {
           this.setStatus({ state: 'error', message: `HTTP ${res.status}` });
           return;
         }
-        const body = (await res.json()) as ErpChangesResponse;
+        // Phase 5 error-shield: res.json() can throw on a truncated/invalid
+        // JSON body. Guard it so a malformed response doesn't crash the pull
+        // loop (the cursor stays; the next pull retries).
+        let body: ErpChangesResponse;
+        try {
+          body = (await res.json()) as ErpChangesResponse;
+        } catch (err) {
+          console.error('[dzos-store] pull: res.json() failed — malformed response body', err);
+          this.setStatus({ state: 'error', message: 'réponse illisible' });
+          return;
+        }
+        // Phase 5 error-shield: validate the response shape. A missing/empty
+        // changes array or missing nextCursor is treated as "up to date".
+        if (!body || !Array.isArray(body.changes)) {
+          this.setStatus({ state: 'synced' });
+          return;
+        }
         for (const change of body.changes) {
-          const applied = await this.repo.applyPulledChange(change);
-          if (applied) appliedAny = true;
+          // Phase 5 error-shield: a single malformed change must not abort
+          // the entire pull. Skip + log; the next pull re-fetches it.
+          try {
+            const applied = await this.repo.applyPulledChange(change);
+            if (applied) appliedAny = true;
+          } catch (err) {
+            console.error('[dzos-store] pull: applyPulledChange failed for change, skipping', change, err);
+          }
         }
         cursor = body.nextCursor;
         hasMore = body.hasMore && cursor !== null;
@@ -285,9 +378,23 @@ export class SyncEngine {
         lastPullAt: new Date().toISOString(),
         lastPushAt: meta?.lastPushAt ?? null,
       };
-      await storage.putMeta(updated);
+      try {
+        await storage.putMeta(updated);
+      } catch (err) {
+        // Phase 5 error-shield: putMeta failure means the cursor didn't
+        // advance — the next pull will re-apply the same changes (idempotent
+        // via LWW). Log and continue.
+        console.error('[dzos-store] pull: putMeta failed — cursor not advanced', err);
+      }
       // Re-evaluate status: synced iff outbox is also empty.
-      const outbox = await storage.listOutbox();
+      let outbox: Awaited<ReturnType<typeof storage.listOutbox>>;
+      try {
+        outbox = await storage.listOutbox();
+      } catch (err) {
+        console.error('[dzos-store] pull: listOutbox failed', err);
+        this.setStatus({ state: 'synced' });
+        return;
+      }
       this.setStatus(
         outbox.length > 0
           ? { state: 'pending', count: outbox.length }
@@ -346,9 +453,19 @@ let cachedApiBase: string | null = null;
  */
 async function resolveApiBase(): Promise<string> {
   if (cachedApiBase) return cachedApiBase;
-  const mod = await import('@affine/core/blocksuite/ai/provider/ai-provider');
-  cachedApiBase = mod.cdzApiUrl('');
-  return cachedApiBase;
+  try {
+    const mod = await import('@affine/core/blocksuite/ai/provider/ai-provider');
+    cachedApiBase = mod.cdzApiUrl('');
+  } catch (err) {
+    // Phase 5 error-shield: if the AI-provider module can't be loaded (broken
+    // build, missing dependency), fall back to a relative URL so fetch calls
+    // resolve against the app origin. Sync will likely 404 (endpoint not
+    // found) but the app won't crash — the pill shows 'synced' (404 → no-op).
+    console.error('[dzos-store] resolveApiBase: AI-provider module unavailable, using relative fallback', err);
+    cachedApiBase = '';
+  }
+  // After both branches, cachedApiBase is guaranteed to be a string.
+  return cachedApiBase as string;
 }
 
 /** Get (or create + start) the SyncEngine for a slug. Returns a Promise. */
@@ -356,7 +473,16 @@ export async function getSyncEngine(slug: string): Promise<SyncEngine> {
   let engine = engineCache.get(slug);
   if (!engine) {
     const apiBase = await resolveApiBase();
-    const repo = await getErpRepo(slug);
+    let repo: ErpRepo;
+    try {
+      repo = await getErpRepo(slug);
+    } catch (err) {
+      // Phase 5 error-shield: if the repo can't be created (storage backend
+      // totally broken), re-throw with a clear message — the caller (pill /
+      // panel) catches it and degrades gracefully.
+      console.error('[dzos-store] getSyncEngine: getErpRepo failed', slug, err);
+      throw new Error(`DzOS sync engine: impossible de créer le repo pour "${slug}"`);
+    }
     engine = new SyncEngine(repo, slug, apiBase);
     engineCache.set(slug, engine);
     engine.start();
@@ -377,7 +503,13 @@ export function getSyncEngineSync(slug: string): SyncEngine | null {
 export function dropSyncEngine(slug: string): void {
   const engine = engineCache.get(slug);
   if (engine) {
-    engine.stop();
+    // Phase 5 error-shield: stop() removes listeners/timers; never let it
+    // throw and block the cache eviction.
+    try {
+      engine.stop();
+    } catch (err) {
+      console.error('[dzos-store] dropSyncEngine: stop failed', slug, err);
+    }
     engineCache.delete(slug);
   }
 }

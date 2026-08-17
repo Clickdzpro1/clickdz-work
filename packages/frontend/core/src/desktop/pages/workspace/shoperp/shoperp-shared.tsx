@@ -1772,7 +1772,7 @@ export interface ShipCourier {
   createdAt?: string;
 }
 
-/** One Algerian wilaya — official code (1-58) + French name (from the endpoint). */
+/** One Algerian wilaya — official code (1-69) + French name (from the endpoint). */
 export interface ShipWilaya {
   code: number;
   name: string;
@@ -1865,7 +1865,7 @@ export async function fetchWilayas(slug: string): Promise<WilayasOutcome> {
     const w = item as Record<string, unknown>;
     const code = num(w.code);
     const name = typeof w.name === 'string' ? w.name : '';
-    if (code >= 1 && code <= 58 && name) wilayas.push({ code, name });
+    if (code >= 1 && code <= 69 && name) wilayas.push({ code, name });
   }
   return { status: 'ok', wilayas };
 }
@@ -1916,7 +1916,7 @@ export async function fetchCouriers(slug: string): Promise<CouriersOutcome> {
   return { status: 'ok', couriers };
 }
 
-/** GET /erp/shipping/rates?courierId= — the dense 58-row matrix for a courier. */
+/** GET /erp/shipping/rates?courierId= — the dense 69-row matrix for a courier. */
 export async function fetchShippingRates(
   slug: string,
   courierId: string
@@ -1952,7 +1952,7 @@ export async function fetchShippingRates(
     if (!item || typeof item !== 'object') continue;
     const r = item as Record<string, unknown>;
     const wilaya = num(r.wilaya);
-    if (wilaya < 1 || wilaya > 58) continue;
+    if (wilaya < 1 || wilaya > 69) continue;
     matrix.push({
       wilaya,
       name: typeof r.name === 'string' ? r.name : '',
@@ -5306,24 +5306,43 @@ export const Banner = ({
   );
 };
 
-// Tiny CSS spinner (keyframes injected inline once via a <style> tag).
-export const Spinner = ({ dark = false }: { dark?: boolean }) => (
-  <span
-    style={{
-      display: 'inline-block',
-      width: 12,
-      height: 12,
-      borderRadius: '50%',
-      border: dark
-        ? '2px solid rgba(255,255,255,0.35)'
-        : `2px solid ${C.border}`,
-      borderTopColor: dark ? '#fff' : C.accent,
-      animation: 'cdz-shoperp-spin 0.7s linear infinite',
-    }}
-  >
-    <style>{'@keyframes cdz-shoperp-spin{to{transform:rotate(360deg)}}'}</style>
-  </span>
-);
+// Phase 2: inject the spinner keyframes ONCE at module level instead of
+// rendering a <style> tag on every Spinner instance (the old code injected a
+// new <style> node per render — dozens across the dashboard).
+let _spinKeyframesInjected = false;
+function ensureSpinKeyframes(): void {
+  if (_spinKeyframesInjected) return;
+  if (typeof document !== 'undefined') {
+    const existing = document.getElementById('cdz-shoperp-spin-kf');
+    if (!existing) {
+      const style = document.createElement('style');
+      style.id = 'cdz-shoperp-spin-kf';
+      style.textContent = '@keyframes cdz-shoperp-spin{to{transform:rotate(360deg)}}';
+      document.head.appendChild(style);
+    }
+  }
+  _spinKeyframesInjected = true;
+}
+
+// Tiny CSS spinner (keyframes injected once via a module-level <style> tag).
+export const Spinner = ({ dark = false }: { dark?: boolean }) => {
+  ensureSpinKeyframes();
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: 12,
+        height: 12,
+        borderRadius: '50%',
+        border: dark
+          ? '2px solid rgba(255,255,255,0.35)'
+          : `2px solid ${C.border}`,
+        borderTopColor: dark ? '#fff' : C.accent,
+        animation: 'cdz-shoperp-spin 0.7s linear infinite',
+      }}
+    />
+  );
+};
 
 /**
  * A loading placeholder shaped like the content that is coming.

@@ -7314,7 +7314,7 @@ export class ClickDzBridgeController {
 
   /**
    * WSE-6 — GET /api/v1/apps/:slug/erp/shipping/rates?courierId= (owner-only).
-   * Returns the dense 58-row matrix for the courier (missing rows → null fees).
+   * Returns the dense 69-row matrix for the courier (missing rows → null fees).
    */
   @Get('/api/v1/apps/:slug/erp/shipping/rates')
   async erpShippingRates(

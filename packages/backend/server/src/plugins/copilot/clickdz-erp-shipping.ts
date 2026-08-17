@@ -18,7 +18,7 @@
 //   Courier       collection `couriers`      { id, name, phone?, active,
 //                                               codFee?, createdAt }  id kebab
 //   Shipping rate collection `shipping-rates` { id: '<courierId>:<wilayaCode>',
-//                                               courierId, wilaya (1-58), fee,
+//                                               courierId, wilaya (1-69), fee,
 //                                               homeFee?, deskFee? }
 //
 // Tracking is a SUB-state stored ON the order record (fields `tracking` +
@@ -32,7 +32,7 @@
 //
 // Extracted VERBATIM from the shop template's checkout selector
 // (`clickdz-shop-template.ts`, the `var WILAYAS = [...]` list, official DZ
-// numbering 1-58). The template stores each option as a display string
+// numbering 1-69). The template stores each option as a display string
 // `'NN - Name'`; here we split it into a typed { code, name } record so server
 // code can look up / validate by numeric code without re-parsing the label.
 // Tiroir (caisse) and future FE consume THIS export — its name + shape are the
@@ -40,7 +40,7 @@
 // `'NN - Name'` string so a UI can render the identical option text.
 // ---------------------------------------------------------------------------
 
-/** One Algerian wilaya: official code (1-58) + French name. */
+/** One Algerian wilaya: official code (1-69) + French name. */
 export interface Wilaya {
   code: number;
   name: string;
@@ -331,10 +331,10 @@ export function mergeCourierPatch(
 }
 
 // ---------------------------------------------------------------------------
-// SHIPPING RATE MATRIX (pinned shape). Each courier has up to 58 rows in the
+// SHIPPING RATE MATRIX (pinned shape). Each courier has up to 69 rows in the
 // unpartitioned `shipping-rates` collection, one per wilaya, id
 // `<courierId>:<wilayaCode>`. This keeps records tiny (well under the 8KB cap)
-// and lets a single wilaya's fee be edited in place without rewriting a 58-entry
+// and lets a single wilaya's fee be edited in place without rewriting a 69-entry
 // singleton (which would also risk the 8KB limit for verbose courier names).
 // ---------------------------------------------------------------------------
 
@@ -529,7 +529,7 @@ export function parseRatesCsv(csv: unknown): CsvParseResult {
 }
 
 // ---------------------------------------------------------------------------
-// MATRIX EXPORT — a dense 58-row view for the studio grid / CSV download. Every
+// MATRIX EXPORT — a dense 69-row view for the studio grid / CSV download. Every
 // canonical wilaya is present (missing rows → nulls) so the UI renders the full
 // table and the merchant sees the gaps to fill.
 // ---------------------------------------------------------------------------

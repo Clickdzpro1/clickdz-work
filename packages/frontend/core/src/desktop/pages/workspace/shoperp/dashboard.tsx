@@ -1,5 +1,7 @@
 import {
   type CSSProperties,
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -20,27 +22,64 @@ import {
   YAxis,
 } from 'recharts';
 
-import { ClientsAdmin } from './admin-clients';
-import { OrdersAdmin } from './admin-orders';
-import { SettingsAdmin } from './admin-settings';
-import { StockAdmin } from './admin-stock';
-import { Inventory } from './inventory';
-import { ShopAppearance } from './shop-appearance';
-import { ShopFeatures } from './shop-features';
+// ---------------------------------------------------------------------------
+// Phase 2 — code-split each panel so only the active tab's chunk loads. The
+// overview tab (charts + KPIs) stays eagerly loaded because it is the default
+// landing tab; every other panel is React.lazy → a separate async chunk.
+// ---------------------------------------------------------------------------
+const ClientsAdmin = lazy(() =>
+  import('./admin-clients').then(m => ({ default: m.ClientsAdmin }))
+);
+const OrdersAdmin = lazy(() =>
+  import('./admin-orders').then(m => ({ default: m.OrdersAdmin }))
+);
+const SettingsAdmin = lazy(() =>
+  import('./admin-settings').then(m => ({ default: m.SettingsAdmin }))
+);
+const StockAdmin = lazy(() =>
+  import('./admin-stock').then(m => ({ default: m.StockAdmin }))
+);
+const Inventory = lazy(() =>
+  import('./inventory').then(m => ({ default: m.Inventory }))
+);
+const ShopAppearance = lazy(() =>
+  import('./shop-appearance').then(m => ({ default: m.ShopAppearance }))
+);
+const ShopFeatures = lazy(() =>
+  import('./shop-features').then(m => ({ default: m.ShopFeatures }))
+);
+const ShopAiEdit = lazy(() =>
+  import('./shop-ai-edit').then(m => ({ default: m.ShopAiEdit }))
+);
+const InvoicingPanel = lazy(() =>
+  import('./invoicing').then(m => ({ default: m.InvoicingPanel }))
+);
+const ProcurementPanel = lazy(() =>
+  import('./procurement').then(m => ({ default: m.ProcurementPanel }))
+);
+const ShippingPanel = lazy(() =>
+  import('./shipping').then(m => ({ default: m.ShippingPanel }))
+);
+const CaissePanel = lazy(() =>
+  import('./caisse').then(m => ({ default: m.CaissePanel }))
+);
+const AccountingPanel = lazy(() =>
+  import('./accounting').then(m => ({ default: m.AccountingPanel }))
+);
+const ReportsPanel = lazy(() =>
+  import('./reports').then(m => ({ default: m.ReportsPanel }))
+);
+const TeamPanel = lazy(() =>
+  import('./team').then(m => ({ default: m.TeamPanel }))
+);
+// ShopTour stays eagerly imported — it renders on first load and its steps
+// reference the tab ids by value (no dynamic import needed).
 import {
   ShopTour,
   DEFAULT_SHOP_TOUR_STEPS,
   isShopTourDone,
   resetShopTourProgress,
 } from './shop-tour';
-import { ShopAiEdit } from './shop-ai-edit';
-import { InvoicingPanel } from './invoicing';
-import { ProcurementPanel } from './procurement';
-import { ShippingPanel } from './shipping';
-import { CaissePanel } from './caisse';
-import { AccountingPanel } from './accounting';
-import { ReportsPanel } from './reports';
-import { TeamPanel } from './team';
 // WS11: Social and ZOOM+ are removed from the DzOS dashboard tab strip. They
 // remain reachable via their standalone /socialplus and /zoomplus routes and
 // the global sidebar, so their panels are no longer imported here.
@@ -454,7 +493,19 @@ export const ErpDashboard = ({
             currency={currency}
             onGoTo={setSection}
           />
-        ) : section === 'orders' ? (
+        ) : (
+          // Phase 2: every non-overview panel is React.lazy → its own async
+          // chunk. Suspense shows a skeleton fallback while the chunk loads
+          // (typically < 100ms from cache after first visit).
+          <Suspense
+            fallback={
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <Skeleton rows={1} height={82} />
+                <Skeleton rows={1} height={190} />
+              </div>
+            }
+          >
+        {section === 'orders' ? (
           <OrdersAdmin
             slug={slug}
             currency={currency}
@@ -527,6 +578,8 @@ export const ErpDashboard = ({
             onWritesBlocked={handleWritesBlocked}
             onMutated={refetch}
           />
+        )}
+          </Suspense>
         )}
         </div>
       ) : null}

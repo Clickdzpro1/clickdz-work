@@ -197,7 +197,7 @@ function noestWilayaIdFromName(value: unknown): number {
   if (!raw) return 0;
   // A bare number (or "16 - Alger") resolves directly when it is in range.
   const direct = Shipping.wilayaCodeFrom(raw);
-  if (direct >= 1 && direct <= 58 && Shipping.isValidWilaya(direct)) {
+  if (direct >= 1 && Shipping.isValidWilaya(direct)) {
     // Guard against a pure-name string whose first digits are incidental
     // (e.g. a street number leaking in) by requiring the value to START with
     // the digits we matched.

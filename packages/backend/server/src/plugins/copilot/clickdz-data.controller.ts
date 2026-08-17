@@ -23,10 +23,6 @@ import { CacheRedis } from '../../base/redis';
 import { Public } from '../../core/auth';
 import { Models } from '../../models';
 import { type DataAction, verifyDataToken } from './cdz-data-token';
-import {
-  isDurableCollection,
-  PARTITION_SUFFIX_RE,
-} from './clickdz-erp-collections';
 
 /**
  * ClickDz Data API — a tiny shared collections store that gives every
@@ -41,28 +37,9 @@ import {
 const SLUG_RE = /^[a-z0-9-]{3,50}$/;
 const COLLECTION_RE = /^[a-z0-9_-]{1,32}$/;
 const MAX_RECORD_BYTES = 8 * 1024;
-// DzOS Phase 0 (WS-A): raise the per-collection record cap now that Postgres
-// is the source of truth for durable collections. 500 silently truncated
-// reports/KPIs (revenue understated after the 500th order). 5,000 is well
-// within the JSONB-row budget and the (slug, collection) index. The cap is
-// still enforced on Redis-only/ephemeral collections (see isDurableCollection).
-const MAX_RECORDS_PER_COLLECTION = 5_000;
-const MAX_RECORDS_PER_COLLECTION_REDIS = 500; // legacy cap for non-durable
-const MAX_LIST_LIMIT = 5_000;
-// Redis TTL for EPHEMERAL collections only (render data: products/settings/
-// categories/reviews/…). DURABLE collections (ERP money + legal docs + PII)
-// NO LONGER expire on Redis — their source of truth is Postgres, and a 90-day
-// silent expiry of legal invoices was a live data-loss risk (a merchant who
-// didn't open the app for 90 days lost everything). See isDurableCollection.
+const MAX_RECORDS_PER_COLLECTION = 500;
+const MAX_LIST_LIMIT = 500;
 const DATA_TTL_SECONDS = 90 * 24 * 60 * 60;
-
-// DzOS Phase 0 (WS-A): durable collections are the ERP/money/legal/PII set.
-// They are dual-written to Postgres, read from Postgres (source of truth),
-// and NEVER TTL-expire on Redis. Ephemeral collections (products/settings/
-// categories/reviews for storefront render) keep the legacy 90d Redis TTL —
-// they are cache-grade and a storefront can always re-seed them. The
-// classification + prefix set live in clickdz-erp-collections.ts (pure,
-// unit-tested, reused by the sync engine) and are imported above.
 
 // Per-slug write rate limit: a coarse fixed-window counter over the current
 // epoch-minute. Cheap (one INCR + one EXPIRE), self-cleaning (short TTL), and
@@ -70,31 +47,18 @@ const DATA_TTL_SECONDS = 90 * 24 * 60 * 60;
 const RL_MAX_WRITES_PER_MIN = 60;
 const RL_TTL_SECONDS = 120;
 
-// DzOS Phase 0 (WS-A): Postgres is now the SOURCE OF TRUTH for durable
-// collections. Dual-write is ON by default (opt-out with CDZ_PG_DUAL_WRITE=0
-// for emergency rollback). The pre-Phase-0 default was OFF; flipping it ON
-// is the single change that stops the 90-day silent data-loss risk.
-//
-// House convention note: every other CDZ_* flag in this codebase is '1' = on.
-// We keep that for explicit opt-in flags, but for THIS default-on flag we
-// accept '0' as the explicit opt-OUT (anything else, including unset, = on).
-const CDZ_PG_DUAL_WRITE = process.env.CDZ_PG_DUAL_WRITE !== '0';
-
-// DzOS Phase 0 (WS-A): read cutover for durable collections. When ON (default),
-// list() reads from Postgres (source of truth) and falls back to Redis only if
-// PG returns nothing for that (slug, collection) — the safe migration path
-// while the Redis→PG backfill is still settling. Ephemeral collections always
-// read from Redis (cache-grade, no PG mirror). CDZ_PG_READ=0 forces Redis-only
-// reads (emergency rollback, mirrors the dual-write opt-out).
-const CDZ_PG_READ = process.env.CDZ_PG_READ !== '0';
+// R15 Phase A: dual-write app-data to Postgres alongside Redis. Reads stay
+// Redis-only. Flag OFF (default) = pure legacy behaviour + full rollback.
+// '1' = on — matches EVERY other CDZ_* flag in this codebase (house convention;
+// the spec draft said 'true' but ops sets flags to '1' everywhere).
+const CDZ_PG_DUAL_WRITE = process.env.CDZ_PG_DUAL_WRITE === '1';
 
 // R18: the Phase A mirror is awaited on the merchant WRITE path, so a slow or
 // unreachable Postgres would otherwise add its full pool/query wait to every
 // order/caisse/invoice write. Bound it: on timeout the write still succeeds on
-// Redis (the cache; PG is source of truth for durable collections) and the
-// mirror is logged + dropped, exactly like any other mirror failure. Only
-// reached when CDZ_PG_DUAL_WRITE is on (default since DzOS Phase 0); floor
-// 250ms, default 2.5s.
+// Redis (the source of truth this phase) and the mirror is logged + dropped,
+// exactly like any other mirror failure. Only reached when CDZ_PG_DUAL_WRITE is
+// on; floor 250ms, default 2.5s.
 const CDZ_PG_MIRROR_TIMEOUT_MS = Math.max(
   250,
   Number(process.env.CDZ_PG_MIRROR_TIMEOUT_MS) || 2500
@@ -134,6 +98,7 @@ const SENSITIVE_COLLECTIONS = new Set([
 // and also treat any `invoice*` name as sensitive (covers `invoices`,
 // `invoices-202607`, and any future invoice-ish partition). Everything else
 // (products/settings/categories/reviews/…) stays public.
+const PARTITION_SUFFIX_RE = /-\d{6}$/;
 const isSensitive = (c: string): boolean => {
   const base = c.replace(PARTITION_SUFFIX_RE, '');
   return (
@@ -247,22 +212,19 @@ export class ClickDzDataController {
     }
   }
 
-  // Sliding-window TTL refresh for EPHEMERAL collections only. Durable
-  // collections (ERP money + legal docs + PII) NO LONGER expire on Redis —
-  // their source of truth is Postgres, and a 90-day silent expiry of legal
-  // invoices was a live data-loss risk. touchTtl on a durable collection is a
-  // no-op so the Redis key is left to natural cache eviction (LRU) rather than
-  // a hard TTL. One EXPIRE per request on ephemeral keys only.
-  private async touchTtl(key: string, collection: string) {
-    if (isDurableCollection(collection)) return; // durable: no TTL
+  // Sliding-window TTL refresh: keep the same DATA_TTL_SECONDS create() uses,
+  // but re-arm it on EVERY access (read + write) so a live-but-static shop's
+  // collection never silently expires at 90d after its last write. One EXPIRE
+  // per request, scoped to the single collection key the route touched.
+  private async touchTtl(key: string) {
     await this.redis.expire(key, DATA_TTL_SECONDS);
   }
 
-  // R15 Phase A / DzOS Phase 0: Postgres mirror of every Redis write. NEVER
-  // throws — a PG failure must not change the HTTP outcome. ON by default
-  // since DzOS Phase 0 (CDZ_PG_DUAL_WRITE !== '0'); rollback = set the flag to
-  // '0'. R18: time-bounded (CDZ_PG_MIRROR_TIMEOUT_MS) so a slow PG can never
-  // stall a merchant write past that budget — on timeout the mirror is
+  // R15 Phase A: best-effort Postgres mirror. NEVER throws — a PG failure must
+  // not change the HTTP outcome (Redis remains the source of truth this phase).
+  // No-op unless CDZ_PG_DUAL_WRITE is on, so rollback = flip the flag off.
+  // R18: additionally time-bounded (CDZ_PG_MIRROR_TIMEOUT_MS) so a slow PG can
+  // never stall a merchant write past that budget — on timeout the mirror is
   // abandoned (logged) while the underlying op keeps running harmlessly to
   // completion in the background (its late settlement is swallowed so it can
   // never surface as an unhandled rejection).
@@ -357,77 +319,28 @@ export class ClickDzDataController {
       this.requireReadToken(req, slug, collection);
     }
     const key = dataKey(slug, collection);
-    const durable = isDurableCollection(collection);
-
-    // DzOS Phase 0 (WS-A): read cutover. Durable collections read from
-    // Postgres (source of truth), falling back to Redis only if PG returns
-    // nothing for this (slug, collection) — the safe migration path while the
-    // Redis→PG backfill is still settling. Ephemeral collections always read
-    // from Redis (cache-grade, no PG mirror). CDZ_PG_READ=0 forces Redis-only.
-    let records: Record<string, unknown>[] = [];
-    if (durable && CDZ_PG_READ) {
-      try {
-        const rows = await this.models.cdzAppData.listByCollection(slug, collection);
-        if (rows.length > 0) {
-          records = rows.map((r) => ({ ...r.data, id: r.recordId }));
-        } else {
-          // PG empty for this collection — fall back to Redis (may still hold
-          // data the backfill hasn't copied yet, or a pre-backfill collection).
-          const raw = await this.redis.hgetall(key);
-          records = Object.values(raw)
-            .map((value) => {
-              try {
-                return JSON.parse(value) as Record<string, unknown>;
-              } catch {
-                return null;
-              }
-            })
-            .filter((r): r is Record<string, unknown> => !!r);
+    const raw = await this.redis.hgetall(key);
+    // Reads slide the expiry window forward: a shop that only serves reads
+    // (no new orders/products) keeps its data alive. Cheap, per-collection.
+    await this.touchTtl(key);
+    const records = Object.values(raw)
+      .map(value => {
+        try {
+          return JSON.parse(value) as Record<string, unknown>;
+        } catch {
+          return null;
         }
-      } catch (err) {
-        // PG table absent / unreachable — fail OPEN to Redis (a read must never
-        // 500 because the durable mirror isn't provisioned yet). Logged once.
-        this.logger.debug(
-          `[cdz-pg-read] list fell back to Redis for ${slug}:${collection}: ${String(
-            (err as Error)?.message ?? err
-          ).slice(0, 120)}`
-        );
-        const raw = await this.redis.hgetall(key);
-        records = Object.values(raw)
-          .map((value) => {
-            try {
-              return JSON.parse(value) as Record<string, unknown>;
-            } catch {
-              return null;
-            }
-          })
-          .filter((r): r is Record<string, unknown> => !!r);
-      }
-    } else {
-      const raw = await this.redis.hgetall(key);
-      records = Object.values(raw)
-        .map((value) => {
-          try {
-            return JSON.parse(value) as Record<string, unknown>;
-          } catch {
-            return null;
-          }
-        })
-        .filter((r): r is Record<string, unknown> => !!r);
-    }
-    // Reads slide the expiry window forward (ephemeral collections only;
-    // durable collections have no Redis TTL — Postgres is source of truth).
-    await this.touchTtl(key, collection);
-    records.sort((a, b) =>
-      String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''))
-    );
+      })
+      .filter((record): record is Record<string, unknown> => !!record)
+      .sort((a, b) =>
+        String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? ''))
+      );
     const max = Math.min(
       Math.max(Number(limit) || MAX_LIST_LIMIT, 1),
       MAX_LIST_LIMIT
     );
     // WS17: optional offset so internal callers (erpList) can paginate past the
-    // cap instead of silently truncating collections with more records. The cap
-    // is 5,000 for durable (PG-backed) collections, 500 for ephemeral.
+    // 500-row cap instead of silently truncating collections with more records.
     // Negative/non-numeric offset is treated as 0 (fail-safe). The slice is
     // bounded by the records length so an over-large offset simply returns [].
     const start = Math.max(Number(offset) || 0, 0);
@@ -459,15 +372,11 @@ export class ClickDzDataController {
       badRequest('Record must be a JSON object');
     }
     const key = dataKey(slug, collection);
-    const durable = isDurableCollection(collection);
-    const cap = durable ? MAX_RECORDS_PER_COLLECTION : MAX_RECORDS_PER_COLLECTION_REDIS;
     const count = await this.redis.hlen(key);
-    // Durable collections are PG-backed (5,000 cap); ephemeral stay at 500.
-    // For durable collections the Redis count is a lower bound (PG may have
-    // more after backfill) — the authoritative cap check is the PG upsert's
-    // own constraint, but we keep the Redis-side guard as a cheap first line.
-    if (count >= cap) {
-      throw new BadRequest(`Collection is full (${cap} records max)`);
+    if (count >= MAX_RECORDS_PER_COLLECTION) {
+      throw new BadRequest(
+        `Collection is full (${MAX_RECORDS_PER_COLLECTION} records max)`
+      );
     }
     const id = randomUUID().slice(0, 8);
     const record = {
@@ -480,9 +389,7 @@ export class ClickDzDataController {
       badRequest(`Record too large (${MAX_RECORD_BYTES / 1024}KB max)`);
     }
     await this.redis.hset(key, id, serialized);
-    // Durable collections: no Redis TTL (PG is source of truth). Ephemeral:
-    // re-arm the 90d TTL like the legacy create() did.
-    await this.touchTtl(key, collection);
+    await this.redis.expire(key, DATA_TTL_SECONDS);
     // R15 Phase A: durable PG copy (best-effort, never throws).
     await this.mirrorToPg(() =>
       this.models.cdzAppData.upsert(slug, collection, id, record)
@@ -543,11 +450,11 @@ export class ClickDzDataController {
         // Corrupt prior value: treat createdAt as new, still overwrite in place.
       }
     } else {
-      const durable = isDurableCollection(collection);
-      const cap = durable ? MAX_RECORDS_PER_COLLECTION : MAX_RECORDS_PER_COLLECTION_REDIS;
       const count = await this.redis.hlen(key);
-      if (count >= cap) {
-        throw new BadRequest(`Collection is full (${cap} records max)`);
+      if (count >= MAX_RECORDS_PER_COLLECTION) {
+        throw new BadRequest(
+          `Collection is full (${MAX_RECORDS_PER_COLLECTION} records max)`
+        );
       }
     }
 
@@ -562,10 +469,9 @@ export class ClickDzDataController {
       badRequest(`Record too large (${MAX_RECORD_BYTES / 1024}KB max)`);
     }
     // Single atomic HSET overwrite of one hash field — the whole point of this
-    // route (vs DELETE+POST). Durable collections skip the TTL (PG is source of
-    // truth); ephemeral re-arm the 90d TTL like create().
+    // route (vs DELETE+POST). Then re-arm the collection TTL like create().
     await this.redis.hset(key, id, serialized);
-    await this.touchTtl(key, collection);
+    await this.redis.expire(key, DATA_TTL_SECONDS);
     // R15 Phase A: durable PG copy. upsert() preserves created_at on conflict,
     // so the PG row keeps the same createdAt this record carries.
     await this.mirrorToPg(() =>
@@ -596,8 +502,8 @@ export class ClickDzDataController {
     }
     const key = dataKey(slug, collection);
     const removed = await this.redis.hdel(key, id);
-    // Deletes also slide the window on ephemeral collections (durable ones
-    // have no TTL; the delete is mirrored to PG below regardless).
+    // Deletes also slide the window: touching a collection (even to remove a
+    // record) counts as activity, so the rest of the collection stays alive.
     await this.touchTtl(key, collection);
     // R15 Phase A: mirror the delete to PG (best-effort, never throws). DzOS
     // Phase 1: also record a tombstone so the /erp/changes feed can tell

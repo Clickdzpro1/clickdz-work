@@ -2,6 +2,7 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useMemo,
   useState,
 } from 'react';
 
@@ -100,6 +101,10 @@ export const StockAdmin = ({
     text: string;
   } | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  // Phase 2: paginate the products table (was rendering ALL rows at once —
+  // fine for 20 products, janky at 500+). 25 rows per page keeps the DOM lean.
+  const PRODUCTS_PER_PAGE = 25;
+  const [productPage, setProductPage] = useState(0);
   // The product whose AI description is being generated/previewed (C5).
   const [describeFor, setDescribeFor] = useState<ErpProduct | null>(null);
   const [applying, setApplying] = useState(false);
@@ -137,6 +142,19 @@ export const StockAdmin = ({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Phase 2: reset to page 0 when the product list changes (refetch / filter).
+  useEffect(() => {
+    setProductPage(0);
+  }, [products]);
+
+  // Phase 2: clamp the page when products shrink (e.g. after a delete).
+  const totalProductPages = Math.max(1, Math.ceil(products.length / PRODUCTS_PER_PAGE));
+  const safePage = Math.min(productPage, totalProductPages - 1);
+  const pagedProducts = useMemo(
+    () => products.slice(safePage * PRODUCTS_PER_PAGE, (safePage + 1) * PRODUCTS_PER_PAGE),
+    [products, safePage]
+  );
 
   // Shared outcome handling for row saves + the add form.
   const submitProduct = useCallback(
@@ -443,7 +461,7 @@ export const StockAdmin = ({
                 </tr>
               </thead>
               <tbody>
-                {products.map(p => (
+                {pagedProducts.map(p => (
                   <ProductRow
                     // id changes after every replace → the row remounts with
                     // fresh saved values once the re-fetch lands.
@@ -461,6 +479,28 @@ export const StockAdmin = ({
             </table>
           </div>
         )}
+        {/* Phase 2: pagination controls for the products table. */}
+        {products.length > PRODUCTS_PER_PAGE ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', padding: '8px 0' }}>
+            <button
+              style={miniBtnStyle('secondary', safePage === 0)}
+              disabled={safePage === 0}
+              onClick={() => setProductPage(p => Math.max(0, p - 1))}
+            >
+              ← Précédent
+            </button>
+            <span style={{ fontSize: 12.5, color: C.muted }}>
+              {safePage + 1} / {totalProductPages}
+            </span>
+            <button
+              style={miniBtnStyle('secondary', safePage >= totalProductPages - 1)}
+              disabled={safePage >= totalProductPages - 1}
+              onClick={() => setProductPage(p => Math.min(totalProductPages - 1, p + 1))}
+            >
+              Suivant →
+            </button>
+          </div>
+        ) : null}
       </Panel>
 
       {/* AI description generator + preview (C5) */}

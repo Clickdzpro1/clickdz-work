@@ -73,16 +73,33 @@ export class ErpRepo {
       try {
         const wrappers = await this.storage.listRecords(collection);
         this.cache.set(collection, wrappers);
+        return wrappers as ErpRecordWrapper<T>[];
+      } catch (err) {
+        // Phase 5 error-shield: a storage failure (IDB quota / SQLite IPC
+        // disconnect) must never crash the UI. Return the cached value if
+        // another caller populated it, otherwise an empty list so the panel
+        // renders an empty state instead of throwing.
+        const fallback = this.cache.get(collection);
+        if (fallback) return fallback as ErpRecordWrapper<T>[];
+        console.error('[dzos-store] list: storage read failed', collection, err);
+        return [];
       } finally {
         this.hydrating.delete(collection);
       }
-    } else {
-      // Another caller is hydrating this collection; await its result by
-      // re-reading storage (the dedup is best-effort; a double-read is cheap).
     }
-    const wrappers = await this.storage.listRecords(collection);
-    this.cache.set(collection, wrappers);
-    return wrappers as ErpRecordWrapper<T>[];
+    // Another caller is hydrating this collection; await its result by
+    // re-reading storage (the dedup is best-effort; a double-read is cheap).
+    // Phase 5 error-shield: guard the secondary read too.
+    try {
+      const wrappers = await this.storage.listRecords(collection);
+      this.cache.set(collection, wrappers);
+      return wrappers as ErpRecordWrapper<T>[];
+    } catch (err) {
+      const fallback = this.cache.get(collection);
+      if (fallback) return fallback as ErpRecordWrapper<T>[];
+      console.error('[dzos-store] list: secondary storage read failed', collection, err);
+      return [];
+    }
   }
 
   /** Get one record by id, or null. Hits the cache if the collection is loaded. */
@@ -95,7 +112,14 @@ export class ErpRepo {
       const hit = cached.find((w) => w.id === id);
       return (hit as ErpRecordWrapper<T> | undefined) ?? null;
     }
-    return (await this.storage.getRecord(collection, id)) as ErpRecordWrapper<T> | null;
+    // Phase 5 error-shield: a storage failure must not crash callers that
+    // check for null. Degrade to null (record "not found").
+    try {
+      return (await this.storage.getRecord(collection, id)) as ErpRecordWrapper<T> | null;
+    } catch (err) {
+      console.error('[dzos-store] get: storage read failed', collection, id, err);
+      return null;
+    }
   }
 
   /**
@@ -112,7 +136,15 @@ export class ErpRepo {
     opts?: MutateOptions
   ): Promise<ErpRecordWrapper<T>> {
     const target = opts?.collectionOverride ?? collection;
-    const existing = await this.storage.getRecord(target, id);
+    // Phase 5 error-shield: guard the existing-record lookup so a storage
+    // error doesn't crash the write path — treat it as a fresh insert.
+    let existing: ErpRecordWrapper | null;
+    try {
+      existing = await this.storage.getRecord(target, id);
+    } catch (err) {
+      console.error('[dzos-store] upsert: getRecord failed, treating as fresh', target, id, err);
+      existing = null;
+    }
     const now = new Date().toISOString();
     const createdAt = existing?.createdAt ?? now;
     const rev = (existing?.rev ?? 0) + 1;
@@ -126,7 +158,17 @@ export class ErpRepo {
       pending: true,
       deleted: false,
     };
-    await this.storage.putRecord(wrapper);
+    try {
+      await this.storage.putRecord(wrapper);
+    } catch (err) {
+      // Phase 5 error-shield: if the local store is corrupted / full, the
+      // write fails — but we still return the wrapper so the caller's UI
+      // state is consistent. The outbox op is skipped (no point queueing a
+      // push for a record that didn't persist locally). The sync pill stays
+      // 'synced' (nothing to push); the error is logged.
+      console.error('[dzos-store] upsert: putRecord failed', target, id, err);
+      return wrapper as ErpRecordWrapper<T>;
+    }
     const op: ErpOutboxOp = {
       opId: ulid(),
       collection: target,
@@ -137,7 +179,15 @@ export class ErpRepo {
       ts: now,
       attempts: 0,
     };
-    await this.storage.appendOutbox(op);
+    try {
+      await this.storage.appendOutbox(op);
+    } catch (err) {
+      // Phase 5 error-shield: outbox-append failure means the change won't
+      // sync, but the local record is already written. Log loudly — the
+      // merchant's data is safe locally; sync will catch up on the next
+      // manual retry or a store repair.
+      console.error('[dzos-store] upsert: appendOutbox failed — change will not sync', target, id, err);
+    }
     this.invalidate(target);
     return wrapper as ErpRecordWrapper<T>;
   }
@@ -153,11 +203,26 @@ export class ErpRepo {
     opts?: MutateOptions
   ): Promise<void> {
     const target = opts?.collectionOverride ?? collection;
-    const existing = await this.storage.getRecord(target, id);
+    // Phase 5 error-shield: guard the existing-record lookup.
+    let existing: ErpRecordWrapper | null;
+    try {
+      existing = await this.storage.getRecord(target, id);
+    } catch (err) {
+      console.error('[dzos-store] remove: getRecord failed', target, id, err);
+      return; // can't tombstone what we can't read — idempotent no-op
+    }
     if (!existing) return; // already gone — idempotent
     const now = new Date().toISOString();
     const rev = existing.rev + 1;
-    await this.storage.tombstoneRecord(target, id, rev, now);
+    try {
+      await this.storage.tombstoneRecord(target, id, rev, now);
+    } catch (err) {
+      // Phase 5 error-shield: storage failure on tombstone — log and bail.
+      // The record stays in its pre-removal state; the next retry or a
+      // store repair will complete the delete.
+      console.error('[dzos-store] remove: tombstoneRecord failed', target, id, err);
+      return;
+    }
     const op: ErpOutboxOp = {
       opId: ulid(),
       collection: target,
@@ -167,7 +232,11 @@ export class ErpRepo {
       ts: now,
       attempts: 0,
     };
-    await this.storage.appendOutbox(op);
+    try {
+      await this.storage.appendOutbox(op);
+    } catch (err) {
+      console.error('[dzos-store] remove: appendOutbox failed — delete will not sync', target, id, err);
+    }
     this.invalidate(target);
   }
 
@@ -220,7 +289,16 @@ export class ErpRepo {
           updatedAt: string;
         }
   ): Promise<boolean> {
-    const existing = await this.storage.getRecord(change.collection, change.id);
+    // Phase 5 error-shield: guard the existing-record lookup so a storage
+    // failure degrades to "no existing record" (server change applied) rather
+    // than crashing the pull loop.
+    let existing: ErpRecordWrapper | null;
+    try {
+      existing = await this.storage.getRecord(change.collection, change.id);
+    } catch (err) {
+      console.error('[dzos-store] applyPulledChange: getRecord failed', change.collection, change.id, err);
+      existing = null;
+    }
     if (change.kind === 'upsert') {
       // LWW: server wins on higher rev; if equal rev, newer updatedAt wins.
       if (existing && !existing.pending && existing.rev > change.rev) return false;
@@ -249,8 +327,17 @@ export class ErpRepo {
         pending: false,
         deleted: false,
       };
-      await this.storage.putRecord(wrapper);
-      this.invalidate(change.collection);
+      try {
+        await this.storage.putRecord(wrapper);
+        this.invalidate(change.collection);
+      } catch (err) {
+        // Phase 5 error-shield: a storage write failure during a pull merge
+        // is non-fatal — the next pull will re-apply this change (the
+        // cursor hasn't advanced). Log and return false so the sync engine
+        // doesn't advance the cursor past an un-applied change.
+        console.error('[dzos-store] applyPulledChange: putRecord failed', change.collection, change.id, err);
+        return false;
+      }
       return true;
     }
     // tombstone
@@ -260,13 +347,20 @@ export class ErpRepo {
       // Local is newer non-deleted → don't tombstone (conflict; sync engine logs).
       if (existing.rev > change.rev) return false;
     }
-    await this.storage.tombstoneRecord(
-      change.collection,
-      change.id,
-      change.rev,
-      change.updatedAt
-    );
-    this.invalidate(change.collection);
+    try {
+      await this.storage.tombstoneRecord(
+        change.collection,
+        change.id,
+        change.rev,
+        change.updatedAt
+      );
+      this.invalidate(change.collection);
+    } catch (err) {
+      // Phase 5 error-shield: tombstone write failure — the next pull
+      // retries (cursor hasn't advanced). Log and return false.
+      console.error('[dzos-store] applyPulledChange: tombstoneRecord failed', change.collection, change.id, err);
+      return false;
+    }
     return true;
   }
 
@@ -278,10 +372,22 @@ export class ErpRepo {
   /** Drop the in-memory cache for a collection (after a mutation or a pull merge). */
   private invalidate(collection: string): void {
     // Re-read from storage so the cache reflects the putRecord/tombstone.
+    // Phase 5 error-shield: catch the rejection so a storage failure doesn't
+    // surface as an unhandled promise rejection (which would crash the page
+    // in strict dev mode). Subscribers get the last-known cached list.
     this.storage.listRecords(collection).then((wrappers) => {
       this.cache.set(collection, wrappers);
       const subs = this.subscribers.get(collection);
       if (subs) for (const h of subs) h(wrappers);
+    }).catch((err) => {
+      console.error('[dzos-store] invalidate: storage re-read failed', collection, err);
+      // Still notify subscribers with whatever's cached (if anything) so
+      // React hooks re-render instead of staling.
+      const cached = this.cache.get(collection);
+      if (cached) {
+        const subs = this.subscribers.get(collection);
+        if (subs) for (const h of subs) h(cached);
+      }
     });
   }
 }
@@ -306,8 +412,17 @@ const isElectron =
  */
 async function makeStorage(slug: string): Promise<DzosStorage> {
   if (isElectron) {
-    const { DzosSqliteStorage } = await import('./sqlite-storage');
-    return new DzosSqliteStorage(slug);
+    try {
+      const { DzosSqliteStorage } = await import('./sqlite-storage');
+      return new DzosSqliteStorage(slug);
+    } catch (err) {
+      // Phase 5 error-shield: if the SQLite adapter import fails (missing
+      // @affine/electron-api in a broken build, or a module-load error),
+      // fall back to IDB so the app still works offline. The IDB adapter
+      // is available in the Electron renderer too.
+      console.error('[dzos-store] makeStorage: SQLite adapter unavailable, falling back to IDB', err);
+      return new DzosIdbStorage(slug);
+    }
   }
   return new DzosIdbStorage(slug);
 }
@@ -334,9 +449,14 @@ export async function getErpRepo(slug: string): Promise<ErpRepo> {
     // Start the sync engine so the /erp/changes pull keeps this repo's local
     // store fresh. Fire-and-forget — the engine self-schedules; a failure
     // (e.g. offline) degrades to 'offline' status, never throws.
+    // Phase 5 error-shield: the import + getSyncEngine chain already has
+    // internal catch(), but we add a top-level guard so a module-load error
+    // in sync.ts doesn't propagate as an unhandled rejection.
     void import('./sync')
       .then(({ getSyncEngine }) => getSyncEngine(slug))
-      .catch(() => {});
+      .catch((err) => {
+        console.error('[dzos-store] getErpRepo: failed to start sync engine', err);
+      });
   }
   return repo;
 }
@@ -354,7 +474,13 @@ export function getErpRepoSync(slug: string): ErpRepo | null {
 export function dropErpRepo(slug: string): void {
   const repo = repoCache.get(slug);
   if (repo) {
-    repo.getStorage().close();
+    // Phase 5 error-shield: close() can throw on a broken storage backend;
+    // never block the cache eviction (the repo is dropped regardless).
+    try {
+      repo.getStorage().close();
+    } catch (err) {
+      console.error('[dzos-store] dropErpRepo: close failed', slug, err);
+    }
     repoCache.delete(slug);
   }
 }

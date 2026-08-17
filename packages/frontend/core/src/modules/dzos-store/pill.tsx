@@ -32,17 +32,28 @@ export const SyncStatusPill = ({ slug }: { slug: string }) => {
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
     let alive = true;
-    void getSyncEngine(slug).then((engine) => {
-      if (!alive) return;
-      unsubscribe = engine.onStatus(setStatus);
-    });
+    // Phase 5 error-shield: getSyncEngine can reject if the repo can't be
+    // created (storage backend broken). The pill must stay visible in its
+    // default 'synced' state rather than crashing the dashboard header.
+    void getSyncEngine(slug)
+      .then((engine) => {
+        if (!alive) return;
+        unsubscribe = engine.onStatus(setStatus);
+      })
+      .catch((err) => {
+        console.error('[dzos-store] SyncStatusPill: getSyncEngine failed', slug, err);
+        // Keep the default 'synced' status — the pill is informational, never blocking.
+      });
     return () => {
       alive = false;
       unsubscribe?.();
     };
   }, [slug]);
 
-  const style = PILL_STYLES[status.state];
+  // Phase 5 error-shield: if the status state is somehow an unexpected value
+  // (shouldn't happen with the typed SyncStatus, but defense-in-depth), fall
+  // back to the 'synced' style so the pill always renders.
+  const style = PILL_STYLES[status.state] ?? PILL_STYLES.synced;
   const count = status.state === 'pending' ? status.count : 0;
   const label =
     status.state === 'pending'

@@ -148,9 +148,35 @@ class DzosSqliteDb {
     await fs.ensureDir(path.dirname(dbPath));
     const factory = await loadSqlite();
     this.db = factory(dbPath);
-    this.db.exec('PRAGMA journal_mode = WAL;');
-    this.db.exec('PRAGMA foreign_keys = ON;');
-    this.db.exec(SCHEMA);
+    // Phase 5 error-shield: each pragma/exec can throw on a corrupted DB
+    // file or a permissions issue. Guard each so a partial failure still
+    // leaves the DB in a usable state (WAL is best-effort; the schema is
+    // idempotent). If the schema exec fails entirely, the connection is
+    // broken — clear it so the next call retries from scratch.
+    try {
+      this.db.exec('PRAGMA journal_mode = WAL;');
+    } catch (err) {
+      logger.warn(`[dzos-sqlite] open: WAL pragma failed (continuing with default journal) — ${dbPath}`, err);
+    }
+    try {
+      this.db.exec('PRAGMA foreign_keys = ON;');
+    } catch (err) {
+      logger.warn(`[dzos-sqlite] open: foreign_keys pragma failed — ${dbPath}`, err);
+    }
+    try {
+      this.db.exec(SCHEMA);
+    } catch (err) {
+      logger.error(`[dzos-sqlite] open: schema exec failed — ${dbPath}`, err);
+      // The DB file might be corrupted. Close it and clear so the next
+      // call retries; the caller will see the error on the next query.
+      try {
+        this.db.close();
+      } catch {
+        /* ignore */
+      }
+      this.db = null;
+      throw new Error(`DzOS SQLite: impossible d'initialiser le schéma pour "${this.slug}" — ${dbPath}`);
+    }
     logger.info(`[dzos-sqlite] opened ${dbPath}`);
     return this.db;
   }
@@ -249,17 +275,30 @@ class DzosSqliteDb {
   async listOutbox() {
     const db = await this.open();
     const rows = db.prepare('SELECT * FROM outbox ORDER BY ts ASC').all() as OutboxRow[];
-    return rows.map((r) => ({
-      opId: r.op_id,
-      collection: r.collection,
-      recordId: r.record_id,
-      op: r.op,
-      payload: r.payload ? (JSON.parse(r.payload) as Record<string, unknown>) : undefined,
-      baseRev: r.base_rev,
-      ts: r.ts,
-      attempts: r.attempts,
-      lastError: r.last_error ?? undefined,
-    }));
+    return rows.map((r) => {
+      // Phase 5 error-shield: JSON.parse on the payload can throw on a
+      // corrupted row. Degrade to undefined (the sync engine treats a
+      // missing payload as an empty body for upserts).
+      let payload: Record<string, unknown> | undefined;
+      if (r.payload) {
+        try {
+          payload = JSON.parse(r.payload) as Record<string, unknown>;
+        } catch (err) {
+          logger.error(`[dzos-sqlite] listOutbox: corrupted payload for op ${r.op_id}`, err);
+        }
+      }
+      return {
+        opId: r.op_id,
+        collection: r.collection,
+        recordId: r.record_id,
+        op: r.op,
+        payload,
+        baseRev: r.base_rev,
+        ts: r.ts,
+        attempts: r.attempts,
+        lastError: r.last_error ?? undefined,
+      };
+    });
   }
 
   async removeOutbox(opId: string) {
@@ -303,17 +342,34 @@ class DzosSqliteDb {
   }
 
   close() {
+    // Phase 5 error-shield: db.close() can throw on a corrupted handle.
+    // Never block the cache eviction (the db is nulled regardless).
     if (this.db) {
-      this.db.close();
+      try {
+        this.db.close();
+      } catch (err) {
+        logger.error(`[dzos-sqlite] close: db.close() failed for "${this.slug}"`, err);
+      }
       this.db = null;
     }
   }
 
   private unwrapRecord(row: RecordRow) {
+    // Phase 5 error-shield: JSON.parse can throw on corrupted data rows
+    // (partial writes, disk corruption). Degrade to an empty object so the
+    // record is still visible (id/rev/collection) rather than crashing the
+    // entire listRecords/getRecord call.
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(row.data) as Record<string, unknown>;
+    } catch (err) {
+      logger.error(`[dzos-sqlite] unwrapRecord: corrupted data for ${row.collection}/${row.id}`, err);
+      data = {};
+    }
     return {
       collection: row.collection,
       id: row.id,
-      data: JSON.parse(row.data) as Record<string, unknown>,
+      data,
       rev: row.rev,
       updatedAt: row.updated_at,
       createdAt: row.created_at,

@@ -100,7 +100,7 @@ export interface AppTemplateDef {
   /**
    * The structured generation brief (FR), prepended to the merchant's prompt
    * by POST /api/v1/apps/generate when `templateId` resolves. This is the
-   * product: concrete screens, Algerian specifics (58 wilayas, DZD, 05/06/07
+   * product: concrete screens, Algerian specifics (69 wilayas, DZD, 05/06/07
    * phones, wa.me, RC/NIF/ART, TVA 19 %), a PIN-gated admin, empty/loading/
    * error states and a « Données de démo » seeding button.
    */
@@ -229,7 +229,7 @@ CONTEXTE : le vendeur expédie via Yalidine, ZR Express, Maystro ou NOEST et per
 - Un champ unique : le code de suivi (format court généré par l'app, ex. DZ-4F7K9). Résultat : frise verticale des 5 statuts — En préparation → Expédié → En livraison → Livré, avec la branche Retour en rouge — plus wilaya de destination et montant à préparer en DZD. Aucune donnée d'autrui n'est listée : recherche par code exact uniquement.
 
 ADMIN (derrière PIN) :
-- Tableau des colis : destinataire, téléphone (liens tel: / wa.me), wilaya (menu des 58 wilayas, code + nom, ex. « 16 — Alger »), montant COD en DZD, transporteur (choix libre : Yalidine, ZR Express, Maystro, NOEST, autre), statut coloré.
+- Tableau des colis : destinataire, téléphone (liens tel: / wa.me), wilaya (menu des 69 wilayas, code + nom, ex. « 16 — Alger »), montant COD en DZD, transporteur (choix libre : Yalidine, ZR Express, Maystro, NOEST, autre), statut coloré.
 - Changement de statut en un tap ; bouton 💬 « Prévenir le client » : wa.me pré-rempli avec le statut et le code de suivi.
 - Filtres : par statut, par wilaya ; recherche par nom / téléphone / code.
 - KPI en haut : colis en cours, livrés ce mois-ci, montant COD à encaisser (somme des « En livraison » + « Expédié »), taux de retour (retours / terminés) — le chiffre qui fait mal en COD, affiche-le franchement.

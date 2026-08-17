@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -321,8 +322,13 @@ const Journal = ({
   const [entries, setEntries] = useState<CaisseEntry[]>([]);
   const [couriers, setCouriers] = useState<CourierLite[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Phase 2: track the active month-load so a rapid month switch can't apply
+  // a stale response (the old code raced: switch Jan→Feb→Mar quickly and the
+  // Jan response could land last, overwriting Mar's entries).
+  const loadTokenRef = useRef(0);
 
   const load = useCallback(async () => {
+    const token = ++loadTokenRef.current;
     setPhase('loading');
     // DzOS Phase 1 END-STATE: read from the LOCAL store first (instant, works
     // offline). The /erp/changes pull keeps it fresh. Only on a cold start
@@ -332,6 +338,7 @@ const Journal = ({
       const repo = await getErpRepo(slug);
       const local = await repo.list<CaisseEntry>(coll);
       if (local.length > 0) {
+        if (token !== loadTokenRef.current) return; // stale — a newer load won
         setEntries(local.map((w) => w.data));
         setPhase('ready');
         return;
@@ -341,6 +348,7 @@ const Journal = ({
     }
     // Cold start: fetch + hydrate, then read back from the local store.
     const out = await fetchCaisse(slug, month);
+    if (token !== loadTokenRef.current) return; // stale — discard
     if (out.status === 'ok') {
       setEntries(out.entries);
       setPhase('ready');

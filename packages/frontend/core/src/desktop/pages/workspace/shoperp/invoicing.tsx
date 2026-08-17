@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 
@@ -275,9 +276,16 @@ const InvoiceList = ({
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errMsg, setErrMsg] = useState('');
   const [rows, setRows] = useState<InvoiceView[]>([]);
+  // Phase 2: cache the unfiltered month data so filter changes are instant
+  // (no re-read from the local store, no phase flash). The month change still
+  // goes through the full load path.
+  const allRowsRef = useRef<InvoiceView[] | null>(null);
 
   const load = useCallback(async () => {
-    setPhase('loading');
+    // Phase 2: don't flash 'loading' when we already have data for this month
+    // and only the filter changed — just re-filter.
+    const hasCache = allRowsRef.current !== null;
+    if (!hasCache) setPhase('loading');
     // DzOS Phase 1 END-STATE: read from the LOCAL store first (per-month
     // partition). The /erp/changes pull keeps it fresh. Only on a cold start
     // (local partition empty) do we fetch + hydrate. Filter by type/status
@@ -288,11 +296,22 @@ const InvoiceList = ({
     const matchesFilters = (inv: InvoiceView) =>
       (!typeFilter || inv.type === typeFilter) &&
       (!statusFilter || inv.status === statusFilter);
+
+    // Fast path: if we already have the month's data cached, just re-filter.
+    if (hasCache) {
+      const all = allRowsRef.current!;
+      setRows(all.filter(matchesFilters));
+      setPhase('ready');
+      return;
+    }
+
     try {
       const repo = await getErpRepo(slug);
       const local = await repo.list<InvoiceView>(coll);
       if (local.length > 0) {
-        setRows(local.map((w) => w.data).filter(matchesFilters));
+        const all = local.map((w) => w.data);
+        allRowsRef.current = all;
+        setRows(all.filter(matchesFilters));
         setPhase('ready');
         return;
       }
@@ -302,6 +321,7 @@ const InvoiceList = ({
     // Cold start: fetch + hydrate, then serve (filtered).
     const out = await fetchInvoices(slug, { month, type: typeFilter, status: statusFilter });
     if (out.status === 'ok') {
+      allRowsRef.current = out.invoices;
       setRows(out.invoices);
       setPhase('ready');
       void getErpRepo(slug).then((repo) =>
@@ -315,6 +335,7 @@ const InvoiceList = ({
       onFlagOff();
     } else if (out.status === 'unavailable') {
       // Offline + empty local store → quiet empty state (never crash).
+      allRowsRef.current = [];
       setRows([]);
       setPhase('ready');
     } else {
@@ -322,6 +343,11 @@ const InvoiceList = ({
       setPhase('error');
     }
   }, [slug, month, typeF, statusF, onFlagOff]);
+
+  // Phase 2: reset the row cache when the month changes (not on filter change).
+  useEffect(() => {
+    allRowsRef.current = null;
+  }, [month]);
 
   useEffect(() => {
     void load();

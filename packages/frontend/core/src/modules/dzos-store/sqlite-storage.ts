@@ -96,6 +96,15 @@ export class DzosSqliteStorage implements DzosStorage {
 
   close(): void {
     // Fire-and-forget the IPC close; the helper drops the SQLite connection.
-    void this.h?.close?.(this.slug).catch(() => {});
+    // Phase 5 error-shield: the h getter can throw if apis is unavailable
+    // (e.g. the helper process disconnected). Guard so close() never throws.
+    try {
+      void this.h?.close?.(this.slug).catch((err: unknown) => {
+        console.error('[dzos-sqlite] close: IPC close failed', err);
+      });
+    } catch (err) {
+      // h getter threw — nothing to close. Log and move on.
+      console.error('[dzos-sqlite] close: handler unavailable', err);
+    }
   }
 }

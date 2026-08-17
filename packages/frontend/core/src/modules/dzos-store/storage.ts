@@ -117,7 +117,15 @@ export class DzosIdbStorage implements DzosStorage {
 
   private async db(): Promise<IDBPDatabase> {
     if (!this.dbPromise) this.dbPromise = openDzosIdb(this.slug);
-    return this.dbPromise;
+    // Phase 5 error-shield: if openDzosIdb rejected, clear the cached promise
+    // so the next call retries instead of failing forever with the same
+    // rejected promise.
+    try {
+      return await this.dbPromise;
+    } catch (err) {
+      this.dbPromise = null;
+      throw err;
+    }
   }
 
   async getRecord(collection: string, id: string): Promise<ErpRecordWrapper | null> {
@@ -132,8 +140,18 @@ export class DzosIdbStorage implements DzosStorage {
 
   async listRecords(collection: string): Promise<ErpRecordWrapper[]> {
     const db = await this.db();
-    const idx = db.transaction(STORE_RECORDS).store.index('collection');
-    const rows = (await idx.getAll(IDBKeyRange.only(collection))) as RecordRow[];
+    // Phase 5 error-shield: the 'collection' index might be missing if the DB
+    // was partially migrated or opened from an older schema. Fall back to a
+    // full table scan + filter so the read never crashes.
+    let rows: RecordRow[];
+    try {
+      const idx = db.transaction(STORE_RECORDS).store.index('collection');
+      rows = (await idx.getAll(IDBKeyRange.only(collection))) as RecordRow[];
+    } catch {
+      // Index missing or corrupt — full scan + in-memory filter.
+      rows = (await db.getAll(STORE_RECORDS)) as RecordRow[];
+      rows = rows.filter((r) => r.collection === collection);
+    }
     return rows
       .filter((r) => !r.deleted)
       .map(({ key: _key, ...wrapper }) => wrapper)
@@ -218,7 +236,21 @@ export class DzosIdbStorage implements DzosStorage {
 
   close(): void {
     if (this.dbPromise) {
-      this.dbPromise.then((db) => db.close()).catch(() => {});
+      // Phase 5 error-shield: catch the rejection so close() never throws
+      // (the caller in dropErpRepo already guards, but this is defense-in-depth
+      // for any direct caller). Also clear the promise so a post-close db()
+      // call re-opens instead of returning a closed DB handle.
+      this.dbPromise
+        .then((db) => {
+          try {
+            db.close();
+          } catch (err) {
+            console.error('[dzos-idb] close: db.close() failed', err);
+          }
+        })
+        .catch((err) => {
+          console.error('[dzos-idb] close: dbPromise rejected', err);
+        });
       this.dbPromise = null;
     }
   }
