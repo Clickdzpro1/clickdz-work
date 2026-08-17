@@ -290,30 +290,52 @@ export class ErpRepo {
 
 const repoCache = new Map<string, ErpRepo>();
 
-/** True if running inside the Electron desktop app (vs web). */
+/**
+ * True if running inside the Electron desktop app (vs web). Uses the build-time
+ * BUILD_CONFIG.isElectron flag (the same flag the rest of AFFiNE uses), with a
+ * runtime fallback check on the injected __apis global. On Electron, getErpRepo
+ * picks the native SQLite adapter; on web, the IDB adapter.
+ */
 const isElectron =
-  typeof window !== 'undefined' &&
-  // AFFiNE's desktop detection: the electron preload injects a flag.
-  Boolean(
-    (window as unknown as { process?: { type?: string } }).process?.type ===
-      'renderer' ||
-      (window as unknown as { __DZOS_ELECTRON__?: boolean }).__DZOS_ELECTRON__
-  );
+  typeof BUILD_CONFIG !== 'undefined' && BUILD_CONFIG.isElectron;
 
 /**
- * Get (or create) the ErpRepo for a shop slug. Web builds use the IDB adapter;
- * Electron builds will use the SQLite adapter (TODO: dzosStoreHandlers IPC,
- * mirroring nbstore's pattern — until then Electron falls back to IDB which is
- * available in the renderer too).
+ * Lazily import the SQLite adapter ONLY on Electron (so a web bundle never
+ * evaluates the @affine/electron-api import, which is undefined on web).
+ * Returns the DzosSqliteStorage class on Electron, or null on web.
  */
-export function getErpRepo(slug: string): ErpRepo {
+async function makeStorage(slug: string): Promise<DzosStorage> {
+  if (isElectron) {
+    const { DzosSqliteStorage } = await import('./sqlite-storage');
+    return new DzosSqliteStorage(slug);
+  }
+  return new DzosIdbStorage(slug);
+}
+
+/**
+ * Get (or create) the ErpRepo for a shop slug. On Electron the backing store
+ * is native SQLite (a real file in userData, WAL mode, index-backed scans);
+ * on web it's IndexedDB. Both implement the same DzosStorage contract, so the
+ * repo + sync engine are backend-agnostic. The first call for a slug hydrates
+ * the store (async); subsequent calls return the cached repo synchronously.
+ */
+export async function getErpRepo(slug: string): Promise<ErpRepo> {
   let repo = repoCache.get(slug);
   if (!repo) {
-    const storage = isElectron ? new DzosIdbStorage(slug) : new DzosIdbStorage(slug);
+    const storage = await makeStorage(slug);
     repo = new ErpRepo(slug, storage);
     repoCache.set(slug, repo);
   }
   return repo;
+}
+
+/**
+ * Synchronous variant: returns the cached repo if already created, or null.
+ * Callers that need the repo synchronously (e.g. a hook that already awaited
+ * the first getErpRepo on mount) can use this; the first access must be async.
+ */
+export function getErpRepoSync(slug: string): ErpRepo | null {
+  return repoCache.get(slug) ?? null;
 }
 
 /** Drop the cached repo for a slug (on shop switch / logout). */

@@ -1,5 +1,6 @@
 import { dialogHandlers } from './dialog';
 import { dbEventsV1, dbHandlersV1, nbstoreHandlers } from './nbstore';
+import { dzosStoreHandlers } from './dzos-store';
 import { previewHandlers } from './preview';
 import { provideExposed } from './provide';
 import { workspaceEvents, workspaceHandlers } from './workspace';
@@ -7,6 +8,7 @@ import { workspaceEvents, workspaceHandlers } from './workspace';
 export const handlers = {
   db: dbHandlersV1,
   nbstore: nbstoreHandlers,
+  dzosStore: dzosStoreHandlers,
   workspace: workspaceHandlers,
   dialog: dialogHandlers,
   preview: previewHandlers,

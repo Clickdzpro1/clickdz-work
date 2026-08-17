@@ -62,6 +62,17 @@ export async function getSpaceDBPath(
   );
 }
 
+/**
+ * DzOS Phase 1: the SQLite file path for one shop's local-first ERP store.
+ * `<sessionData>/dzos/<slug>.sqlite` — one DB per shop (mirrors the per-shop
+ * IDB DB name `dzos:<slug>`), in a dedicated `dzos/` subdir so a single-shop
+ * backup/restore is one file. The slug is sanitized for the filesystem.
+ */
+export async function getDzosDbPath(slug: string) {
+  const safeSlug = normalizeWorkspaceIdForPath(slug);
+  return path.join(await getAppDataPath(), 'dzos', `${safeSlug}.sqlite`);
+}
+
 export async function getDeletedWorkspacesBasePath() {
   return path.join(await getAppDataPath(), 'deleted-workspaces');
 }

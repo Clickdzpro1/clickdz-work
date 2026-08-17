@@ -11,9 +11,10 @@
  * helpers until migrated.
  */
 
-export { ErpRepo, getErpRepo, dropErpRepo } from './repo';
+export { ErpRepo, getErpRepo, getErpRepoSync, dropErpRepo } from './repo';
 export type { MutateOptions } from './repo';
 export { DzosIdbStorage, openDzosIdb } from './storage';
+export { DzosSqliteStorage } from './sqlite-storage';
 export type { DzosStorage } from './storage';
 export { useErpQuery, useErpMutation, useErpPendingCount } from './hooks';
 export { SyncEngine, getSyncEngine, dropSyncEngine } from './sync';

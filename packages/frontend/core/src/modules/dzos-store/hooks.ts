@@ -29,22 +29,25 @@ export function useErpQuery<T = Record<string, unknown>>(
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const repo = getErpRepo(slug);
+    let unsubscribe: (() => void) | undefined;
     let alive = true;
-    // Initial hydrate + subscribe.
-    repo.list<T>(collection).then((rows) => {
+    void getErpRepo(slug).then((repo) => {
       if (!alive) return;
-      setWrappers(rows);
-      setReady(true);
-    });
-    const unsubscribe = repo.subscribe(collection, (rows) => {
-      if (!alive) return;
-      setWrappers(rows as ErpRecordWrapper<T>[]);
-      setReady(true);
+      // Initial hydrate + subscribe.
+      repo.list<T>(collection).then((rows) => {
+        if (!alive) return;
+        setWrappers(rows);
+        setReady(true);
+      });
+      unsubscribe = repo.subscribe(collection, (rows) => {
+        if (!alive) return;
+        setWrappers(rows as ErpRecordWrapper<T>[]);
+        setReady(true);
+      });
     });
     return () => {
       alive = false;
-      unsubscribe();
+      unsubscribe?.();
     };
   }, [slug, collection]);
 
@@ -55,24 +58,23 @@ export function useErpQuery<T = Record<string, unknown>>(
 export function useErpPendingCount(slug: string): number {
   const [count, setCount] = useState(0);
   useEffect(() => {
-    const repo = getErpRepo(slug);
     let alive = true;
-    const refresh = () => {
-      repo
-        .getStorage()
-        .listOutbox()
-        .then((ops) => {
-          if (alive) setCount(ops.length);
-        });
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const refresh = async () => {
+      try {
+        const repo = await getErpRepo(slug);
+        const ops = await repo.getStorage().listOutbox();
+        if (alive) setCount(ops.length);
+      } catch {
+        /* ignore — the pill degrades to 0 */
+      }
     };
-    refresh();
+    void refresh();
     // Poll every 2s — the outbox is small and the pill must reflect new writes.
-    // (A tighter signal could be wired from repo.invalidate, but polling is
-    // cheap and avoids coupling the hook to the repo's internals.)
-    const interval = setInterval(refresh, 2000);
+    interval = setInterval(() => void refresh(), 2000);
     return () => {
       alive = false;
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
     };
   }, [slug]);
   return count;
@@ -91,7 +93,7 @@ export function useErpMutation(slug: string) {
         id: string,
         data: T,
         opts?: { collectionOverride?: string }
-      ) => getErpRepo(slug).upsert<T>(collection, id, data, opts),
+      ) => getErpRepo(slug).then((repo) => repo.upsert<T>(collection, id, data, opts)),
       [slug]
     ),
     remove: useCallback(
@@ -99,7 +101,7 @@ export function useErpMutation(slug: string) {
         collection: ErpCollection,
         id: string,
         opts?: { collectionOverride?: string }
-      ) => getErpRepo(slug).remove(collection, id, opts),
+      ) => getErpRepo(slug).then((repo) => repo.remove(collection, id, opts)),
       [slug]
     ),
   };

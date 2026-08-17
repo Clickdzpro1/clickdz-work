@@ -356,7 +356,8 @@ export async function getSyncEngine(slug: string): Promise<SyncEngine> {
   let engine = engineCache.get(slug);
   if (!engine) {
     const apiBase = await resolveApiBase();
-    engine = new SyncEngine(getErpRepo(slug), slug, apiBase);
+    const repo = await getErpRepo(slug);
+    engine = new SyncEngine(repo, slug, apiBase);
     engineCache.set(slug, engine);
     engine.start();
   }

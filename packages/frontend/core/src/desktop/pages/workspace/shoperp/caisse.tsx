@@ -334,15 +334,16 @@ const Journal = ({
       // are server-authoritative reads, not outbox writes). Best-effort — a
       // hydration failure never blocks the panel (the fetch already succeeded).
       const coll = `caisse-${month}`;
-      const repo = getErpRepo(slug);
-      void Promise.all(
-        out.entries.map((e) =>
-          repo.upsert(coll, e.id, e, { collectionOverride: coll }).catch(() => {})
-        )
-      ).catch(() => {});
+      void getErpRepo(slug).then((repo) =>
+        Promise.all(
+          out.entries.map((e) =>
+            repo.upsert(coll, e.id, e, { collectionOverride: coll }).catch(() => {})
+          )
+        ).catch(() => {})
+      );
     } else if (out.status === 'unavailable') {
       // Route/data unreachable → try the local store (offline read), else empty.
-      const repo = getErpRepo(slug);
+      const repo = await getErpRepo(slug);
       const local = await repo.list<CaisseEntry>(`caisse-${month}`).catch(() => []);
       setEntries(local.map((w) => w.data));
       setPhase('ready');
@@ -686,11 +687,12 @@ const QuickAdd = ({
       // caisse-<month> partition. Best-effort — the server write already
       // succeeded, so a local-store failure doesn't undo it.
       const coll = `caisse-${monthYYYYMM(draft.date)}`;
-      const repo = getErpRepo(slug);
       if (out.entry?.id) {
-        void repo
-          .upsert(coll, out.entry.id, out.entry, { collectionOverride: coll })
-          .catch(() => {});
+        void getErpRepo(slug).then((repo) =>
+          repo
+            .upsert(coll, out.entry.id, out.entry, { collectionOverride: coll })
+            .catch(() => {})
+        );
       }
       setOk(true);
       setDraft(d => ({ ...emptyDraft(), method: d.method, date: d.date }));
