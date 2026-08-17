@@ -204,6 +204,18 @@ export class ClickDzPgAdminController {
       out.ok = false;
       out.erpSeqError = String((err as Error)?.message ?? err).slice(0, 300);
     }
+    // DzOS Phase 1: ensure the tombstone table (for the /erp/changes feed) +
+    // the rev column on cdz_app_data (for the LWW merge). Idempotent.
+    try {
+      const tombstone = await this.models.cdzAppDataTombstone.ensureSchema();
+      this.logger.log(
+        `[cdz-pg-migrate] cdz_app_data_tombstone alreadyExisted=${tombstone.alreadyExisted} ranDdl=${tombstone.ranDdl}`
+      );
+      out.tombstone = tombstone;
+    } catch (err) {
+      out.ok = false;
+      out.tombstoneError = String((err as Error)?.message ?? err).slice(0, 300);
+    }
     return out;
   }
 
