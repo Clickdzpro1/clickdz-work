@@ -414,10 +414,40 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
     return fetch(DATA_URL + "/" + coll + "/" + encodeURIComponent(id), { method:"DELETE", headers:apiHeaders() })
       .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
   }
-  // The Data API has no update: replace = delete old id then create merged body.
+  // DzOS Phase 0 (WS-E): atomic upsert via the v2 PUT route. The body MUST
+  // carry a stable `id` (the path id); the server preserves createdAt on
+  // conflict and stamps updatedAt. Idempotency key (opId) makes retries safe.
+  function putRec(coll, id, body, opId){
+    var url = DATA_URL + "/" + coll + "/" + encodeURIComponent(id);
+    var h = apiHeaders();
+    if(opId) h["X-Idempotency-Key"] = opId;
+    return fetch(url, { method:"PUT", headers:h, body:JSON.stringify(body) })
+      .then(function(r){ if(!r.ok) return r.text().then(function(t){ throw new Error(t||("HTTP "+r.status)); }); return r.json(); });
+  }
+  // The Data API now HAS an atomic update (PUT v2, WS-E). replace = one PUT at
+  // the new id (no delete window). The legacy delete-then-create path was a
+  // data-loss risk: a network failure between the DELETE and the POST erased
+  // the record permanently (UI rolled back, server record gone). PUT removes
+  // that window — a concurrent reader sees old-or-new, never a gap. When the
+  // id CHANGES (oldId !== newId), the old id is best-effort deleted AFTER the
+  // PUT succeeds (the new record is authoritative once written).
   function replaceRec(coll, oldId, body){
-    var chain = oldId ? deleteRec(coll, oldId) : Promise.resolve();
-    return chain.then(function(){ return createRec(coll, body); });
+    var newId = body && body.id ? String(body.id) : "";
+    if(newId && (!oldId || oldId === newId)){
+      // Same-id edit or pure create-with-id: one atomic PUT.
+      return putRec(coll, newId, body);
+    }
+    if(newId && oldId && oldId !== newId){
+      // id changed: PUT the new record first (authoritative), then best-effort
+      // delete the old id. A failure of the delete leaves a duplicate that the
+      // caller's loadAll() will reconcile by id; a failure of the PUT leaves
+      // the old record intact (never a gap).
+      return putRec(coll, newId, body).then(function(rec){
+        return deleteRec(coll, oldId).catch(function(){ return rec; }).then(function(){ return rec; });
+      });
+    }
+    // No new id: fall back to create (server mints the id).
+    return createRec(coll, body);
   }
 
   /* ============================================================
@@ -814,8 +844,10 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
 
   function advanceStatus(o, target){
     var body = {};
-    // copy business fields, drop server-managed id/createdAt
-    for(var k in o){ if(k!=="id" && k!=="createdAt") body[k]=o[k]; }
+    // copy business fields, drop server-managed createdAt (keep id for the
+    // atomic PUT — WS-E; the server treats the PATH id as authoritative).
+    for(var k in o){ if(k!=="createdAt") body[k]=o[k]; }
+    body.id = o.id; // explicit: same-id atomic PUT, no delete window
     body.status = target;
     if(!body.orderedAt) body.orderedAt = parseDate(o);
     // MONEY-3: stamp the delivery moment on a genuine transition into Livrée,
@@ -835,7 +867,8 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   function changeStock(p, delta){
     var next = Math.max(0, num(p.stock)+delta);
     if(next===num(p.stock)) return;
-    var body={}; for(var k in p){ if(k!=="id" && k!=="createdAt") body[k]=p[k]; }
+    var body={}; for(var k in p){ if(k!=="createdAt") body[k]=p[k]; }
+    body.id = p.id; // explicit: same-id atomic PUT, no delete window (WS-E)
     body.stock = next;
     return withBusy("prod:"+p.id, function(){
       return replaceRec("products", p.id, body).then(function(){ return loadAll(); });
@@ -862,7 +895,7 @@ export const CLICKDZ_ERP_TEMPLATE_HTML = String.raw`<!doctype html>
   }
 
   function saveNote(c, note){
-    var body = { phone:c.phone||"", name:c.name||"", note:note, wilaya:c.wilaya||"" };
+    var body = { id:c.custId, phone:c.phone||"", name:c.name||"", note:note, wilaya:c.wilaya||"" };
     return withBusy("cust:"+(digits(c.phone)||c.name), function(){
       return replaceRec("customers", c.custId, body).then(function(){ toast("Note enregistrée","ok"); return loadAll(); });
     });
