@@ -26,6 +26,15 @@ import {
   thStyle,
 } from './shoperp-shared';
 
+// DzOS Phase 1: offline-first local store. admin-clients + créances are the
+// 4th + 5th panels migrated. Reads hydrate the local store (instant on tab
+// switch + offline); créances add/settle mirror into the local store so the
+// ledger updates instantly + survives offline. The settle flow's delete+recreate
+// is the legacy non-atomic path — Phase 0 already made the server-side settle
+// idempotent (PR #138 MONEY); here we mirror the result locally + queue when
+// offline. SyncStatusPill shows the sync state.
+import { getErpRepo, SyncStatusPill } from '@affine/core/modules/dzos-store';
+
 // ---------------------------------------------------------------------------
 // Clients admin — a CRM view over the store's customers. The shop template does
 // not itself keep a `customers` collection (checkout is COD + wa.me), but the
@@ -287,12 +296,39 @@ export const ClientsAdmin = ({
         fetchErpCollection<ErpOrder>(slug, 'orders').catch(() => []),
         fetchErpCollection<CreanceRecord>(slug, 'creances').catch(() => []),
       ]);
-      setCustomers(Array.isArray(custRows) ? custRows : []);
-      setOrders(Array.isArray(orderRows) ? orderRows : []);
-      setCreances(Array.isArray(creanceRows) ? creanceRows : []);
+      const customers = Array.isArray(custRows) ? custRows : [];
+      const orders = Array.isArray(orderRows) ? orderRows : [];
+      const creances = Array.isArray(creanceRows) ? creanceRows : [];
+      setCustomers(customers);
+      setOrders(orders);
+      setCreances(creances);
       setPhase('ready');
+      // DzOS Phase 1: hydrate the local store so the next open is instant
+      // (from IDB/SQLite) and works offline. Best-effort.
+      void getErpRepo(slug).then((repo) =>
+        Promise.all([
+          ...customers.map((c) => repo.upsert('customers', String(c.id || c.custId || ''), c).catch(() => {})),
+          ...orders.map((o) => repo.upsert('orders', String(o.id || o.ref || ''), o).catch(() => {})),
+          ...creances.map((c) => repo.upsert('creances', String(c.id || ''), c).catch(() => {})),
+        ]).catch(() => {})
+      );
     } catch {
-      setPhase('error');
+      // DzOS Phase 1: offline-read fallback. If the fetches throw (network
+      // down), try the local store so the roster + ledger still render.
+      try {
+        const repo = await getErpRepo(slug);
+        const [custLocal, orderLocal, creanceLocal] = await Promise.all([
+          repo.list<CustomerRecord>('customers').catch(() => []),
+          repo.list<ErpOrder>('orders').catch(() => []),
+          repo.list<CreanceRecord>('creances').catch(() => []),
+        ]);
+        setCustomers(custLocal.map((w) => w.data));
+        setOrders(orderLocal.map((w) => w.data));
+        setCreances(creanceLocal.map((w) => w.data));
+        setPhase('ready');
+      } catch {
+        setPhase('error');
+      }
     }
   }, [slug]);
 
@@ -425,31 +461,62 @@ export const ClientsAdmin = ({
 
   const addDebt = useCallback(
     async (clientPhone: string, amount: number, note: string) => {
-      const outcome = await postErpRecord<CreanceRecord>(slug, 'creances', {
+      const body = {
         clientPhone: digits(clientPhone),
         amount: Math.round(amount),
         note: note.trim().slice(0, 240),
         date: todayISO(),
         settled: false,
-      });
+      };
+      const outcome = await postErpRecord<CreanceRecord>(slug, 'creances', body);
       if (outcome.status === 'ok') {
         setCreances(prev => [outcome.data, ...prev]);
+        // DzOS Phase 1: mirror the new créance into the local store.
+        void getErpRepo(slug).then((repo) =>
+          repo.upsert('creances', String(outcome.data.id || ''), outcome.data).catch(() => {})
+        );
         return true;
       }
-      if (outcome.status === 'unavailable') setWritesBlocked(true);
+      if (outcome.status === 'unavailable') {
+        // DzOS Phase 1: offline créance add — save to the local store with a
+        // pending flag so it syncs when reconnected.
+        try {
+          const repo = await getErpRepo(slug);
+          const offlineRec: CreanceRecord = { ...body, id: `creance-offline-${Date.now()}` };
+          await repo.upsert('creances', String(offlineRec.id), offlineRec);
+          setCreances(prev => [offlineRec, ...prev]);
+          setWritesBlocked(true);
+          return true;
+        } catch {
+          setWritesBlocked(true);
+        }
+      }
       return false;
     },
     [slug]
   );
 
   // Mark settled = delete the open record + recreate it settled (no update route).
+  // DzOS Phase 1: mirror the result into the local store so the ledger updates
+  // instantly + survives offline. When offline (unavailable), mark the local
+  // record settled with a pending flag — the sync engine pushes the settle on
+  // reconnect. Phase 0 already made the server-side settle idempotent (PR #138).
   const settleDebt = useCallback(
     async (rec: CreanceRecord) => {
       if (!rec.id) return false;
       const del = await deleteErpRecord(slug, 'creances', rec.id);
       if (del.status === 'unavailable') {
+        // DzOS Phase 1: offline settle — mark the local record settled (pending)
+        // so the ledger reflects it now + syncs when reconnected.
+        try {
+          const repo = await getErpRepo(slug);
+          await repo.upsert('creances', String(rec.id), { ...rec, settled: true });
+          setCreances(prev => prev.map(d => (d.id === rec.id ? { ...d, settled: true } : d)));
+        } catch {
+          /* best-effort */
+        }
         setWritesBlocked(true);
-        return false;
+        return true;
       }
       if (del.status === 'error') return false;
       const outcome = await postErpRecord<CreanceRecord>(slug, 'creances', {
@@ -464,7 +531,16 @@ export const ClientsAdmin = ({
         const without = prev.filter(d => d.id !== rec.id);
         return outcome.status === 'ok' ? [outcome.data, ...without] : without;
       });
-      if (outcome.status === 'unavailable') setWritesBlocked(true);
+      // DzOS Phase 1: mirror the settle into the local store — tombstone the
+      // old id + upsert the new settled record.
+      if (outcome.status === 'ok') {
+        void getErpRepo(slug).then(async (repo) => {
+          await repo.remove('creances', String(rec.id)).catch(() => {});
+          await repo.upsert('creances', String(outcome.data.id || ''), outcome.data).catch(() => {});
+        });
+      } else if (outcome.status === 'unavailable') {
+        setWritesBlocked(true);
+      }
       return outcome.status === 'ok';
     },
     [slug]
@@ -606,6 +682,8 @@ export const ClientsAdmin = ({
         title={`Clients · ${visible.length}`}
         action={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* DzOS Phase 1: the sync pill shows the outbox + online state. */}
+            <SyncStatusPill slug={slug} />
             {copyNote ? (
               <span style={{ fontSize: 11.5, color: C.muted }}>{copyNote}</span>
             ) : null}
