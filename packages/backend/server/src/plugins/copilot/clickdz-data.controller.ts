@@ -387,7 +387,7 @@ export class ClickDzDataController {
       } catch (err) {
         // PG table absent / unreachable — fail OPEN to Redis (a read must never
         // 500 because the durable mirror isn't provisioned yet). Logged once.
-        this.logger.debug?.(
+        this.logger.debug(
           `[cdz-pg-read] list fell back to Redis for ${slug}:${collection}: ${String(
             (err as Error)?.message ?? err
           ).slice(0, 120)}`

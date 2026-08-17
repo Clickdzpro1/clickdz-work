@@ -134,7 +134,7 @@ export const WILAYAS: readonly Wilaya[] = Object.freeze([
 export const WILAYA_COUNT = WILAYAS.length; // 69
 
 /** Fast code→name map for O(1) validation / label rendering. */
-const WILAYA_NAME_BY_CODE: ReadonlyMap<number, string> = new Map(
+export const WILAYA_NAME_BY_CODE: ReadonlyMap<number, string> = new Map(
   WILAYAS.map(w => [w.code, w.name])
 );
 
